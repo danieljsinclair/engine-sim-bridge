@@ -4,6 +4,11 @@ project(engine-sim-bridge VERSION 1.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# NOTE: engine-sim must be added as a subdirectory by the parent project
+# before including this bridge. The parent project should:
+# 1. add_subdirectory(engine-sim) with BUILD_ENGINE_SIM_APP=OFF
+# 2. Then add_subdirectory(engine-sim-bridge)
+
 # Find engine-sim (expected to be a sibling directory or submodule)
 set(ENGINE_SIM_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../engine-sim" CACHE PATH "Path to engine-sim")
 
@@ -11,12 +16,10 @@ if(NOT EXISTS "${ENGINE_SIM_PATH}/CMakeLists.txt")
     message(FATAL_ERROR "engine-sim not found at ${ENGINE_SIM_PATH}")
 endif()
 
-# Configure engine-sim
-set(BUILD_ENGINE_SIM_APP OFF CACHE BOOL "Disable GUI application" FORCE)
-set(PIRANHA_ENABLED ON CACHE BOOL "Enable Piranha scripting" FORCE)
-
-# Add engine-sim subdirectory
-add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_ALL)
+# Check if engine-sim targets are already defined
+if(NOT TARGET engine-sim)
+    message(FATAL_ERROR "engine-sim target not found. Parent project must add engine-sim as subdirectory first.")
+endif()
 
 # Bridge library
 add_library(engine-sim-bridge SHARED
@@ -35,7 +38,7 @@ target_link_libraries(engine-sim-bridge
         engine-sim
 )
 
-if(PIRANHA_ENABLED)
+if(TARGET engine-sim-script-interpreter)
     target_link_libraries(engine-sim-bridge
         PRIVATE
             engine-sim-script-interpreter
