@@ -10,7 +10,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # 2. Then add_subdirectory(engine-sim-bridge)
 
 # Find engine-sim (expected to be a sibling directory or submodule)
-set(ENGINE_SIM_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../engine-sim" CACHE PATH "Path to engine-sim")
+# Use ENGINE_SIM_PATH if set by parent project, otherwise assume sibling
+if(NOT DEFINED ENGINE_SIM_PATH)
+    set(ENGINE_SIM_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../engine-sim")
+endif()
 
 if(NOT EXISTS "${ENGINE_SIM_PATH}/CMakeLists.txt")
     message(FATAL_ERROR "engine-sim not found at ${ENGINE_SIM_PATH}")
@@ -28,7 +31,9 @@ add_library(engine-sim-bridge SHARED
 
 target_include_directories(engine-sim-bridge
     PUBLIC
-        include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/dr_libs
         ${ENGINE_SIM_PATH}/include
         ${ENGINE_SIM_PATH}/scripting/include
 )
@@ -43,6 +48,7 @@ if(TARGET engine-sim-script-interpreter)
         PRIVATE
             engine-sim-script-interpreter
     )
+    target_compile_definitions(engine-sim-bridge PRIVATE ATG_ENGINE_SIM_PIRANHA_ENABLED)
 endif()
 
 # Set library output properties
