@@ -4,25 +4,22 @@ project(engine-sim-bridge VERSION 1.0.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# NOTE: engine-sim must be added as a subdirectory by the parent project
-# before including this bridge. The parent project should:
-# 1. add_subdirectory(engine-sim) with BUILD_ENGINE_SIM_APP=OFF
-# 2. Then add_subdirectory(engine-sim-bridge)
-
-# Find engine-sim (expected to be a sibling directory or submodule)
-# Use ENGINE_SIM_PATH if set by parent project, otherwise assume sibling
+# Find engine-sim (expected as a submodule at ./engine-sim)
+# Use ENGINE_SIM_PATH if set by parent project for override
 if(NOT DEFINED ENGINE_SIM_PATH)
-    set(ENGINE_SIM_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../engine-sim")
+    set(ENGINE_SIM_PATH "${CMAKE_CURRENT_SOURCE_DIR}/engine-sim")
 endif()
 
 if(NOT EXISTS "${ENGINE_SIM_PATH}/CMakeLists.txt")
     message(FATAL_ERROR "engine-sim not found at ${ENGINE_SIM_PATH}")
 endif()
 
-# Check if engine-sim targets are already defined
-if(NOT TARGET engine-sim)
-    message(FATAL_ERROR "engine-sim target not found. Parent project must add engine-sim as subdirectory first.")
-endif()
+# Add engine-sim as a subdirectory (it's a submodule of this repo)
+# Disable the GUI app and bridge from engine-sim's own CMakeLists
+set(BUILD_ENGINE_SIM_APP OFF CACHE BOOL "Build engine-sim GUI app" FORCE)
+set(BUILD_BRIDGE OFF CACHE BOOL "Build bridge from engine-sim (we are the bridge)" FORCE)
+set(DISCORD_ENABLED OFF CACHE BOOL "Enable Discord Rich Presence" FORCE)
+add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_ALL)
 
 # Bridge library
 add_library(engine-sim-bridge SHARED
