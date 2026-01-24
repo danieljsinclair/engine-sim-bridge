@@ -1,3 +1,0 @@
-[submodule "external/dr_libs"]
-	path = external/dr_libs
-	url = https://github.com/mackron/dr_libs.git

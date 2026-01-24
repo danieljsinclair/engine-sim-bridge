@@ -33,7 +33,7 @@ target_include_directories(engine-sim-bridge
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/external/dr_libs
+        ${ENGINE_SIM_PATH}/dependencies/dr_libs
         ${ENGINE_SIM_PATH}/include
         ${ENGINE_SIM_PATH}/scripting/include
 )
