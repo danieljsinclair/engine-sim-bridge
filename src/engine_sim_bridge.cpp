@@ -152,6 +152,7 @@ static bool loadImpulseResponses(
         if (!impulse) continue;
 
         std::string filename = impulse->getFilename();
+        std::cerr << "DEBUG BRIDGE: IR filename='" << filename << "'\n";
         if (filename.empty()) {
             continue;  // No impulse response specified
         }
@@ -164,6 +165,7 @@ static bool loadImpulseResponses(
         } else {
             // Relative path - combine with asset base path
             fullPath = assetBasePath + "/" + filename;
+            std::cerr << "DEBUG BRIDGE: Loading impulse: fullPath=" << fullPath << "\n";
         }
 
         // Load WAV file using WavLoader module
@@ -347,6 +349,7 @@ EngineSimResult EngineSimLoadScript(
     std::string resolvedAssetPath;
     if (assetBasePath != nullptr && strlen(assetBasePath) > 0) {
         resolvedAssetPath = assetBasePath;
+        std::cerr << "DEBUG BRIDGE: Using provided assetBasePath: " << resolvedAssetPath << "\n";
     } else {
         // Default: derive from script path (go up to assets/ directory)
         std::string scriptPathStr(scriptPath);
@@ -508,18 +511,32 @@ EngineSimResult EngineSimRender(
         return ESIM_ERROR_AUDIO_BUFFER;
     }
 
+    // CRITICAL: For synchronous rendering (no audio thread), we must call renderAudio()
+    // to generate audio samples before reading them. The audio thread normally does this.
+    ctx->simulator->synthesizer().renderAudio();
+
     // Read audio from synthesizer (int16 format)
+    // IMPORTANT: readAudioOutput returns MONO samples (1 sample per frame)
     int samplesRead = ctx->simulator->readAudioOutput(
         frames,
         ctx->audioConversionBuffer
     );
 
-    // Convert int16 to float32 [-1.0, 1.0]
+    static int renderCount = 0;
+    if (renderCount < 5 || samplesRead == 0) {
+        std::cerr << "DEBUG BRIDGE RENDER: samplesRead=" << samplesRead << " frames=" << frames << "\n";
+    }
+    renderCount++;
+
+    // Convert mono int16 to stereo float32 [-1.0, 1.0]
     // This is the CRITICAL PATH - must be FAST and allocation-free
+    // readAudioOutput returns MONO samples, so we duplicate each sample to L and R channels
     constexpr float scale = 1.0f / 32768.0f;
 
-    for (int i = 0; i < samplesRead * 2; ++i) {
-        buffer[i] = static_cast<float>(ctx->audioConversionBuffer[i]) * scale;
+    for (int i = 0; i < samplesRead; ++i) {
+        const float sample = static_cast<float>(ctx->audioConversionBuffer[i]) * scale;
+        buffer[i * 2] = sample;     // Left channel
+        buffer[i * 2 + 1] = sample; // Right channel
     }
 
     // Fill remainder with silence if underrun
