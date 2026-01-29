@@ -144,6 +144,7 @@ static bool loadImpulseResponses(
     }
 
     const int exhaustCount = ctx->engine->getExhaustSystemCount();
+    std::cerr << "DEBUG BRIDGE: Engine has " << exhaustCount << " exhaust systems\n";
     for (int i = 0; i < exhaustCount; ++i) {
         ExhaustSystem* exhaust = ctx->engine->getExhaustSystem(i);
         if (!exhaust) continue;
@@ -513,6 +514,16 @@ EngineSimResult EngineSimRender(
 
     // CRITICAL: For synchronous rendering (no audio thread), we must call renderAudio()
     // to generate audio samples before reading them. The audio thread normally does this.
+    //
+    // However, renderAudio() can only be called ONCE per simulation step because:
+    // 1. It sets m_processed = true after each call (synthesizer.cpp:241)
+    // 2. Subsequent calls BLOCK waiting for m_processed to be reset to false
+    // 3. m_processed is only reset by endInputBlock() at the end of simulateStep()
+    //
+    // Therefore, we can ONLY call renderAudio() once per EngineSimRender() call.
+    // If there aren't enough samples, we must handle the underrun gracefully.
+
+    // Call renderAudio() ONCE to generate samples from the latest simulation step
     ctx->simulator->synthesizer().renderAudio();
 
     // Read audio from synthesizer (int16 format)
@@ -523,6 +534,16 @@ EngineSimResult EngineSimRender(
     );
 
     static int renderCount = 0;
+    static int lastUnderrunReport = 0;
+    if (samplesRead < frames) {
+        // Report underruns every 60 frames (1 second) to avoid spam
+        if (renderCount - lastUnderrunReport > 60) {
+            std::cerr << "DEBUG BRIDGE RENDER: UNDERRUN at frame " << renderCount
+                      << ": requested=" << frames << " got=" << samplesRead
+                      << " missing=" << (frames - samplesRead) << "\n";
+            lastUnderrunReport = renderCount;
+        }
+    }
     if (renderCount < 5 || samplesRead == 0) {
         std::cerr << "DEBUG BRIDGE RENDER: samplesRead=" << samplesRead << " frames=" << frames << "\n";
     }
@@ -539,15 +560,6 @@ EngineSimResult EngineSimRender(
         buffer[i * 2 + 1] = sample; // Right channel
     }
 
-    // Fill remainder with silence if underrun
-    if (samplesRead < frames) {
-        std::memset(
-            buffer + (samplesRead * 2),
-            0,
-            (frames - samplesRead) * 2 * sizeof(float)
-        );
-    }
-
     if (outSamplesWritten) {
         *outSamplesWritten = samplesRead;
     }
@@ -555,6 +567,8 @@ EngineSimResult EngineSimRender(
     return ESIM_SUCCESS;
 }
 
+// ============================================================================
+// DIAGNOSTICS & TELEMETRY
 // ============================================================================
 // DIAGNOSTICS & TELEMETRY
 // ============================================================================
