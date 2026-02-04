@@ -259,6 +259,10 @@ EngineSimResult EngineSimUpdate(
  * Allocations: NONE (allocation-free, real-time safe)
  *
  * Example: Render(handle, buf, 256, NULL) fills 512 floats (256 L/R pairs)
+ *
+ * NOTE: This is for SYNCHRONOUS rendering only (no audio thread).
+ *       When using the audio thread (EngineSimStartAudioThread), use
+ *       EngineSimReadAudioBuffer() instead to read from the audio buffer.
  */
 EngineSimResult EngineSimRender(
     EngineSimHandle handle,
@@ -266,6 +270,52 @@ EngineSimResult EngineSimRender(
     int32_t frames,
     int32_t* outSamplesWritten
 );
+
+/**
+ * Reads audio samples from the internal audio buffer (asynchronous mode).
+ * Use this when the audio thread is running (EngineSimStartAudioThread).
+ * This function does NOT render audio - it only reads from the buffer
+ * that the audio thread is continuously filling.
+ *
+ * PERFORMANCE REQUIREMENTS:
+ * - MUST complete in < 2ms for 256 frames @ 48kHz
+ * - MUST be allocation-free (no GC pressure)
+ * - Buffer must be pre-allocated by caller
+ *
+ * @param handle Simulator handle
+ * @param buffer Output buffer for interleaved float samples (L, R, L, R...)
+ *               Range: -1.0 to +1.0
+ * @param frames Number of frames to read (NOT samples)
+ *               For stereo: buffer size = frames * 2 * sizeof(float)
+ * @param outSamplesRead Pointer to receive actual samples read (can be NULL)
+ * @return ESIM_SUCCESS on success, error code otherwise
+ *
+ * Thread Safety: Call from main thread only (audio thread writes to buffer)
+ * Allocations: NONE (allocation-free, real-time safe)
+ *
+ * NOTE: This function may return fewer samples than requested if the audio
+ *       buffer doesn't have enough data yet. This is normal - the audio thread
+ *       is continuously filling the buffer in the background.
+ */
+EngineSimResult EngineSimReadAudioBuffer(
+    EngineSimHandle handle,
+    float* buffer,
+    int32_t frames,
+    int32_t* outSamplesRead
+);
+
+/**
+ * Waits for the audio rendering thread to finish processing the current frame.
+ * This ensures the audio buffer is fully populated before reading, preventing
+ * race conditions and underruns.
+ *
+ * @param handle Simulator handle
+ * @return ESIM_SUCCESS on success, error code otherwise
+ *
+ * Thread Safety: Call from main thread only
+ * Synchronization: Uses condition variable to wait for audio thread
+ * Allocations: NONE
+ */
 
 // ============================================================================
 // DIAGNOSTICS & TELEMETRY (Optional)

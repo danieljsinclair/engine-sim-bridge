@@ -560,8 +560,87 @@ EngineSimResult EngineSimRender(
         buffer[i * 2 + 1] = sample; // Right channel
     }
 
+    // CRITICAL: Zero-fill any remaining frames to prevent crackling from uninitialized memory
+    // If we have a buffer underrun (samplesRead < frames), the rest of the buffer
+    // must be explicitly zeroed - otherwise the output has garbage data = static/crackling
+    if (samplesRead < frames) {
+        const int remainingFrames = frames - samplesRead;
+        float* silenceStart = buffer + samplesRead * 2;  // Stereo offset
+        std::memset(silenceStart, 0, remainingFrames * 2 * sizeof(float));
+    }
+
     if (outSamplesWritten) {
         *outSamplesWritten = samplesRead;
+    }
+
+    return ESIM_SUCCESS;
+}
+
+EngineSimResult EngineSimReadAudioBuffer(
+    EngineSimHandle handle,
+    float* buffer,
+    int32_t frames,
+    int32_t* outSamplesRead)
+{
+    if (!validateHandle(handle)) {
+        return ESIM_ERROR_INVALID_HANDLE;
+    }
+
+    if (!buffer || frames <= 0) {
+        return ESIM_ERROR_INVALID_PARAMETER;
+    }
+
+    EngineSimContext* ctx = getContext(handle);
+
+    if (!ctx->engine) {
+        // No engine loaded - output silence
+        std::memset(buffer, 0, frames * 2 * sizeof(float));
+        if (outSamplesRead) {
+            *outSamplesRead = 0;
+        }
+        return ESIM_SUCCESS;
+    }
+
+    // Check buffer size
+    size_t requiredSize = frames * 2; // Stereo
+    if (requiredSize > ctx->conversionBufferSize) {
+        ctx->setError("Read buffer size exceeds internal buffer");
+        return ESIM_ERROR_AUDIO_BUFFER;
+    }
+
+    // IMPORTANT: This function does NOT call renderAudio()
+    // It only reads from the audio buffer that the audio thread is filling
+    // This matches the GUI pattern (engine_sim_application.cpp line 274)
+
+    // Read audio from synthesizer (int16 format)
+    // IMPORTANT: readAudioOutput returns MONO samples (1 sample per frame)
+    int samplesRead = ctx->simulator->readAudioOutput(
+        frames,
+        ctx->audioConversionBuffer
+    );
+
+    // Convert mono int16 to stereo float32 [-1.0, 1.0]
+    // This is the CRITICAL PATH - must be FAST and allocation-free
+    // readAudioOutput returns MONO samples, so we duplicate each sample to L and R channels
+    constexpr float scale = 1.0f / 32768.0f;
+
+    for (int i = 0; i < samplesRead; ++i) {
+        const float sample = static_cast<float>(ctx->audioConversionBuffer[i]) * scale;
+        buffer[i * 2] = sample;     // Left channel
+        buffer[i * 2 + 1] = sample; // Right channel
+    }
+
+    // CRITICAL: Zero-fill any remaining frames to prevent crackling from uninitialized memory
+    // If we have a buffer underrun (samplesRead < frames), the rest of the buffer
+    // must be explicitly zeroed - otherwise the callback receives garbage data = static/crackling
+    if (samplesRead < frames) {
+        const int remainingFrames = frames - samplesRead;
+        float* silenceStart = buffer + samplesRead * 2;  // Stereo offset
+        std::memset(silenceStart, 0, remainingFrames * 2 * sizeof(float));
+    }
+
+    if (outSamplesRead) {
+        *outSamplesRead = samplesRead;
     }
 
     return ESIM_SUCCESS;
@@ -630,7 +709,8 @@ EngineSimResult EngineSimValidateConfig(
     }
 
     // Validate buffer sizes
-    if (config->inputBufferSize < 64 || config->inputBufferSize > 8192) {
+    // Allow inputBufferSize up to sampleRate (GUI uses 44100, which is > 8192)
+    if (config->inputBufferSize < 64 || config->inputBufferSize > config->sampleRate) {
         return ESIM_ERROR_INVALID_PARAMETER;
     }
 
