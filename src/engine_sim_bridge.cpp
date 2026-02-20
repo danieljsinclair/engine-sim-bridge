@@ -341,6 +341,21 @@ EngineSimResult EngineSimLoadScript(
     // Load the simulation
     if (ctx->engine) {
         ctx->simulator->loadSimulation(ctx->engine, ctx->vehicle, ctx->transmission);
+
+        // IMPORTANT: Re-initialize synthesizer with correct parameters
+        // PistonEngineSimulator::loadSimulation() calls initializeSynthesizer() with hardcoded 44100 values
+        // We need to override with our config values
+        Synthesizer::Parameters synthParamsOverride;
+        synthParamsOverride.inputChannelCount = ctx->engine->getExhaustSystemCount();
+        synthParamsOverride.inputBufferSize = ctx->config.inputBufferSize;
+        synthParamsOverride.audioBufferSize = ctx->config.audioBufferSize;
+        synthParamsOverride.inputSampleRate = static_cast<float>(ctx->config.simulationFrequency);
+        synthParamsOverride.audioSampleRate = static_cast<float>(ctx->config.sampleRate);
+        synthParamsOverride.initialAudioParameters.volume = ctx->config.volume;
+        synthParamsOverride.initialAudioParameters.convolution = ctx->config.convolutionLevel;
+        synthParamsOverride.initialAudioParameters.airNoise = ctx->config.airNoise;
+        ctx->simulator->synthesizer().initialize(synthParamsOverride);
+        std::cerr << "DEBUG BRIDGE: Re-initialized synthesizer with audioBufferSize=" << ctx->config.audioBufferSize << "\n";
     } else {
         ctx->setError("Script did not create an engine");
         return ESIM_ERROR_LOAD_FAILED;
@@ -390,7 +405,16 @@ EngineSimResult EngineSimStartAudioThread(
         return ESIM_ERROR_NOT_INITIALIZED;
     }
 
-
+    // Drain the synthesizer's pre-fill buffer (96000 samples of silence)
+    // This must be done BEFORE starting the audio thread
+    // The audio thread waits for buffer.size() < 2000, but pre-fill is 96000
+    int16_t drainBuffer[4096];
+    int totalDrained = 0;
+    int samplesDrained;
+    while ((samplesDrained = ctx->simulator->readAudioOutput(4096, drainBuffer)) > 0) {
+        totalDrained += samplesDrained;
+    }
+    std::cerr << "DEBUG BRIDGE: Drained " << totalDrained << " pre-fill samples\n";
     ctx->simulator->startAudioRenderingThread();
 
     return ESIM_SUCCESS;
