@@ -390,13 +390,6 @@ EngineSimResult EngineSimStartAudioThread(
         return ESIM_ERROR_NOT_INITIALIZED;
     }
 
-    int16_t drainBuffer[4096];
-    int totalDrained = 0;
-    int samplesDrained;
-    while ((samplesDrained = ctx->simulator->readAudioOutput(4096, drainBuffer)) > 0) {
-        totalDrained += samplesDrained;
-    }
-    std::cerr << "DEBUG BRIDGE: Drained " << totalDrained << " pre-fill samples from synthesizer buffer\n";
 
     ctx->simulator->startAudioRenderingThread();
 
