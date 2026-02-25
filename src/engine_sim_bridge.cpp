@@ -341,21 +341,9 @@ EngineSimResult EngineSimLoadScript(
     // Load the simulation
     if (ctx->engine) {
         ctx->simulator->loadSimulation(ctx->engine, ctx->vehicle, ctx->transmission);
-
-        // IMPORTANT: Re-initialize synthesizer with correct parameters
-        // PistonEngineSimulator::loadSimulation() calls initializeSynthesizer() with hardcoded 44100 values
-        // We need to override with our config values
-        Synthesizer::Parameters synthParamsOverride;
-        synthParamsOverride.inputChannelCount = ctx->engine->getExhaustSystemCount();
-        synthParamsOverride.inputBufferSize = ctx->config.inputBufferSize;
-        synthParamsOverride.audioBufferSize = ctx->config.audioBufferSize;
-        synthParamsOverride.inputSampleRate = static_cast<float>(ctx->config.simulationFrequency);
-        synthParamsOverride.audioSampleRate = static_cast<float>(ctx->config.sampleRate);
-        synthParamsOverride.initialAudioParameters.volume = ctx->config.volume;
-        synthParamsOverride.initialAudioParameters.convolution = ctx->config.convolutionLevel;
-        synthParamsOverride.initialAudioParameters.airNoise = ctx->config.airNoise;
-        ctx->simulator->synthesizer().initialize(synthParamsOverride);
-        std::cerr << "DEBUG BRIDGE: Re-initialized synthesizer with audioBufferSize=" << ctx->config.audioBufferSize << "\n";
+        // NOTE: Do NOT re-initialize synthesizer here.
+        // loadSimulation() already initializes the synthesizer correctly.
+        // Re-initializing would reset the buffer and cause underruns.
     } else {
         ctx->setError("Script did not create an engine");
         return ESIM_ERROR_LOAD_FAILED;
