@@ -284,6 +284,27 @@ public:
         m_processed = true;
     }
 
+    // On-demand render: process whatever input is available without blocking on CV.
+    // Used by synchronous pull model to render audio inline during audio callback.
+    void renderAudioOnDemand() {
+        std::lock_guard<std::mutex> lock(m_lock0);
+
+        const int available = m_inputChannel.size();
+        if (available <= 0) return;
+
+        const int n = std::min(available, static_cast<int>(m_transferBuffer.size()));
+        m_inputChannel.readAndRemove(n, m_transferBuffer.data());
+
+        for (int i = 0; i < n; ++i) {
+            float sample = m_transferBuffer[i];
+            sample = std::max(-1.0f, std::min(1.0f, sample));
+            int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
+            m_audioBuffer.write(intSample);
+        }
+
+        m_processed = true;
+    }
+
     void destroy() {
         m_audioBuffer.destroy();
         m_inputChannel.destroy();
@@ -925,6 +946,50 @@ EngineSimResult EngineSimReadAudioBuffer(
         frames, ctx->audioConversionBuffer.data());
 
     // Convert int16 → float stereo (matches real bridge pattern)
+    for (int32_t i = 0; i < samplesRead; ++i) {
+        float sample = static_cast<float>(ctx->audioConversionBuffer[i]) / 32768.0f;
+        buffer[i * 2] = sample;
+        buffer[i * 2 + 1] = sample;
+    }
+
+    if (outSamplesRead) {
+        *outSamplesRead = samplesRead;
+    }
+
+    // Zero-fill remaining frames to prevent crackling
+    if (samplesRead < frames) {
+        int32_t remaining = frames - samplesRead;
+        std::memset(buffer + samplesRead * 2, 0, remaining * 2 * sizeof(float));
+    }
+
+    return ESIM_SUCCESS;
+}
+
+EngineSimResult EngineSimRenderOnDemand(
+    EngineSimHandle handle,
+    float* buffer,
+    int32_t frames,
+    int32_t* outSamplesRead)
+{
+    if (!validateHandle(handle)) {
+        return ESIM_ERROR_INVALID_HANDLE;
+    }
+
+    if (!buffer || frames <= 0) {
+        return ESIM_ERROR_INVALID_PARAMETER;
+    }
+
+    MockEngineSimContext* ctx = getContext(handle);
+
+    // KEY DIFFERENCE: Call renderAudioOnDemand() which doesn't block on CV
+    // This allows multiple render calls per simulation frame without deadlock
+    ctx->synthesizer.renderAudioOnDemand();
+
+    // Read from synthesizer's audio buffer
+    int32_t samplesRead = ctx->synthesizer.readAudioOutput(
+        frames, ctx->audioConversionBuffer.data());
+
+    // Convert int16 → float stereo
     for (int32_t i = 0; i < samplesRead; ++i) {
         float sample = static_cast<float>(ctx->audioConversionBuffer[i]) / 32768.0f;
         buffer[i * 2] = sample;
