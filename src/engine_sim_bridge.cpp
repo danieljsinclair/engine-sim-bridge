@@ -21,6 +21,48 @@
 #include <atomic>
 
 // ============================================================================
+// BUILD IDENTIFIER - used to verify binary matches source
+// ============================================================================
+#define BUILD_ID "SYNC-PULL-DRY-v1"
+static const char* g_buildId = BUILD_ID;
+
+// ============================================================================
+// AUDIO CONVERSION HELPER (DRY - single place for all audio conversion)
+// ============================================================================
+static inline void convertMonoInt16ToStereoFloat(
+    const int16_t* input,
+    float* output,
+    int samplesRead,
+    int frames,
+    float scale)
+{
+    // Convert mono int16 to stereo float32 with clamping
+    for (int i = 0; i < samplesRead; ++i) {
+        float sample = static_cast<float>(input[i]) * scale;
+        // Clamp to prevent clipping [-1.0, 1.0]
+        if (sample > 1.0f) sample = 1.0f;
+        if (sample < -1.0f) sample = -1.0f;
+        output[i * 2] = sample;      // Left channel
+        output[i * 2 + 1] = sample; // Right channel
+    }
+
+    // Handle underrun: use sample-and-hold instead of zero-fill
+    // This prevents audible clicks/pops when buffer underruns occur
+    if (samplesRead < frames && samplesRead > 0) {
+        // Get the last valid sample
+        float lastSample = output[(samplesRead - 1) * 2];  // Left channel
+        // Hold the last sample for remaining frames (smooth transition, no click)
+        for (int i = samplesRead; i < frames; ++i) {
+            output[i * 2] = lastSample;
+            output[i * 2 + 1] = lastSample;
+        }
+    } else if (samplesRead == 0) {
+        // No samples at all - output silence
+        std::memset(output, 0, frames * 2 * sizeof(float));
+    }
+}
+
+// ============================================================================
 // INTERNAL IMPLEMENTATION STRUCTURES
 // ============================================================================
 
@@ -563,25 +605,9 @@ EngineSimResult EngineSimRender(
     }
     renderCount++;
 
-    // Convert mono int16 to stereo float32 [-1.0, 1.0]
-    // This is the CRITICAL PATH - must be FAST and allocation-free
-    // readAudioOutput returns MONO samples, so we duplicate each sample to L and R channels
-    constexpr float scale = 1.0f / 32768.0f;
-
-    for (int i = 0; i < samplesRead; ++i) {
-        const float sample = static_cast<float>(ctx->audioConversionBuffer[i]) * scale;
-        buffer[i * 2] = sample;     // Left channel
-        buffer[i * 2 + 1] = sample; // Right channel
-    }
-
-    // CRITICAL: Zero-fill any remaining frames to prevent crackling from uninitialized memory
-    // If we have a buffer underrun (samplesRead < frames), the rest of the buffer
-    // must be explicitly zeroed - otherwise the output has garbage data = static/crackling
-    if (samplesRead < frames) {
-        const int remainingFrames = frames - samplesRead;
-        float* silenceStart = buffer + samplesRead * 2;  // Stereo offset
-        std::memset(silenceStart, 0, remainingFrames * 2 * sizeof(float));
-    }
+    // DRY: Use shared conversion helper
+    constexpr float scale = 0.5f / 32768.0f;
+    convertMonoInt16ToStereoFloat(ctx->audioConversionBuffer, buffer, samplesRead, frames, scale);
 
     if (outSamplesWritten) {
         *outSamplesWritten = samplesRead;
@@ -633,25 +659,9 @@ EngineSimResult EngineSimReadAudioBuffer(
         ctx->audioConversionBuffer
     );
 
-    // Convert mono int16 to stereo float32 [-1.0, 1.0]
-    // This is the CRITICAL PATH - must be FAST and allocation-free
-    // readAudioOutput returns MONO samples, so we duplicate each sample to L and R channels
-    constexpr float scale = 1.0f / 32768.0f;
-
-    for (int i = 0; i < samplesRead; ++i) {
-        const float sample = static_cast<float>(ctx->audioConversionBuffer[i]) * scale;
-        buffer[i * 2] = sample;     // Left channel
-        buffer[i * 2 + 1] = sample; // Right channel
-    }
-
-    // CRITICAL: Zero-fill any remaining frames to prevent crackling from uninitialized memory
-    // If we have a buffer underrun (samplesRead < frames), the rest of the buffer
-    // must be explicitly zeroed - otherwise the callback receives garbage data = static/crackling
-    if (samplesRead < frames) {
-        const int remainingFrames = frames - samplesRead;
-        float* silenceStart = buffer + samplesRead * 2;  // Stereo offset
-        std::memset(silenceStart, 0, remainingFrames * 2 * sizeof(float));
-    }
+    // DRY: Use shared conversion helper
+    constexpr float scale = 0.5f / 32768.0f;
+    convertMonoInt16ToStereoFloat(ctx->audioConversionBuffer, buffer, samplesRead, frames, scale);
 
     if (outSamplesRead) {
         *outSamplesRead = samplesRead;
@@ -692,15 +702,16 @@ EngineSimResult EngineSimRenderOnDemand(
         return ESIM_ERROR_AUDIO_BUFFER;
     }
 
-    // SYNC-PULL: Generate audio synchronously in this callback
-    // This replaces the buffered approach - we run simulation and generate audio here
+    // SYNC-PULL: Run simulation and generate audio in the callback
+    // This is for engine mode where Update() is not called in main loop
     
     // Run simulation for this audio frame
     const double dt = static_cast<double>(frames) / ctx->config.sampleRate;
     ctx->simulator->startFrame(dt);
     
     // Calculate how many simulation steps we need
-    const int simStepsPerFrame = static_cast<int>(ctx->config.simulationFrequency * dt);
+    int simStepsPerFrame = static_cast<int>(ctx->config.simulationFrequency * dt);
+    if (simStepsPerFrame < 1) simStepsPerFrame = 1;
     
     for (int i = 0; i < simStepsPerFrame; ++i) {
         ctx->simulator->simulateStep();
@@ -716,22 +727,21 @@ EngineSimResult EngineSimRenderOnDemand(
         frames,
         ctx->audioConversionBuffer
     );
-
-    // Convert mono int16 to stereo float32 [-1.0, 1.0]
-    constexpr float scale = 1.0f / 32768.0f;
-
-    for (int i = 0; i < samplesRead; ++i) {
-        const float sample = static_cast<float>(ctx->audioConversionBuffer[i]) * scale;
-        buffer[i * 2] = sample;     // Left channel
-        buffer[i * 2 + 1] = sample; // Right channel
-    }
-
-    // Zero-fill any remaining frames to prevent crackling
+    
+    // DEBUG: Log underrun info
+    static int underrunCount = 0;
     if (samplesRead < frames) {
-        const int remainingFrames = frames - samplesRead;
-        float* silenceStart = buffer + samplesRead * 2;
-        std::memset(silenceStart, 0, remainingFrames * 2 * sizeof(float));
+        underrunCount++;
+        if (underrunCount % 10 == 1) {
+            std::cerr << "[UNDERRUN] req=" << frames << " got=" << samplesRead 
+                      << " simSteps=" << simStepsPerFrame << " dt=" << dt
+                      << "\n";
+        }
     }
+
+    // DRY: Use shared conversion helper (same scale as other functions for consistency)
+    constexpr float scale = 0.5f / 32768.0f;
+    convertMonoInt16ToStereoFloat(ctx->audioConversionBuffer, buffer, samplesRead, frames, scale);
 
     if (outFramesWritten) {
         *outFramesWritten = samplesRead;
