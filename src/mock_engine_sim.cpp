@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <iomanip>
 
 // ============================================================================
 // RING BUFFER - Matches engine-sim's RingBuffer<T> semantics
@@ -189,19 +190,20 @@ public:
     }
 
     // Called from main thread during simulateStep() - feeds one sample per step
-    // Replicates Synthesizer::writeInput() with proper upsampling from sim rate to audio rate
+    // Zero-order hold resampling (repeat sample N times)
     void writeInput(float sample) {
-        // Resample from simulation rate (10kHz) to audio rate (44.1kHz)
-        // Each simulation step should produce ~4.41 audio-rate samples on average
-        // Use fractional accumulator for jitter-free sample rate conversion
+        std::lock_guard<std::mutex> lock(m_lock0);
+        
+        // Resample from simulation rate to audio rate
         m_resampleAccumulator += m_audioSampleRate / m_inputSampleRate;
-
-        // Write one audio-rate sample for each whole unit accumulated
         int samplesToWrite = static_cast<int>(m_resampleAccumulator);
         m_resampleAccumulator -= samplesToWrite;
 
+        // Write to audio buffer (no interpolation - zero-order hold)
         for (int i = 0; i < samplesToWrite; ++i) {
-            m_inputChannel.write(sample);
+            float clamped = std::max(-1.0f, std::min(1.0f, sample));
+            int16_t intSample = static_cast<int16_t>(clamped * 32767.0f);
+            m_audioBuffer.write(intSample);
         }
     }
 
@@ -284,25 +286,22 @@ public:
         m_processed = true;
     }
 
-    // On-demand render: process whatever input is available without blocking on CV.
-    // Used by synchronous pull model to render audio inline during audio callback.
+    // On-demand render: just read from audio buffer - no processing!
+    // Audio is already resampled to audio rate in writeInput()
     void renderAudioOnDemand() {
+        // NO-OP: Audio is already ready in m_audioBuffer
+        // This exists only for API compatibility
+    }
+
+    // Debug getters
+    int getInputChannelSize() {
         std::lock_guard<std::mutex> lock(m_lock0);
+        return m_inputChannel.size();
+    }
 
-        const int available = m_inputChannel.size();
-        if (available <= 0) return;
-
-        const int n = std::min(available, static_cast<int>(m_transferBuffer.size()));
-        m_inputChannel.readAndRemove(n, m_transferBuffer.data());
-
-        for (int i = 0; i < n; ++i) {
-            float sample = m_transferBuffer[i];
-            sample = std::max(-1.0f, std::min(1.0f, sample));
-            int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
-            m_audioBuffer.write(intSample);
-        }
-
-        m_processed = true;
+    int getAudioBufferSize() {
+        std::lock_guard<std::mutex> lock(m_lock0);
+        return m_audioBuffer.size();
     }
 
     void destroy() {
@@ -676,9 +675,8 @@ struct MockEngineSimContext {
         // Update engine state at simulation rate
         updateEngineState(timestep);
 
-        // Generate sine wave sample and write to synthesizer
-        // This is the mock equivalent of writeToSynthesizer()
-        writeToSynthesizer();
+        // DISABLED for sync-pull: Audio is now generated on-demand in RenderOnDemand
+        // Old buffered path removed - no more writeToSynthesizer()
 
         ++m_currentIteration;
         return true;
@@ -981,31 +979,48 @@ EngineSimResult EngineSimRenderOnDemand(
 
     MockEngineSimContext* ctx = getContext(handle);
 
-    // KEY DIFFERENCE: Call renderAudioOnDemand() which doesn't block on CV
-    // This allows multiple render calls per simulation frame without deadlock
-    ctx->synthesizer.renderAudioOnDemand();
-
-    // Read from synthesizer's audio buffer
-    int32_t samplesRead = ctx->synthesizer.readAudioOutput(
-        frames, ctx->audioConversionBuffer.data());
-
-    // Convert int16 → float stereo
-    for (int32_t i = 0; i < samplesRead; ++i) {
-        float sample = static_cast<float>(ctx->audioConversionBuffer[i]) / 32768.0f;
+    // DIAGNOSTICS: Read output values
+    static int64_t lastDebug = 0;
+    auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    static int renderCall = 0;
+    
+    // SINGLE-THREADED SYNC-PULL: Generate exactly what we need, when we need it
+    // No buffers - just generate directly to output based on current engine state
+    
+    const double curRPM = ctx->stats.currentRPM;
+    const double safeRPM = std::max(curRPM, 100.0);
+    const double frequency = (safeRPM / 600.0) * 100.0;
+    const double sampleRate = 44100.0;
+    const double phaseIncrement = 2.0 * M_PI * frequency / sampleRate;
+    
+    // Generate exactly 'frames' samples directly to output
+    for (int32_t i = 0; i < frames; ++i) {
+        float sample = static_cast<float>(std::sin(ctx->sinePhase)) * ctx->config.volume;
+        ctx->sinePhase += phaseIncrement;
+        if (ctx->sinePhase > 2.0 * M_PI) {
+            ctx->sinePhase -= 2.0 * M_PI;
+        }
         buffer[i * 2] = sample;
         buffer[i * 2 + 1] = sample;
     }
-
+    
+    // DIAGNOSTICS: Print output values
+    if (renderCall++ % 50 == 0 || nowMs - lastDebug > 500) {
+        std::cout << "[RENDER] RPM=" << curRPM << " freq=" << frequency 
+                  << " phaseInc=" << phaseIncrement << " frames=" << frames;
+        // Print first 5 output samples
+        for (int i = 0; i < std::min(5, frames); i++) {
+            std::cout << " out[" << i << "]=" << std::fixed << std::setprecision(4) << buffer[i*2];
+        }
+        std::cout << "\n";
+        lastDebug = nowMs;
+    }
+    
     if (outSamplesRead) {
-        *outSamplesRead = samplesRead;
+        *outSamplesRead = frames;
     }
-
-    // Zero-fill remaining frames to prevent crackling
-    if (samplesRead < frames) {
-        int32_t remaining = frames - samplesRead;
-        std::memset(buffer + samplesRead * 2, 0, remaining * 2 * sizeof(float));
-    }
-
+    
     return ESIM_SUCCESS;
 }
 
