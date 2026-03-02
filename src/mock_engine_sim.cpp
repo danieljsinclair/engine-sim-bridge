@@ -979,12 +979,6 @@ EngineSimResult EngineSimRenderOnDemand(
 
     MockEngineSimContext* ctx = getContext(handle);
 
-    // DIAGNOSTICS: Read output values
-    static int64_t lastDebug = 0;
-    auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    static int renderCall = 0;
-    
     // SINGLE-THREADED SYNC-PULL: Generate exactly what we need, when we need it
     // No buffers - just generate directly to output based on current engine state
     
@@ -1003,18 +997,6 @@ EngineSimResult EngineSimRenderOnDemand(
         }
         buffer[i * 2] = sample;
         buffer[i * 2 + 1] = sample;
-    }
-    
-    // DIAGNOSTICS: Print output values
-    if (renderCall++ % 50 == 0 || nowMs - lastDebug > 500) {
-        std::cout << "[RENDER] RPM=" << curRPM << " freq=" << frequency 
-                  << " phaseInc=" << phaseIncrement << " frames=" << frames;
-        // Print first 5 output samples
-        for (int i = 0; i < std::min(5, frames); i++) {
-            std::cout << " out[" << i << "]=" << std::fixed << std::setprecision(4) << buffer[i*2];
-        }
-        std::cout << "\n";
-        lastDebug = nowMs;
     }
     
     if (outSamplesRead) {

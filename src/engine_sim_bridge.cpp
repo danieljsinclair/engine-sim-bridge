@@ -237,6 +237,7 @@ EngineSimResult EngineSimCreate(
     ctx->simulator->setSimulationFrequency(ctx->config.simulationFrequency);
     ctx->simulator->setFluidSimulationSteps(ctx->config.fluidSimulationSteps);
     ctx->simulator->setTargetSynthesizerLatency(ctx->config.targetSynthesizerLatency);
+    // TODO: Enable sync-pull mode when engine audio generation is moved to RenderOnDemand
 
     // Configure synthesizer
     Synthesizer::Parameters synthParams;
