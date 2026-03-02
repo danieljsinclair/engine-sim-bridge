@@ -692,12 +692,26 @@ EngineSimResult EngineSimRenderOnDemand(
         return ESIM_ERROR_AUDIO_BUFFER;
     }
 
-    // KEY DIFFERENCE: Call renderAudioOnDemand() instead of renderAudio()
-    // This skips the condition variable wait, allowing multiple render calls
-    // per simulation frame without blocking
+    // SYNC-PULL: Generate audio synchronously in this callback
+    // This replaces the buffered approach - we run simulation and generate audio here
+    
+    // Run simulation for this audio frame
+    const double dt = static_cast<double>(frames) / ctx->config.sampleRate;
+    ctx->simulator->startFrame(dt);
+    
+    // Calculate how many simulation steps we need
+    const int simStepsPerFrame = static_cast<int>(ctx->config.simulationFrequency * dt);
+    
+    for (int i = 0; i < simStepsPerFrame; ++i) {
+        ctx->simulator->simulateStep();
+    }
+    
+    ctx->simulator->endFrame();
+
+    // Now render the audio that was generated
     ctx->simulator->synthesizer().renderAudioOnDemand();
 
-    // Read audio from synthesizer (int16 format)
+    // Read audio from synthesizer
     int samplesRead = ctx->simulator->readAudioOutput(
         frames,
         ctx->audioConversionBuffer
