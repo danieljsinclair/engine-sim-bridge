@@ -739,10 +739,26 @@ EngineSimResult EngineSimRenderOnDemand(
         }
     }
 
-    // DRY: Use shared conversion helper (same scale as other functions for consistency)
+    // Convert only what we have
     constexpr float scale = 0.5f / 32768.0f;
-    convertMonoInt16ToStereoFloat(ctx->audioConversionBuffer, buffer, samplesRead, frames, scale);
+    
+    // Convert real samples
+    for (int i = 0; i < samplesRead; ++i) {
+        float sample = static_cast<float>(ctx->audioConversionBuffer[i]) * scale;
+        if (sample > 1.0f) sample = 1.0f;
+        if (sample < -1.0f) sample = -1.0f;
+        buffer[i * 2] = sample;
+        buffer[i * 2 + 1] = sample;
+    }
+    
+    // CONTROL TEST: Zero-fill remainder and return full count
+    // This should reproduce the original crackles if that's what caused them
+    if (samplesRead < frames) {
+        int remainingFrames = frames - samplesRead;
+        std::memset(buffer + samplesRead * 2, 0, remainingFrames * 2 * sizeof(float));
+    }
 
+    // Always return actual sample count
     if (outFramesWritten) {
         *outFramesWritten = samplesRead;
     }
