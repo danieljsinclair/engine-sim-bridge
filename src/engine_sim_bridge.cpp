@@ -659,6 +659,77 @@ EngineSimResult EngineSimReadAudioBuffer(
     return ESIM_SUCCESS;
 }
 
+EngineSimResult EngineSimRenderOnDemand(
+    EngineSimHandle handle,
+    float* buffer,
+    int32_t frames,
+    int32_t* outFramesWritten)
+{
+    if (!validateHandle(handle)) {
+        return ESIM_ERROR_INVALID_HANDLE;
+    }
+
+    if (!buffer || frames <= 0) {
+        return ESIM_ERROR_INVALID_PARAMETER;
+    }
+
+    EngineSimContext* ctx = getContext(handle);
+
+    if (!ctx->engine) {
+        std::memset(buffer, 0, frames * 2 * sizeof(float));
+        if (outFramesWritten) *outFramesWritten = 0;
+        return ESIM_SUCCESS;
+    }
+
+    if (frames * 2 > static_cast<int>(ctx->conversionBufferSize)) {
+        ctx->setError("Render buffer size exceeds internal buffer");
+        return ESIM_ERROR_AUDIO_BUFFER;
+    }
+
+    // Run simulation for this audio frame
+    const double dt = static_cast<double>(frames) / ctx->config.sampleRate;
+    ctx->simulator->startFrame(dt);
+    
+    int simSteps = static_cast<int>(ctx->config.simulationFrequency * dt);
+    if (simSteps < 1) simSteps = 1;
+    
+    for (int i = 0; i < simSteps; ++i) {
+        ctx->simulator->simulateStep();
+    }
+    
+    ctx->simulator->endFrame();
+
+    // Render and read audio
+    ctx->simulator->synthesizer().renderAudioOnDemand();
+
+    int samplesRead = ctx->simulator->readAudioOutput(
+        frames,
+        ctx->audioConversionBuffer
+    );
+
+    // Convert mono int16 to stereo float with zero-fill for underruns
+    constexpr float scale = 0.5f / 32768.0f;
+    
+    for (int i = 0; i < samplesRead; ++i) {
+        float sample = static_cast<float>(ctx->audioConversionBuffer[i]) * scale;
+        if (sample > 1.0f) sample = 1.0f;
+        if (sample < -1.0f) sample = -1.0f;
+        buffer[i * 2] = sample;
+        buffer[i * 2 + 1] = sample;
+    }
+    
+    // Zero-fill remainder
+    if (samplesRead < frames) {
+        std::memset(buffer + samplesRead * 2, 0, (frames - samplesRead) * 2 * sizeof(float));
+    }
+
+    if (outFramesWritten) {
+        *outFramesWritten = samplesRead;
+    }
+
+    return ESIM_SUCCESS;
+}
+
 // ============================================================================
 // DIAGNOSTICS & TELEMETRY
 // ============================================================================
