@@ -16,10 +16,14 @@
 // RING BUFFER - Matches engine-sim's RingBuffer<T> semantics
 // ============================================================================
 
+// Matches engine-sim's RingBuffer<T> exactly: size computed from writeIndex - start,
+// no separate m_size field. This is critical for thread safety - write() only modifies
+// m_writePos, readAndRemove/removeBeginning only modify m_readPos, so concurrent
+// access from audio thread (write) and reader thread (readAndRemove) is safe.
 template<typename T>
 class MockRingBuffer {
 public:
-    MockRingBuffer() : m_data(nullptr), m_capacity(0), m_readPos(0), m_writePos(0), m_size(0) {}
+    MockRingBuffer() : m_data(nullptr), m_capacity(0), m_readPos(0), m_writePos(0) {}
     ~MockRingBuffer() { destroy(); }
 
     void initialize(int capacity) {
@@ -28,7 +32,6 @@ public:
         m_data = new T[capacity]();
         m_readPos = 0;
         m_writePos = 0;
-        m_size = 0;
     }
 
     void destroy() {
@@ -37,44 +40,59 @@ public:
         m_capacity = 0;
         m_readPos = 0;
         m_writePos = 0;
-        m_size = 0;
     }
 
     void write(T value) {
-        if (m_size < m_capacity) {
-            m_data[m_writePos] = value;
-            m_writePos = (m_writePos + 1) % m_capacity;
-            ++m_size;
+        m_data[m_writePos] = value;
+        if (++m_writePos >= m_capacity) {
+            m_writePos = 0;
         }
     }
 
     // Read n items into dest without removing them (matches engine-sim's read())
     void read(int n, T* dest) const {
         int pos = m_readPos;
-        for (int i = 0; i < n && i < m_size; ++i) {
+        int avail = size();
+        int count = std::min(n, avail);
+        for (int i = 0; i < count; ++i) {
             dest[i] = m_data[pos];
-            pos = (pos + 1) % m_capacity;
+            if (++pos >= m_capacity) pos = 0;
         }
     }
 
     // Read and remove n items (matches engine-sim's readAndRemove())
     void readAndRemove(int n, T* dest) {
-        int count = std::min(n, m_size);
-        for (int i = 0; i < count; ++i) {
-            dest[i] = m_data[m_readPos];
-            m_readPos = (m_readPos + 1) % m_capacity;
+        int avail = size();
+        int count = std::min(n, avail);
+        if (m_readPos + count <= m_capacity) {
+            std::memcpy(dest, m_data + m_readPos, count * sizeof(T));
+        } else {
+            int firstPart = m_capacity - m_readPos;
+            std::memcpy(dest, m_data + m_readPos, firstPart * sizeof(T));
+            std::memcpy(dest + firstPart, m_data, (count - firstPart) * sizeof(T));
         }
-        m_size -= count;
+        m_readPos += count;
+        if (m_readPos >= m_capacity) {
+            m_readPos -= m_capacity;
+        }
     }
 
     // Remove n items from the beginning (matches engine-sim's removeBeginning())
     void removeBeginning(int n) {
-        int count = std::min(n, m_size);
-        m_readPos = (m_readPos + count) % m_capacity;
-        m_size -= count;
+        int avail = size();
+        int count = std::min(n, avail);
+        m_readPos += count;
+        if (m_readPos >= m_capacity) {
+            m_readPos -= m_capacity;
+        }
     }
 
-    int size() const { return m_size; }
+    int size() const {
+        return (m_writePos < m_readPos)
+            ? m_writePos + (m_capacity - m_readPos)
+            : m_writePos - m_readPos;
+    }
+
     int capacity() const { return m_capacity; }
 
     size_t writeIndex() const { return m_writePos; }
@@ -84,7 +102,6 @@ private:
     int m_capacity;
     int m_readPos;
     int m_writePos;
-    int m_size;
 };
 
 // ============================================================================
