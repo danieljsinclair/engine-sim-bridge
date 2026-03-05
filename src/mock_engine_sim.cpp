@@ -152,23 +152,10 @@ public:
         m_processed = true;
         m_inputSamplesRead = 0;
 
-        // Dynamic target buffer level based on exhaust system count
-        // Matches real Synthesizer's buffer sizing logic
-        // Base target: 20000 samples * exhaust system count (increased from 10000 to handle CLI consumption rate)
-        // CLI reads 735 samples per iteration at 60Hz, so we need enough buffer to avoid oscillation
-        // Increased to 20000 to prevent the buffer from oscillating between full and empty
-        m_targetBufferLevel = 20000 * m_inputChannelCount;
-        std::cout << "[MOCK SYNTH] inputChannelCount: " << m_inputChannelCount << std::endl;
-
-        // Multi-exhaust engines need extra buffer for computational load
-        // This matches real Synthesizer logic
-        // Adds 20000 samples per additional exhaust system beyond the first (increased from 10000)
-        if (m_inputChannelCount > 1) {
-            int extraBuffer = (m_inputChannelCount - 1) * 20000;
-            m_targetBufferLevel += extraBuffer;
-            std::cout << "[MOCK SYNTH] Multi-exhaust engine detected - added " << extraBuffer
-                      << " samples (total: " << m_targetBufferLevel << ")\n";
-        }
+        // Target buffer level matches real Synthesizer (hardcoded 2000 in synthesizer.cpp:228)
+        m_targetBufferLevel = 2000;
+        std::cout << "[MOCK SYNTH] inputChannelCount: " << m_inputChannelCount
+                  << " targetBufferLevel: " << m_targetBufferLevel << std::endl;
 
         // Input channel ring buffer - matches real synthesizer
         m_inputChannel.initialize(inputBufferSize);
@@ -179,12 +166,11 @@ public:
         // Transfer buffer for reading input data
         m_transferBuffer.resize(inputBufferSize, 0.0f);
 
-        // Pre-fill audio buffer with a SMALL amount to prevent initial underruns.
-        // CRITICAL: Must be LESS than targetBufferLevel so audio thread can wake up.
-        // The wait condition is: m_audioBuffer.size() < targetBufferLevel
-        // If we pre-fill to targetBufferLevel, the audio thread will deadlock.
-        const int preFillAmount = std::min(500, m_audioBufferSize);  // Small pre-fill
-        for (int i = 0; i < preFillAmount; ++i) {
+        // Pre-fill entire audio buffer with silence - matches real synthesizer
+        // (synthesizer.cpp:81-83). This provides >2s of headroom at 44.1kHz.
+        // The audio thread will wait until readAudioOutput drains below
+        // targetBufferLevel (2000), which is the correct behavior.
+        for (int i = 0; i < audioBufferSize; ++i) {
             m_audioBuffer.write(0);
         }
     }
@@ -380,8 +366,8 @@ private:
     double m_audioSampleRate;
     int m_inputBufferSize;
     int m_audioBufferSize;
-    int m_inputChannelCount;  // Number of exhaust systems (for dynamic buffer sizing)
-    int m_targetBufferLevel;    // Dynamic target based on exhaust system count
+    int m_inputChannelCount;  // Number of exhaust systems
+    int m_targetBufferLevel;    // Target audio buffer level (matches real synthesizer's 2000)
     double m_resampleAccumulator;    // Fractional accumulator for sim→audio resampling
 
     // Sine wave phase (used by the simulation step, not the audio thread)
