@@ -69,3 +69,25 @@ install(TARGETS engine-sim-bridge
     LIBRARY DESTINATION lib
     PUBLIC_HEADER DESTINATION include
 )
+
+# -----------------------------------------------------------------------------
+# Unit tests (optional, requires GoogleTest)
+# -----------------------------------------------------------------------------
+option(BUILD_BRIDGE_TESTS "Build engine-sim-bridge unit tests" OFF)
+if(BUILD_BRIDGE_TESTS)
+    find_package(GTest REQUIRED)
+    enable_testing()
+
+    add_executable(mock_engine_tests
+        test/mock_engine_tests.cpp
+    )
+    target_include_directories(mock_engine_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(mock_engine_tests
+        PRIVATE
+            engine-sim-bridge
+            GTest::gtest_main
+    )
+    add_test(NAME mock_engine_tests COMMAND mock_engine_tests)
+endif()
