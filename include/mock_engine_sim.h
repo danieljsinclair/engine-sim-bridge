@@ -264,6 +264,27 @@ EngineSimResult EngineSimReadAudioBuffer(
 );
 
 /**
+ * Render audio synchronously on-demand (sync-pull model).
+ * Runs simulation for the requested frame duration, then renders audio
+ * directly without using the audio thread or pre-filled buffer.
+ *
+ * @param handle Simulator handle
+ * @param buffer Output buffer for stereo float samples
+ * @param frames Number of frames to render
+ * @param outFramesWritten Number of frames actually written
+ * @return ESIM_SUCCESS on success, error code otherwise
+ *
+ * Thread Safety: Safe to call from any thread
+ * Allocations: NONE
+ */
+EngineSimResult EngineSimRenderOnDemand(
+    EngineSimHandle handle,
+    float* buffer,
+    int32_t frames,
+    int32_t* outFramesWritten
+);
+
+/**
  * Waits for the audio rendering thread to finish processing the current frame.
  * This ensures the audio buffer is fully populated before reading, preventing
  * race conditions and underruns.
