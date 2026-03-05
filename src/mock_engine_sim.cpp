@@ -1191,6 +1191,62 @@ EngineSimResult EngineSimSetRPM(
     return ESIM_SUCCESS;
 }
 
+EngineSimResult EngineSimRenderOnDemand(
+    EngineSimHandle handle,
+    float* buffer,
+    int32_t frames,
+    int32_t* outFramesWritten)
+{
+    if (!validateHandle(handle)) {
+        return ESIM_ERROR_INVALID_HANDLE;
+    }
+
+    if (!buffer || frames <= 0) {
+        return ESIM_ERROR_INVALID_PARAMETER;
+    }
+
+    MockEngineSimContext* ctx = getContext(handle);
+
+    // Run simulation for this audio frame (matches real bridge RenderOnDemand)
+    const double dt = static_cast<double>(frames) / ctx->config.sampleRate;
+    ctx->startFrame(dt);
+    while (ctx->simulateStep()) {
+        // Process all simulation steps
+    }
+    ctx->endFrame();
+
+    // Update stats so GetStats() returns current values in sync-pull mode
+    ctx->stats.currentRPM = ctx->currentRPM.load(std::memory_order_relaxed);
+    ctx->stats.currentLoad = ctx->throttlePosition.load(std::memory_order_relaxed);
+
+    // Synchronous render (no audio thread needed)
+    ctx->synthesizer.renderAudioSync();
+
+    int32_t samplesRead = ctx->synthesizer.readAudioOutput(
+        frames, ctx->audioConversionBuffer.data());
+
+    // Convert int16 -> float stereo (matches real bridge pattern)
+    constexpr float scale = 0.5f / 32768.0f;
+    for (int32_t i = 0; i < samplesRead; ++i) {
+        float sample = static_cast<float>(ctx->audioConversionBuffer[i]) * scale;
+        if (sample > 1.0f) sample = 1.0f;
+        if (sample < -1.0f) sample = -1.0f;
+        buffer[i * 2] = sample;
+        buffer[i * 2 + 1] = sample;
+    }
+
+    // Zero-fill remainder
+    if (samplesRead < frames) {
+        std::memset(buffer + samplesRead * 2, 0, (frames - samplesRead) * 2 * sizeof(float));
+    }
+
+    if (outFramesWritten) {
+        *outFramesWritten = samplesRead;
+    }
+
+    return ESIM_SUCCESS;
+}
+
 EngineSimResult EngineSimWaitForAudioFrame(
     EngineSimHandle handle)
 {

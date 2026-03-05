@@ -699,6 +699,14 @@ EngineSimResult EngineSimRenderOnDemand(
     
     ctx->simulator->endFrame();
 
+    // Update statistics (same as EngineSimUpdate, needed because sync-pull
+    // mode skips Update() and relies solely on RenderOnDemand)
+    double throttle = ctx->throttlePosition.load(std::memory_order_relaxed);
+    ctx->stats.currentRPM = units::toRpm(ctx->engine->getSpeed());
+    ctx->stats.currentLoad = throttle;
+    ctx->stats.exhaustFlow = ctx->simulator->getTotalExhaustFlow();
+    ctx->stats.processingTimeMs = ctx->simulator->getAverageProcessingTime() * 1000.0;
+
     // Render and read audio
     ctx->simulator->synthesizer().renderAudioOnDemand();
 
