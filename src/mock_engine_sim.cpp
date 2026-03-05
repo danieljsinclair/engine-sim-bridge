@@ -131,7 +131,9 @@ public:
         , m_inputChannelCount(1)
         , m_targetBufferLevel(2000)
         , m_latency(0)
-        , m_resampleAccumulator(0.0)
+        , m_inputWriteOffset(0.0)
+        , m_lastInputSampleOffset(0.0)
+        , m_lastInputSample(0.0f)
         , m_sinePhase(0.0)
     {}
 
@@ -148,7 +150,9 @@ public:
         m_inputChannelCount = inputChannelCount;
         m_inputSampleRate = inputSampleRate;
         m_audioSampleRate = audioSampleRate;
-        m_resampleAccumulator = 0.0;
+        m_inputWriteOffset = 0.0;
+        m_lastInputSampleOffset = 0.0;
+        m_lastInputSample = 0.0f;
         m_processed = true;
         m_inputSamplesRead = 0;
 
@@ -192,20 +196,30 @@ public:
     }
 
     // Called from main thread during simulateStep() - feeds one sample per step
-    // Replicates Synthesizer::writeInput() with proper upsampling from sim rate to audio rate
+    // Replicates Synthesizer::writeInput() with linear interpolation (synthesizer.cpp:176-202)
     void writeInput(float sample) {
-        // Resample from simulation rate (10kHz) to audio rate (44.1kHz)
-        // Each simulation step should produce ~4.41 audio-rate samples on average
-        // Use fractional accumulator for jitter-free sample rate conversion
-        m_resampleAccumulator += m_audioSampleRate / m_inputSampleRate;
-
-        // Write one audio-rate sample for each whole unit accumulated
-        int samplesToWrite = static_cast<int>(m_resampleAccumulator);
-        m_resampleAccumulator -= samplesToWrite;
-
-        for (int i = 0; i < samplesToWrite; ++i) {
-            m_inputChannel.write(sample);
+        // Advance write offset by audio/input ratio (matches real synthesizer)
+        m_inputWriteOffset += m_audioSampleRate / m_inputSampleRate;
+        if (m_inputWriteOffset >= static_cast<double>(m_inputBufferSize)) {
+            m_inputWriteOffset -= static_cast<double>(m_inputBufferSize);
         }
+
+        // Calculate distance between current and last write positions
+        double distance = m_inputWriteOffset - m_lastInputSampleOffset;
+        if (distance < 0) distance += m_inputBufferSize;
+        if (distance == 0) distance = 1.0;
+
+        // Linear interpolation from last sample to current sample
+        double s = 1.0;
+        for (; s <= distance; s += 1.0) {
+            const double f = s / distance;
+            const float interpolated = static_cast<float>(
+                m_lastInputSample * (1.0 - f) + sample * f);
+            m_inputChannel.write(interpolated);
+        }
+
+        m_lastInputSample = sample;
+        m_lastInputSampleOffset = m_inputWriteOffset;
     }
 
     // Called from main thread at end of frame - signals audio thread
@@ -403,7 +417,9 @@ private:
     int m_audioBufferSize;
     int m_inputChannelCount;  // Number of exhaust systems
     int m_targetBufferLevel;    // Target audio buffer level (matches real synthesizer's 2000)
-    double m_resampleAccumulator;    // Fractional accumulator for sim→audio resampling
+    double m_inputWriteOffset;       // Fractional write position (matches real synthesizer)
+    double m_lastInputSampleOffset;  // Last write position for interpolation
+    float m_lastInputSample;         // Previous sample for linear interpolation
 
     // Sine wave phase (used by the simulation step, not the audio thread)
     double m_sinePhase;
