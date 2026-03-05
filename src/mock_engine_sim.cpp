@@ -211,7 +211,7 @@ public:
     // Called from main thread at end of frame - signals audio thread
     // Replicates Synthesizer::endInputBlock()
     void endInputBlock() {
-        std::unique_lock<std::mutex> lk(m_lock0);  // FIX: Use m_lock0, not m_inputLock (matches real synthesizer)
+        std::unique_lock<std::mutex> lk(m_inputLock);  // Matches real synthesizer (synthesizer.cpp:206)
 
         // Remove samples that the audio thread already processed
         m_inputChannel.removeBeginning(m_inputSamplesRead);
