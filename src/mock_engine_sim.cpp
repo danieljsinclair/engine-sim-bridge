@@ -264,18 +264,24 @@ public:
     }
 
     // Synchronous audio render: process all pending input without cv0/audio thread.
-    // Used for WAV-only export mode where no audio thread is running.
+    // Matches real Synthesizer::renderAudioOnDemand() (synthesizer.cpp:258-293):
+    // - Uses read() (non-destructive), not readAndRemove()
+    // - Sets m_inputSamplesRead so endInputBlock() can properly remove processed samples
+    // - This keeps latency measurement accurate for the step adjustment in startFrame()
     void renderAudioSync() {
         std::lock_guard<std::mutex> lock(m_lock0);
 
-        const int available = m_inputChannel.size();
-        if (available <= 0) return;
+        const int n = std::min(
+            m_inputChannel.size(),
+            static_cast<int>(m_transferBuffer.size()));
 
-        const int n = std::min(available, static_cast<int>(m_transferBuffer.size()));
-        // CRITICAL: use readAndRemove (not read) to drain the input buffer.
-        // read() is non-destructive and leaves data in the ring buffer,
-        // causing it to fill to capacity and corrupt at wrap boundaries.
-        m_inputChannel.readAndRemove(n, m_transferBuffer.data());
+        if (n <= 0) return;
+
+        // Non-destructive read - endInputBlock() removes via m_inputSamplesRead
+        m_inputChannel.read(n, m_transferBuffer.data());
+
+        m_inputSamplesRead = n;
+        m_processed = true;
 
         for (int i = 0; i < n; ++i) {
             float sample = m_transferBuffer[i];
@@ -283,8 +289,37 @@ public:
             int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
             m_audioBuffer.write(intSample);
         }
+    }
 
+    // Synchronous fallback: if the audio thread hasn't processed the current
+    // frame yet (!m_processed), process it inline. This is safe because
+    // m_processed acts as a one-shot flag - the audio thread will see
+    // m_processed=true and skip processing when it eventually wakes.
+    void renderAudioSyncFallback() {
+        std::lock_guard<std::mutex> lock(m_lock0);
+
+        if (m_processed) return;  // Audio thread already handled it
+
+        const int targetBufferLevel = m_targetBufferLevel;
+        const int n = std::min(
+            std::max(0, targetBufferLevel - m_audioBuffer.size()),
+            m_inputChannel.size());
+
+        if (n <= 0) {
+            m_processed = true;
+            return;
+        }
+
+        m_inputChannel.read(n, m_transferBuffer.data());
+        m_inputSamplesRead = n;
         m_processed = true;
+
+        for (int i = 0; i < n; ++i) {
+            float sample = m_transferBuffer[i];
+            sample = std::max(-1.0f, std::min(1.0f, sample));
+            int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
+            m_audioBuffer.write(intSample);
+        }
     }
 
     void destroy() {
@@ -327,21 +362,21 @@ private:
         m_inputChannel.read(n, m_transferBuffer.data());
 
         m_inputSamplesRead = n;
-        m_processed = true;
 
-        lk0.unlock();
-
-        // Write processed samples to audio buffer
-        // In real engine-sim, this is where convolution/filtering happens
-        // For mock, we just pass through the sine wave samples
+        // Write processed samples to audio buffer BEFORE setting m_processed.
+        // Real engine-sim does slow convolution after unlocking, which naturally
+        // completes before the next ReadAudioBuffer. Mock processing is trivial,
+        // so the audio thread loses the race. Writing inside the lock ensures
+        // readAudioOutput sees the new samples immediately.
         for (int i = 0; i < n; ++i) {
-            // Convert float [-1.0, 1.0] to int16 [-32768, 32767]
             float sample = m_transferBuffer[i];
             sample = std::max(-1.0f, std::min(1.0f, sample));
             int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
             m_audioBuffer.write(intSample);
         }
 
+        m_processed = true;
+        lk0.unlock();
         m_cv0.notify_one();
     }
 
@@ -922,8 +957,15 @@ EngineSimResult EngineSimReadAudioBuffer(
 
     MockEngineSimContext* ctx = getContext(handle);
 
-    // Read from synthesizer's audio buffer (matches real bridge EXACTLY)
-    // Real bridge: ctx->simulator->readAudioOutput(frames, ctx->audioConversionBuffer)
+    // If there's unprocessed input, process it synchronously as a fallback.
+    // Real engine-sim's audio thread always wins the race because convolution
+    // takes enough time to complete before the next ReadAudioBuffer call.
+    // Mock processing is trivial, so the main loop often reaches ReadAudioBuffer
+    // before the audio thread has been scheduled. This synchronous fallback
+    // ensures the audio pipeline doesn't starve.
+    ctx->synthesizer.renderAudioSyncFallback();
+
+    // Read from synthesizer's audio buffer (matches real bridge)
     int32_t samplesRead = ctx->synthesizer.readAudioOutput(
         frames, ctx->audioConversionBuffer.data());
 
