@@ -396,6 +396,39 @@ EngineSimResult EngineSimSetRPM(
     double rpm
 );
 
+/**
+ * Enables or disables sine wave mode for testing.
+ * When enabled, the mock synthesizer generates pure sine waves
+ * instead of engine audio.
+ *
+ * @param handle Simulator handle
+ * @param enabled 1 to enable sine mode, 0 to disable
+ * @return ESIM_SUCCESS on success
+ *
+ * Thread Safety: Safe to call from any thread
+ * Allocations: NONE
+ */
+EngineSimResult EngineSimSetSineMode(
+    EngineSimHandle handle,
+    int enabled
+);
+
+/**
+ * Sets the frequency for sine wave generation.
+ * Only effective when sine mode is enabled via EngineSimSetSineMode.
+ *
+ * @param handle Simulator handle
+ * @param frequency Frequency in Hz (e.g., 440.0 for A4)
+ * @return ESIM_SUCCESS on success
+ *
+ * Thread Safety: Safe to call from any thread
+ * Allocations: NONE
+ */
+EngineSimResult EngineSimSetSineFrequency(
+    EngineSimHandle handle,
+    double frequency
+);
+
 #ifdef __cplusplus
 }
 #endif

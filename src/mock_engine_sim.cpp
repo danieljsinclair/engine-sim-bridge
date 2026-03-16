@@ -135,6 +135,8 @@ public:
         , m_lastInputSampleOffset(0.0)
         , m_lastInputSample(0.0f)
         , m_sinePhase(0.0)
+        , m_sineModeEnabled(false)
+        , m_sineFrequency(440.0)
     {}
 
     ~MockSynthesizer() {
@@ -277,6 +279,16 @@ public:
         return static_cast<double>(m_latency) / m_audioSampleRate;
     }
 
+    // Enable/disable sine wave mode for testing
+    void setSineMode(bool enabled) {
+        m_sineModeEnabled = enabled;
+    }
+
+    // Set frequency (in Hz) for sine wave generation
+    void setSineFrequency(double frequency) {
+        m_sineFrequency = frequency;
+    }
+
     // Synchronous audio render: process all pending input without cv0/audio thread.
     // Matches real Synthesizer::renderAudioOnDemand() (synthesizer.cpp:258-293):
     // - Uses read() (non-destructive), not readAndRemove()
@@ -328,11 +340,23 @@ public:
         m_inputSamplesRead = n;
         m_processed = true;
 
-        for (int i = 0; i < n; ++i) {
-            float sample = m_transferBuffer[i];
-            sample = std::max(-1.0f, std::min(1.0f, sample));
-            int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
-            m_audioBuffer.write(intSample);
+        // If sine mode enabled, generate sine instead of processing input
+        if (m_sineModeEnabled) {
+            double phaseIncrement = 2.0 * M_PI * m_sineFrequency / m_audioSampleRate;
+            for (int i = 0; i < n; ++i) {
+                float sample = static_cast<float>(sin(m_sinePhase) * 0.9);
+                m_sinePhase += phaseIncrement;
+                if (m_sinePhase >= 2.0 * M_PI) m_sinePhase -= 2.0 * M_PI;
+                int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
+                m_audioBuffer.write(intSample);
+            }
+        } else {
+            for (int i = 0; i < n; ++i) {
+                float sample = m_transferBuffer[i];
+                sample = std::max(-1.0f, std::min(1.0f, sample));
+                int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
+                m_audioBuffer.write(intSample);
+            }
         }
     }
 
@@ -382,11 +406,22 @@ private:
         // completes before the next ReadAudioBuffer. Mock processing is trivial,
         // so the audio thread loses the race. Writing inside the lock ensures
         // readAudioOutput sees the new samples immediately.
-        for (int i = 0; i < n; ++i) {
-            float sample = m_transferBuffer[i];
-            sample = std::max(-1.0f, std::min(1.0f, sample));
-            int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
-            m_audioBuffer.write(intSample);
+        if (m_sineModeEnabled) {
+            double phaseIncrement = 2.0 * M_PI * m_sineFrequency / m_audioSampleRate;
+            for (int i = 0; i < n; ++i) {
+                float sample = static_cast<float>(sin(m_sinePhase) * 0.9);
+                m_sinePhase += phaseIncrement;
+                if (m_sinePhase >= 2.0 * M_PI) m_sinePhase -= 2.0 * M_PI;
+                int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
+                m_audioBuffer.write(intSample);
+            }
+        } else {
+            for (int i = 0; i < n; ++i) {
+                float sample = m_transferBuffer[i];
+                sample = std::max(-1.0f, std::min(1.0f, sample));
+                int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
+                m_audioBuffer.write(intSample);
+            }
         }
 
         m_processed = true;
@@ -423,6 +458,8 @@ private:
 
     // Sine wave phase (used by the simulation step, not the audio thread)
     double m_sinePhase;
+    bool m_sineModeEnabled; // When true, generate sine waves instead of engine audio
+    double m_sineFrequency; // Frequency in Hz for sine wave generation
 
 public:
     // Expose phase for simulation step to use
@@ -477,6 +514,7 @@ struct MockEngineSimContext {
     std::chrono::steady_clock::time_point m_simulationStart;
 
     // Sine wave state (used during simulateStep)
+    bool sineModeEnabled;
     double sinePhase;
 
     // Audio conversion buffer (int16 → float, matches real bridge)
@@ -519,6 +557,7 @@ struct MockEngineSimContext {
         , m_simulationSpeed(1.0)
         , m_physicsProcessingTime(0.0)
         , sinePhase(0.0)
+        , sineModeEnabled(false)
         , inWarmupPhase(false)
         , warmupStartTime(std::chrono::steady_clock::now()) {
 
@@ -1248,6 +1287,35 @@ EngineSimResult EngineSimSetRPM(
 
     MockEngineSimContext* ctx = getContext(handle);
     ctx->targetRPM.store(rpm, std::memory_order_relaxed);
+
+    return ESIM_SUCCESS;
+}
+
+EngineSimResult EngineSimSetSineMode(
+    EngineSimHandle handle,
+    int enabled)
+{
+    if (!validateHandle(handle)) {
+        return ESIM_ERROR_INVALID_HANDLE;
+    }
+
+    MockEngineSimContext* ctx = getContext(handle);
+    ctx->sineModeEnabled = (enabled != 0);
+    ctx->synthesizer.setSineMode(enabled != 0);
+
+    return ESIM_SUCCESS;
+}
+
+EngineSimResult EngineSimSetSineFrequency(
+    EngineSimHandle handle,
+    double frequency)
+{
+    if (!validateHandle(handle)) {
+        return ESIM_ERROR_INVALID_HANDLE;
+    }
+
+    MockEngineSimContext* ctx = getContext(handle);
+    ctx->synthesizer.setSineFrequency(frequency);
 
     return ESIM_SUCCESS;
 }
