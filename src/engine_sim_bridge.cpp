@@ -362,7 +362,7 @@ EngineSimResult EngineSimLoadScript(
             // Extract path up to and including /assets/
             resolvedAssetPath = scriptPathStr.substr(0, assetsPos + 8); // +8 for "/assets/"
         } else {
-            // Fallback: use script's directory
+             // Default: use script's directory
             size_t lastSlash = scriptPathStr.find_last_of('/');
             if (lastSlash != std::string::npos) {
                 resolvedAssetPath = scriptPathStr.substr(0, lastSlash);
@@ -562,16 +562,9 @@ EngineSimResult EngineSimRender(
     }
     renderCount++;
 
-    // Convert mono int16 to stereo float32 [-1.0, 1.0]
-    // This is the CRITICAL PATH - must be FAST and allocation-free
-    // readAudioOutput returns MONO samples, so we duplicate each sample to L and R channels
-    constexpr float scale = 1.0f / 32768.0f;
+    // Convert mono int16 to stereo float32 using shared utility (DRY)
+    EngineSimAudio::convertInt16ToStereoFloat(ctx->audioConversionBuffer, buffer, samplesRead);
 
-    for (int i = 0; i < samplesRead; ++i) {
-        const float sample = static_cast<float>(ctx->audioConversionBuffer[i]) * scale;
-        buffer[i * 2] = sample;     // Left channel
-        buffer[i * 2 + 1] = sample; // Right channel
-    }
 
     // CRITICAL: Zero-fill any remaining frames to prevent crackling from uninitialized memory
     // If we have a buffer underrun (samplesRead < frames), the rest of the buffer
@@ -632,16 +625,8 @@ EngineSimResult EngineSimReadAudioBuffer(
         ctx->audioConversionBuffer
     );
 
-    // Convert mono int16 to stereo float32 [-1.0, 1.0]
-    // This is the CRITICAL PATH - must be FAST and allocation-free
-    // readAudioOutput returns MONO samples, so we duplicate each sample to L and R channels
-    constexpr float scale = 1.0f / 32768.0f;
-
-    for (int i = 0; i < samplesRead; ++i) {
-        const float sample = static_cast<float>(ctx->audioConversionBuffer[i]) * scale;
-        buffer[i * 2] = sample;     // Left channel
-        buffer[i * 2 + 1] = sample; // Right channel
-    }
+    // Convert mono int16 to stereo float32 using shared utility (DRY)
+    EngineSimAudio::convertInt16ToStereoFloat(ctx->audioConversionBuffer, buffer, samplesRead);
 
     // CRITICAL: Zero-fill any remaining frames to prevent crackling from uninitialized memory
     // If we have a buffer underrun (samplesRead < frames), the rest of the buffer
@@ -715,16 +700,8 @@ EngineSimResult EngineSimRenderOnDemand(
         ctx->audioConversionBuffer
     );
 
-    // Convert mono int16 to stereo float with zero-fill for underruns
-    constexpr float scale = 0.5f / 32768.0f;
-    
-    for (int i = 0; i < samplesRead; ++i) {
-        float sample = static_cast<float>(ctx->audioConversionBuffer[i]) * scale;
-        if (sample > 1.0f) sample = 1.0f;
-        if (sample < -1.0f) sample = -1.0f;
-        buffer[i * 2] = sample;
-        buffer[i * 2 + 1] = sample;
-    }
+    // Convert mono int16 to stereo float using shared utility with clipping (DRY)
+    EngineSimAudio::convertInt16ToStereoFloatClipped(ctx->audioConversionBuffer, buffer, samplesRead);
     
     // Zero-fill remainder
     if (samplesRead < frames) {

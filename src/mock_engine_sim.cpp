@@ -105,6 +105,82 @@ private:
 };
 
 // ============================================================================
+// SINE GENERATOR - Bridge-level sine wave generation
+// Used by MockSynthesizer for sine wave mode
+// ============================================================================
+
+class SineGenerator {
+public:
+    SineGenerator() : sampleRate_(44100), phase_(0.0), enabled_(false), frequency_(440.0) {}
+    ~SineGenerator() = default;
+
+    void initialize(int sampleRate) {
+        sampleRate_ = sampleRate;
+        phase_ = 0.0;
+    }
+
+    void setEnabled(bool enabled) { enabled_ = enabled; }
+    bool isEnabled() const { return enabled_; }
+
+    void setFrequency(double frequency) { frequency_ = frequency; }
+    double getFrequency() const { return frequency_; }
+
+    void setPhase(double phase) {
+        const double twoPi = 2.0 * M_PI;
+        phase_ = std::fmod(phase, twoPi);
+        if (phase_ < 0) phase_ += twoPi;
+    }
+    double getPhase() const { return phase_; }
+
+    // Generate sine samples into int16_t buffer (mono)
+    void generate(int16_t* output, int frameCount, double amplitude = 0.9) {
+        if (!enabled_ || !output || frameCount <= 0 || frequency_ <= 0) {
+            return;
+        }
+
+        const double twoPi = 2.0 * M_PI;
+        const double phaseIncrement = twoPi * frequency_ / sampleRate_;
+
+        for (int i = 0; i < frameCount; i++) {
+            double sample = amplitude * std::sin(phase_);
+            output[i] = static_cast<int16_t>(sample * 32767.0);
+
+            phase_ += phaseIncrement;
+            if (phase_ >= twoPi) {
+                phase_ -= twoPi;
+            }
+        }
+    }
+
+    // Generate sine samples into float buffer (stereo interleaved)
+    void generateStereo(float* output, int frameCount, double amplitude = 0.9) {
+        if (!enabled_ || !output || frameCount <= 0 || frequency_ <= 0) {
+            return;
+        }
+
+        const double twoPi = 2.0 * M_PI;
+        const double phaseIncrement = twoPi * frequency_ / sampleRate_;
+
+        for (int i = 0; i < frameCount; i++) {
+            double sample = amplitude * std::sin(phase_);
+            output[i * 2] = static_cast<float>(sample);     // Left
+            output[i * 2 + 1] = static_cast<float>(sample); // Right
+
+            phase_ += phaseIncrement;
+            if (phase_ >= twoPi) {
+                phase_ -= twoPi;
+            }
+        }
+    }
+
+private:
+    int sampleRate_;
+    double phase_;
+    bool enabled_;
+    double frequency_;
+};
+
+// ============================================================================
 // MOCK SYNTHESIZER - Replicates engine-sim Synthesizer threading pattern
 //
 // Real engine-sim flow:
@@ -134,10 +210,7 @@ public:
         , m_inputWriteOffset(0.0)
         , m_lastInputSampleOffset(0.0)
         , m_lastInputSample(0.0f)
-        , m_sinePhase(0.0)
-        , m_sineModeEnabled(false)
-        , m_sineFrequency(440.0)
-    {}
+        , sineGenerator_()    {}
 
     ~MockSynthesizer() {
         if (m_thread != nullptr) {
@@ -158,6 +231,8 @@ public:
         m_processed = true;
         m_inputSamplesRead = 0;
 
+        // Initialize sine generator
+        sineGenerator_.initialize(static_cast<int>(audioSampleRate));
         // Target buffer level matches real Synthesizer (hardcoded 2000 in synthesizer.cpp:228)
         m_targetBufferLevel = 2000;
         std::cout << "[MOCK SYNTH] inputChannelCount: " << m_inputChannelCount
@@ -279,15 +354,17 @@ public:
         return static_cast<double>(m_latency) / m_audioSampleRate;
     }
 
+
     // Enable/disable sine wave mode for testing
     void setSineMode(bool enabled) {
-        m_sineModeEnabled = enabled;
+        sineGenerator_.setEnabled(enabled);
     }
 
     // Set frequency (in Hz) for sine wave generation
     void setSineFrequency(double frequency) {
-        m_sineFrequency = frequency;
+        sineGenerator_.setFrequency(frequency);
     }
+
 
     // Synchronous audio render: process all pending input without cv0/audio thread.
     // Matches real Synthesizer::renderAudioOnDemand() (synthesizer.cpp:258-293):
@@ -317,48 +394,6 @@ public:
         }
     }
 
-    // Synchronous fallback: if the audio thread hasn't processed the current
-    // frame yet (!m_processed), process it inline. This is safe because
-    // m_processed acts as a one-shot flag - the audio thread will see
-    // m_processed=true and skip processing when it eventually wakes.
-    void renderAudioSyncFallback() {
-        std::lock_guard<std::mutex> lock(m_lock0);
-
-        if (m_processed) return;  // Audio thread already handled it
-
-        const int targetBufferLevel = m_targetBufferLevel;
-        const int n = std::min(
-            std::max(0, targetBufferLevel - m_audioBuffer.size()),
-            m_inputChannel.size());
-
-        if (n <= 0) {
-            m_processed = true;
-            return;
-        }
-
-        m_inputChannel.read(n, m_transferBuffer.data());
-        m_inputSamplesRead = n;
-        m_processed = true;
-
-        // If sine mode enabled, generate sine instead of processing input
-        if (m_sineModeEnabled) {
-            double phaseIncrement = 2.0 * M_PI * m_sineFrequency / m_audioSampleRate;
-            for (int i = 0; i < n; ++i) {
-                float sample = static_cast<float>(sin(m_sinePhase) * 0.9);
-                m_sinePhase += phaseIncrement;
-                if (m_sinePhase >= 2.0 * M_PI) m_sinePhase -= 2.0 * M_PI;
-                int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
-                m_audioBuffer.write(intSample);
-            }
-        } else {
-            for (int i = 0; i < n; ++i) {
-                float sample = m_transferBuffer[i];
-                sample = std::max(-1.0f, std::min(1.0f, sample));
-                int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
-                m_audioBuffer.write(intSample);
-            }
-        }
-    }
 
     void destroy() {
         m_audioBuffer.destroy();
@@ -406,14 +441,12 @@ private:
         // completes before the next ReadAudioBuffer. Mock processing is trivial,
         // so the audio thread loses the race. Writing inside the lock ensures
         // readAudioOutput sees the new samples immediately.
-        if (m_sineModeEnabled) {
-            double phaseIncrement = 2.0 * M_PI * m_sineFrequency / m_audioSampleRate;
+        // Use SineGenerator for sine mode
+        if (sineGenerator_.isEnabled()) {
+            std::vector<int16_t> sineBuffer(n);
+            sineGenerator_.generate(sineBuffer.data(), n);
             for (int i = 0; i < n; ++i) {
-                float sample = static_cast<float>(sin(m_sinePhase) * 0.9);
-                m_sinePhase += phaseIncrement;
-                if (m_sinePhase >= 2.0 * M_PI) m_sinePhase -= 2.0 * M_PI;
-                int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
-                m_audioBuffer.write(intSample);
+                m_audioBuffer.write(sineBuffer[i]);
             }
         } else {
             for (int i = 0; i < n; ++i) {
@@ -423,7 +456,6 @@ private:
                 m_audioBuffer.write(intSample);
             }
         }
-
         m_processed = true;
         lk0.unlock();
         m_cv0.notify_one();
@@ -456,14 +488,12 @@ private:
     double m_lastInputSampleOffset;  // Last write position for interpolation
     float m_lastInputSample;         // Previous sample for linear interpolation
 
-    // Sine wave phase (used by the simulation step, not the audio thread)
-    double m_sinePhase;
-    bool m_sineModeEnabled; // When true, generate sine waves instead of engine audio
-    double m_sineFrequency; // Frequency in Hz for sine wave generation
+    // Sine generator for sine wave mode
+    SineGenerator sineGenerator_;
 
 public:
-    // Expose phase for simulation step to use
-    double& sinePhase() { return m_sinePhase; }
+    // Expose sine generator for external access
+    SineGenerator& getSineGenerator() { return sineGenerator_; }
 };
 
 // ============================================================================
@@ -982,12 +1012,8 @@ EngineSimResult EngineSimRender(
     int32_t samplesRead = ctx->synthesizer.readAudioOutput(
         frames, ctx->audioConversionBuffer.data());
 
-    // Convert int16 → float stereo (matches real bridge pattern exactly)
-    for (int32_t i = 0; i < samplesRead; ++i) {
-        float sample = static_cast<float>(ctx->audioConversionBuffer[i]) / 32768.0f;
-        buffer[i * 2] = sample;
-        buffer[i * 2 + 1] = sample;
-    }
+    // Convert int16 → float stereo using shared utility (DRY)
+    EngineSimAudio::convertInt16ToStereoFloat(ctx->audioConversionBuffer.data(), buffer, samplesRead);
 
     if (outSamplesWritten) {
         *outSamplesWritten = samplesRead;
@@ -1012,24 +1038,13 @@ EngineSimResult EngineSimReadAudioBuffer(
 
     MockEngineSimContext* ctx = getContext(handle);
 
-    // If there's unprocessed input, process it synchronously as a fallback.
-    // Real engine-sim's audio thread always wins the race because convolution
-    // takes enough time to complete before the next ReadAudioBuffer call.
-    // Mock processing is trivial, so the main loop often reaches ReadAudioBuffer
-    // before the audio thread has been scheduled. This synchronous fallback
-    // ensures the audio pipeline doesn't starve.
-    ctx->synthesizer.renderAudioSyncFallback();
 
     // Read from synthesizer's audio buffer (matches real bridge)
     int32_t samplesRead = ctx->synthesizer.readAudioOutput(
         frames, ctx->audioConversionBuffer.data());
 
-    // Convert int16 → float stereo (matches real bridge pattern)
-    for (int32_t i = 0; i < samplesRead; ++i) {
-        float sample = static_cast<float>(ctx->audioConversionBuffer[i]) / 32768.0f;
-        buffer[i * 2] = sample;
-        buffer[i * 2 + 1] = sample;
-    }
+    // Convert int16 → float stereo using shared utility (DRY)
+    EngineSimAudio::convertInt16ToStereoFloat(ctx->audioConversionBuffer.data(), buffer, samplesRead);
 
     if (outSamplesRead) {
         *outSamplesRead = samplesRead;
@@ -1354,15 +1369,8 @@ EngineSimResult EngineSimRenderOnDemand(
     int32_t samplesRead = ctx->synthesizer.readAudioOutput(
         frames, ctx->audioConversionBuffer.data());
 
-    // Convert int16 -> float stereo (matches real bridge pattern)
-    constexpr float scale = 0.5f / 32768.0f;
-    for (int32_t i = 0; i < samplesRead; ++i) {
-        float sample = static_cast<float>(ctx->audioConversionBuffer[i]) * scale;
-        if (sample > 1.0f) sample = 1.0f;
-        if (sample < -1.0f) sample = -1.0f;
-        buffer[i * 2] = sample;
-        buffer[i * 2 + 1] = sample;
-    }
+    // Convert int16 -> float stereo using shared utility with clipping (DRY)
+    EngineSimAudio::convertInt16ToStereoFloatClipped(ctx->audioConversionBuffer.data(), buffer, samplesRead);
 
     // Zero-fill remainder
     if (samplesRead < frames) {

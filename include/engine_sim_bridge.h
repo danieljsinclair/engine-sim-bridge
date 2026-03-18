@@ -99,7 +99,7 @@ EngineSimResult EngineSimCreate(
 EngineSimResult EngineSimLoadScript(
     EngineSimHandle handle,
     const char* scriptPath,
-    const char* assetBasePath  // Optional, null = use default
+    const char* assetBasePath
 );
 
 /**
@@ -336,7 +336,7 @@ EngineSimResult EngineSimRenderOnDemand(
  */
 
 // ============================================================================
-// DIAGNOSTICS & TELEMETRY (Optional)
+// DIAGNOSTICS & TELEMETRY
 // ============================================================================
 
 /**
@@ -417,6 +417,47 @@ EngineSimResult EngineSimLoadImpulseResponse(
 
 #ifdef __cplusplus
 }
+#endif
+
+// ============================================================================
+// SHARED AUDIO UTILITIES (DRY principle)
+// Used by both bridge and mock implementations
+// ============================================================================
+
+#ifdef __cplusplus
+
+namespace EngineSimAudio {
+
+/**
+ * Converts mono int16 samples to stereo float32 (interleaved).
+ * Uses correct scale factor: 1.0/32768.0 (NOT 0.5/32768.0).
+ * This matches the audio hardware full-scale range.
+ */
+inline void convertInt16ToStereoFloat(const int16_t* input, float* output, int32_t frameCount) {
+    constexpr float scale = 1.0f / 32768.0f;
+    for (int32_t i = 0; i < frameCount; ++i) {
+        const float sample = static_cast<float>(input[i]) * scale;
+        output[i * 2] = sample;     // Left channel
+        output[i * 2 + 1] = sample; // Right channel
+    }
+}
+
+/**
+ * Converts mono int16 samples to stereo float32 with clipping protection.
+ * Uses correct scale factor: 1.0/32768.0
+ */
+inline void convertInt16ToStereoFloatClipped(const int16_t* input, float* output, int32_t frameCount) {
+    constexpr float scale = 1.0f / 32768.0f;
+    for (int32_t i = 0; i < frameCount; ++i) {
+        float sample = static_cast<float>(input[i]) * scale;
+        if (sample > 1.0f) sample = 1.0f;
+        if (sample < -1.0f) sample = -1.0f;
+        output[i * 2] = sample;
+        output[i * 2 + 1] = sample;
+    }
+}
+
+} // namespace EngineSimAudio
 #endif
 
 #endif /* ATG_ENGINE_SIM_BRIDGE_H */
