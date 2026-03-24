@@ -39,6 +39,10 @@ struct EngineSimContext {
     std::string lastError;
     std::mutex errorMutex;
 
+    // Warmup phase tracking for cranking volume
+    bool inWarmupPhase;
+    bool ignitionWasEnabled;
+
     // Audio conversion buffer (reused, allocation-free after init)
     int16_t* audioConversionBuffer;
     size_t conversionBufferSize;
@@ -57,6 +61,8 @@ struct EngineSimContext {
         , vehicle(nullptr)
         , transmission(nullptr)
         , throttlePosition(0.0)
+        , inWarmupPhase(false)
+        , ignitionWasEnabled(false)
         , audioConversionBuffer(nullptr)
         , conversionBufferSize(0)
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
@@ -125,6 +131,8 @@ static void setDefaultConfig(EngineSimConfig* config) {
     config->volume = 0.5f;
     config->convolutionLevel = 1.0f;
     config->airNoise = 1.0f;
+    config->starterVolume = 1.0f;       // Default no boost
+    config->starterRPMThreshold = 600.0f; // RPM below which starter volume applies
 }
 
 // ============================================================================
@@ -484,6 +492,30 @@ EngineSimResult EngineSimUpdate(
         ctx->stats.currentLoad = throttle;
         ctx->stats.exhaustFlow = ctx->simulator->getTotalExhaustFlow();
         ctx->stats.processingTimeMs = ctx->simulator->getAverageProcessingTime() * 1000.0;
+    // Apply cranking volume boost during CRANKING (not warmup)
+    // Cranking = ignition ON + low RPM + no exhaust flow (engine hasn't fired yet)
+    // Warmup happens BEFORE ignition, cranking happens AFTER ignition when engine is turning over
+    if (ctx->simulator && ctx->simulator->getEngine()) {
+        bool ignEnabled = ctx->simulator->getEngine()->getIgnitionModule()->m_enabled;
+        double curRPM = ctx->stats.currentRPM;
+        double curFlow = ctx->stats.exhaustFlow;
+        const float flowThreshold = 0.001f; // m3/s - essentially zero flow during cranking
+        const float warmupEndRPM = 800.0f;
+
+        // Exit warmup phase when RPM exceeds warmup threshold
+        if (ctx->inWarmupPhase && curRPM > warmupEndRPM) {
+            ctx->inWarmupPhase = false;
+        }
+
+        // Apply cranking volume if: ignition ON, NOT in warmup, RPM < threshold, exhaust flow ~0
+        if (ignEnabled && !ctx->inWarmupPhase && curRPM < ctx->config.starterRPMThreshold && curFlow < flowThreshold) {
+            Synthesizer::AudioParameters params = ctx->simulator->synthesizer().getAudioParameters();
+            params.volume *= ctx->config.starterVolume;
+            ctx->simulator->synthesizer().setAudioParameters(params);
+            std::cout << "[CRANKING DIAG] Cranking volume applied: RPM=" << curRPM << " threshold=" << ctx->config.starterRPMThreshold << " flow=" << curFlow << " volume=" << params.volume << "\n";
+        }
+    }
+
     }
 
     return ESIM_SUCCESS;
@@ -691,6 +723,30 @@ EngineSimResult EngineSimRenderOnDemand(
     ctx->stats.currentLoad = throttle;
     ctx->stats.exhaustFlow = ctx->simulator->getTotalExhaustFlow();
     ctx->stats.processingTimeMs = ctx->simulator->getAverageProcessingTime() * 1000.0;
+    // Apply cranking volume boost during CRANKING (not warmup)
+    // Cranking = ignition ON + low RPM + no exhaust flow (engine hasn't fired yet)
+    // Warmup happens BEFORE ignition, cranking happens AFTER ignition when engine is turning over
+    if (ctx->simulator && ctx->simulator->getEngine()) {
+        bool ignEnabled = ctx->simulator->getEngine()->getIgnitionModule()->m_enabled;
+        double curRPM = ctx->stats.currentRPM;
+        double curFlow = ctx->stats.exhaustFlow;
+        const float flowThreshold = 0.001f; // m3/s - essentially zero flow during cranking
+        const float warmupEndRPM = 800.0f;
+
+        // Exit warmup phase when RPM exceeds warmup threshold
+        if (ctx->inWarmupPhase && curRPM > warmupEndRPM) {
+            ctx->inWarmupPhase = false;
+        }
+
+        // Apply cranking volume if: ignition ON, NOT in warmup, RPM < threshold, exhaust flow ~0
+        if (ignEnabled && !ctx->inWarmupPhase && curRPM < ctx->config.starterRPMThreshold && curFlow < flowThreshold) {
+            Synthesizer::AudioParameters params = ctx->simulator->synthesizer().getAudioParameters();
+            params.volume *= ctx->config.starterVolume;
+            ctx->simulator->synthesizer().setAudioParameters(params);
+            std::cout << "[CRANKING DIAG] Cranking volume applied: RPM=" << curRPM << " threshold=" << ctx->config.starterRPMThreshold << " flow=" << curFlow << " volume=" << params.volume << "\n";
+        }
+    }
+
 
     // Render and read audio
     ctx->simulator->synthesizer().renderAudioOnDemand();
@@ -872,6 +928,17 @@ EngineSimResult EngineSimSetIgnition(
 
     if (ctx->simulator && ctx->simulator->getEngine()) {
         ctx->simulator->getEngine()->getIgnitionModule()->m_enabled = (enabled != 0);
+
+        // Track warmup phase for cranking volume
+        // Enter warmup when ignition is first enabled
+        if (enabled != 0 && !ctx->ignitionWasEnabled) {
+            ctx->inWarmupPhase = true;
+            ctx->ignitionWasEnabled = true;
+        } else if (enabled == 0) {
+            ctx->ignitionWasEnabled = false;
+            ctx->inWarmupPhase = false;
+        }
+
         return ESIM_SUCCESS;
     }
 
@@ -995,6 +1062,25 @@ EngineSimResult EngineSimLoadImpulseResponse(
         volume,
         exhaustIndex
     );
+
+    return ESIM_SUCCESS;
+}
+
+EngineSimResult EngineSimSetStarterVolume(
+    EngineSimHandle handle,
+    float volume)
+{
+    if (!validateHandle(handle)) {
+        return ESIM_ERROR_INVALID_HANDLE;
+    }
+
+    // Clamp volume to reasonable range
+    if (volume < 0.0f) volume = 0.0f;
+    if (volume > 10.0f) volume = 10.0f;
+
+    // Store the starter volume in config for use during cranking
+    EngineSimContext* ctx = getContext(handle);
+    ctx->config.starterVolume = volume;
 
     return ESIM_SUCCESS;
 }

@@ -49,6 +49,8 @@ typedef struct {
     float volume;                    // Master volume (0.0 - 2.0)
     float convolutionLevel;          // Convolution mix (0.0 - 1.0)
     float airNoise;                  // Air intake noise (0.0 - 2.0)
+    float starterVolume;            // Starter/cranking volume boost (0.0 - 10.0, default 1.0)
+    float starterRPMThreshold;     // RPM below which starter volume applies (default 600)
 
 } EngineSimConfig;
 
@@ -412,6 +414,22 @@ EngineSimResult EngineSimLoadImpulseResponse(
     int exhaustIndex,
     const int16_t* impulseData,
     int sampleCount,
+    float volume
+);
+
+/**
+ * Sets the starter motor volume boost at runtime.
+ * This applies a volume multiplier when RPM is below the threshold.
+ *
+ * @param handle Simulator handle
+ * @param volume Volume multiplier (0.0 - 10.0, default 1.0)
+ * @return ESIM_SUCCESS on success, error code otherwise
+ *
+ * Thread Safety: Safe to call from any thread
+ * Allocations: NONE
+ */
+EngineSimResult EngineSimSetStarterVolume(
+    EngineSimHandle handle,
     float volume
 );
 

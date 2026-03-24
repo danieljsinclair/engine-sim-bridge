@@ -803,8 +803,27 @@ struct MockEngineSimContext {
         // Phase increment at simulation rate
         double phaseIncrement = 2.0 * M_PI * frequency / config.simulationFrequency;
 
+        // Apply starter volume boost during CRANKING (not warmup)
+        // Cranking = ignition ON + low RPM + no exhaust flow (engine hasn't fired yet)
+        // Warmup happens BEFORE ignition, cranking happens AFTER ignition when engine is turning over
+        float effectiveVolume = config.volume;
+        
+        int ignEnabled = ignitionEnabled.load(std::memory_order_relaxed);
+        double curFlow = stats.exhaustFlow;
+        
+        // Cranking conditions (all must be true):
+        // - Ignition is ON
+        // - NOT in warmup phase (warmup is before engine tries to start)
+        // - RPM is below threshold (50-600 RPM range for cranking)
+        // - Exhaust flow is essentially zero (engine hasn't fired/combusted yet)
+        const float flowThreshold = 0.001; // m3/s - essentially zero flow during cranking
+        
+        if (ignEnabled != 0 && !inWarmupPhase && curRPM < config.starterRPMThreshold && curFlow < flowThreshold) {
+            effectiveVolume *= config.starterVolume;
+        }
+
         // Generate phase-continuous sine sample
-        float sample = static_cast<float>(std::sin(sinePhase)) * config.volume;
+        float sample = static_cast<float>(std::sin(sinePhase)) * effectiveVolume;
 
         // Advance phase
         sinePhase += phaseIncrement;
