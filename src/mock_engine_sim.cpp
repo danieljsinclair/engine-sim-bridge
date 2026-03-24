@@ -218,6 +218,8 @@ public:
         }
     }
 
+    // Initialize buffers and state - called from EngineSimInit after config validation
+    // Matches real Synthesizer initialization in synthesizer.cpp:71-85, with parameters from config
     void initialize(int inputBufferSize, int audioBufferSize, int inputChannelCount,
                     double inputSampleRate, double audioSampleRate) {
         m_inputBufferSize = inputBufferSize;
@@ -256,11 +258,15 @@ public:
         }
     }
 
+    // Start the audio rendering thread - called from EngineSimStartAudioThread
+    // Matches real Synthesizer::startAudioRenderingThread() (synthesizer.cpp:88-92)
     void startAudioRenderingThread() {
         m_run = true;
         m_thread = new std::thread(&MockSynthesizer::audioRenderingThread, this);
     }
 
+    // End the audio rendering thread - called from EngineSimDestroy
+    // Matches real Synthesizer::endAudioRenderingThread() (synthesizer.cpp:94-100), including the cv0.notify_one() to wake the thread
     void endAudioRenderingThread() {
         if (m_thread != nullptr) {
             m_run = false;
@@ -343,6 +349,8 @@ public:
         return std::min(samples, available);
     }
 
+    // Set input sample rate - called from EngineSimInit based on config
+    // Matches real Synthesizer::setInputSampleRate() (synthesizer.cpp:102-106)
     void setInputSampleRate(double rate) {
         if (rate != m_inputSampleRate) {
             std::lock_guard<std::mutex> lock(m_lock0);
@@ -350,6 +358,7 @@ public:
         }
     }
 
+    // Get current latency in seconds based on input channel size and sample rate
     double getLatency() const {
         return static_cast<double>(m_latency) / m_audioSampleRate;
     }
@@ -410,6 +419,8 @@ private:
     }
 
     // EXACT replica of Synthesizer::renderAudio() cv0.wait() pattern
+    // Uses m_targetBufferLevel for dynamic buffer level matching real synthesizer's behavior with multiple exhausts.
+    // Writes to audioBuffer inside the lock to ensure readAudioOutput sees new samples immediately, avoiding underruns.
     void renderAudio() {
         std::unique_lock<std::mutex> lk0(m_lock0);
 
@@ -441,20 +452,12 @@ private:
         // completes before the next ReadAudioBuffer. Mock processing is trivial,
         // so the audio thread loses the race. Writing inside the lock ensures
         // readAudioOutput sees the new samples immediately.
-        // Use SineGenerator for sine mode
-        if (sineGenerator_.isEnabled()) {
-            std::vector<int16_t> sineBuffer(n);
-            sineGenerator_.generate(sineBuffer.data(), n);
-            for (int i = 0; i < n; ++i) {
-                m_audioBuffer.write(sineBuffer[i]);
-            }
-        } else {
-            for (int i = 0; i < n; ++i) {
-                float sample = m_transferBuffer[i];
-                sample = std::max(-1.0f, std::min(1.0f, sample));
-                int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
-                m_audioBuffer.write(intSample);
-            }
+        // Process input channel
+        for (int i = 0; i < n; ++i) {
+            float sample = m_transferBuffer[i];
+            sample = std::max(-1.0f, std::min(1.0f, sample));
+            int16_t intSample = static_cast<int16_t>(sample * 32767.0f);
+            m_audioBuffer.write(intSample);
         }
         m_processed = true;
         lk0.unlock();
@@ -600,6 +603,8 @@ struct MockEngineSimContext {
         synthesizer.destroy();
     }
 
+    // Initialize synthesizer with parameters from config - called from EngineSimInit after config validation
+    // Matches real Synthesizer initialization in synthesizer.cpp:71-85, with parameters from config
     void initializeSynthesizer() {
         // Mock synthesizer uses 1 channel (single exhaust system)
         // This matches 4-cylinder engines typically
@@ -1021,7 +1026,11 @@ EngineSimResult EngineSimRender(
 
     return ESIM_SUCCESS;
 }
-
+// ============================================================================
+// This is the main audio rendering function called from the CLI thread. It reads from the synthesizer's audio buffer, converts to float stereo, and zero-fills remaining frames if needed to prevent underruns.
+// This matches the real bridge's EngineSimReadAudioBuffer() behavior, including the dynamic target buffer level in the audio thread and the conversion pattern.
+// The main difference from EngineSimRender() is that we rely on the audio thread to have processed input and filled the audio buffer, so we just read whatever is available up to 'frames'.
+// ============================================================================
 EngineSimResult EngineSimReadAudioBuffer(
     EngineSimHandle handle,
     float* buffer,
@@ -1169,6 +1178,10 @@ EngineSimResult EngineSimSetSpeedControl(
     return ESIM_SUCCESS;
 }
 
+/// @brief This function allows enabling/disabling the starter motor, which is a mock feature that doesn't affect the engine state in this simplified simulation but is included to match the real API and allow testing of cranking-related logic in the CLI or other layers. In a real implementation, the starter motor would be controlled by the engine's starting system and would not be exposed as a direct control function. However, for testing purposes in the mock, this allows us to simulate the effect of the starter motor on RPM during the starting phase.
+/// @param handle The engine simulation handle.
+/// @param enabled Whether to enable (non-zero) or disable (zero) the starter motor.
+/// @return ESIM_SUCCESS if the operation was successful, or an error code otherwise.
 EngineSimResult EngineSimSetStarterMotor(
     EngineSimHandle handle,
     int enabled)
@@ -1183,6 +1196,10 @@ EngineSimResult EngineSimSetStarterMotor(
     return ESIM_SUCCESS;
 }
 
+/// @brief This function allows enabling/disabling the ignition, which is a mock feature that doesn't affect the engine state in this simplified simulation but is included to match the real API and allow testing of ignition-related logic in the CLI or other layers. In a real implementation, ignition would control the spark timing and fuel injection, but in this mock, it simply updates the ignition state without impacting the physics model.
+/// @param handle The engine simulation handle.
+/// @param enabled Whether to enable (non-zero) or disable (zero) the ignition.
+/// @return ESIM_SUCCESS if the operation was successful, or an error code otherwise.
 EngineSimResult EngineSimSetIgnition(
     EngineSimHandle handle,
     int enabled)
@@ -1203,6 +1220,10 @@ EngineSimResult EngineSimSetIgnition(
     return ESIM_SUCCESS;
 }
 
+/// @brief This function allows shifting gears, which is a mock feature that doesn't affect the engine state in this simplified simulation but is included to match the real API and allow testing of gear-related logic in the CLI or other layers. In a real implementation, shifting gears would affect the load and RPM behavior of the engine, but in this mock, it simply updates the current gear state without impacting the physics model.
+/// @param handle The engine simulation handle.
+/// @param gear The gear to shift to.
+/// @return ESIM_SUCCESS if the operation was successful, or an error code otherwise.
 EngineSimResult EngineSimShiftGear(
     EngineSimHandle handle,
     int gear)
@@ -1217,6 +1238,10 @@ EngineSimResult EngineSimShiftGear(
     return ESIM_SUCCESS;
 }
 
+/// @brief This function allows setting the clutch pressure, which is a mock feature that doesn't affect the engine state in this simplified simulation but is included to match the real API and allow testing of clutch-related logic in the CLI or other layers. In a real implementation, clutch pressure would affect the load and RPM behavior of the engine, especially during gear shifts, but in this mock, it simply updates the clutch pressure state without impacting the physics model.
+/// @param handle The engine simulation handle.
+/// @param pressure The clutch pressure to set (0.0 to 1.0).
+/// @return ESIM_SUCCESS if the operation was successful, or an error code otherwise.
 EngineSimResult EngineSimSetClutch(
     EngineSimHandle handle,
     double pressure)
@@ -1235,6 +1260,10 @@ EngineSimResult EngineSimSetClutch(
     return ESIM_SUCCESS;
 }
 
+/// @brief This function allows enabling/disabling the dyno mode, which is a mock feature that doesn't affect the engine state in this simplified simulation but is included to match the real API and allow testing of dyno-related logic in the CLI or other layers. In a real implementation, dyno mode would affect the load and RPM behavior of the engine, simulating the effect of a dynamometer, but in this mock, it simply updates the dyno enabled state without impacting the physics model.
+/// @param handle The engine simulation handle.
+/// @param enabled Whether to enable (non-zero) or disable (zero) the dyno mode.
+/// @return ESIM_SUCCESS if the operation was successful, or an error code otherwise.
 EngineSimResult EngineSimSetDyno(
     EngineSimHandle handle,
     int enabled)
@@ -1249,6 +1278,11 @@ EngineSimResult EngineSimSetDyno(
     return ESIM_SUCCESS;
 }
 
+/// @brief This function allows enabling/disabling the dyno hold mode and setting the dyno speed, which are mock features that don't affect the engine state in this simplified simulation but are included to match the real API and allow testing of dyno hold-related logic in the CLI or other layers. In a real implementation, dyno hold mode would maintain a constant speed regardless of throttle input, simulating the effect of a dynamometer holding the engine at a specific RPM, but in this mock, it simply updates the dyno hold enabled state and dyno speed without impacting the physics model.
+/// @param handle The engine simulation handle.
+/// @param enabled Whether to enable (non-zero) or disable (zero) the dyno hold mode.
+/// @param speed The dyno speed to set.
+/// @return ESIM_SUCCESS if the operation was successful, or an error code otherwise.
 EngineSimResult EngineSimSetDynoHold(
     EngineSimHandle handle,
     int enabled,
@@ -1265,6 +1299,13 @@ EngineSimResult EngineSimSetDynoHold(
     return ESIM_SUCCESS;
 }
 
+/// @brief This function allows loading an impulse response for convolution, which is a mock feature that doesn't affect the engine state in this simplified simulation but is included to match the real API and allow testing of convolution-related logic in the CLI or other layers. In a real implementation, loading an impulse response would allow for more realistic sound modeling by convolving the engine's audio output with the impulse response of an exhaust system or environment, but in this mock, it simply validates the input parameters without impacting the physics model or audio output.
+/// @param handle The engine simulation handle.
+/// @param exhaustIndex The index of the exhaust to apply the impulse response to.
+/// @param impulseData Pointer to the impulse response data.
+/// @param sampleCount The number of samples in the impulse response.
+/// @param volume The volume of the impulse response.
+/// @return ESIM_SUCCESS if the operation was successful, or an error code otherwise.
 EngineSimResult EngineSimLoadImpulseResponse(
     EngineSimHandle handle,
     int exhaustIndex,
@@ -1288,6 +1329,10 @@ EngineSimResult EngineSimLoadImpulseResponse(
     return ESIM_SUCCESS;
 }
 
+/// @brief  This function allows setting a target RPM for the engine, which is a mock feature that doesn't affect the engine state in this simplified simulation but is included to match the real API and allow testing of RPM control-related logic in the CLI or other layers. In a real implementation, setting a target RPM would cause the engine to adjust its throttle and other parameters to try to reach and maintain that RPM, simulating a cruise control or dyno mode, but in this mock, it simply updates the target RPM state without impacting the physics model.
+/// @param handle The engine simulation handle.
+/// @param rpm The target RPM to set.
+/// @return ESIM_SUCCESS if the operation was successful, or an error code otherwise.
 EngineSimResult EngineSimSetRPM(
     EngineSimHandle handle,
     double rpm)
@@ -1306,6 +1351,10 @@ EngineSimResult EngineSimSetRPM(
     return ESIM_SUCCESS;
 }
 
+/// @brief This function allows enabling/disabling sine wave mode, which is a mock feature that replaces the normal engine sound with a simple sine wave at a frequency corresponding to the current RPM. This is useful for testing the audio rendering pipeline and ensuring that changes in RPM are reflected in the audio output without the complexity of the full engine sound synthesis. In a real implementation, this mode would not exist, but in this mock, it provides a simple way to verify that the synthesizer is receiving input and producing output based on the engine state.
+/// @param handle The engine simulation handle.
+/// @param enabled Whether to enable (non-zero) or disable (zero) the sine wave mode.
+/// @return ESIM_SUCCESS if the operation was successful, or an error code otherwise.
 EngineSimResult EngineSimSetSineMode(
     EngineSimHandle handle,
     int enabled)
@@ -1321,6 +1370,10 @@ EngineSimResult EngineSimSetSineMode(
     return ESIM_SUCCESS;
 }
 
+/// @brief This function allows setting the frequency of the sine wave used in sine mode, which is a mock feature that doesn't affect the engine state in this simplified simulation but is included to match the real API and allow testing of frequency control-related logic in the CLI or other layers. In a real implementation, this function would not exist, but in this mock, it provides a way to adjust the frequency of the sine wave independently of the RPM for testing purposes. The frequency parameter allows us to verify that changes to the synthesizer's parameters are reflected in the audio output when sine mode is enabled.
+/// @param handle The engine simulation handle.
+/// @param frequency The frequency of the sine wave.
+/// @return ESIM_SUCCESS if the operation was successful, or an error code otherwise.
 EngineSimResult EngineSimSetSineFrequency(
     EngineSimHandle handle,
     double frequency)
@@ -1335,6 +1388,12 @@ EngineSimResult EngineSimSetSineFrequency(
     return ESIM_SUCCESS;
 }
 
+/// @brief This function allows rendering audio on demand in a synchronous manner, which is useful for testing the audio rendering pipeline without relying on the audio thread. It processes a single audio frame by running the simulation steps for that frame and then rendering the audio output directly. This matches the behavior of the real bridge's EngineSimRenderOnDemand() function, allowing us to verify that the simulation and audio rendering are working together correctly in a simplified context. The function reads from the synthesizer's audio buffer, converts to float stereo, and zero-fills remaining frames if needed to prevent underruns, just like the real implementation.
+/// @param handle 
+/// @param buffer The buffer to write the audio data to.
+/// @param frames The number of frames to render.
+/// @param outFramesWritten Pointer to an integer to receive the number of frames actually written.
+/// @return ESIM_SUCCESS if the operation was successful, or an error code otherwise.
 EngineSimResult EngineSimRenderOnDemand(
     EngineSimHandle handle,
     float* buffer,
@@ -1384,6 +1443,9 @@ EngineSimResult EngineSimRenderOnDemand(
     return ESIM_SUCCESS;
 }
 
+/// @brief This function allows waiting for the audio thread to process the current frame, which is useful for synchronizing the CLI thread with the audio thread in scenarios where we want to ensure that all pending input has been processed and the audio output is up to date before proceeding. This matches the behavior of the real bridge's EngineSimWaitForAudioFrame() function, allowing us to verify that the synchronization between threads is working correctly in the mock implementation. The function simply waits for the synthesizer's audio processing to complete before returning.
+/// @param handle The engine simulation handle.
+/// @return ESIM_SUCCESS if the operation was successful, or an error code otherwise.
 EngineSimResult EngineSimWaitForAudioFrame(
     EngineSimHandle handle)
 {

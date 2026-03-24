@@ -20,6 +20,11 @@
 #include <mutex>
 #include <atomic>
 
+// ANSI color codes for terminal output
+#define ANSI_COLOR_RED     "\x1b[31m"
+#define ANSI_COLOR_YELLOW  "\x1b[33m"
+#define ANSI_COLOR_RESET   "\x1b[0m"
+
 // ============================================================================
 // INTERNAL IMPLEMENTATION STRUCTURES
 // ============================================================================
@@ -172,10 +177,14 @@ static bool loadImpulseResponses(
         // Load WAV file using WavLoader module
         WavLoader::Result wavResult = WavLoader::load(fullPath);
         if (!wavResult.valid) {
+            std::cerr << ANSI_COLOR_RED << "ERROR: Failed to load required audio file: " << fullPath << ANSI_COLOR_RESET << "\n";
+            std::cerr << ANSI_COLOR_RED << "       (asset base: " << assetBasePath << ", from script: " << filename << ")" << ANSI_COLOR_RESET << "\n";
             ctx->setError("Failed to load impulse response: " + fullPath);
-            // Continue with other exhaust systems rather than failing completely
-            continue;
+            return false;  // Fast-fail: halt execution immediately
         }
+
+        // Success
+        std::cerr << "Loaded impulse response: " << fullPath << " (" << wavResult.getSampleCount() << " samples)\n";
 
         // Initialize synthesizer with impulse response
         ctx->simulator->synthesizer().initializeImpulseResponse(
@@ -373,7 +382,11 @@ EngineSimResult EngineSimLoadScript(
     }
 
     // Load impulse responses
-    loadImpulseResponses(ctx, resolvedAssetPath);
+    if (!loadImpulseResponses(ctx, resolvedAssetPath)) {
+        std::cerr << ANSI_COLOR_RED << "FATAL: Cannot continue without required audio files - engine configuration failed" << ANSI_COLOR_RESET << "\n";
+        ctx->setError("Failed to load impulse responses");
+        return ESIM_ERROR_LOAD_FAILED;
+    }
 
     return ESIM_SUCCESS;
 }
@@ -702,14 +715,26 @@ EngineSimResult EngineSimRenderOnDemand(
 
     // Convert mono int16 to stereo float using shared utility with clipping (DRY)
     EngineSimAudio::convertInt16ToStereoFloatClipped(ctx->audioConversionBuffer, buffer, samplesRead);
-    
+
+    // Calculate actual frames with non-zero data BEFORE zeroing
+    // This is critical: we must NOT count zero-filled frames as valid data
+    int actualFramesWithData = 0;
+    if (samplesRead > 0) {
+        const int16_t* src = ctx->audioConversionBuffer;
+        for (int i = 0; i < samplesRead; ++i) {
+            if (src[i] != 0) {
+                actualFramesWithData = i + 1;
+            }
+        }
+    }
+
     // Zero-fill remainder
     if (samplesRead < frames) {
         std::memset(buffer + samplesRead * 2, 0, (frames - samplesRead) * 2 * sizeof(float));
     }
 
     if (outFramesWritten) {
-        *outFramesWritten = samplesRead;
+        *outFramesWritten = actualFramesWithData;
     }
 
     return ESIM_SUCCESS;
