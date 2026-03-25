@@ -21,7 +21,50 @@ set(BUILD_BRIDGE OFF CACHE BOOL "Build bridge from engine-sim (we are the bridge
 set(DISCORD_ENABLED OFF CACHE BOOL "Enable Discord Rich Presence" FORCE)
 add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_ALL)
 
-# Bridge library
+# Mock engine-sim library (for --sine mode testing)
+add_library(engine-sim-mock SHARED
+    src/mock_engine_sim.cpp
+)
+
+target_include_directories(engine-sim-mock
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+)
+
+target_link_libraries(engine-sim-mock
+    PRIVATE
+        engine-sim
+)
+
+set_target_properties(engine-sim-mock PROPERTIES
+    OUTPUT_NAME "enginesim-mock"
+    VERSION ${PROJECT_VERSION}
+    SOVERSION 1
+)
+
+if(APPLE)
+    set_target_properties(engine-sim-mock PROPERTIES
+        MACOSX_RPATH TRUE
+        INSTALL_NAME_DIR "@rpath"
+    )
+endif()
+
+# Post-build: Replace symlinks with actual copies
+add_custom_command(TARGET engine-sim-mock POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E remove -f
+        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim-mock.1.dylib
+        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim-mock.dylib
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim-mock.1.0.0.dylib
+        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim-mock.1.dylib
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim-mock.1.0.0.dylib
+        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim-mock.dylib
+    COMMENT "Replacing symlinks with actual copies for engine-sim-mock"
+)
+
+# Real bridge library (uses actual engine-sim)
 add_library(engine-sim-bridge SHARED
     src/engine_sim_bridge.cpp
 )
@@ -63,6 +106,20 @@ if(APPLE)
         INSTALL_NAME_DIR "@rpath"
     )
 endif()
+
+# Post-build: Replace symlinks with actual copies
+add_custom_command(TARGET engine-sim-bridge POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E remove -f
+        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.dylib
+        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.dylib
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
+        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.dylib
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
+        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.dylib
+    COMMENT "Replacing symlinks with actual copies for engine-sim-bridge"
+)
 
 # Installation
 install(TARGETS engine-sim-bridge
