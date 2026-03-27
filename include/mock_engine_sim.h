@@ -23,17 +23,16 @@ extern "C" {
 
 // Include the real definitions
 #include "engine_sim_bridge.h"
+#include "ILogging.h"
 
 // ============================================================================
 // LIFECYCLE FUNCTIONS
 // ============================================================================
 
 /**
- * Creates a new mock simulator instance with specified configuration and engine script.
+ * Creates a new mock simulator instance with specified configuration.
  *
  * @param config Pointer to configuration structure
- * @param scriptPath Path to .mr file (UTF-8). REQUIRED for real engine, optional for mock.
- * @param assetBasePath Optional base path for assets (WAV files).
  * @param outHandle Pointer to receive the simulator handle
  * @return ESIM_SUCCESS on success, error code otherwise
  *
@@ -42,9 +41,25 @@ extern "C" {
  */
 EngineSimResult EngineSimCreate(
     const EngineSimConfig* config,
-    const char* scriptPath,
-    const char* assetBasePath,
     EngineSimHandle* outHandle
+);
+
+/**
+ * Loads an engine script into the simulator instance.
+ * For mock library, "sine" mode is enabled when scriptPath is "sine" or empty.
+ *
+ * @param handle Simulator handle
+ * @param scriptPath Path to .mr file (UTF-8). Use "sine" for sine wave mode.
+ * @param assetBasePath Optional base path for assets (WAV files).
+ * @return ESIM_SUCCESS on success, error code otherwise
+ *
+ * Thread Safety: Must be called from main thread
+ * Allocations: Yes (script compilation)
+ */
+EngineSimResult EngineSimLoadScript(
+    EngineSimHandle handle,
+    const char* scriptPath,
+    const char* assetBasePath
 );
 
 /**
@@ -73,6 +88,22 @@ EngineSimResult EngineSimStartAudioThread(
  */
 EngineSimResult EngineSimDestroy(
     EngineSimHandle handle
+);
+
+/**
+ * Sets the logging interface for the simulator instance.
+ * The mock library will use this for all debug and diagnostic output.
+ *
+ * @param handle Simulator handle
+ * @param logger Pointer to ILogging implementation (caller retains ownership)
+ * @return ESIM_SUCCESS on success, error code otherwise
+ *
+ * Thread Safety: Safe to call from any thread before audio callbacks start
+ * Allocations: None
+ */
+EngineSimResult EngineSimSetLogging(
+    EngineSimHandle handle,
+    ILogging* logger
 );
 
 // ============================================================================

@@ -67,6 +67,7 @@ add_custom_command(TARGET engine-sim-mock POST_BUILD
 # Real bridge library (uses actual engine-sim)
 add_library(engine-sim-bridge SHARED
     src/engine_sim_bridge.cpp
+    src/sine_wave_simulator.cpp
 )
 
 target_include_directories(engine-sim-bridge

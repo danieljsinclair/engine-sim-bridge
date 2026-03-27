@@ -8,6 +8,11 @@ extern "C" {
 #include <stdint.h>
 #include <stddef.h>
 
+// Forward declaration for C++ logging interface
+#ifdef __cplusplus
+class ILogging;
+#endif
+
 // ============================================================================
 // ENGINE-SIM HEADLESS BRIDGE API
 // C-style API for .NET P/Invoke integration
@@ -50,6 +55,9 @@ typedef struct {
     float convolutionLevel;          // Convolution mix (0.0 - 1.0)
     float airNoise;                  // Air intake noise (0.0 - 2.0)
 
+    // Sine wave mode (for testing/development without engine script)
+    int32_t sineMode;                 // 1 = sine wave mode, 0 = normal physics mode
+
 } EngineSimConfig;
 
 // Runtime statistics (optional, for diagnostics)
@@ -67,29 +75,64 @@ typedef struct {
 // ============================================================================
 
 /**
- * Creates a new simulator instance with specified configuration and engine script.
+ * Creates a new simulator instance with specified configuration.
  *
- * This is the PRIMARY creation function - it initializes the simulator and loads
- * the engine configuration in one atomic operation. This matches the GUI pattern
- * where the script is loaded immediately during initialization.
+ * Initializes the simulator with the given configuration. Does NOT load
+ * an engine script - call EngineSimLoadScript() separately after Create().
  *
  * @param config Pointer to configuration structure
- * @param scriptPath Absolute path to .mr file (UTF-8). REQUIRED.
- * @param assetBasePath Optional base path for assets (WAV files). If null, uses
- *                      default path derived from scriptPath location.
  * @param outHandle Pointer to receive the simulator handle
  * @return ESIM_SUCCESS on success, error code otherwise
  *
  * Thread Safety: Safe to call from any thread
  * Allocations: Yes (one-time)
  *
- * Example: EngineSimCreate(&config, "/path/to/assets/engines/subaru.mr", "/path/to/assets", &handle)
+ * Example: EngineSimCreate(&config, &handle)
  */
 EngineSimResult EngineSimCreate(
     const EngineSimConfig* config,
-    const char* scriptPath,
-    const char* assetBasePath,
     EngineSimHandle* outHandle
+);
+
+/**
+ * Loads an engine script into the simulator instance.
+ *
+ * Compiles and loads the specified .mr script file, which contains the engine
+ * configuration. Must be called after EngineSimCreate() and before any
+ * simulation or rendering functions.
+ *
+ * @param handle Simulator handle
+ * @param scriptPath Absolute path to .mr file (UTF-8)
+ * @param assetBasePath Optional base path for assets (WAV files)
+ * @return ESIM_SUCCESS on success, error code otherwise
+ *
+ * Thread Safety: Must be called from main thread
+ * Allocations: Yes (script compilation)
+ *
+ * Example: EngineSimLoadScript(handle, "/path/to/assets/engines/subaru.mr", "/path/to/assets")
+ */
+EngineSimResult EngineSimLoadScript(
+    EngineSimHandle handle,
+    const char* scriptPath,
+    const char* assetBasePath
+);
+
+/**
+ * Sets the logging interface for the simulator instance.
+ * The bridge will use this for all debug and diagnostic output.
+ *
+ * @param handle Simulator handle
+ * @param logger Pointer to ILogging implementation (caller retains ownership)
+ * @return ESIM_SUCCESS on success, error code otherwise
+ *
+ * Thread Safety: Safe to call from any thread before audio callbacks start
+ * Allocations: None
+ *
+ * Example: EngineSimSetLogging(handle, &myLogger);
+ */
+EngineSimResult EngineSimSetLogging(
+    EngineSimHandle handle,
+    ILogging* logger
 );
 
 /**

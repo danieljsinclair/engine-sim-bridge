@@ -1,4 +1,6 @@
 #include "../include/engine_sim_bridge.h"
+#include "../include/ILogging.h"
+#include "../include/sine_wave_simulator.h"
 
 // Core engine-sim includes
 #include "../include/piston_engine_simulator.h"
@@ -33,6 +35,7 @@
 struct EngineSimContext {
     // Core components
     PistonEngineSimulator* simulator;
+    SineWaveSimulator* sineSimulator;  // Used when config.sineMode == 1
     Engine* engine;
     Vehicle* vehicle;
     Transmission* transmission;
@@ -57,8 +60,12 @@ struct EngineSimContext {
     // Statistics
     EngineSimStats stats;
 
+    // DI: Injected logging interface (caller retains ownership, non-null for logging)
+    ILogging* logger;
+
     EngineSimContext()
         : simulator(nullptr)
+        , sineSimulator(nullptr)
         , engine(nullptr)
         , vehicle(nullptr)
         , transmission(nullptr)
@@ -68,6 +75,7 @@ struct EngineSimContext {
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
         , compiler(nullptr)
 #endif
+        , logger(nullptr)
     {
         std::memset(&config, 0, sizeof(config));
         std::memset(&stats, 0, sizeof(stats));
@@ -77,6 +85,11 @@ struct EngineSimContext {
         if (audioConversionBuffer) {
             delete[] audioConversionBuffer;
             audioConversionBuffer = nullptr;
+        }
+
+        if (sineSimulator) {
+            delete sineSimulator;
+            sineSimulator = nullptr;
         }
 
         if (simulator) {
@@ -150,7 +163,6 @@ static bool loadImpulseResponses(
     }
 
     const int exhaustCount = ctx->engine->getExhaustSystemCount();
-    std::cerr << "DEBUG BRIDGE: Engine has " << exhaustCount << " exhaust systems\n";
     for (int i = 0; i < exhaustCount; ++i) {
         ExhaustSystem* exhaust = ctx->engine->getExhaustSystem(i);
         if (!exhaust) continue;
@@ -159,7 +171,6 @@ static bool loadImpulseResponses(
         if (!impulse) continue;
 
         std::string filename = impulse->getFilename();
-        std::cerr << "DEBUG BRIDGE: IR filename='" << filename << "'\n";
         if (filename.empty()) {
             continue;  // No impulse response specified
         }
@@ -178,38 +189,42 @@ static bool loadImpulseResponses(
                 if (filename.find(lastComponent + "/") == 0) {
                     // Filename already includes the base path component (e.g., "es/..." when base is ".../es")
                     fullPath = filename;
-                    std::cerr << "DEBUG BRIDGE: Using filename as-is (already has base component): " << fullPath << "\n";
                 } else {
                     fullPath = assetBasePath + "/" + filename;
-                    std::cerr << "DEBUG BRIDGE: Loading impulse: fullPath=" << fullPath << "\n";
                 }
             } else {
                 fullPath = assetBasePath + "/" + filename;
-                std::cerr << "DEBUG BRIDGE: Loading impulse: fullPath=" << fullPath << "\n";
             }
         }
 
         // Load WAV file using WavLoader module
         WavLoader::Result wavResult = WavLoader::load(fullPath);
         if (!wavResult.valid) {
-            std::cerr << ANSI_COLOR_RED << "ERROR: Failed to load required audio file: " << fullPath << ANSI_COLOR_RESET << "\n";
-            std::cerr << ANSI_COLOR_RED << "       (asset base: " << assetBasePath << ", from script: " << filename << ")" << ANSI_COLOR_RESET << "\n";
+            if (ctx->logger) {
+                ctx->logger->error("Failed to load required audio file: %s", fullPath.c_str());
+                ctx->logger->error("(asset base: %s, from script: %s)", assetBasePath.c_str(), filename.c_str());
+            } else {
+                std::cerr << ANSI_COLOR_RED << "ERROR: Failed to load required audio file: " << fullPath << ANSI_COLOR_RESET << "\n";
+                std::cerr << ANSI_COLOR_RED << "       (asset base: " << assetBasePath << ", from script: " << filename << ")" << ANSI_COLOR_RESET << "\n";
+            }
             ctx->setError("Failed to load impulse response: " + fullPath);
             return false;  // Fast-fail: halt execution immediately
         }
 
         // Success
-        std::cerr << "Loaded impulse response: " << fullPath << " (" << wavResult.getSampleCount() << " samples)\n";
+        if (ctx->logger) {
+            ctx->logger->info("Loaded impulse response: %s (%zu samples)", fullPath.c_str(), wavResult.getSampleCount());
+        } else {
+            std::cerr << "Loaded impulse response: " << fullPath << " (" << wavResult.getSampleCount() << " samples)\n";
+        }
 
         // Initialize synthesizer with impulse response
-        std::cerr << "DEBUG BRIDGE: About to initialize impulse response for exhaust " << i << "\n";
         ctx->simulator->synthesizer().initializeImpulseResponse(
             wavResult.getData(),
             static_cast<unsigned int>(wavResult.getSampleCount()),
             static_cast<float>(impulse->getVolume()),
             i
         );
-        std::cerr << "DEBUG BRIDGE: Impulse response initialized for exhaust " << i << "\n";
     }
 
     return true;
@@ -221,15 +236,9 @@ static bool loadImpulseResponses(
 
 EngineSimResult EngineSimCreate(
     const EngineSimConfig* config,
-    const char* scriptPath,
-    const char* assetBasePath,
     EngineSimHandle* outHandle)
 {
     if (!outHandle) {
-        return ESIM_ERROR_INVALID_PARAMETER;
-    }
-
-    if (!scriptPath || strlen(scriptPath) == 0) {
         return ESIM_ERROR_INVALID_PARAMETER;
     }
 
@@ -253,22 +262,36 @@ EngineSimResult EngineSimCreate(
         return validateResult;
     }
 
-    // Create simulator
-    ctx->simulator = new (std::nothrow) PistonEngineSimulator();
-    if (!ctx->simulator) {
-        ctx->setError("Failed to allocate PistonEngineSimulator");
-        delete ctx;
-        return ESIM_ERROR_INVALID_HANDLE;
+    // Create simulator based on mode
+    if (ctx->config.sineMode == 1) {
+        // Sine wave mode: create simple sine wave generator
+        ctx->sineSimulator = new (std::nothrow) SineWaveSimulator();
+        if (!ctx->sineSimulator) {
+            ctx->setError("Failed to allocate SineWaveSimulator");
+            delete ctx;
+            return ESIM_ERROR_INVALID_HANDLE;
+        }
+        ctx->sineSimulator->initialize(ctx->config.sampleRate);
+
+        // Don't create PistonEngineSimulator in sine mode - it's not needed
+    } else {
+        // Normal mode: create full physics simulator
+        ctx->simulator = new (std::nothrow) PistonEngineSimulator();
+        if (!ctx->simulator) {
+            ctx->setError("Failed to allocate PistonEngineSimulator");
+            delete ctx;
+            return ESIM_ERROR_INVALID_HANDLE;
+        }
+
+        // Initialize simulator parameters
+        Simulator::Parameters simParams;
+        simParams.systemType = Simulator::SystemType::NsvOptimized;
+
+        ctx->simulator->initialize(simParams);
+        ctx->simulator->setSimulationFrequency(ctx->config.simulationFrequency);
+        ctx->simulator->setFluidSimulationSteps(ctx->config.fluidSimulationSteps);
+        ctx->simulator->setTargetSynthesizerLatency(ctx->config.targetSynthesizerLatency);
     }
-
-    // Initialize simulator parameters
-    Simulator::Parameters simParams;
-    simParams.systemType = Simulator::SystemType::NsvOptimized;
-
-    ctx->simulator->initialize(simParams);
-    ctx->simulator->setSimulationFrequency(ctx->config.simulationFrequency);
-    ctx->simulator->setFluidSimulationSteps(ctx->config.fluidSimulationSteps);
-    ctx->simulator->setTargetSynthesizerLatency(ctx->config.targetSynthesizerLatency);
 
     // Allocate audio conversion buffer (stereo)
     ctx->conversionBufferSize = 4096 * 2; // Max frames * 2 channels
@@ -280,7 +303,7 @@ EngineSimResult EngineSimCreate(
     }
 
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
-    // Create compiler for script loading
+    // Create compiler for script loading (will be used by LoadScript)
     ctx->compiler = new (std::nothrow) es_script::Compiler();
     if (!ctx->compiler) {
         ctx->setError("Failed to allocate script compiler");
@@ -290,6 +313,43 @@ EngineSimResult EngineSimCreate(
 
     ctx->compiler->initialize();
 #endif
+
+    *outHandle = ctx;
+    return ESIM_SUCCESS;
+}
+
+EngineSimResult EngineSimLoadScript(
+    EngineSimHandle handle,
+    const char* scriptPath,
+    const char* assetBasePath)
+{
+    if (!validateHandle(handle)) {
+        return ESIM_ERROR_INVALID_HANDLE;
+    }
+
+    EngineSimContext* ctx = getContext(handle);
+
+    // Sine mode support: Check config flag OR script path for sine wave generation
+    bool isSineMode = (ctx->config.sineMode == 1) ||
+                      (!scriptPath || strlen(scriptPath) == 0 ||
+                       (scriptPath && std::string(scriptPath) == "sine"));
+
+    // Sine mode: create minimal simulator
+    if (isSineMode) {
+        // For sine mode, we don't need vehicle, transmission, or engine
+        ctx->vehicle = nullptr;
+        ctx->transmission = nullptr;
+        ctx->engine = nullptr;
+
+        // Initialize sine simulator with default RPM if not already set
+        if (ctx->sineSimulator) {
+            ctx->sineSimulator->setRPM(800.0);  // Idle RPM
+        }
+
+        // Initialize the synthesizer directly for sine mode
+        // Skip loadSimulation since it requires a non-null engine
+        return ESIM_SUCCESS;
+    }
 
     // SRP: Bridge handles path resolution - CLI just passes raw path
     std::string scriptPathStr(scriptPath);
@@ -304,8 +364,8 @@ EngineSimResult EngineSimCreate(
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
     // Compile the script
     if (!ctx->compiler->compile(scriptPathStr.c_str())) {
-        ctx->setError("Failed to compile script: " + scriptPathStr + ":" + (!ctx->lastError.empty() ? ctx->lastError : "Unknown lastError"));
-        delete ctx;
+        std::string error = "Failed to compile script: " + scriptPathStr + ":" + (!ctx->lastError.empty() ? ctx->lastError : "Unknown lastError");
+        ctx->setError(error);
         return ESIM_ERROR_SCRIPT_COMPILATION;
     }
 
@@ -345,15 +405,12 @@ EngineSimResult EngineSimCreate(
 
     if (!ctx->engine) {
         ctx->setError("Script did not create an engine");
-        delete ctx;
         return ESIM_ERROR_LOAD_FAILED;
     }
 
     // Load the simulation FIRST (matches old LoadScript flow)
     // This calls initializeSynthesizer() which has hardcoded 44100 values
-    std::cerr << "DEBUG BRIDGE: About to call loadSimulation\n";
     ctx->simulator->loadSimulation(ctx->engine, ctx->vehicle, ctx->transmission);
-    std::cerr << "DEBUG BRIDGE: loadSimulation completed\n";
 
     // Determine asset base path
     std::string resolvedAssetPath;
@@ -363,7 +420,9 @@ EngineSimResult EngineSimCreate(
         // Default: derive from script path
         size_t assetsPos = scriptPathStr.find("/assets/");
         if (assetsPos != std::string::npos) {
-            resolvedAssetPath = scriptPathStr.substr(0, assetsPos + 8);
+            // Audio files are in the parent of assets directory, not inside it
+            // e.g., script is "engine-sim/assets/main.mr", audio is in "engine-sim/es/..."
+            resolvedAssetPath = scriptPathStr.substr(0, assetsPos);
         } else {
             size_t lastSlash = scriptPathStr.find_last_of('/');
             if (lastSlash != std::string::npos) {
@@ -377,19 +436,16 @@ EngineSimResult EngineSimCreate(
     // Load impulse responses AFTER loadSimulation (matches old LoadScript flow)
     if (!loadImpulseResponses(ctx, resolvedAssetPath)) {
         ctx->setError("Failed to load impulse responses");
-        delete ctx;
         return ESIM_ERROR_LOAD_FAILED;
     }
+
+    return ESIM_SUCCESS;
 #else
     (void)scriptPathStr;  // Suppress unused warning
     (void)assetBasePath;  // Suppress unused warning
     ctx->setError("Script loading requested but Piranha support not available.");
-    delete ctx;
     return ESIM_ERROR_SCRIPT_COMPILATION;
 #endif
-
-    *outHandle = ctx;
-    return ESIM_SUCCESS;
 }
 
 EngineSimResult EngineSimStartAudioThread(
@@ -415,7 +471,11 @@ EngineSimResult EngineSimStartAudioThread(
     while ((samplesDrained = ctx->simulator->readAudioOutput(4096, drainBuffer)) > 0) {
         totalDrained += samplesDrained;
     }
-    std::cerr << "DEBUG BRIDGE: Drained " << totalDrained << " pre-fill samples\n";
+    if (ctx->logger) {
+        ctx->logger->debug("Drained %d pre-fill samples", totalDrained);
+    } else {
+        std::cerr << "DEBUG BRIDGE: Drained " << totalDrained << " pre-fill samples\n";
+    }
     ctx->simulator->startAudioRenderingThread();
 
     return ESIM_SUCCESS;
@@ -430,6 +490,20 @@ EngineSimResult EngineSimDestroy(
 
     EngineSimContext* ctx = getContext(handle);
     delete ctx;
+
+    return ESIM_SUCCESS;
+}
+
+EngineSimResult EngineSimSetLogging(
+    EngineSimHandle handle,
+    ILogging* logger)
+{
+    if (!validateHandle(handle)) {
+        return ESIM_ERROR_INVALID_HANDLE;
+    }
+
+    EngineSimContext* ctx = getContext(handle);
+    ctx->logger = logger;
 
     return ESIM_SUCCESS;
 }
@@ -475,6 +549,22 @@ EngineSimResult EngineSimUpdate(
     }
 
     EngineSimContext* ctx = getContext(handle);
+
+    // Sine mode: Update sine simulator RPM from throttle
+    if (ctx->sineSimulator) {
+        double throttle = ctx->throttlePosition.load(std::memory_order_relaxed);
+        // Map throttle (0-1) to RPM (800-6000)
+        double targetRpm = 800.0 + throttle * 5200.0;
+        ctx->sineSimulator->setRPM(targetRpm);
+
+        // Update stats
+        ctx->stats.currentRPM = targetRpm;
+        ctx->stats.currentLoad = throttle;
+        ctx->stats.exhaustFlow = 0.0;
+        ctx->stats.processingTimeMs = 0.0;
+
+        return ESIM_SUCCESS;
+    }
 
     if (!ctx->engine) {
         ctx->setError("No engine loaded");
@@ -522,6 +612,17 @@ EngineSimResult EngineSimRender(
 
     EngineSimContext* ctx = getContext(handle);
 
+    // Sine mode: Use simple sine wave generator
+    if (ctx->sineSimulator) {
+        // Generate sine wave directly into output buffer (stereo float)
+        ctx->sineSimulator->generate(buffer, frames);
+
+        if (outSamplesWritten) {
+            *outSamplesWritten = frames;
+        }
+        return ESIM_SUCCESS;
+    }
+
     if (!ctx->engine) {
         // No engine loaded - output silence
         std::memset(buffer, 0, frames * 2 * sizeof(float));
@@ -564,14 +665,23 @@ EngineSimResult EngineSimRender(
     if (samplesRead < frames) {
         // Report underruns every 60 frames (1 second) to avoid spam
         if (renderCount - lastUnderrunReport > 60) {
-            std::cerr << "DEBUG BRIDGE RENDER: UNDERRUN at frame " << renderCount
-                      << ": requested=" << frames << " got=" << samplesRead
-                      << " missing=" << (frames - samplesRead) << "\n";
+            if (ctx->logger) {
+                ctx->logger->warning("RENDER UNDERRUN at frame %d: requested=%d got=%d missing=%d",
+                                     renderCount, frames, samplesRead, frames - samplesRead);
+            } else {
+                std::cerr << "DEBUG BRIDGE RENDER: UNDERRUN at frame " << renderCount
+                          << ": requested=" << frames << " got=" << samplesRead
+                          << " missing=" << (frames - samplesRead) << "\n";
+            }
             lastUnderrunReport = renderCount;
         }
     }
     if (renderCount < 5 || samplesRead == 0) {
-        std::cerr << "DEBUG BRIDGE RENDER: samplesRead=" << samplesRead << " frames=" << frames << "\n";
+        if (ctx->logger) {
+            ctx->logger->debug("RENDER: samplesRead=%d frames=%d", samplesRead, frames);
+        } else {
+            std::cerr << "DEBUG BRIDGE RENDER: samplesRead=" << samplesRead << " frames=" << frames << "\n";
+        }
     }
     renderCount++;
 
@@ -730,6 +840,10 @@ EngineSimResult EngineSimRenderOnDemand(
 
     // Zero-fill remainder
     if (samplesRead < frames) {
+        if (ctx->logger && samplesRead == 0) {
+            // Log first underrun (happens occasionally at startup)
+            ctx->logger->debug("RenderOnDemand underrun: requested=%d got=%d", frames, samplesRead);
+        }
         std::memset(buffer + samplesRead * 2, 0, (frames - samplesRead) * 2 * sizeof(float));
     }
 

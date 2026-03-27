@@ -560,6 +560,9 @@ struct MockEngineSimContext {
     // Statistics
     EngineSimStats stats;
 
+    // DI: Injected logging interface (caller retains ownership)
+    ILogging* logger;
+
     // Warmup phase
     const double warmupDuration = 2.0;
     bool inWarmupPhase;
@@ -592,7 +595,8 @@ struct MockEngineSimContext {
         , sinePhase(0.0)
         , sineModeEnabled(false)
         , inWarmupPhase(false)
-        , warmupStartTime(std::chrono::steady_clock::now()) {
+        , warmupStartTime(std::chrono::steady_clock::now())
+        , logger(nullptr) {
 
         std::memset(&config, 0, sizeof(config));
         std::memset(&stats, 0, sizeof(stats));
@@ -863,13 +867,8 @@ extern "C" {
 
 EngineSimResult EngineSimCreate(
     const EngineSimConfig* config,
-    const char* scriptPath,
-    const char* assetBasePath,
     EngineSimHandle* outHandle)
 {
-    (void)scriptPath;     // Mock doesn't use script path
-    (void)assetBasePath;  // Mock doesn't use asset base path
-
     if (!outHandle) {
         return ESIM_ERROR_INVALID_PARAMETER;
     }
@@ -906,6 +905,31 @@ EngineSimResult EngineSimCreate(
     return ESIM_SUCCESS;
 }
 
+EngineSimResult EngineSimLoadScript(
+    EngineSimHandle handle,
+    const char* scriptPath,
+    const char* assetBasePath)
+{
+    (void)assetBasePath;  // Mock doesn't use asset base path
+
+    if (!validateHandle(handle)) {
+        return ESIM_ERROR_INVALID_HANDLE;
+    }
+
+    MockEngineSimContext* ctx = getContext(handle);
+
+    // Check if sine mode is requested (scriptPath is "sine" or empty)
+    bool isSineMode = (!scriptPath || strlen(scriptPath) == 0 ||
+                       (scriptPath && std::string(scriptPath) == "sine"));
+
+    if (isSineMode) {
+        ctx->sineModeEnabled = true;
+        ctx->synthesizer.setSineMode(true);
+    }
+
+    return ESIM_SUCCESS;
+}
+
 EngineSimResult EngineSimStartAudioThread(
     EngineSimHandle handle)
 {
@@ -928,6 +952,20 @@ EngineSimResult EngineSimDestroy(
 
     MockEngineSimContext* ctx = getContext(handle);
     delete ctx;
+
+    return ESIM_SUCCESS;
+}
+
+EngineSimResult EngineSimSetLogging(
+    EngineSimHandle handle,
+    ILogging* logger)
+{
+    if (!validateHandle(handle)) {
+        return ESIM_ERROR_INVALID_HANDLE;
+    }
+
+    MockEngineSimContext* ctx = getContext(handle);
+    ctx->logger = logger;
 
     return ESIM_SUCCESS;
 }
