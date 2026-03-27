@@ -19,6 +19,7 @@
 #include <cmath>
 #include <mutex>
 #include <atomic>
+#include <filesystem>
 
 // ANSI color codes for terminal output
 #define ANSI_COLOR_RED     "\x1b[31m"
@@ -169,9 +170,23 @@ static bool loadImpulseResponses(
             // Absolute path
             fullPath = filename;
         } else {
-            // Relative path - combine with asset base path
-            fullPath = assetBasePath + "/" + filename;
-            std::cerr << "DEBUG BRIDGE: Loading impulse: fullPath=" << fullPath << "\n";
+            // Relative path - check if first component matches last component of assetBasePath
+            size_t firstSlash = filename.find('/');
+            if (firstSlash != std::string::npos) {
+                size_t lastSlash = assetBasePath.find_last_of('/');
+                std::string lastComponent = assetBasePath.substr(lastSlash + 1);
+                if (filename.find(lastComponent + "/") == 0) {
+                    // Filename already includes the base path component (e.g., "es/..." when base is ".../es")
+                    fullPath = filename;
+                    std::cerr << "DEBUG BRIDGE: Using filename as-is (already has base component): " << fullPath << "\n";
+                } else {
+                    fullPath = assetBasePath + "/" + filename;
+                    std::cerr << "DEBUG BRIDGE: Loading impulse: fullPath=" << fullPath << "\n";
+                }
+            } else {
+                fullPath = assetBasePath + "/" + filename;
+                std::cerr << "DEBUG BRIDGE: Loading impulse: fullPath=" << fullPath << "\n";
+            }
         }
 
         // Load WAV file using WavLoader module
@@ -187,12 +202,14 @@ static bool loadImpulseResponses(
         std::cerr << "Loaded impulse response: " << fullPath << " (" << wavResult.getSampleCount() << " samples)\n";
 
         // Initialize synthesizer with impulse response
+        std::cerr << "DEBUG BRIDGE: About to initialize impulse response for exhaust " << i << "\n";
         ctx->simulator->synthesizer().initializeImpulseResponse(
             wavResult.getData(),
             static_cast<unsigned int>(wavResult.getSampleCount()),
             static_cast<float>(impulse->getVolume()),
             i
         );
+        std::cerr << "DEBUG BRIDGE: Impulse response initialized for exhaust " << i << "\n";
     }
 
     return true;
@@ -204,9 +221,15 @@ static bool loadImpulseResponses(
 
 EngineSimResult EngineSimCreate(
     const EngineSimConfig* config,
+    const char* scriptPath,
+    const char* assetBasePath,
     EngineSimHandle* outHandle)
 {
     if (!outHandle) {
+        return ESIM_ERROR_INVALID_PARAMETER;
+    }
+
+    if (!scriptPath || strlen(scriptPath) == 0) {
         return ESIM_ERROR_INVALID_PARAMETER;
     }
 
@@ -247,20 +270,6 @@ EngineSimResult EngineSimCreate(
     ctx->simulator->setFluidSimulationSteps(ctx->config.fluidSimulationSteps);
     ctx->simulator->setTargetSynthesizerLatency(ctx->config.targetSynthesizerLatency);
 
-    // Configure synthesizer
-    Synthesizer::Parameters synthParams;
-    synthParams.inputChannelCount = 2; // Stereo
-    synthParams.inputBufferSize = ctx->config.inputBufferSize;
-    synthParams.audioBufferSize = ctx->config.audioBufferSize;
-    synthParams.inputSampleRate = static_cast<float>(ctx->config.simulationFrequency);
-    synthParams.audioSampleRate = static_cast<float>(ctx->config.sampleRate);
-
-    synthParams.initialAudioParameters.volume = ctx->config.volume;
-    synthParams.initialAudioParameters.convolution = ctx->config.convolutionLevel;
-    synthParams.initialAudioParameters.airNoise = ctx->config.airNoise;
-
-    ctx->simulator->synthesizer().initialize(synthParams);
-
     // Allocate audio conversion buffer (stereo)
     ctx->conversionBufferSize = 4096 * 2; // Max frames * 2 channels
     ctx->audioConversionBuffer = new (std::nothrow) int16_t[ctx->conversionBufferSize];
@@ -282,34 +291,21 @@ EngineSimResult EngineSimCreate(
     ctx->compiler->initialize();
 #endif
 
-    *outHandle = ctx;
-    return ESIM_SUCCESS;
-}
+    // SRP: Bridge handles path resolution - CLI just passes raw path
+    std::string scriptPathStr(scriptPath);
+
+    // Resolve script path to absolute if relative
+    if (scriptPathStr[0] != '/' && scriptPathStr[0] != '~' && scriptPathStr[0] != '.') {
+        // Relative path - make absolute relative to CWD
+        scriptPathStr = std::filesystem::absolute(scriptPathStr).string();
+    }
+    scriptPathStr = std::filesystem::path(scriptPathStr).lexically_normal();
 
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
-EngineSimResult EngineSimLoadScript(
-    EngineSimHandle handle,
-    const char* scriptPath,
-    const char* assetBasePath)
-{
-    if (!validateHandle(handle)) {
-        return ESIM_ERROR_INVALID_HANDLE;
-    }
-
-    if (!scriptPath || strlen(scriptPath) == 0) {
-        return ESIM_ERROR_INVALID_PARAMETER;
-    }
-
-    EngineSimContext* ctx = getContext(handle);
-
-    if (!ctx->compiler) {
-        ctx->setError("Compiler not initialized. Piranha support not available.");
-        return ESIM_ERROR_SCRIPT_COMPILATION;
-    }
-
     // Compile the script
-    if (!ctx->compiler->compile(scriptPath)) {
-        ctx->setError("Failed to compile script: " + std::string(scriptPath));
+    if (!ctx->compiler->compile(scriptPathStr.c_str())) {
+        ctx->setError("Failed to compile script: " + scriptPathStr + ":" + (!ctx->lastError.empty() ? ctx->lastError : "Unknown lastError"));
+        delete ctx;
         return ESIM_ERROR_SCRIPT_COMPILATION;
     }
 
@@ -347,50 +343,54 @@ EngineSimResult EngineSimLoadScript(
     ctx->vehicle = vehicle;
     ctx->transmission = transmission;
 
-    // Load the simulation
-    if (ctx->engine) {
-        ctx->simulator->loadSimulation(ctx->engine, ctx->vehicle, ctx->transmission);
-        // NOTE: Do NOT re-initialize synthesizer here.
-        // loadSimulation() already initializes the synthesizer correctly.
-        // Re-initializing would reset the buffer and cause underruns.
-    } else {
+    if (!ctx->engine) {
         ctx->setError("Script did not create an engine");
+        delete ctx;
         return ESIM_ERROR_LOAD_FAILED;
     }
+
+    // Load the simulation FIRST (matches old LoadScript flow)
+    // This calls initializeSynthesizer() which has hardcoded 44100 values
+    std::cerr << "DEBUG BRIDGE: About to call loadSimulation\n";
+    ctx->simulator->loadSimulation(ctx->engine, ctx->vehicle, ctx->transmission);
+    std::cerr << "DEBUG BRIDGE: loadSimulation completed\n";
 
     // Determine asset base path
     std::string resolvedAssetPath;
     if (assetBasePath != nullptr && strlen(assetBasePath) > 0) {
         resolvedAssetPath = assetBasePath;
-        std::cerr << "DEBUG BRIDGE: Using provided assetBasePath: " << resolvedAssetPath << "\n";
     } else {
-        // Default: derive from script path (go up to assets/ directory)
-        std::string scriptPathStr(scriptPath);
+        // Default: derive from script path
         size_t assetsPos = scriptPathStr.find("/assets/");
         if (assetsPos != std::string::npos) {
-            // Extract path up to and including /assets/
-            resolvedAssetPath = scriptPathStr.substr(0, assetsPos + 8); // +8 for "/assets/"
+            resolvedAssetPath = scriptPathStr.substr(0, assetsPos + 8);
         } else {
-             // Default: use script's directory
             size_t lastSlash = scriptPathStr.find_last_of('/');
             if (lastSlash != std::string::npos) {
                 resolvedAssetPath = scriptPathStr.substr(0, lastSlash);
             } else {
-                resolvedAssetPath = ".";  // Current directory
+                resolvedAssetPath = ".";
             }
         }
     }
 
-    // Load impulse responses
+    // Load impulse responses AFTER loadSimulation (matches old LoadScript flow)
     if (!loadImpulseResponses(ctx, resolvedAssetPath)) {
-        std::cerr << ANSI_COLOR_RED << "FATAL: Cannot continue without required audio files - engine configuration failed" << ANSI_COLOR_RESET << "\n";
         ctx->setError("Failed to load impulse responses");
+        delete ctx;
         return ESIM_ERROR_LOAD_FAILED;
     }
+#else
+    (void)scriptPathStr;  // Suppress unused warning
+    (void)assetBasePath;  // Suppress unused warning
+    ctx->setError("Script loading requested but Piranha support not available.");
+    delete ctx;
+    return ESIM_ERROR_SCRIPT_COMPILATION;
+#endif
 
+    *outHandle = ctx;
     return ESIM_SUCCESS;
 }
-#endif
 
 EngineSimResult EngineSimStartAudioThread(
     EngineSimHandle handle)
@@ -402,7 +402,7 @@ EngineSimResult EngineSimStartAudioThread(
     EngineSimContext* ctx = getContext(handle);
 
     if (!ctx->engine) {
-        ctx->setError("No engine loaded. Call EngineSimLoadScript first.");
+        ctx->setError("No engine loaded. Ensure script path was provided to EngineSimCreate() before EngineSimLoadImpulseResponse().");
         return ESIM_ERROR_NOT_INITIALIZED;
     }
 
@@ -734,7 +734,7 @@ EngineSimResult EngineSimRenderOnDemand(
     }
 
     if (outFramesWritten) {
-        *outFramesWritten = actualFramesWithData;
+        *outFramesWritten = samplesRead;
     }
 
     return ESIM_SUCCESS;
@@ -1003,7 +1003,7 @@ EngineSimResult EngineSimLoadImpulseResponse(
     EngineSimContext* ctx = getContext(handle);
 
     if (!ctx->engine) {
-        ctx->setError("No engine loaded. Call EngineSimLoadScript first.");
+        ctx->setError("No engine loaded. Ensure script path was provided to EngineSimCreate() before EngineSimLoadImpulseResponse().");
         return ESIM_ERROR_NOT_INITIALIZED;
     }
 

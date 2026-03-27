@@ -16,12 +16,9 @@ typedef EngineSimHandle MockEngineSimHandle;
 // Internal function prototypes (these are the actual implementations)
 EngineSimResult MockEngineSimCreateInternal(
     const EngineSimConfig* config,
-    MockEngineSimHandle* outHandle);
-
-EngineSimResult MockEngineSimLoadScriptInternal(
-    MockEngineSimHandle handle,
     const char* scriptPath,
-    const char* assetBasePath);
+    const char* assetBasePath,
+    MockEngineSimHandle* outHandle);
 
 EngineSimResult MockEngineSimStartAudioThreadInternal(
     MockEngineSimHandle handle);

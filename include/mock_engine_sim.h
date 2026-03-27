@@ -29,9 +29,11 @@ extern "C" {
 // ============================================================================
 
 /**
- * Creates a new mock simulator instance with specified configuration.
+ * Creates a new mock simulator instance with specified configuration and engine script.
  *
  * @param config Pointer to configuration structure
+ * @param scriptPath Path to .mr file (UTF-8). REQUIRED for real engine, optional for mock.
+ * @param assetBasePath Optional base path for assets (WAV files).
  * @param outHandle Pointer to receive the simulator handle
  * @return ESIM_SUCCESS on success, error code otherwise
  *
@@ -40,25 +42,9 @@ extern "C" {
  */
 EngineSimResult EngineSimCreate(
     const EngineSimConfig* config,
-    EngineSimHandle* outHandle
-);
-
-/**
- * Loads a mock engine configuration.
- * This must be called before the simulator can generate audio.
- *
- * @param handle Simulator handle
- * @param scriptPath Absolute path to .mr file (UTF-8) - ignored in mock
- * @param assetBasePath Optional base path for assets (WAV files) - ignored in mock
- * @return ESIM_SUCCESS on success, error code otherwise
- *
- * Thread Safety: Must be called before audio thread starts
- * Allocations: Yes (mock setup)
- */
-EngineSimResult EngineSimLoadScript(
-    EngineSimHandle handle,
     const char* scriptPath,
-    const char* assetBasePath  // Optional, null = use default
+    const char* assetBasePath,
+    EngineSimHandle* outHandle
 );
 
 /**

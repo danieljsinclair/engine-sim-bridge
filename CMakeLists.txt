@@ -107,7 +107,7 @@ if(APPLE)
     )
 endif()
 
-# Post-build: Replace symlinks with actual copies
+# Post-build: Replace legacy symlinks with actual copies
 add_custom_command(TARGET engine-sim-bridge POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E remove -f
         ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.dylib
@@ -118,6 +118,9 @@ add_custom_command(TARGET engine-sim-bridge POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy
         ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
         ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.dylib
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
+        ${CMAKE_BINARY_DIR}/libenginesim.dylib
     COMMENT "Replacing symlinks with actual copies for engine-sim-bridge"
 )
 

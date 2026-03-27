@@ -863,8 +863,13 @@ extern "C" {
 
 EngineSimResult EngineSimCreate(
     const EngineSimConfig* config,
+    const char* scriptPath,
+    const char* assetBasePath,
     EngineSimHandle* outHandle)
 {
+    (void)scriptPath;     // Mock doesn't use script path
+    (void)assetBasePath;  // Mock doesn't use asset base path
+
     if (!outHandle) {
         return ESIM_ERROR_INVALID_PARAMETER;
     }
@@ -889,21 +894,7 @@ EngineSimResult EngineSimCreate(
     // Initialize synthesizer with config
     ctx->initializeSynthesizer();
 
-    *outHandle = ctx;
-    return ESIM_SUCCESS;
-}
-
-EngineSimResult EngineSimLoadScript(
-    EngineSimHandle handle,
-    const char* scriptPath,
-    const char* assetBasePath)
-{
-    if (!validateHandle(handle)) {
-        return ESIM_ERROR_INVALID_HANDLE;
-    }
-
-    MockEngineSimContext* ctx = getContext(handle);
-
+    // Initialize warmup state
     ctx->warmupStartTime = std::chrono::steady_clock::now();
     ctx->currentRPM = 0.0;
     ctx->throttlePosition = 0.0;
@@ -911,6 +902,7 @@ EngineSimResult EngineSimLoadScript(
     ctx->sinePhase = 0.0;
     ctx->inWarmupPhase = true;
 
+    *outHandle = ctx;
     return ESIM_SUCCESS;
 }
 

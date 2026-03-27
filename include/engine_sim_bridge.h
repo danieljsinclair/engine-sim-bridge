@@ -67,39 +67,29 @@ typedef struct {
 // ============================================================================
 
 /**
- * Creates a new simulator instance with specified configuration.
+ * Creates a new simulator instance with specified configuration and engine script.
+ *
+ * This is the PRIMARY creation function - it initializes the simulator and loads
+ * the engine configuration in one atomic operation. This matches the GUI pattern
+ * where the script is loaded immediately during initialization.
  *
  * @param config Pointer to configuration structure
+ * @param scriptPath Absolute path to .mr file (UTF-8). REQUIRED.
+ * @param assetBasePath Optional base path for assets (WAV files). If null, uses
+ *                      default path derived from scriptPath location.
  * @param outHandle Pointer to receive the simulator handle
  * @return ESIM_SUCCESS on success, error code otherwise
  *
  * Thread Safety: Safe to call from any thread
  * Allocations: Yes (one-time)
+ *
+ * Example: EngineSimCreate(&config, "/path/to/assets/engines/subaru.mr", "/path/to/assets", &handle)
  */
 EngineSimResult EngineSimCreate(
     const EngineSimConfig* config,
-    EngineSimHandle* outHandle
-);
-
-/**
- * Loads an engine configuration from a .mr script file.
- * This must be called before the simulator can generate audio.
- *
- * @param handle Simulator handle
- * @param scriptPath Absolute path to .mr file (UTF-8)
- * @param assetBasePath Optional base path for assets (WAV files). If null, uses
- *                      default path derived from scriptPath location.
- * @return ESIM_SUCCESS on success, error code otherwise
- *
- * Thread Safety: Must be called before audio thread starts
- * Allocations: Yes (loads engine model and impulse responses)
- *
- * Example: EngineSimLoadScript(handle, "/path/to/assets/engines/subaru.mr", "/path/to/assets")
- */
-EngineSimResult EngineSimLoadScript(
-    EngineSimHandle handle,
     const char* scriptPath,
-    const char* assetBasePath
+    const char* assetBasePath,
+    EngineSimHandle* outHandle
 );
 
 /**
