@@ -37,6 +37,8 @@ target_link_libraries(engine-sim-mock
         engine-sim
 )
 
+target_compile_options(engine-sim-mock PRIVATE -g)
+
 set_target_properties(engine-sim-mock PROPERTIES
     OUTPUT_NAME "enginesim-mock"
     VERSION ${PROJECT_VERSION}
@@ -83,6 +85,8 @@ target_link_libraries(engine-sim-bridge
     PRIVATE
         engine-sim
 )
+
+target_compile_options(engine-sim-bridge PRIVATE -g)
 
 if(TARGET engine-sim-script-interpreter)
     target_link_libraries(engine-sim-bridge
