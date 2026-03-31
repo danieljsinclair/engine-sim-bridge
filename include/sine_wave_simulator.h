@@ -1,68 +1,74 @@
 #ifndef ENGINE_SIM_BRIDGE_SINE_WAVE_SIMULATOR_H
 #define ENGINE_SIM_BRIDGE_SINE_WAVE_SIMULATOR_H
 
-#include <cstdint>
+#include "simulator.h"
+#include "engine.h"
+#include "vehicle.h"
+#include "transmission.h"
+#include "throttle.h"
 #include <cmath>
 
 /**
- * SineWaveSimulator - A simple sine wave generator for testing/development.
+ * SineWaveSimulator - Test simulator with dummy engine for consistent output.
  *
- * Generates a pure sine wave at a frequency proportional to RPM:
- *   frequency = RPM / 60 * (cylinders / 2) Hz
+ * Derives from Simulator (same as PistonEngineSimulator) and implements the
+ * same DRY interface. Creates dummy Engine/Vehicle/Transmission objects
+ * and uses the base class loadSimulation() method.
  *
- * For a 4-cylinder engine at 3000 RPM: frequency = 3000/60*2 = 100 Hz
+ * Key differences from PistonEngineSimulator:
+ * - No physics simulation (crankshaft, pistons, valves, etc.)
+ * - Throttle directly controls RPM with no lag
+ * - Predictable sine wave audio output for testing
  *
- * This class is used when config.sineMode == 1 to bypass the full engine
- * simulation for quick audio testing without requiring script loading.
+ * From the bridge's perspective, this is identical to PistonEngineSimulator:
+ * - call loadSimulation()
+ * - call engine->setSpeedControl()
+ * - call startFrame()/simulateStep()/endFrame()
+ *
+ * This proves buffer management, threading, and control flow work correctly
+ * without requiring complex physics simulation.
  */
-class SineWaveSimulator {
+class SineWaveSimulator : public Simulator {
 public:
     SineWaveSimulator();
-    ~SineWaveSimulator() = default;
+    virtual ~SineWaveSimulator();
 
     /**
-     * Initialize the sine wave generator with sample rate and cylinder count.
+     * Initialize with dummy engine/vehicle/transmission.
+     * Creates minimal objects and calls parent loadSimulation().
      */
-    void initialize(int sampleRate, int cylinders = 4);
+    virtual void initialize(const Parameters &params) override;
+    
+    /**
+     * Override loadSimulation to connect physics constraints (dyno, starter).
+     */
+    virtual void loadSimulation(Engine* engine, Vehicle* vehicle, Transmission* transmission) override;
+    
+    /**
+     * Clean up dummy objects.
+     */
+    virtual void destroy() override;
+
+protected:
+    /**
+     * Override physics simulation - just update RPM from throttle.
+     */
+    virtual void simulateStep_() override;
 
     /**
-     * Set the current RPM for frequency calculation.
+     * Override synthesizer writing - generate simple sine wave.
      */
-    void setRPM(double rpm);
-
-    /**
-     * Generate stereo float audio samples.
-     * @param buffer Output buffer for interleaved stereo samples (L, R, L, R...)
-     * @param frames Number of frames to generate
-     */
-    void generate(float* buffer, int32_t frames);
-
-    /**
-     * Generate mono int16 audio samples (matching synthesizer output format).
-     * @param buffer Output buffer for mono samples
-     * @param samples Number of samples to generate
-     */
-    void generateInt16(int16_t* buffer, int32_t samples);
-
-    /**
-     * Get the current frequency in Hz.
-     */
-    double getFrequency() const { return m_frequency; }
-
-    /**
-     * Set the output volume (0.0 to 1.0).
-     */
-    void setVolume(float volume) { m_volume = volume; }
+    virtual void writeToSynthesizer() override;
 
 private:
-    int m_sampleRate;
-    int m_cylinders;
-    double m_rpm;
-    double m_frequency;
-    double m_phase;
-    float m_volume;
+    Engine* m_dummyEngine;
+    Vehicle* m_dummyVehicle;
+    Transmission* m_dummyTransmission;
+    atg_scs::RigidBody m_vehicleMass;  // Required by Vehicle/Transmission addToSystem()
+    
+    double m_phase;       // Sine wave phase accumulator
 
-    static constexpr float TWO_PI = static_cast<float>(2.0 * M_PI);
+    static constexpr double TWO_PI = 2.0 * M_PI;
 };
 
 #endif // ENGINE_SIM_BRIDGE_SINE_WAVE_SIMULATOR_H
