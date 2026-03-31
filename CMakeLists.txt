@@ -16,9 +16,13 @@ endif()
 
 # Add engine-sim as a subdirectory (it's a submodule of this repo)
 # Disable the GUI app and bridge from engine-sim's own CMakeLists
+# Also disable engine-sim's own tests to avoid phantom test entries
 set(BUILD_ENGINE_SIM_APP OFF CACHE BOOL "Build engine-sim GUI app" FORCE)
 set(BUILD_BRIDGE OFF CACHE BOOL "Build bridge from engine-sim (we are the bridge)" FORCE)
 set(DISCORD_ENABLED OFF CACHE BOOL "Enable Discord Rich Presence" FORCE)
+# Disable engine-sim's internal testing
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ENGINE_SIM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_ALL)
 
 # Real bridge library (uses actual engine-sim with polymorphic simulator selection)
@@ -93,23 +97,40 @@ install(TARGETS engine-sim-bridge
 )
 
 # -----------------------------------------------------------------------------
-# Unit tests (optional, requires GoogleTest)
+# Unit tests (bridge owns its own tests)
+# Standalone build: `make test` works directly
+# As CLI subdirectory: CLI registers bridge_unit_tests with its own CTest
 # -----------------------------------------------------------------------------
-option(BUILD_BRIDGE_TESTS "Build engine-sim-bridge unit tests" OFF)
+option(BUILD_BRIDGE_TESTS "Build engine-sim-bridge unit tests" ON)
 if(BUILD_BRIDGE_TESTS)
-    find_package(GTest REQUIRED)
-    enable_testing()
-
-    add_executable(mock_engine_tests
-        test/mock_engine_tests.cpp
+    # Fetch GoogleTest if not available
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG release-1.12.1
     )
-    target_include_directories(mock_engine_tests PRIVATE
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    # Only register with CTest when building standalone (not as a subdirectory)
+    # This prevents double-registration when CLI includes us
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        enable_testing()
+    endif()
+
+    add_executable(bridge_unit_tests
+        test/BridgeUnitTests.cpp
+    )
+    target_include_directories(bridge_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
-    target_link_libraries(mock_engine_tests
+    target_link_libraries(bridge_unit_tests
         PRIVATE
-            engine-sim-bridge
             GTest::gtest_main
     )
-    add_test(NAME mock_engine_tests COMMAND mock_engine_tests)
+
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME bridge_unit_tests COMMAND bridge_unit_tests --gtest_color=yes)
+    endif()
 endif()
