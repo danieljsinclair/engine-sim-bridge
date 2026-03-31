@@ -33,12 +33,9 @@
 // ============================================================================
 
 struct EngineSimContext {
-    // Core components
-    PistonEngineSimulator* simulator;
-    SineWaveSimulator* sineSimulator;  // Used when config.sineMode == 1
-    Engine* engine;
-    Vehicle* vehicle;
-    Transmission* transmission;
+    // Core components - SINGLE simulator pointer (polymorphic)
+    // Can be either PistonEngineSimulator or SineWaveSimulator based on config
+    Simulator* simulator;
 
     // Configuration
     EngineSimConfig config;
@@ -55,6 +52,9 @@ struct EngineSimContext {
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
     // Scripting
     es_script::Compiler* compiler;
+    Engine* engine;
+    Vehicle* vehicle;
+    Transmission* transmission;
 #endif
 
     // Statistics
@@ -65,15 +65,14 @@ struct EngineSimContext {
 
     EngineSimContext()
         : simulator(nullptr)
-        , sineSimulator(nullptr)
-        , engine(nullptr)
-        , vehicle(nullptr)
-        , transmission(nullptr)
         , throttlePosition(0.0)
         , audioConversionBuffer(nullptr)
         , conversionBufferSize(0)
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
         , compiler(nullptr)
+        , engine(nullptr)
+        , vehicle(nullptr)
+        , transmission(nullptr)
 #endif
         , logger(nullptr)
     {
@@ -87,20 +86,12 @@ struct EngineSimContext {
             audioConversionBuffer = nullptr;
         }
 
-        if (sineSimulator) {
-            delete sineSimulator;
-            sineSimulator = nullptr;
-        }
-
         if (simulator) {
             simulator->endAudioRenderingThread();
             simulator->destroy();
             delete simulator;
             simulator = nullptr;
         }
-
-        // Note: Engine, Vehicle, Transmission are owned by simulator
-        // Don't delete them explicitly
 
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
         if (compiler) {
@@ -144,6 +135,86 @@ static void setDefaultConfig(EngineSimConfig* config) {
     config->volume = 0.5f;
     config->convolutionLevel = 1.0f;
     config->airNoise = 1.0f;
+}
+
+// ============================================================================
+// HELPER FUNCTIONS FOR SCRIPT LOADING (SRP)
+// ============================================================================
+
+/**
+ * Normalize script path to absolute path.
+ */
+static std::string normalizeScriptPath(const char* scriptPath) {
+    if (!scriptPath || strlen(scriptPath) == 0) {
+        return "";
+    }
+    
+    std::string path(scriptPath);
+    
+    // Already absolute or special path
+    if (path[0] == '/' || path[0] == '~' || path[0] == '.') {
+        return path;
+    }
+    
+    // Relative path - make absolute relative to CWD
+    return std::filesystem::absolute(path).lexically_normal().string();
+}
+
+/**
+ * Resolve asset base path from script path or explicit override.
+ */
+static std::string resolveAssetBasePath(const std::string& scriptPath, const char* assetBasePath) {
+    if (assetBasePath != nullptr && strlen(assetBasePath) > 0) {
+        return std::string(assetBasePath);
+    }
+    
+    // Default: derive from script path
+    size_t assetsPos = scriptPath.find("/assets/");
+    if (assetsPos != std::string::npos) {
+        // Audio files are in the parent of assets directory
+        // e.g., script is "engine-sim/assets/main.mr", audio is in "engine-sim/es/..."
+        return scriptPath.substr(0, assetsPos);
+    }
+    
+    size_t lastSlash = scriptPath.find_last_of('/');
+    if (lastSlash != std::string::npos) {
+        return scriptPath.substr(0, lastSlash);
+    }
+    
+    return ".";
+}
+
+/**
+ * Create default vehicle with sensible parameters.
+ */
+static Vehicle* createDefaultVehicle() {
+    Vehicle::Parameters vehParams;
+    vehParams.mass = units::mass(1597, units::kg);
+    vehParams.diffRatio = 3.42;
+    vehParams.tireRadius = units::distance(10, units::inch);
+    vehParams.dragCoefficient = 0.25;
+    vehParams.crossSectionArea = units::distance(6.0, units::foot) * units::distance(6.0, units::foot);
+    vehParams.rollingResistance = 2000.0;
+    
+    Vehicle* vehicle = new Vehicle;
+    vehicle->initialize(vehParams);
+    return vehicle;
+}
+
+/**
+ * Create default transmission with sensible gear ratios.
+ */
+static Transmission* createDefaultTransmission() {
+    const double gearRatios[] = { 2.97, 2.07, 1.43, 1.00, 0.84, 0.56 };
+    
+    Transmission::Parameters tParams;
+    tParams.GearCount = 6;
+    tParams.GearRatios = gearRatios;
+    tParams.MaxClutchTorque = units::torque(1000.0, units::ft_lb);
+    
+    Transmission* transmission = new Transmission;
+    transmission->initialize(tParams);
+    return transmission;
 }
 
 // ============================================================================
@@ -243,10 +314,7 @@ EngineSimResult EngineSimCreate(
     }
 
     // Allocate context
-    EngineSimContext* ctx = new (std::nothrow) EngineSimContext();
-    if (!ctx) {
-        return ESIM_ERROR_INVALID_HANDLE;
-    }
+    EngineSimContext* ctx = new EngineSimContext();
 
     // Use default config if none provided
     if (config) {
@@ -262,55 +330,37 @@ EngineSimResult EngineSimCreate(
         return validateResult;
     }
 
-    // Create simulator based on mode
+    // Create simulator based on mode (Factory pattern)
     if (ctx->config.sineMode == 1) {
-        // Sine wave mode: create simple sine wave generator
-        ctx->sineSimulator = new (std::nothrow) SineWaveSimulator();
-        if (!ctx->sineSimulator) {
-            ctx->setError("Failed to allocate SineWaveSimulator");
-            delete ctx;
-            return ESIM_ERROR_INVALID_HANDLE;
-        }
-        ctx->sineSimulator->initialize(ctx->config.sampleRate);
-
-        // Don't create PistonEngineSimulator in sine mode - it's not needed
+        // Sine wave mode: create SineWaveSimulator (derives from Simulator)
+        ctx->simulator = new SineWaveSimulator();
     } else {
         // Normal mode: create full physics simulator
-        ctx->simulator = new (std::nothrow) PistonEngineSimulator();
-        if (!ctx->simulator) {
-            ctx->setError("Failed to allocate PistonEngineSimulator");
-            delete ctx;
-            return ESIM_ERROR_INVALID_HANDLE;
-        }
-
-        // Initialize simulator parameters
-        Simulator::Parameters simParams;
-        simParams.systemType = Simulator::SystemType::NsvOptimized;
-
-        ctx->simulator->initialize(simParams);
-        ctx->simulator->setSimulationFrequency(ctx->config.simulationFrequency);
-        ctx->simulator->setFluidSimulationSteps(ctx->config.fluidSimulationSteps);
-        ctx->simulator->setTargetSynthesizerLatency(ctx->config.targetSynthesizerLatency);
+        ctx->simulator = new PistonEngineSimulator();
     }
+
+    // Initialize simulator with common parameters
+    Simulator::Parameters simParams;
+    simParams.systemType = Simulator::SystemType::NsvOptimized;
+
+    ctx->simulator->initialize(simParams);
+    ctx->simulator->setSimulationFrequency(ctx->config.simulationFrequency);
+
+    // Only set fluid simulation steps for PistonEngineSimulator
+    // SineWaveSimulator doesn't use physics, so skip this call
+    if (ctx->config.sineMode != 1) {
+        PistonEngineSimulator* pistonSim = static_cast<PistonEngineSimulator*>(ctx->simulator);
+        pistonSim->setFluidSimulationSteps(ctx->config.fluidSimulationSteps);
+    }
+    ctx->simulator->setTargetSynthesizerLatency(ctx->config.targetSynthesizerLatency);
 
     // Allocate audio conversion buffer (stereo)
     ctx->conversionBufferSize = 4096 * 2; // Max frames * 2 channels
-    ctx->audioConversionBuffer = new (std::nothrow) int16_t[ctx->conversionBufferSize];
-    if (!ctx->audioConversionBuffer) {
-        ctx->setError("Failed to allocate audio conversion buffer");
-        delete ctx;
-        return ESIM_ERROR_AUDIO_BUFFER;
-    }
+    ctx->audioConversionBuffer = new int16_t[ctx->conversionBufferSize];
 
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
     // Create compiler for script loading (will be used by LoadScript)
-    ctx->compiler = new (std::nothrow) es_script::Compiler();
-    if (!ctx->compiler) {
-        ctx->setError("Failed to allocate script compiler");
-        delete ctx;
-        return ESIM_ERROR_SCRIPT_COMPILATION;
-    }
-
+    ctx->compiler = new es_script::Compiler();
     ctx->compiler->initialize();
 #endif
 
@@ -318,6 +368,9 @@ EngineSimResult EngineSimCreate(
     return ESIM_SUCCESS;
 }
 
+/// ==============================================================================
+/// SCRIPT LOADING
+/// ==============================================================================
 EngineSimResult EngineSimLoadScript(
     EngineSimHandle handle,
     const char* scriptPath,
@@ -329,74 +382,38 @@ EngineSimResult EngineSimLoadScript(
 
     EngineSimContext* ctx = getContext(handle);
 
-    // Sine mode support: Check config flag OR script path for sine wave generation
-    bool isSineMode = (ctx->config.sineMode == 1) ||
-                      (!scriptPath || strlen(scriptPath) == 0 ||
-                       (scriptPath && std::string(scriptPath) == "sine"));
-
-    // Sine mode: create minimal simulator
-    if (isSineMode) {
-        // For sine mode, we don't need vehicle, transmission, or engine
-        ctx->vehicle = nullptr;
-        ctx->transmission = nullptr;
-        ctx->engine = nullptr;
-
-        // Initialize sine simulator with default RPM if not already set
-        if (ctx->sineSimulator) {
-            ctx->sineSimulator->setRPM(800.0);  // Idle RPM
-        }
-
-        // Initialize the synthesizer directly for sine mode
-        // Skip loadSimulation since it requires a non-null engine
+    // POLYMORPHIC CHECK: If simulator has already initialized its engine
+    // (e.g., SineWaveSimulator creates dummy objects in initialize()),
+    // just populate context pointers without loading a script.
+    // This respects Open/Closed and Liskov - no type checking, just behavior.
+    if (ctx->simulator->getEngine() != nullptr) {
+        ctx->engine = ctx->simulator->getEngine();
+        ctx->vehicle = ctx->simulator->getVehicle();
+        ctx->transmission = ctx->simulator->getTransmission();
+        ctx->throttlePosition.store(0.0, std::memory_order_relaxed);
         return ESIM_SUCCESS;
     }
 
-    // SRP: Bridge handles path resolution - CLI just passes raw path
-    std::string scriptPathStr(scriptPath);
-
-    // Resolve script path to absolute if relative
-    if (scriptPathStr[0] != '/' && scriptPathStr[0] != '~' && scriptPathStr[0] != '.') {
-        // Relative path - make absolute relative to CWD
-        scriptPathStr = std::filesystem::absolute(scriptPathStr).string();
+    // Normalize script path (SRP: path handling extracted)
+    std::string scriptPathStr = normalizeScriptPath(scriptPath);
+    if (scriptPathStr.empty()) {
+        ctx->setError("Script path required for engine simulation");
+        return ESIM_ERROR_INVALID_PARAMETER;
     }
-    scriptPathStr = std::filesystem::path(scriptPathStr).lexically_normal();
 
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
     // Compile the script
     if (!ctx->compiler->compile(scriptPathStr.c_str())) {
-        std::string error = "Failed to compile script: " + scriptPathStr + ":" + (!ctx->lastError.empty() ? ctx->lastError : "Unknown lastError");
-        ctx->setError(error);
+        ctx->setError("Failed to compile script: " + scriptPathStr);
         return ESIM_ERROR_SCRIPT_COMPILATION;
     }
 
     // Execute the compiled script
     es_script::Compiler::Output output = ctx->compiler->execute();
 
-    // Create default vehicle if none specified
-    Vehicle* vehicle = output.vehicle;
-    if (vehicle == nullptr) {
-        Vehicle::Parameters vehParams;
-        vehParams.mass = units::mass(1597, units::kg);
-        vehParams.diffRatio = 3.42;
-        vehParams.tireRadius = units::distance(10, units::inch);
-        vehParams.dragCoefficient = 0.25;
-        vehParams.crossSectionArea = units::distance(6.0, units::foot) * units::distance(6.0, units::foot);
-        vehParams.rollingResistance = 2000.0;
-        vehicle = new Vehicle;
-        vehicle->initialize(vehParams);
-    }
-
-    // Create default transmission if none specified
-    Transmission* transmission = output.transmission;
-    if (transmission == nullptr) {
-        const double gearRatios[] = { 2.97, 2.07, 1.43, 1.00, 0.84, 0.56 };
-        Transmission::Parameters tParams;
-        tParams.GearCount = 6;
-        tParams.GearRatios = gearRatios;
-        tParams.MaxClutchTorque = units::torque(1000.0, units::ft_lb);
-        transmission = new Transmission;
-        transmission->initialize(tParams);
-    }
+    // Create defaults for missing components (SRP: object creation extracted)
+    Vehicle* vehicle = output.vehicle ? output.vehicle : createDefaultVehicle();
+    Transmission* transmission = output.transmission ? output.transmission : createDefaultTransmission();
 
     // Store references
     ctx->engine = output.engine;
@@ -408,32 +425,11 @@ EngineSimResult EngineSimLoadScript(
         return ESIM_ERROR_LOAD_FAILED;
     }
 
-    // Load the simulation FIRST (matches old LoadScript flow)
-    // This calls initializeSynthesizer() which has hardcoded 44100 values
+    // Load the simulation (virtual dispatch - works for any Simulator subclass)
     ctx->simulator->loadSimulation(ctx->engine, ctx->vehicle, ctx->transmission);
 
-    // Determine asset base path
-    std::string resolvedAssetPath;
-    if (assetBasePath != nullptr && strlen(assetBasePath) > 0) {
-        resolvedAssetPath = assetBasePath;
-    } else {
-        // Default: derive from script path
-        size_t assetsPos = scriptPathStr.find("/assets/");
-        if (assetsPos != std::string::npos) {
-            // Audio files are in the parent of assets directory, not inside it
-            // e.g., script is "engine-sim/assets/main.mr", audio is in "engine-sim/es/..."
-            resolvedAssetPath = scriptPathStr.substr(0, assetsPos);
-        } else {
-            size_t lastSlash = scriptPathStr.find_last_of('/');
-            if (lastSlash != std::string::npos) {
-                resolvedAssetPath = scriptPathStr.substr(0, lastSlash);
-            } else {
-                resolvedAssetPath = ".";
-            }
-        }
-    }
-
-    // Load impulse responses AFTER loadSimulation (matches old LoadScript flow)
+    // Resolve asset path and load impulse responses (SRP: path handling extracted)
+    std::string resolvedAssetPath = resolveAssetBasePath(scriptPathStr, assetBasePath);
     if (!loadImpulseResponses(ctx, resolvedAssetPath)) {
         ctx->setError("Failed to load impulse responses");
         return ESIM_ERROR_LOAD_FAILED;
@@ -443,11 +439,14 @@ EngineSimResult EngineSimLoadScript(
 #else
     (void)scriptPathStr;  // Suppress unused warning
     (void)assetBasePath;  // Suppress unused warning
-    ctx->setError("Script loading requested but Piranha support not available.");
+    ctx->setError("Script loading not available (Piranha support disabled)");
     return ESIM_ERROR_SCRIPT_COMPILATION;
 #endif
 }
 
+/// ==============================================================================
+/// AUDIO THREAD CONTROL
+/// ==============================================================================
 EngineSimResult EngineSimStartAudioThread(
     EngineSimHandle handle)
 {
@@ -481,6 +480,9 @@ EngineSimResult EngineSimStartAudioThread(
     return ESIM_SUCCESS;
 }
 
+/// ==============================================================================
+/// LIFECYCLE CONTINUED
+/// ==============================================================================
 EngineSimResult EngineSimDestroy(
     EngineSimHandle handle)
 {
@@ -508,9 +510,9 @@ EngineSimResult EngineSimSetLogging(
     return ESIM_SUCCESS;
 }
 
-// ============================================================================
-// CONTROL FUNCTIONS
-// ============================================================================
+// ==============================================================================
+/// CONTROL FUNCTIONS
+/// ==============================================================================
 
 EngineSimResult EngineSimSetThrottle(
     EngineSimHandle handle,
@@ -536,6 +538,9 @@ EngineSimResult EngineSimSetThrottle(
     return ESIM_SUCCESS;
 }
 
+/// =======================================================================
+/// SIMULATION UPDATE
+/// =======================================================================
 EngineSimResult EngineSimUpdate(
     EngineSimHandle handle,
     double deltaTime)
@@ -549,22 +554,6 @@ EngineSimResult EngineSimUpdate(
     }
 
     EngineSimContext* ctx = getContext(handle);
-
-    // Sine mode: Update sine simulator RPM from throttle
-    if (ctx->sineSimulator) {
-        double throttle = ctx->throttlePosition.load(std::memory_order_relaxed);
-        // Map throttle (0-1) to RPM (800-6000)
-        double targetRpm = 800.0 + throttle * 5200.0;
-        ctx->sineSimulator->setRPM(targetRpm);
-
-        // Update stats
-        ctx->stats.currentRPM = targetRpm;
-        ctx->stats.currentLoad = throttle;
-        ctx->stats.exhaustFlow = 0.0;
-        ctx->stats.processingTimeMs = 0.0;
-
-        return ESIM_SUCCESS;
-    }
 
     if (!ctx->engine) {
         ctx->setError("No engine loaded");
@@ -595,7 +584,6 @@ EngineSimResult EngineSimUpdate(
 // ============================================================================
 // AUDIO RENDERING (CRITICAL HOT PATH)
 // ============================================================================
-
 EngineSimResult EngineSimRender(
     EngineSimHandle handle,
     float* buffer,
@@ -611,26 +599,6 @@ EngineSimResult EngineSimRender(
     }
 
     EngineSimContext* ctx = getContext(handle);
-
-    // Sine mode: Use simple sine wave generator
-    if (ctx->sineSimulator) {
-        // Generate sine wave directly into output buffer (stereo float)
-        ctx->sineSimulator->generate(buffer, frames);
-
-        if (outSamplesWritten) {
-            *outSamplesWritten = frames;
-        }
-        return ESIM_SUCCESS;
-    }
-
-    if (!ctx->engine) {
-        // No engine loaded - output silence
-        std::memset(buffer, 0, frames * 2 * sizeof(float));
-        if (outSamplesWritten) {
-            *outSamplesWritten = 0;
-        }
-        return ESIM_SUCCESS;
-    }
 
     // Check buffer size
     size_t requiredSize = frames * 2; // Stereo
@@ -705,6 +673,9 @@ EngineSimResult EngineSimRender(
     return ESIM_SUCCESS;
 }
 
+/// ==============================================================================
+/// SYNCHRONOUS RENDERING (NO AUDIO THREAD)
+/// ==============================================================================
 EngineSimResult EngineSimReadAudioBuffer(
     EngineSimHandle handle,
     float* buffer,
@@ -767,6 +738,9 @@ EngineSimResult EngineSimReadAudioBuffer(
     return ESIM_SUCCESS;
 }
 
+/// ==============================================================================
+/// RENDER ON DEMAND (FOR SYNCHRONOUS RENDERING WITHOUT AUDIO THREAD)
+/// ==============================================================================  
 EngineSimResult EngineSimRenderOnDemand(
     EngineSimHandle handle,
     float* buffer,
@@ -854,11 +828,9 @@ EngineSimResult EngineSimRenderOnDemand(
     return ESIM_SUCCESS;
 }
 
-// ============================================================================
-// DIAGNOSTICS & TELEMETRY
-// ============================================================================
-// DIAGNOSTICS & TELEMETRY
-// ============================================================================
+/// ============================================================================
+/// DIAGNOSTICS & TELEMETRY
+/// ============================================================================
 
 EngineSimResult EngineSimGetStats(
     EngineSimHandle handle,
@@ -981,6 +953,7 @@ EngineSimResult EngineSimSetSpeedControl(
     return ESIM_SUCCESS;
 }
 
+// Additional controls for testing and diagnostics
 EngineSimResult EngineSimSetStarterMotor(
     EngineSimHandle handle,
     int enabled)
@@ -991,14 +964,11 @@ EngineSimResult EngineSimSetStarterMotor(
 
     EngineSimContext* ctx = getContext(handle);
 
-    if (ctx->simulator) {
-        ctx->simulator->m_starterMotor.m_enabled = (enabled != 0);
-        return ESIM_SUCCESS;
-    }
-
-    return ESIM_ERROR_NOT_INITIALIZED;
+    ctx->simulator->m_starterMotor.m_enabled = (enabled != 0);
+    return ESIM_SUCCESS;
 }
 
+// Additional controls for testing and diagnostics
 EngineSimResult EngineSimSetIgnition(
     EngineSimHandle handle,
     int enabled)
@@ -1009,7 +979,7 @@ EngineSimResult EngineSimSetIgnition(
 
     EngineSimContext* ctx = getContext(handle);
 
-    if (ctx->simulator && ctx->simulator->getEngine()) {
+    if (ctx->simulator->getEngine()) {
         ctx->simulator->getEngine()->getIgnitionModule()->m_enabled = (enabled != 0);
         return ESIM_SUCCESS;
     }
@@ -1017,6 +987,7 @@ EngineSimResult EngineSimSetIgnition(
     return ESIM_ERROR_NOT_INITIALIZED;
 }
 
+// Additional controls for testing and diagnostics
 EngineSimResult EngineSimShiftGear(
     EngineSimHandle handle,
     int gear)
@@ -1027,7 +998,7 @@ EngineSimResult EngineSimShiftGear(
 
     EngineSimContext* ctx = getContext(handle);
 
-    if (ctx->simulator && ctx->simulator->getTransmission()) {
+    if (ctx->simulator->getTransmission()) {
         ctx->simulator->getTransmission()->changeGear(gear);
         return ESIM_SUCCESS;
     }
@@ -1035,6 +1006,7 @@ EngineSimResult EngineSimShiftGear(
     return ESIM_ERROR_NOT_INITIALIZED;
 }
 
+// Additional controls for testing and diagnostics
 EngineSimResult EngineSimSetClutch(
     EngineSimHandle handle,
     double pressure)
@@ -1049,7 +1021,7 @@ EngineSimResult EngineSimSetClutch(
 
     EngineSimContext* ctx = getContext(handle);
 
-    if (ctx->simulator && ctx->simulator->getTransmission()) {
+    if (ctx->simulator->getTransmission()) {
         ctx->simulator->getTransmission()->setClutchPressure(pressure);
         return ESIM_SUCCESS;
     }
@@ -1057,6 +1029,7 @@ EngineSimResult EngineSimSetClutch(
     return ESIM_ERROR_NOT_INITIALIZED;
 }
 
+// Additional controls for testing and diagnostics
 EngineSimResult EngineSimSetDyno(
     EngineSimHandle handle,
     int enabled)
@@ -1067,14 +1040,11 @@ EngineSimResult EngineSimSetDyno(
 
     EngineSimContext* ctx = getContext(handle);
 
-    if (ctx->simulator) {
-        ctx->simulator->m_dyno.m_enabled = (enabled != 0);
-        return ESIM_SUCCESS;
-    }
-
-    return ESIM_ERROR_NOT_INITIALIZED;
+    ctx->simulator->m_dyno.m_enabled = (enabled != 0);
+    return ESIM_SUCCESS;
 }
 
+// Additional controls for testing and diagnostics
 EngineSimResult EngineSimSetDynoHold(
     EngineSimHandle handle,
     int enabled,
@@ -1086,15 +1056,20 @@ EngineSimResult EngineSimSetDynoHold(
 
     EngineSimContext* ctx = getContext(handle);
 
-    if (ctx->simulator) {
-        ctx->simulator->m_dyno.m_hold = (enabled != 0);
-        ctx->simulator->m_dyno.m_rotationSpeed = speed;
-        return ESIM_SUCCESS;
-    }
-
-    return ESIM_ERROR_NOT_INITIALIZED;
+    ctx->simulator->m_dyno.m_hold = (enabled != 0);
+    ctx->simulator->m_dyno.m_rotationSpeed = speed;
+    return ESIM_SUCCESS;
 }
 
+/// ============================================================================
+/// @brief  Load custom impulse response data for a specific exhaust system index.
+/// @param handle 
+/// @param exhaustIndex 
+/// @param impulseData 
+/// @param sampleCount 
+/// @param volume 
+/// @return 
+/// ============================================================================
 EngineSimResult EngineSimLoadImpulseResponse(
     EngineSimHandle handle,
     int exhaustIndex,
