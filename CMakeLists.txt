@@ -26,6 +26,7 @@ set(ENGINE_SIM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_ALL)
 
 # Real bridge library (uses actual engine-sim with polymorphic simulator selection)
+# Bridge is platform-agnostic - audio infrastructure stays in CLI
 add_library(engine-sim-bridge SHARED
     src/engine_sim_bridge.cpp
     src/sine_wave_simulator.cpp
