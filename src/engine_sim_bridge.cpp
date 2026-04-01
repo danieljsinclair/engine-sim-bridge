@@ -148,15 +148,11 @@ static std::string normalizeScriptPath(const char* scriptPath) {
     if (!scriptPath || strlen(scriptPath) == 0) {
         return "";
     }
-    
+
     std::string path(scriptPath);
-    
-    // Already absolute or special path
-    if (path[0] == '/' || path[0] == '~' || path[0] == '.') {
-        return path;
-    }
-    
-    // Relative path - make absolute relative to CWD
+
+    // Normalize all paths to absolute
+    // std::filesystem::absolute() handles both absolute and relative paths correctly
     return std::filesystem::absolute(path).lexically_normal().string();
 }
 
