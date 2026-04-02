@@ -280,7 +280,7 @@ static bool loadImpulseResponses(
         }
 
         // Success
-        ctx->logger->info(LogMask::ASSET, "Loaded impulse response: %s%s%s (%zu samples)", ANSIColors::CYAN.c_str(), fullPath.c_str(), ANSIColors::RESET.c_str(), wavResult.getSampleCount());
+        ctx->logger->info(LogMask::ASSET, "Loaded impulse response: %s (%zu samples)", fullPath.c_str(), wavResult.getSampleCount());
 
         // Initialize synthesizer with impulse response
         ctx->simulator->synthesizer().initializeImpulseResponse(
