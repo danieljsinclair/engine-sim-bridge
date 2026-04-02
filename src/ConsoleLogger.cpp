@@ -25,41 +25,46 @@ bool ConsoleLogger::shouldLog(uint32_t mask) {
 }
 
 void ConsoleLogger::log(uint32_t mask, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    vlog(mask, format, args);
+    va_end(args);
+}
+
+// Internal method that takes va_list
+void ConsoleLogger::vlog(uint32_t mask, const char* format, va_list args) {
     if (!shouldLog(mask)) return;
 
     uint32_t level = mask & 0xFFFF0000;
     FILE* stream = getStream(level);
 
-    va_list args;
-    va_start(args, format);
     fprintf(stream, "[%s] ", levelToString(level));
     vfprintf(stream, format, args);
     fprintf(stream, "\n");
     fflush(stream);
-    va_end(args);
 }
 
 // Convenience methods - OR level with category
 void ConsoleLogger::debug(uint32_t category, const char* format, ...) {
     va_list args; va_start(args, format);
-    log(category | LogMask::DEBUG, format, args);
+    vlog(category | LogMask::DEBUG, format, args);
     va_end(args);
 }
 
 void ConsoleLogger::info(uint32_t category, const char* format, ...) {
     va_list args; va_start(args, format);
-    log(category | LogMask::INFO, format, args);
+    vlog(category | LogMask::INFO, format, args);
     va_end(args);
 }
 
 void ConsoleLogger::warning(uint32_t category, const char* format, ...) {
     va_list args; va_start(args, format);
-    log(category | LogMask::WARN, format, args);
+    vlog(category | LogMask::WARN, format, args);
     va_end(args);
 }
 
 void ConsoleLogger::error(uint32_t category, const char* format, ...) {
     va_list args; va_start(args, format);
-    log(category | LogMask::ERROR, format, args);
+    vlog(category | LogMask::ERROR, format, args);
     va_end(args);
 }

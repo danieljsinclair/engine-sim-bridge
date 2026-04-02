@@ -80,6 +80,7 @@ private:
     const char* levelToString(uint32_t level);
     FILE* getStream(uint32_t level);
     bool shouldLog(uint32_t mask);
+    void vlog(uint32_t mask, const char* format, va_list args);
 };
 
 #endif // ILOGGING_H

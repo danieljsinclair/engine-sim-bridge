@@ -23,6 +23,14 @@
 #include <atomic>
 #include <filesystem>
 
+namespace ANSIColors {
+    const std::string GREEN = "\x1b[32m";
+    const std::string YELLOW = "\x1b[33m";
+    const std::string RED = "\x1b[31m";
+    const std::string CYAN = "\x1b[36m";
+    const std::string RESET = "\x1b[0m";
+}
+
 // ============================================================================
 // INTERNAL IMPLEMENTATION STRUCTURES
 // ============================================================================
@@ -272,7 +280,7 @@ static bool loadImpulseResponses(
         }
 
         // Success
-        ctx->logger->info(LogMask::ASSET, "Loaded impulse response: %s (%zu samples)", fullPath.c_str(), wavResult.getSampleCount());
+        ctx->logger->info(LogMask::ASSET, "Loaded impulse response: %s%s%s (%zu samples)", ANSIColors::CYAN.c_str(), fullPath.c_str(), ANSIColors::RESET.c_str(), wavResult.getSampleCount());
 
         // Initialize synthesizer with impulse response
         ctx->simulator->synthesizer().initializeImpulseResponse(
