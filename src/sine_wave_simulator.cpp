@@ -2,7 +2,6 @@
 #include "throttle.h"
 #include "units.h"
 #include <cmath>
-#include <iostream>
 
 // Private helper classes - minimal self-initializing assets for sine wave mode
 namespace {
@@ -67,12 +66,14 @@ namespace {
     };
 }
 
-SineWaveSimulator::SineWaveSimulator()
+SineWaveSimulator::SineWaveSimulator(ILogging* logger)
     : Simulator()
     , m_dummyEngine(nullptr)
     , m_dummyVehicle(nullptr)
     , m_dummyTransmission(nullptr)
     , m_phase(0.0)
+    , defaultLogger_(logger ? nullptr : new ConsoleLogger())
+    , logger_(logger ? logger : defaultLogger_.get())
 {
 }
 
@@ -88,11 +89,12 @@ void SineWaveSimulator::initialize(const Parameters &params) {
     m_dummyEngine        = new SineEngine();
     m_dummyVehicle       = new SineVehicle();
     m_dummyTransmission  = new SineTransmission();
-    
+
     // Load simulation (sets up physics constraints)
     loadSimulation(m_dummyEngine, m_dummyVehicle, m_dummyTransmission);
 
-    std::cerr << "SineWaveSimulator initialized (1 dummy crankshaft, 0 cylinders)\n";
+    // Logger is always available (default or injected)
+    logger_->debug(LogMask::PHYSICS, "SineWaveSimulator initialized (1 dummy crankshaft, 0 cylinders)");
 }
 
 void SineWaveSimulator::loadSimulation(Engine* engine, Vehicle* vehicle, Transmission* transmission) {
@@ -136,6 +138,8 @@ void SineWaveSimulator::destroy() {
     endAudioRenderingThread();
     if (m_system != nullptr) {
         m_system->reset();
+        delete m_system;
+        m_system = nullptr;
     }
 
     if (m_dummyEngine)       { m_dummyEngine->destroy(); delete m_dummyEngine;       m_dummyEngine       = nullptr; }

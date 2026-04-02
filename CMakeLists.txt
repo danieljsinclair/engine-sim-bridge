@@ -31,6 +31,7 @@ add_library(engine-sim-bridge SHARED
     src/engine_sim_bridge.cpp
     src/sine_wave_simulator.cpp
     src/InMemoryTelemetry.cpp
+    src/ConsoleLogger.cpp
 )
 
 target_include_directories(engine-sim-bridge

@@ -1,12 +1,15 @@
+// SineWaveSimulator.h - Bridge-provided test simulator for sine wave output
 #ifndef ENGINE_SIM_BRIDGE_SINE_WAVE_SIMULATOR_H
 #define ENGINE_SIM_BRIDGE_SINE_WAVE_SIMULATOR_H
 
 #include "simulator.h"
+#include "ILogging.h"
 #include "engine.h"
 #include "vehicle.h"
 #include "transmission.h"
 #include "throttle.h"
 #include <cmath>
+#include <memory>
 
 /**
  * SineWaveSimulator - Test simulator with dummy engine for consistent output.
@@ -30,7 +33,8 @@
  */
 class SineWaveSimulator : public Simulator {
 public:
-    SineWaveSimulator();
+    // Constructor: inject logger (uses ConsoleLogger if null)
+    explicit SineWaveSimulator(ILogging* logger = nullptr);
     virtual ~SineWaveSimulator();
 
     /**
@@ -38,12 +42,12 @@ public:
      * Creates minimal objects and calls parent loadSimulation().
      */
     virtual void initialize(const Parameters &params) override;
-    
+
     /**
      * Override loadSimulation to connect physics constraints (dyno, starter).
      */
     virtual void loadSimulation(Engine* engine, Vehicle* vehicle, Transmission* transmission) override;
-    
+
     /**
      * Clean up dummy objects.
      */
@@ -65,8 +69,12 @@ private:
     Vehicle* m_dummyVehicle;
     Transmission* m_dummyTransmission;
     atg_scs::RigidBody m_vehicleMass;  // Required by Vehicle/Transmission addToSystem()
-    
+
     double m_phase;       // Sine wave phase accumulator
+
+    // Logging: owns ConsoleLogger by default, or uses injected logger
+    std::unique_ptr<ConsoleLogger> defaultLogger_;
+    ILogging* logger_;    // Non-null, points to defaultLogger_ or injected logger
 
     static constexpr double TWO_PI = 2.0 * M_PI;
 };

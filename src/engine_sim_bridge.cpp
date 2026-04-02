@@ -23,11 +23,6 @@
 #include <atomic>
 #include <filesystem>
 
-// ANSI color codes for terminal output
-#define ANSI_COLOR_RED     "\x1b[31m"
-#define ANSI_COLOR_YELLOW  "\x1b[33m"
-#define ANSI_COLOR_RESET   "\x1b[0m"
-
 // ============================================================================
 // INTERNAL IMPLEMENTATION STRUCTURES
 // ============================================================================
@@ -60,7 +55,10 @@ struct EngineSimContext {
     // Statistics
     EngineSimStats stats;
 
-    // DI: Injected logging interface (caller retains ownership, non-null for logging)
+    // DI: Injected logging interface
+    // Default logger is always available (owned by context)
+    // Caller can provide custom logger via EngineSimSetLogging
+    ConsoleLogger defaultLogger;
     ILogging* logger;
 
     EngineSimContext()
@@ -74,7 +72,7 @@ struct EngineSimContext {
         , vehicle(nullptr)
         , transmission(nullptr)
 #endif
-        , logger(nullptr)
+        , logger(&defaultLogger)
     {
         std::memset(&config, 0, sizeof(config));
         std::memset(&stats, 0, sizeof(stats));
@@ -267,23 +265,14 @@ static bool loadImpulseResponses(
         // Load WAV file using WavLoader module
         WavLoader::Result wavResult = WavLoader::load(fullPath);
         if (!wavResult.valid) {
-            if (ctx->logger) {
-                ctx->logger->error("Failed to load required audio file: %s", fullPath.c_str());
-                ctx->logger->error("(asset base: %s, from script: %s)", assetBasePath.c_str(), filename.c_str());
-            } else {
-                std::cerr << ANSI_COLOR_RED << "ERROR: Failed to load required audio file: " << fullPath << ANSI_COLOR_RESET << "\n";
-                std::cerr << ANSI_COLOR_RED << "       (asset base: " << assetBasePath << ", from script: " << filename << ")" << ANSI_COLOR_RESET << "\n";
-            }
+            ctx->logger->error(LogMask::ASSET, "Failed to load required audio file: %s", fullPath.c_str());
+            ctx->logger->error(LogMask::ASSET, "(asset base: %s, from script: %s)", assetBasePath.c_str(), filename.c_str());
             ctx->setError("Failed to load impulse response: " + fullPath);
             return false;  // Fast-fail: halt execution immediately
         }
 
         // Success
-        if (ctx->logger) {
-            ctx->logger->info("Loaded impulse response: %s (%zu samples)", fullPath.c_str(), wavResult.getSampleCount());
-        } else {
-            std::cerr << "Loaded impulse response: " << fullPath << " (" << wavResult.getSampleCount() << " samples)\n";
-        }
+        ctx->logger->info(LogMask::ASSET, "Loaded impulse response: %s (%zu samples)", fullPath.c_str(), wavResult.getSampleCount());
 
         // Initialize synthesizer with impulse response
         ctx->simulator->synthesizer().initializeImpulseResponse(
@@ -328,8 +317,10 @@ EngineSimResult EngineSimCreate(
 
     // Create simulator based on mode (Factory pattern)
     if (ctx->config.sineMode == 1) {
-        // Sine wave mode: create SineWaveSimulator (derives from Simulator)
-        ctx->simulator = new SineWaveSimulator();
+        // Sine wave mode: create SineWaveSimulator with logger injection
+        // Pass nullptr to use default ConsoleLogger, or pass ctx->logger to use bridge's logger
+        // For consistency, use the bridge's logger
+        ctx->simulator = new SineWaveSimulator(ctx->logger);
     } else {
         // Normal mode: create full physics simulator
         ctx->simulator = new PistonEngineSimulator();
@@ -466,11 +457,7 @@ EngineSimResult EngineSimStartAudioThread(
     while ((samplesDrained = ctx->simulator->readAudioOutput(4096, drainBuffer)) > 0) {
         totalDrained += samplesDrained;
     }
-    if (ctx->logger) {
-        ctx->logger->debug("Drained %d pre-fill samples", totalDrained);
-    } else {
-        std::cerr << "DEBUG BRIDGE: Drained " << totalDrained << " pre-fill samples\n";
-    }
+    ctx->logger->debug(LogMask::BUFFER, "Drained %d pre-fill samples", totalDrained);
     ctx->simulator->startAudioRenderingThread();
 
     return ESIM_SUCCESS;
@@ -501,7 +488,12 @@ EngineSimResult EngineSimSetLogging(
     }
 
     EngineSimContext* ctx = getContext(handle);
-    ctx->logger = logger;
+    // If null logger is provided, keep using the default ConsoleLogger
+    // Otherwise, use the provided logger (caller retains ownership)
+    if (logger) {
+        ctx->logger = logger;
+    }
+    // If logger is null, ctx->logger already points to defaultLogger
 
     return ESIM_SUCCESS;
 }
@@ -629,23 +621,13 @@ EngineSimResult EngineSimRender(
     if (samplesRead < frames) {
         // Report underruns every 60 frames (1 second) to avoid spam
         if (renderCount - lastUnderrunReport > 60) {
-            if (ctx->logger) {
-                ctx->logger->warning("RENDER UNDERRUN at frame %d: requested=%d got=%d missing=%d",
-                                     renderCount, frames, samplesRead, frames - samplesRead);
-            } else {
-                std::cerr << "DEBUG BRIDGE RENDER: UNDERRUN at frame " << renderCount
-                          << ": requested=" << frames << " got=" << samplesRead
-                          << " missing=" << (frames - samplesRead) << "\n";
-            }
+            ctx->logger->warning(LogMask::DIAGNOSTICS, "RENDER UNDERRUN at frame %d: requested=%d got=%d missing=%d",
+                                renderCount, frames, samplesRead, frames - samplesRead);
             lastUnderrunReport = renderCount;
         }
     }
     if (renderCount < 5 || samplesRead == 0) {
-        if (ctx->logger) {
-            ctx->logger->debug("RENDER: samplesRead=%d frames=%d", samplesRead, frames);
-        } else {
-            std::cerr << "DEBUG BRIDGE RENDER: samplesRead=" << samplesRead << " frames=" << frames << "\n";
-        }
+        ctx->logger->debug(LogMask::AUDIO, "RENDER: samplesRead=%d frames=%d", samplesRead, frames);
     }
     renderCount++;
 
@@ -810,9 +792,9 @@ EngineSimResult EngineSimRenderOnDemand(
 
     // Zero-fill remainder
     if (samplesRead < frames) {
-        if (ctx->logger && samplesRead == 0) {
+        if (samplesRead == 0) {
             // Log first underrun (happens occasionally at startup)
-            ctx->logger->debug("RenderOnDemand underrun: requested=%d got=%d", frames, samplesRead);
+            ctx->logger->debug(LogMask::DIAGNOSTICS, "RenderOnDemand underrun: requested=%d got=%d", frames, samplesRead);
         }
         std::memset(buffer + samplesRead * 2, 0, (frames - samplesRead) * 2 * sizeof(float));
     }
