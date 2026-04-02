@@ -649,7 +649,7 @@ EngineSimResult EngineSimRender(
     if (samplesRead < frames) {
         const int remainingFrames = frames - samplesRead;
         float* silenceStart = buffer + samplesRead * 2;  // Stereo offset
-        std::memset(silenceStart, 0, remainingFrames * 2 * sizeof(float));
+        EngineSimAudio::fillSilence(silenceStart, remainingFrames);
     }
 
     if (outSamplesWritten) {
@@ -680,7 +680,7 @@ EngineSimResult EngineSimReadAudioBuffer(
 
     if (!ctx->engine) {
         // No engine loaded - output silence
-        std::memset(buffer, 0, frames * 2 * sizeof(float));
+        EngineSimAudio::fillSilence(buffer, frames);
         if (outSamplesRead) {
             *outSamplesRead = 0;
         }
@@ -714,7 +714,7 @@ EngineSimResult EngineSimReadAudioBuffer(
     if (samplesRead < frames) {
         const int remainingFrames = frames - samplesRead;
         float* silenceStart = buffer + samplesRead * 2;  // Stereo offset
-        std::memset(silenceStart, 0, remainingFrames * 2 * sizeof(float));
+        EngineSimAudio::fillSilence(silenceStart, remainingFrames);
     }
 
     if (outSamplesRead) {
@@ -744,7 +744,7 @@ EngineSimResult EngineSimRenderOnDemand(
     EngineSimContext* ctx = getContext(handle);
 
     if (!ctx->engine) {
-        std::memset(buffer, 0, frames * 2 * sizeof(float));
+        EngineSimAudio::fillSilence(buffer, frames);
         if (outFramesWritten) *outFramesWritten = 0;
         return ESIM_SUCCESS;
     }
@@ -804,7 +804,7 @@ EngineSimResult EngineSimRenderOnDemand(
             // Log first underrun (happens occasionally at startup)
             ctx->logger->debug(LogMask::DIAGNOSTICS, "RenderOnDemand underrun: requested=%d got=%d", frames, samplesRead);
         }
-        std::memset(buffer + samplesRead * 2, 0, (frames - samplesRead) * 2 * sizeof(float));
+        EngineSimAudio::fillSilence(buffer + samplesRead * 2, frames - samplesRead);
     }
 
     if (outFramesWritten) {

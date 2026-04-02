@@ -459,6 +459,8 @@ EngineSimResult EngineSimLoadImpulseResponse(
 
 #ifdef __cplusplus
 
+#include <cstring>
+
 namespace EngineSimAudio {
 
 /**
@@ -488,6 +490,18 @@ inline void convertInt16ToStereoFloatClipped(const int16_t* input, float* output
         output[i * 2] = sample;
         output[i * 2 + 1] = sample;
     }
+}
+
+/**
+ * Fills a stereo float buffer with silence (zeros).
+ * This is a DRY utility used throughout the codebase for buffer underruns.
+ * Assumes interleaved stereo format (2 channels per frame).
+ *
+ * @param buffer Pointer to the buffer to fill
+ * @param frames Number of frames to fill (each frame = 2 samples)
+ */
+inline void fillSilence(float* buffer, int32_t frames) {
+    std::memset(buffer, 0, frames * 2 * sizeof(float));
 }
 
 } // namespace EngineSimAudio
