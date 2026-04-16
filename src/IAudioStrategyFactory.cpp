@@ -4,20 +4,18 @@
 #include "IAudioStrategy.h"
 #include "ThreadedStrategy.h"
 #include "SyncPullStrategy.h"
+#include "ITelemetryProvider.h"
 
 #include <memory>
 
-// Forward declarations for strategy implementations
-// Will be implemented when we create the strategy classes
-
-// Implementation of createStrategy method
 std::unique_ptr<IAudioStrategy> IAudioStrategyFactory::createStrategy(
     AudioMode mode,
-    ILogging* logger
+    ILogging* logger,
+    telemetry::ITelemetryWriter* telemetry
 ) {
     switch (mode) {
-        case AudioMode::Threaded: return std::make_unique<ThreadedStrategy>(logger);
-        case AudioMode::SyncPull: return std::make_unique<SyncPullStrategy>(logger);
+        case AudioMode::Threaded: return std::make_unique<ThreadedStrategy>(logger, telemetry);
+        case AudioMode::SyncPull: return std::make_unique<SyncPullStrategy>(logger, telemetry);
     }
 
     return nullptr;

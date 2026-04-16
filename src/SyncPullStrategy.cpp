@@ -15,14 +15,38 @@
 #include <cstring>
 
 // ============================================================================
+// NullTelemetryWriter - Silently discards all telemetry writes
+// ============================================================================
+
+namespace {
+
+class NullTelemetryWriter : public telemetry::ITelemetryWriter {
+public:
+    void write(const telemetry::TelemetryData&) override {}
+    void writeEngineState(const telemetry::EngineStateTelemetry&) override {}
+    void writeFramePerformance(const telemetry::FramePerformanceTelemetry&) override {}
+    void writeAudioDiagnostics(const telemetry::AudioDiagnosticsTelemetry&) override {}
+    void writeAudioTiming(const telemetry::AudioTimingTelemetry&) override {}
+    void writeVehicleInputs(const telemetry::VehicleInputsTelemetry&) override {}
+    void writeSimulatorMetrics(const telemetry::SimulatorMetricsTelemetry&) override {}
+    void reset() override {}
+    const char* getName() const override { return "NullTelemetryWriter"; }
+};
+
+} // anonymous namespace
+
+// ============================================================================
 // SyncPullStrategy Implementation
 // ============================================================================
 
-SyncPullStrategy::SyncPullStrategy(ILogging* logger)
+SyncPullStrategy::SyncPullStrategy(ILogging* logger, telemetry::ITelemetryWriter* telemetry)
     : defaultLogger_(logger ? nullptr : new ConsoleLogger())
     , logger_(logger ? logger : defaultLogger_.get())
+    , defaultTelemetry_(telemetry ? nullptr : new NullTelemetryWriter())
+    , telemetry_(telemetry ? telemetry : defaultTelemetry_.get())
 {
     ASSERT(logger_, "SyncPullStrategy: logger must not be null");
+    ASSERT(telemetry_, "SyncPullStrategy: telemetry must not be null");
 }
 
 // ============================================================================
@@ -76,6 +100,7 @@ bool SyncPullStrategy::startPlayback(ISimulator* simulator) {
     shuttingDown_.store(false);
     simulator_ = simulator;
     audioState_.isPlaying.store(true);
+    lastThroughputTime_ = std::chrono::steady_clock::now();
 
     logger_->info(LogMask::AUDIO, "SyncPullStrategy::startPlayback: On-demand rendering started");
 
@@ -192,6 +217,27 @@ bool SyncPullStrategy::render(
     double renderMs = std::chrono::duration<double, std::milli>(callbackEnd - callbackStart).count();
 
     diagnostics_.recordRender(renderMs, framesRendered, framesToGenerate);
+
+    // Update throughput rates once per second
+    auto now = std::chrono::steady_clock::now();
+    double elapsedSec = std::chrono::duration<double>(now - lastThroughputTime_).count();
+    if (elapsedSec >= 1.0) {
+        diagnostics_.updateThroughput(elapsedSec);
+        lastThroughputTime_ = now;
+    }
+
+    // Push timing diagnostics to telemetry
+    auto snap = diagnostics_.getSnapshot();
+    telemetry::AudioTimingTelemetry timing;
+    timing.renderMs = snap.lastRenderMs;
+    timing.headroomMs = snap.lastHeadroomMs;
+    timing.budgetPct = snap.lastBudgetPct;
+    timing.framesRequested = snap.lastFramesRequested;
+    timing.framesRendered = snap.lastFramesRendered;
+    timing.callbackRateHz = snap.callbackRateHz;
+    timing.generatingRateFps = snap.generatingRateFps;
+    timing.trendPct = snap.trendPct;
+    telemetry_->writeAudioTiming(timing);
 
     return true;
 }

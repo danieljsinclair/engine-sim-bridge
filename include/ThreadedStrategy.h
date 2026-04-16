@@ -10,6 +10,7 @@
 
 #include <string>
 #include <memory>
+#include <chrono>
 #include <AudioUnit/AudioUnit.h>
 #include <AudioToolbox/AudioToolbox.h>
 
@@ -58,10 +59,8 @@ public:
     void reset() override;
     std::string getModeString() const override;
 
-    // Returns render timing diagnostics for presentation
+    // Direct diagnostics access (for internal use and testing)
     const Diagnostics& diagnostics() const { return diagnostics_; }
-    Diagnostics::Snapshot getDiagnosticsSnapshot() const override { return diagnostics_.getSnapshot(); }
-    void updateDiagnosticsThroughput(double elapsedSeconds) override { diagnostics_.updateThroughput(elapsedSeconds); }
 
 private:
     // Logger: always non-null (defaults to ConsoleLogger if not injected)
@@ -83,9 +82,13 @@ private:
     // Simulator reference (set during startPlayback)
     ISimulator* simulator_ = nullptr;
 
+    // Throughput timing
+    std::chrono::steady_clock::time_point lastThroughputTime_;
+
     int getAvailableFrames() const;
     void updateDiagnostics(int availableFrames, int framesRequested);
     void publishAudioDiagnostics(int underrunCount, double bufferHealthPct);
+    void publishAudioTiming();
 };
 
 #endif // THREADED_STRATEGY_H

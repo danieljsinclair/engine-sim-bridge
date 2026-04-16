@@ -11,11 +11,13 @@
 
 #include <string>
 #include <atomic>
+#include <chrono>
 #include <memory>
 
 #include "IAudioStrategy.h"
 #include "AudioState.h"
 #include "Diagnostics.h"
+#include "ITelemetryProvider.h"
 #include "ILogging.h"
 
 class ISimulator;
@@ -31,7 +33,8 @@ class ISimulator;
  */
 class SyncPullStrategy : public IAudioStrategy {
 public:
-    explicit SyncPullStrategy(ILogging* logger = nullptr);
+    explicit SyncPullStrategy(ILogging* logger = nullptr,
+                              telemetry::ITelemetryWriter* telemetry = nullptr);
 
     const char* getName() const override;
     bool isEnabled() const override;
@@ -53,15 +56,17 @@ public:
     void reset() override;
     std::string getModeString() const override;
 
-    // Returns render timing diagnostics for presentation
+    // Direct diagnostics access (for internal use and testing)
     const Diagnostics& diagnostics() const { return diagnostics_; }
-    Diagnostics::Snapshot getDiagnosticsSnapshot() const override { return diagnostics_.getSnapshot(); }
-    void updateDiagnosticsThroughput(double elapsedSeconds) override { diagnostics_.updateThroughput(elapsedSeconds); }
 
 private:
     // Logger: always non-null (defaults to ConsoleLogger if not injected)
     std::unique_ptr<ILogging> defaultLogger_;
     ILogging* logger_;
+
+    // Telemetry: always non-null (defaults to NullTelemetryWriter if not injected)
+    std::unique_ptr<telemetry::ITelemetryWriter> defaultTelemetry_;
+    telemetry::ITelemetryWriter* telemetry_;
 
     // Owned state
     AudioState audioState_;
@@ -72,6 +77,9 @@ private:
 
     // Simulator reference (set during startPlayback)
     ISimulator* simulator_ = nullptr;
+
+    // Throughput timing
+    std::chrono::steady_clock::time_point lastThroughputTime_;
 };
 
 #endif // SYNC_PULL_STRATEGY_H

@@ -70,6 +70,17 @@ struct SimulatorMetricsTelemetry {
     double timestamp = 0.0;          // Seconds since start
 };
 
+struct AudioTimingTelemetry {
+    double renderMs = 0.0;           // Last render time in ms
+    double headroomMs = 0.0;         // Buffer headroom in ms
+    double budgetPct = 0.0;          // Render budget percentage used
+    int32_t framesRequested = 0;     // Frames requested per callback
+    int32_t framesRendered = 0;      // Frames actually rendered
+    double callbackRateHz = 0.0;     // Callback throughput in Hz
+    double generatingRateFps = 0.0;  // Frame generation rate
+    double trendPct = 0.0;           // Throughput trend percentage
+};
+
 // ============================================================================
 // ITelemetryWriter - Bridge writes telemetry here
 // Used by: Bridge (runSimulation, Update)
@@ -86,6 +97,7 @@ public:
     virtual void writeEngineState(const EngineStateTelemetry& state) = 0;
     virtual void writeFramePerformance(const FramePerformanceTelemetry& perf) = 0;
     virtual void writeAudioDiagnostics(const AudioDiagnosticsTelemetry& diag) = 0;
+    virtual void writeAudioTiming(const AudioTimingTelemetry& timing) = 0;
     virtual void writeVehicleInputs(const VehicleInputsTelemetry& inputs) = 0;
     virtual void writeSimulatorMetrics(const SimulatorMetricsTelemetry& metrics) = 0;
 
@@ -117,6 +129,7 @@ public:
     virtual EngineStateTelemetry getEngineState() const = 0;
     virtual FramePerformanceTelemetry getFramePerformance() const = 0;
     virtual AudioDiagnosticsTelemetry getAudioDiagnostics() const = 0;
+    virtual AudioTimingTelemetry getAudioTiming() const = 0;
     virtual VehicleInputsTelemetry getVehicleInputs() const = 0;
     virtual SimulatorMetricsTelemetry getSimulatorMetrics() const = 0;
 
@@ -145,6 +158,7 @@ public:
     void writeEngineState(const EngineStateTelemetry& state) override;
     void writeFramePerformance(const FramePerformanceTelemetry& perf) override;
     void writeAudioDiagnostics(const AudioDiagnosticsTelemetry& diag) override;
+    void writeAudioTiming(const AudioTimingTelemetry& timing) override;
     void writeVehicleInputs(const VehicleInputsTelemetry& inputs) override;
     void writeSimulatorMetrics(const SimulatorMetricsTelemetry& metrics) override;
 
@@ -152,6 +166,7 @@ public:
     EngineStateTelemetry getEngineState() const override;
     FramePerformanceTelemetry getFramePerformance() const override;
     AudioDiagnosticsTelemetry getAudioDiagnostics() const override;
+    AudioTimingTelemetry getAudioTiming() const override;
     VehicleInputsTelemetry getVehicleInputs() const override;
     SimulatorMetricsTelemetry getSimulatorMetrics() const override;
 
@@ -166,6 +181,14 @@ private:
         std::atomic<double> processingTimeMs;
         std::atomic<int32_t> underrunCount;
         std::atomic<double> bufferHealthPct;
+        std::atomic<double> renderMs;
+        std::atomic<double> headroomMs;
+        std::atomic<double> budgetPct;
+        std::atomic<int32_t> framesRequested;
+        std::atomic<int32_t> framesRendered;
+        std::atomic<double> callbackRateHz;
+        std::atomic<double> generatingRateFps;
+        std::atomic<double> trendPct;
         std::atomic<double> throttlePosition;
         std::atomic<bool> ignitionOn;
         std::atomic<bool> starterMotorEngaged;

@@ -28,6 +28,7 @@ public:
     void writeEngineState(const telemetry::EngineStateTelemetry&) override {}
     void writeFramePerformance(const telemetry::FramePerformanceTelemetry&) override {}
     void writeAudioDiagnostics(const telemetry::AudioDiagnosticsTelemetry&) override {}
+    void writeAudioTiming(const telemetry::AudioTimingTelemetry&) override {}
     void writeVehicleInputs(const telemetry::VehicleInputsTelemetry&) override {}
     void writeSimulatorMetrics(const telemetry::SimulatorMetricsTelemetry&) override {}
     void reset() override {}
@@ -158,6 +159,7 @@ bool ThreadedStrategy::startPlayback(ISimulator* simulator) {
 
     simulator_ = simulator;
     audioState_.isPlaying.store(true);
+    lastThroughputTime_ = std::chrono::steady_clock::now();
 
     logger_->info(LogMask::AUDIO, "ThreadedStrategy::startPlayback: Audio thread started");
 
@@ -207,6 +209,7 @@ bool ThreadedStrategy::render(
         std::memset(ioData->mBuffers[0].mData, 0, ioData->mBuffers[0].mDataByteSize);
         updateDiagnostics(0, static_cast<int>(numberFrames));
         diagnostics_.recordRender(0.0, 0, static_cast<int>(numberFrames));
+        publishAudioTiming();
         return true;
     }
 
@@ -214,6 +217,7 @@ bool ThreadedStrategy::render(
 
     updateDiagnostics(availableFrames, numberFrames);
     diagnostics_.recordRender(0.0, framesToRead, static_cast<int>(numberFrames));
+    publishAudioTiming();
 
     return true;
 }
@@ -280,4 +284,26 @@ void ThreadedStrategy::publishAudioDiagnostics(int underrunCount, double bufferH
     diag.underrunCount = underrunCount;
     diag.bufferHealthPct = bufferHealthPct;
     telemetry_->writeAudioDiagnostics(diag);
+}
+
+void ThreadedStrategy::publishAudioTiming() {
+    // Update throughput rates once per second
+    auto now = std::chrono::steady_clock::now();
+    double elapsedSec = std::chrono::duration<double>(now - lastThroughputTime_).count();
+    if (elapsedSec >= 1.0) {
+        diagnostics_.updateThroughput(elapsedSec);
+        lastThroughputTime_ = now;
+    }
+
+    auto snap = diagnostics_.getSnapshot();
+    telemetry::AudioTimingTelemetry timing;
+    timing.renderMs = snap.lastRenderMs;
+    timing.headroomMs = snap.lastHeadroomMs;
+    timing.budgetPct = snap.lastBudgetPct;
+    timing.framesRequested = snap.lastFramesRequested;
+    timing.framesRendered = snap.lastFramesRendered;
+    timing.callbackRateHz = snap.callbackRateHz;
+    timing.generatingRateFps = snap.generatingRateFps;
+    timing.trendPct = snap.trendPct;
+    telemetry_->writeAudioTiming(timing);
 }

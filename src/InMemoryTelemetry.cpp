@@ -19,6 +19,14 @@ InMemoryTelemetry::AtomicData::AtomicData()
     , processingTimeMs(0.0)
     , underrunCount(0)
     , bufferHealthPct(0.0)
+    , renderMs(0.0)
+    , headroomMs(0.0)
+    , budgetPct(0.0)
+    , framesRequested(0)
+    , framesRendered(0)
+    , callbackRateHz(0.0)
+    , generatingRateFps(0.0)
+    , trendPct(0.0)
     , throttlePosition(0.0)
     , ignitionOn(false)
     , starterMotorEngaged(false)
@@ -110,6 +118,17 @@ void InMemoryTelemetry::writeAudioDiagnostics(const AudioDiagnosticsTelemetry& d
     data_.bufferHealthPct.store(diag.bufferHealthPct, std::memory_order_relaxed);
 }
 
+void InMemoryTelemetry::writeAudioTiming(const AudioTimingTelemetry& timing) {
+    data_.renderMs.store(timing.renderMs, std::memory_order_relaxed);
+    data_.headroomMs.store(timing.headroomMs, std::memory_order_relaxed);
+    data_.budgetPct.store(timing.budgetPct, std::memory_order_relaxed);
+    data_.framesRequested.store(timing.framesRequested, std::memory_order_relaxed);
+    data_.framesRendered.store(timing.framesRendered, std::memory_order_relaxed);
+    data_.callbackRateHz.store(timing.callbackRateHz, std::memory_order_relaxed);
+    data_.generatingRateFps.store(timing.generatingRateFps, std::memory_order_relaxed);
+    data_.trendPct.store(timing.trendPct, std::memory_order_relaxed);
+}
+
 void InMemoryTelemetry::writeVehicleInputs(const VehicleInputsTelemetry& inputs) {
     data_.throttlePosition.store(inputs.throttlePosition, std::memory_order_relaxed);
     data_.ignitionOn.store(inputs.ignitionOn, std::memory_order_relaxed);
@@ -145,6 +164,19 @@ AudioDiagnosticsTelemetry InMemoryTelemetry::getAudioDiagnostics() const {
     diag.underrunCount = data_.underrunCount.load(std::memory_order_relaxed);
     diag.bufferHealthPct = data_.bufferHealthPct.load(std::memory_order_relaxed);
     return diag;
+}
+
+AudioTimingTelemetry InMemoryTelemetry::getAudioTiming() const {
+    AudioTimingTelemetry timing;
+    timing.renderMs = data_.renderMs.load(std::memory_order_relaxed);
+    timing.headroomMs = data_.headroomMs.load(std::memory_order_relaxed);
+    timing.budgetPct = data_.budgetPct.load(std::memory_order_relaxed);
+    timing.framesRequested = data_.framesRequested.load(std::memory_order_relaxed);
+    timing.framesRendered = data_.framesRendered.load(std::memory_order_relaxed);
+    timing.callbackRateHz = data_.callbackRateHz.load(std::memory_order_relaxed);
+    timing.generatingRateFps = data_.generatingRateFps.load(std::memory_order_relaxed);
+    timing.trendPct = data_.trendPct.load(std::memory_order_relaxed);
+    return timing;
 }
 
 VehicleInputsTelemetry InMemoryTelemetry::getVehicleInputs() const {

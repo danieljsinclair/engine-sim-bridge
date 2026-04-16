@@ -17,10 +17,11 @@
 #include <AudioUnit/AudioUnit.h>
 #include <AudioToolbox/AudioToolbox.h>
 
-#include "Diagnostics.h"
 #include "ILogging.h"
 
 class ISimulator;
+
+namespace telemetry { class ITelemetryWriter; }
 
 // Simulation configuration
 struct AudioStrategyConfig {
@@ -99,12 +100,6 @@ public:
     virtual void reset() = 0;
 
     virtual void updateSimulation(ISimulator* simulator, double deltaTimeMs) = 0;
-
-    // Returns render timing diagnostics snapshot for presentation
-    virtual Diagnostics::Snapshot getDiagnosticsSnapshot() const = 0;
-
-    // Update throughput rate calculations (call periodically)
-    virtual void updateDiagnosticsThroughput(double elapsedSeconds) = 0;
 };
 
 /**
@@ -115,7 +110,8 @@ class IAudioStrategyFactory {
 public:
     static std::unique_ptr<IAudioStrategy> createStrategy(
         AudioMode mode,
-        ILogging* logger = nullptr
+        ILogging* logger = nullptr,
+        telemetry::ITelemetryWriter* telemetry = nullptr
     );
 };
 
