@@ -205,12 +205,14 @@ bool ThreadedStrategy::render(
     if (framesToRead <= 0) {
         std::memset(ioData->mBuffers[0].mData, 0, ioData->mBuffers[0].mDataByteSize);
         updateDiagnostics(0, static_cast<int>(numberFrames));
+        diagnostics_.recordRender(0.0, 0, static_cast<int>(numberFrames));
         return true;
     }
 
     circularBuffer_.read(static_cast<float*>(ioData->mBuffers[0].mData), framesToRead);
 
     updateDiagnostics(availableFrames, numberFrames);
+    diagnostics_.recordRender(0.0, framesToRead, static_cast<int>(numberFrames));
 
     return true;
 }

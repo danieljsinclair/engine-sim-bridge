@@ -108,6 +108,8 @@ bool SyncPullStrategy::render(
 
     auto callbackStart = std::chrono::high_resolution_clock::now();
 
+    constexpr int MAX_RETRIES = 3;
+
     int framesToGenerate = static_cast<int>(numberFrames);
     int framesRendered = 0;
 
@@ -124,7 +126,6 @@ bool SyncPullStrategy::render(
 
         if (!result) {
             logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed, filling silence");
-            // Zero the entire output buffer to prevent crackles from stale data
             EngineSimAudio::fillSilence(audioData, framesToGenerate);
             return true;
         }
@@ -132,9 +133,43 @@ bool SyncPullStrategy::render(
         framesRendered += framesWritten;
         remainingFrames -= framesWritten;
 
+        // Partial render: advance simulation and retry up to MAX_RETRIES
+        if (framesWritten > 0 && framesWritten < remainingFrames + framesWritten) {
+            // Successfully got some frames but not all -- continue loop naturally
+            continue;
+        }
+
         if (framesWritten == 0 && remainingFrames > 0) {
-            logger_->warning(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand returned 0 frames, filling silence");
-            break;
+            // No frames produced: advance simulation and retry
+            int retryCount = 0;
+            while (retryCount < MAX_RETRIES) {
+                simulator_->update(1.0 / 48000.0);  // One sample period to feed synthesizer
+                result = simulator_->renderOnDemand(
+                    audioData + (framesRendered * 2),
+                    remainingFrames,
+                    &framesWritten
+                );
+
+                if (!result) {
+                    logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed during retry, filling silence");
+                    EngineSimAudio::fillSilence(audioData, framesToGenerate);
+                    return true;
+                }
+
+                if (framesWritten > 0) {
+                    framesRendered += framesWritten;
+                    remainingFrames -= framesWritten;
+                    break;
+                }
+                retryCount++;
+            }
+
+            if (framesWritten == 0 && remainingFrames > 0) {
+                logger_->warning(LogMask::AUDIO,
+                    "SyncPullStrategy::render: exhausted %d retries, filling silence for %d frames",
+                    MAX_RETRIES, remainingFrames);
+                break;
+            }
         }
     }
 
@@ -147,7 +182,7 @@ bool SyncPullStrategy::render(
     auto callbackEnd = std::chrono::high_resolution_clock::now();
     double renderMs = std::chrono::duration<double, std::milli>(callbackEnd - callbackStart).count();
 
-    diagnostics_.recordRender(renderMs, framesRendered);
+    diagnostics_.recordRender(renderMs, framesRendered, framesToGenerate);
 
     return true;
 }

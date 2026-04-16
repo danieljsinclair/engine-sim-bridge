@@ -39,6 +39,8 @@ struct Diagnostics {
         , lastBudgetPct(0.0)
         , lastFrameBudgetPct(0.0)
         , totalFramesRendered(0)
+        , lastFramesRequested(0)
+        , lastFramesRendered(0)
     {}
 
     /**
@@ -79,12 +81,16 @@ struct Diagnostics {
      */
     std::atomic<int64_t> totalFramesRendered;
 
+    std::atomic<int> lastFramesRequested{0};
+    std::atomic<int> lastFramesRendered{0};
+
     /**
      * Record render time
      * @param renderTimeMs Time taken for this render in milliseconds
      * @param framesRendered Number of frames rendered in this call
+     * @param framesRequested Number of frames requested
      */
-    void recordRender(double renderTimeMs, int framesRendered) {
+    void recordRender(double renderTimeMs, int framesRendered, int framesRequested) {
         auto now = Clock::now();
 
         lastRenderMs.store(renderTimeMs);
@@ -103,6 +109,9 @@ struct Diagnostics {
         }
         lastFrameBudgetPct.store(frameBudgetPct);
 
+        lastFramesRequested.store(framesRequested);
+        lastFramesRendered.store(framesRendered);
+
         totalFramesRendered.fetch_add(framesRendered);
     }
 
@@ -116,6 +125,8 @@ struct Diagnostics {
         lastBudgetPct.store(0.0);
         lastFrameBudgetPct.store(0.0);
         totalFramesRendered.store(0);
+        lastFramesRequested.store(0);
+        lastFramesRendered.store(0);
     }
 
     /**
@@ -128,6 +139,8 @@ struct Diagnostics {
         double lastBudgetPct;
         double lastFrameBudgetPct;
         int64_t totalFramesRendered;
+        int lastFramesRequested;
+        int lastFramesRendered;
 
         Snapshot()
             : lastRenderMs(0.0)
@@ -135,6 +148,8 @@ struct Diagnostics {
             , lastBudgetPct(0.0)
             , lastFrameBudgetPct(0.0)
             , totalFramesRendered(0)
+            , lastFramesRequested(0)
+            , lastFramesRendered(0)
         {}
     };
 
@@ -150,6 +165,8 @@ struct Diagnostics {
         snapshot.lastBudgetPct = lastBudgetPct.load();
         snapshot.lastFrameBudgetPct = lastFrameBudgetPct.load();
         snapshot.totalFramesRendered = totalFramesRendered.load();
+        snapshot.lastFramesRequested = lastFramesRequested.load();
+        snapshot.lastFramesRendered = lastFramesRendered.load();
         return snapshot;
     }
 };
