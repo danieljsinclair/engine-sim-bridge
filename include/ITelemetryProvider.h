@@ -79,25 +79,17 @@ class ITelemetryWriter {
 public:
     virtual ~ITelemetryWriter() = default;
 
-    /**
-     * Write telemetry data from bridge.
-     * Called from bridge's simulation thread.
-     *
-     * @param data Telemetry data to write
-     *
-     * Thread Safety: Implementation must be thread-safe.
-     * Bridge calls this from simulation thread, storage handles synchronization.
-     */
+    // Legacy bulk write (backward compat)
     virtual void write(const TelemetryData& data) = 0;
 
-    /**
-     * Reset telemetry counters (e.g., on simulation restart).
-     */
-    virtual void reset() = 0;
+    // ISP per-component write methods
+    virtual void writeEngineState(const EngineStateTelemetry& state) = 0;
+    virtual void writeFramePerformance(const FramePerformanceTelemetry& perf) = 0;
+    virtual void writeAudioDiagnostics(const AudioDiagnosticsTelemetry& diag) = 0;
+    virtual void writeVehicleInputs(const VehicleInputsTelemetry& inputs) = 0;
+    virtual void writeSimulatorMetrics(const SimulatorMetricsTelemetry& metrics) = 0;
 
-    /**
-     * Get writer name for diagnostics.
-     */
+    virtual void reset() = 0;
     virtual const char* getName() const = 0;
 };
 
@@ -121,9 +113,13 @@ public:
      */
     virtual TelemetryData getSnapshot() const = 0;
 
-    /**
-     * Get reader name for diagnostics.
-     */
+    // ISP per-component read methods
+    virtual EngineStateTelemetry getEngineState() const = 0;
+    virtual FramePerformanceTelemetry getFramePerformance() const = 0;
+    virtual AudioDiagnosticsTelemetry getAudioDiagnostics() const = 0;
+    virtual VehicleInputsTelemetry getVehicleInputs() const = 0;
+    virtual SimulatorMetricsTelemetry getSimulatorMetrics() const = 0;
+
     virtual const char* getName() const = 0;
 };
 
@@ -145,19 +141,19 @@ public:
     // ITelemetryReader implementation
     TelemetryData getSnapshot() const override;
 
-    // ISP per-component write methods
-    void writeEngineState(const EngineStateTelemetry& state);
-    void writeFramePerformance(const FramePerformanceTelemetry& perf);
-    void writeAudioDiagnostics(const AudioDiagnosticsTelemetry& diag);
-    void writeVehicleInputs(const VehicleInputsTelemetry& inputs);
-    void writeSimulatorMetrics(const SimulatorMetricsTelemetry& metrics);
+    // ISP per-component write methods (ITelemetryWriter overrides)
+    void writeEngineState(const EngineStateTelemetry& state) override;
+    void writeFramePerformance(const FramePerformanceTelemetry& perf) override;
+    void writeAudioDiagnostics(const AudioDiagnosticsTelemetry& diag) override;
+    void writeVehicleInputs(const VehicleInputsTelemetry& inputs) override;
+    void writeSimulatorMetrics(const SimulatorMetricsTelemetry& metrics) override;
 
-    // ISP per-component read methods
-    EngineStateTelemetry getEngineState() const;
-    FramePerformanceTelemetry getFramePerformance() const;
-    AudioDiagnosticsTelemetry getAudioDiagnostics() const;
-    VehicleInputsTelemetry getVehicleInputs() const;
-    SimulatorMetricsTelemetry getSimulatorMetrics() const;
+    // ISP per-component read methods (ITelemetryReader overrides)
+    EngineStateTelemetry getEngineState() const override;
+    FramePerformanceTelemetry getFramePerformance() const override;
+    AudioDiagnosticsTelemetry getAudioDiagnostics() const override;
+    VehicleInputsTelemetry getVehicleInputs() const override;
+    SimulatorMetricsTelemetry getSimulatorMetrics() const override;
 
 private:
     // Atomic storage for thread-safe write/read
