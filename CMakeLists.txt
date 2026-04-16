@@ -40,6 +40,9 @@ add_library(engine-sim-bridge SHARED
     src/CoreAudioHardwareProvider.cpp
     # Phase F: BridgeSimulator (ISimulator implementation)
     src/BridgeSimulator.cpp
+    # Phase F: Factories (moved from CLI)
+    src/IAudioStrategyFactory.cpp
+    src/AudioHardwareProviderFactory.cpp
 )
 
 # Platform-specific audio libraries
