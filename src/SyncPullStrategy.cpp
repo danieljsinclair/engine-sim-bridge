@@ -10,6 +10,9 @@
 #include "ISimulator.h"
 #include "ILogging.h"
 #include "Verification.h"
+#include "engine_sim_bridge.h"
+
+#include <cstring>
 
 // ============================================================================
 // SyncPullStrategy Implementation
@@ -120,17 +123,25 @@ bool SyncPullStrategy::render(
         );
 
         if (!result) {
-            logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed");
-            return false;
+            logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed, filling silence");
+            // Zero the entire output buffer to prevent crackles from stale data
+            EngineSimAudio::fillSilence(audioData, framesToGenerate);
+            return true;
         }
 
         framesRendered += framesWritten;
         remainingFrames -= framesWritten;
 
         if (framesWritten == 0 && remainingFrames > 0) {
-            logger_->warning(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand returned 0 frames, breaking loop");
+            logger_->warning(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand returned 0 frames, filling silence");
             break;
         }
+    }
+
+    // Fill remaining buffer with silence on partial render to prevent crackles
+    if (framesRendered < framesToGenerate) {
+        float* remaining = audioData + (framesRendered * 2);
+        EngineSimAudio::fillSilence(remaining, framesToGenerate - framesRendered);
     }
 
     auto callbackEnd = std::chrono::high_resolution_clock::now();
