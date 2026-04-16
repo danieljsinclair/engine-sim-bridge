@@ -245,7 +245,7 @@ void ThreadedStrategy::reset() {
 }
 
 std::string ThreadedStrategy::getModeString() const {
-    return "Threaded mode";
+    return "THREADED";
 }
 
 // ============================================================================

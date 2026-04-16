@@ -201,5 +201,5 @@ void SyncPullStrategy::reset() {
 }
 
 std::string SyncPullStrategy::getModeString() const {
-    return "Sync-pull (lock-step) mode";
+    return "SYNC-PULL";
 }
