@@ -43,6 +43,9 @@ add_library(engine-sim-bridge SHARED
     # Phase F: Factories (moved from CLI)
     src/IAudioStrategyFactory.cpp
     src/AudioHardwareProviderFactory.cpp
+    # Phase F: Simulation loop and engine config (moved from CLI)
+    src/SimulationLoop.cpp
+    src/EngineConfig.cpp
 )
 
 # Platform-specific audio libraries
