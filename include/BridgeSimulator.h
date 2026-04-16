@@ -9,6 +9,7 @@
 #include "ISimulator.h"
 #include "engine_sim_bridge.h"
 #include "engine_sim_loader.h"
+#include "ITelemetryProvider.h"
 #include <string>
 
 class BridgeSimulator : public ISimulator {
@@ -20,6 +21,7 @@ public:
     bool create(const EngineSimConfig& config) override;
     bool loadScript(const std::string& path, const std::string& assetBase) override;
     bool setLogging(ILogging* logger) override;
+    void setTelemetryWriter(telemetry::ITelemetryWriter* writer) override;
     void destroy() override;
     std::string getLastError() const override;
 
@@ -41,6 +43,7 @@ private:
     EngineSimAPI api_;
     EngineSimHandle handle_ = nullptr;
     ILogging* pendingLogger_ = nullptr;
+    telemetry::ITelemetryWriter* telemetryWriter_ = nullptr;
     bool created_ = false;
 };
 

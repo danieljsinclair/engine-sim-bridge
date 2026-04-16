@@ -62,6 +62,10 @@ bool BridgeSimulator::setLogging(ILogging* logger) {
     return result == ESIM_SUCCESS;
 }
 
+void BridgeSimulator::setTelemetryWriter(telemetry::ITelemetryWriter* writer) {
+    telemetryWriter_ = writer;
+}
+
 void BridgeSimulator::destroy() {
     if (!handle_) return;
     api_.Destroy(handle_);
@@ -77,6 +81,24 @@ std::string BridgeSimulator::getLastError() const {
 void BridgeSimulator::update(double deltaTime) {
     if (!handle_) return;
     api_.Update(handle_, deltaTime);
+
+    // Push engine state to telemetry if writer is set
+    if (telemetryWriter_) {
+        EngineSimStats stats = {};
+        api_.GetStats(handle_, &stats);
+
+        telemetry::EngineStateTelemetry engine;
+        engine.currentRPM = stats.currentRPM;
+        engine.currentLoad = stats.currentLoad;
+        engine.exhaustFlow = stats.exhaustFlow;
+        engine.manifoldPressure = stats.manifoldPressure;
+        engine.activeChannels = stats.activeChannels;
+        telemetryWriter_->writeEngineState(engine);
+
+        telemetry::FramePerformanceTelemetry perf;
+        perf.processingTimeMs = stats.processingTimeMs;
+        telemetryWriter_->writeFramePerformance(perf);
+    }
 }
 
 EngineSimStats BridgeSimulator::getStats() const {
