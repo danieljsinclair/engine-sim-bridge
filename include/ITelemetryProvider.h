@@ -11,34 +11,6 @@
 namespace telemetry {
 
 // ============================================================================
-// TelemetryData - Structured engine telemetry (non-atomic snapshot)
-// ============================================================================
-
-struct TelemetryData {
-    // Engine state
-    double currentRPM;
-    double currentLoad;           // 0.0 - 1.0
-    double exhaustFlow;           // m^3/s
-    double manifoldPressure;      // Pa
-    int32_t activeChannels;
-
-    // Performance metrics
-    double processingTimeMs;      // Last frame processing time
-
-    // Audio diagnostics
-    int32_t underrunCount;
-    double bufferHealthPct;       // 0-100 (buffer fullness)
-
-    // Control inputs (echo back for display)
-    double throttlePosition;      // 0.0 - 1.0
-    bool ignitionOn;
-    bool starterMotorEngaged;
-
-    // Timestamp
-    double timestamp;             // Seconds since start
-};
-
-// ============================================================================
 // ISP Component Structs - Per-concern telemetry data
 // Components push only their own data (Interface Segregation Principle)
 // ============================================================================
@@ -90,9 +62,6 @@ class ITelemetryWriter {
 public:
     virtual ~ITelemetryWriter() = default;
 
-    // Legacy bulk write (backward compat)
-    virtual void write(const TelemetryData& data) = 0;
-
     // ISP per-component write methods
     virtual void writeEngineState(const EngineStateTelemetry& state) = 0;
     virtual void writeFramePerformance(const FramePerformanceTelemetry& perf) = 0;
@@ -113,17 +82,6 @@ public:
 class ITelemetryReader {
 public:
     virtual ~ITelemetryReader() = default;
-
-    /**
-     * Get current telemetry snapshot.
-     * Called from presentation layer (main thread).
-     *
-     * @return Copy of current telemetry data
-     *
-     * Thread Safety: Implementation must be thread-safe.
-     * Returns snapshot to avoid race conditions during reads.
-     */
-    virtual TelemetryData getSnapshot() const = 0;
 
     // ISP per-component read methods
     virtual EngineStateTelemetry getEngineState() const = 0;
@@ -147,12 +105,8 @@ public:
     ~InMemoryTelemetry() override = default;
 
     // ITelemetryWriter implementation
-    void write(const TelemetryData& data) override;
     void reset() override;
     const char* getName() const override { return "InMemoryTelemetry"; }
-
-    // ITelemetryReader implementation
-    TelemetryData getSnapshot() const override;
 
     // ISP per-component write methods (ITelemetryWriter overrides)
     void writeEngineState(const EngineStateTelemetry& state) override;
@@ -171,33 +125,51 @@ public:
     SimulatorMetricsTelemetry getSimulatorMetrics() const override;
 
 private:
-    // Atomic storage for thread-safe write/read
-    struct AtomicData {
-        std::atomic<double> currentRPM;
-        std::atomic<double> currentLoad;
-        std::atomic<double> exhaustFlow;
-        std::atomic<double> manifoldPressure;
-        std::atomic<int32_t> activeChannels;
-        std::atomic<double> processingTimeMs;
-        std::atomic<int32_t> underrunCount;
-        std::atomic<double> bufferHealthPct;
-        std::atomic<double> renderMs;
-        std::atomic<double> headroomMs;
-        std::atomic<double> budgetPct;
-        std::atomic<int32_t> framesRequested;
-        std::atomic<int32_t> framesRendered;
-        std::atomic<double> callbackRateHz;
-        std::atomic<double> generatingRateFps;
-        std::atomic<double> trendPct;
-        std::atomic<double> throttlePosition;
-        std::atomic<bool> ignitionOn;
-        std::atomic<bool> starterMotorEngaged;
-        std::atomic<double> timestamp;
-
-        AtomicData();  // Initializes atomics
+    // Per-concern atomic sub-structs mirror the ISP structs
+    struct AtomicEngineState {
+        std::atomic<double> currentRPM{0.0};
+        std::atomic<double> currentLoad{0.0};
+        std::atomic<double> exhaustFlow{0.0};
+        std::atomic<double> manifoldPressure{0.0};
+        std::atomic<int32_t> activeChannels{0};
     };
 
-    AtomicData data_;
+    struct AtomicFramePerformance {
+        std::atomic<double> processingTimeMs{0.0};
+    };
+
+    struct AtomicAudioDiagnostics {
+        std::atomic<int32_t> underrunCount{0};
+        std::atomic<double> bufferHealthPct{0.0};
+    };
+
+    struct AtomicAudioTiming {
+        std::atomic<double> renderMs{0.0};
+        std::atomic<double> headroomMs{0.0};
+        std::atomic<double> budgetPct{0.0};
+        std::atomic<int32_t> framesRequested{0};
+        std::atomic<int32_t> framesRendered{0};
+        std::atomic<double> callbackRateHz{0.0};
+        std::atomic<double> generatingRateFps{0.0};
+        std::atomic<double> trendPct{0.0};
+    };
+
+    struct AtomicVehicleInputs {
+        std::atomic<double> throttlePosition{0.0};
+        std::atomic<bool> ignitionOn{false};
+        std::atomic<bool> starterMotorEngaged{false};
+    };
+
+    struct AtomicSimulatorMetrics {
+        std::atomic<double> timestamp{0.0};
+    };
+
+    AtomicEngineState engineState_;
+    AtomicFramePerformance framePerformance_;
+    AtomicAudioDiagnostics audioDiagnostics_;
+    AtomicAudioTiming audioTiming_;
+    AtomicVehicleInputs vehicleInputs_;
+    AtomicSimulatorMetrics simulatorMetrics_;
 };
 
 } // namespace telemetry

@@ -22,7 +22,6 @@ namespace {
 
 class NullTelemetryWriter : public telemetry::ITelemetryWriter {
 public:
-    void write(const telemetry::TelemetryData&) override {}
     void writeEngineState(const telemetry::EngineStateTelemetry&) override {}
     void writeFramePerformance(const telemetry::FramePerformanceTelemetry&) override {}
     void writeAudioDiagnostics(const telemetry::AudioDiagnosticsTelemetry&) override {}

@@ -1,45 +1,22 @@
 // InMemoryTelemetry.cpp - Thread-safe in-memory telemetry storage
 // Implements both ITelemetryWriter and ITelemetryReader interfaces
+// Per-concern atomic sub-structs mirror the ISP structs
 
 #include "ITelemetryProvider.h"
-#include <cstring>
 
 namespace telemetry {
-
-// ============================================================================
-// AtomicData constructor - Initialize all atomic members
-// ============================================================================
-
-InMemoryTelemetry::AtomicData::AtomicData()
-    : currentRPM(0.0)
-    , currentLoad(0.0)
-    , exhaustFlow(0.0)
-    , manifoldPressure(0.0)
-    , activeChannels(0)
-    , processingTimeMs(0.0)
-    , underrunCount(0)
-    , bufferHealthPct(0.0)
-    , renderMs(0.0)
-    , headroomMs(0.0)
-    , budgetPct(0.0)
-    , framesRequested(0)
-    , framesRendered(0)
-    , callbackRateHz(0.0)
-    , generatingRateFps(0.0)
-    , trendPct(0.0)
-    , throttlePosition(0.0)
-    , ignitionOn(false)
-    , starterMotorEngaged(false)
-    , timestamp(0.0)
-{
-}
 
 // ============================================================================
 // InMemoryTelemetry constructor
 // ============================================================================
 
 InMemoryTelemetry::InMemoryTelemetry()
-    : data_()
+    : engineState_()
+    , framePerformance_()
+    , audioDiagnostics_()
+    , audioTiming_()
+    , vehicleInputs_()
+    , simulatorMetrics_()
 {
 }
 
@@ -47,54 +24,27 @@ InMemoryTelemetry::InMemoryTelemetry()
 // ITelemetryWriter implementation
 // ============================================================================
 
-void InMemoryTelemetry::write(const TelemetryData& data) {
-    // Thread-safe atomic stores - each write is independent
-    // Using memory_order_relaxed for performance - we don't need
-    // synchronization between different fields, just atomicity per field
-    data_.currentRPM.store(data.currentRPM, std::memory_order_relaxed);
-    data_.currentLoad.store(data.currentLoad, std::memory_order_relaxed);
-    data_.exhaustFlow.store(data.exhaustFlow, std::memory_order_relaxed);
-    data_.manifoldPressure.store(data.manifoldPressure, std::memory_order_relaxed);
-    data_.activeChannels.store(data.activeChannels, std::memory_order_relaxed);
-    data_.processingTimeMs.store(data.processingTimeMs, std::memory_order_relaxed);
-    data_.underrunCount.store(data.underrunCount, std::memory_order_relaxed);
-    data_.bufferHealthPct.store(data.bufferHealthPct, std::memory_order_relaxed);
-    data_.throttlePosition.store(data.throttlePosition, std::memory_order_relaxed);
-    data_.ignitionOn.store(data.ignitionOn, std::memory_order_relaxed);
-    data_.starterMotorEngaged.store(data.starterMotorEngaged, std::memory_order_relaxed);
-    data_.timestamp.store(data.timestamp, std::memory_order_relaxed);
-}
-
 void InMemoryTelemetry::reset() {
-    // Reset all counters to initial state
-    TelemetryData zeroData = {};
-    write(zeroData);
-}
-
-// ============================================================================
-// ITelemetryReader implementation
-// ============================================================================
-
-TelemetryData InMemoryTelemetry::getSnapshot() const {
-    TelemetryData snapshot;
-
-    // Thread-safe atomic loads - create consistent snapshot
-    // Using memory_order_relaxed for performance - individual fields
-    // may be slightly inconsistent but that's acceptable for telemetry
-    snapshot.currentRPM = data_.currentRPM.load(std::memory_order_relaxed);
-    snapshot.currentLoad = data_.currentLoad.load(std::memory_order_relaxed);
-    snapshot.exhaustFlow = data_.exhaustFlow.load(std::memory_order_relaxed);
-    snapshot.manifoldPressure = data_.manifoldPressure.load(std::memory_order_relaxed);
-    snapshot.activeChannels = data_.activeChannels.load(std::memory_order_relaxed);
-    snapshot.processingTimeMs = data_.processingTimeMs.load(std::memory_order_relaxed);
-    snapshot.underrunCount = data_.underrunCount.load(std::memory_order_relaxed);
-    snapshot.bufferHealthPct = data_.bufferHealthPct.load(std::memory_order_relaxed);
-    snapshot.throttlePosition = data_.throttlePosition.load(std::memory_order_relaxed);
-    snapshot.ignitionOn = data_.ignitionOn.load(std::memory_order_relaxed);
-    snapshot.starterMotorEngaged = data_.starterMotorEngaged.load(std::memory_order_relaxed);
-    snapshot.timestamp = data_.timestamp.load(std::memory_order_relaxed);
-
-    return snapshot;
+    engineState_.currentRPM.store(0.0, std::memory_order_relaxed);
+    engineState_.currentLoad.store(0.0, std::memory_order_relaxed);
+    engineState_.exhaustFlow.store(0.0, std::memory_order_relaxed);
+    engineState_.manifoldPressure.store(0.0, std::memory_order_relaxed);
+    engineState_.activeChannels.store(0, std::memory_order_relaxed);
+    framePerformance_.processingTimeMs.store(0.0, std::memory_order_relaxed);
+    audioDiagnostics_.underrunCount.store(0, std::memory_order_relaxed);
+    audioDiagnostics_.bufferHealthPct.store(0.0, std::memory_order_relaxed);
+    audioTiming_.renderMs.store(0.0, std::memory_order_relaxed);
+    audioTiming_.headroomMs.store(0.0, std::memory_order_relaxed);
+    audioTiming_.budgetPct.store(0.0, std::memory_order_relaxed);
+    audioTiming_.framesRequested.store(0, std::memory_order_relaxed);
+    audioTiming_.framesRendered.store(0, std::memory_order_relaxed);
+    audioTiming_.callbackRateHz.store(0.0, std::memory_order_relaxed);
+    audioTiming_.generatingRateFps.store(0.0, std::memory_order_relaxed);
+    audioTiming_.trendPct.store(0.0, std::memory_order_relaxed);
+    vehicleInputs_.throttlePosition.store(0.0, std::memory_order_relaxed);
+    vehicleInputs_.ignitionOn.store(false, std::memory_order_relaxed);
+    vehicleInputs_.starterMotorEngaged.store(false, std::memory_order_relaxed);
+    simulatorMetrics_.timestamp.store(0.0, std::memory_order_relaxed);
 }
 
 // ============================================================================
@@ -102,41 +52,41 @@ TelemetryData InMemoryTelemetry::getSnapshot() const {
 // ============================================================================
 
 void InMemoryTelemetry::writeEngineState(const EngineStateTelemetry& state) {
-    data_.currentRPM.store(state.currentRPM, std::memory_order_relaxed);
-    data_.currentLoad.store(state.currentLoad, std::memory_order_relaxed);
-    data_.exhaustFlow.store(state.exhaustFlow, std::memory_order_relaxed);
-    data_.manifoldPressure.store(state.manifoldPressure, std::memory_order_relaxed);
-    data_.activeChannels.store(state.activeChannels, std::memory_order_relaxed);
+    engineState_.currentRPM.store(state.currentRPM, std::memory_order_relaxed);
+    engineState_.currentLoad.store(state.currentLoad, std::memory_order_relaxed);
+    engineState_.exhaustFlow.store(state.exhaustFlow, std::memory_order_relaxed);
+    engineState_.manifoldPressure.store(state.manifoldPressure, std::memory_order_relaxed);
+    engineState_.activeChannels.store(state.activeChannels, std::memory_order_relaxed);
 }
 
 void InMemoryTelemetry::writeFramePerformance(const FramePerformanceTelemetry& perf) {
-    data_.processingTimeMs.store(perf.processingTimeMs, std::memory_order_relaxed);
+    framePerformance_.processingTimeMs.store(perf.processingTimeMs, std::memory_order_relaxed);
 }
 
 void InMemoryTelemetry::writeAudioDiagnostics(const AudioDiagnosticsTelemetry& diag) {
-    data_.underrunCount.store(diag.underrunCount, std::memory_order_relaxed);
-    data_.bufferHealthPct.store(diag.bufferHealthPct, std::memory_order_relaxed);
+    audioDiagnostics_.underrunCount.store(diag.underrunCount, std::memory_order_relaxed);
+    audioDiagnostics_.bufferHealthPct.store(diag.bufferHealthPct, std::memory_order_relaxed);
 }
 
 void InMemoryTelemetry::writeAudioTiming(const AudioTimingTelemetry& timing) {
-    data_.renderMs.store(timing.renderMs, std::memory_order_relaxed);
-    data_.headroomMs.store(timing.headroomMs, std::memory_order_relaxed);
-    data_.budgetPct.store(timing.budgetPct, std::memory_order_relaxed);
-    data_.framesRequested.store(timing.framesRequested, std::memory_order_relaxed);
-    data_.framesRendered.store(timing.framesRendered, std::memory_order_relaxed);
-    data_.callbackRateHz.store(timing.callbackRateHz, std::memory_order_relaxed);
-    data_.generatingRateFps.store(timing.generatingRateFps, std::memory_order_relaxed);
-    data_.trendPct.store(timing.trendPct, std::memory_order_relaxed);
+    audioTiming_.renderMs.store(timing.renderMs, std::memory_order_relaxed);
+    audioTiming_.headroomMs.store(timing.headroomMs, std::memory_order_relaxed);
+    audioTiming_.budgetPct.store(timing.budgetPct, std::memory_order_relaxed);
+    audioTiming_.framesRequested.store(timing.framesRequested, std::memory_order_relaxed);
+    audioTiming_.framesRendered.store(timing.framesRendered, std::memory_order_relaxed);
+    audioTiming_.callbackRateHz.store(timing.callbackRateHz, std::memory_order_relaxed);
+    audioTiming_.generatingRateFps.store(timing.generatingRateFps, std::memory_order_relaxed);
+    audioTiming_.trendPct.store(timing.trendPct, std::memory_order_relaxed);
 }
 
 void InMemoryTelemetry::writeVehicleInputs(const VehicleInputsTelemetry& inputs) {
-    data_.throttlePosition.store(inputs.throttlePosition, std::memory_order_relaxed);
-    data_.ignitionOn.store(inputs.ignitionOn, std::memory_order_relaxed);
-    data_.starterMotorEngaged.store(inputs.starterMotorEngaged, std::memory_order_relaxed);
+    vehicleInputs_.throttlePosition.store(inputs.throttlePosition, std::memory_order_relaxed);
+    vehicleInputs_.ignitionOn.store(inputs.ignitionOn, std::memory_order_relaxed);
+    vehicleInputs_.starterMotorEngaged.store(inputs.starterMotorEngaged, std::memory_order_relaxed);
 }
 
 void InMemoryTelemetry::writeSimulatorMetrics(const SimulatorMetricsTelemetry& metrics) {
-    data_.timestamp.store(metrics.timestamp, std::memory_order_relaxed);
+    simulatorMetrics_.timestamp.store(metrics.timestamp, std::memory_order_relaxed);
 }
 
 // ============================================================================
@@ -145,51 +95,51 @@ void InMemoryTelemetry::writeSimulatorMetrics(const SimulatorMetricsTelemetry& m
 
 EngineStateTelemetry InMemoryTelemetry::getEngineState() const {
     EngineStateTelemetry state;
-    state.currentRPM = data_.currentRPM.load(std::memory_order_relaxed);
-    state.currentLoad = data_.currentLoad.load(std::memory_order_relaxed);
-    state.exhaustFlow = data_.exhaustFlow.load(std::memory_order_relaxed);
-    state.manifoldPressure = data_.manifoldPressure.load(std::memory_order_relaxed);
-    state.activeChannels = data_.activeChannels.load(std::memory_order_relaxed);
+    state.currentRPM = engineState_.currentRPM.load(std::memory_order_relaxed);
+    state.currentLoad = engineState_.currentLoad.load(std::memory_order_relaxed);
+    state.exhaustFlow = engineState_.exhaustFlow.load(std::memory_order_relaxed);
+    state.manifoldPressure = engineState_.manifoldPressure.load(std::memory_order_relaxed);
+    state.activeChannels = engineState_.activeChannels.load(std::memory_order_relaxed);
     return state;
 }
 
 FramePerformanceTelemetry InMemoryTelemetry::getFramePerformance() const {
     FramePerformanceTelemetry perf;
-    perf.processingTimeMs = data_.processingTimeMs.load(std::memory_order_relaxed);
+    perf.processingTimeMs = framePerformance_.processingTimeMs.load(std::memory_order_relaxed);
     return perf;
 }
 
 AudioDiagnosticsTelemetry InMemoryTelemetry::getAudioDiagnostics() const {
     AudioDiagnosticsTelemetry diag;
-    diag.underrunCount = data_.underrunCount.load(std::memory_order_relaxed);
-    diag.bufferHealthPct = data_.bufferHealthPct.load(std::memory_order_relaxed);
+    diag.underrunCount = audioDiagnostics_.underrunCount.load(std::memory_order_relaxed);
+    diag.bufferHealthPct = audioDiagnostics_.bufferHealthPct.load(std::memory_order_relaxed);
     return diag;
 }
 
 AudioTimingTelemetry InMemoryTelemetry::getAudioTiming() const {
     AudioTimingTelemetry timing;
-    timing.renderMs = data_.renderMs.load(std::memory_order_relaxed);
-    timing.headroomMs = data_.headroomMs.load(std::memory_order_relaxed);
-    timing.budgetPct = data_.budgetPct.load(std::memory_order_relaxed);
-    timing.framesRequested = data_.framesRequested.load(std::memory_order_relaxed);
-    timing.framesRendered = data_.framesRendered.load(std::memory_order_relaxed);
-    timing.callbackRateHz = data_.callbackRateHz.load(std::memory_order_relaxed);
-    timing.generatingRateFps = data_.generatingRateFps.load(std::memory_order_relaxed);
-    timing.trendPct = data_.trendPct.load(std::memory_order_relaxed);
+    timing.renderMs = audioTiming_.renderMs.load(std::memory_order_relaxed);
+    timing.headroomMs = audioTiming_.headroomMs.load(std::memory_order_relaxed);
+    timing.budgetPct = audioTiming_.budgetPct.load(std::memory_order_relaxed);
+    timing.framesRequested = audioTiming_.framesRequested.load(std::memory_order_relaxed);
+    timing.framesRendered = audioTiming_.framesRendered.load(std::memory_order_relaxed);
+    timing.callbackRateHz = audioTiming_.callbackRateHz.load(std::memory_order_relaxed);
+    timing.generatingRateFps = audioTiming_.generatingRateFps.load(std::memory_order_relaxed);
+    timing.trendPct = audioTiming_.trendPct.load(std::memory_order_relaxed);
     return timing;
 }
 
 VehicleInputsTelemetry InMemoryTelemetry::getVehicleInputs() const {
     VehicleInputsTelemetry inputs;
-    inputs.throttlePosition = data_.throttlePosition.load(std::memory_order_relaxed);
-    inputs.ignitionOn = data_.ignitionOn.load(std::memory_order_relaxed);
-    inputs.starterMotorEngaged = data_.starterMotorEngaged.load(std::memory_order_relaxed);
+    inputs.throttlePosition = vehicleInputs_.throttlePosition.load(std::memory_order_relaxed);
+    inputs.ignitionOn = vehicleInputs_.ignitionOn.load(std::memory_order_relaxed);
+    inputs.starterMotorEngaged = vehicleInputs_.starterMotorEngaged.load(std::memory_order_relaxed);
     return inputs;
 }
 
 SimulatorMetricsTelemetry InMemoryTelemetry::getSimulatorMetrics() const {
     SimulatorMetricsTelemetry metrics;
-    metrics.timestamp = data_.timestamp.load(std::memory_order_relaxed);
+    metrics.timestamp = simulatorMetrics_.timestamp.load(std::memory_order_relaxed);
     return metrics;
 }
 
