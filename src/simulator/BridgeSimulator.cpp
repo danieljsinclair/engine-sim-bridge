@@ -141,3 +141,7 @@ bool BridgeSimulator::start() {
     EngineSimResult result = api_.StartAudioThread(handle_);
     return result == ESIM_SUCCESS;
 }
+
+void BridgeSimulator::stop() {
+    // Underlying C API has no StopAudioThread; cleanup happens in destroy()
+}

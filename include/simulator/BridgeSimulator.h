@@ -38,6 +38,7 @@ public:
     bool renderOnDemand(float* buffer, int32_t frames, int32_t* written) override;
     bool readAudioBuffer(float* buffer, int32_t frames, int32_t* read) override;
     bool start() override;
+    void stop() override;
 
 private:
     EngineSimAPI api_;
