@@ -39,6 +39,38 @@ struct TelemetryData {
 };
 
 // ============================================================================
+// ISP Component Structs - Per-concern telemetry data
+// Components push only their own data (Interface Segregation Principle)
+// ============================================================================
+
+struct EngineStateTelemetry {
+    double currentRPM = 0.0;
+    double currentLoad = 0.0;        // 0.0 - 1.0
+    double exhaustFlow = 0.0;        // m^3/s
+    double manifoldPressure = 0.0;   // Pa
+    int32_t activeChannels = 0;
+};
+
+struct FramePerformanceTelemetry {
+    double processingTimeMs = 0.0;   // Last frame processing time
+};
+
+struct AudioDiagnosticsTelemetry {
+    int32_t underrunCount = 0;
+    double bufferHealthPct = 0.0;    // 0-100 (buffer fullness)
+};
+
+struct VehicleInputsTelemetry {
+    double throttlePosition = 0.0;   // 0.0 - 1.0
+    bool ignitionOn = false;
+    bool starterMotorEngaged = false;
+};
+
+struct SimulatorMetricsTelemetry {
+    double timestamp = 0.0;          // Seconds since start
+};
+
+// ============================================================================
 // ITelemetryWriter - Bridge writes telemetry here
 // Used by: Bridge (runSimulation, Update)
 // ============================================================================
@@ -112,6 +144,20 @@ public:
 
     // ITelemetryReader implementation
     TelemetryData getSnapshot() const override;
+
+    // ISP per-component write methods
+    void writeEngineState(const EngineStateTelemetry& state);
+    void writeFramePerformance(const FramePerformanceTelemetry& perf);
+    void writeAudioDiagnostics(const AudioDiagnosticsTelemetry& diag);
+    void writeVehicleInputs(const VehicleInputsTelemetry& inputs);
+    void writeSimulatorMetrics(const SimulatorMetricsTelemetry& metrics);
+
+    // ISP per-component read methods
+    EngineStateTelemetry getEngineState() const;
+    FramePerformanceTelemetry getFramePerformance() const;
+    AudioDiagnosticsTelemetry getAudioDiagnostics() const;
+    VehicleInputsTelemetry getVehicleInputs() const;
+    SimulatorMetricsTelemetry getSimulatorMetrics() const;
 
 private:
     // Atomic storage for thread-safe write/read

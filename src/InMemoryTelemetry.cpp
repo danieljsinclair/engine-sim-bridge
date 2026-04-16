@@ -89,4 +89,76 @@ TelemetryData InMemoryTelemetry::getSnapshot() const {
     return snapshot;
 }
 
+// ============================================================================
+// ISP per-component write methods
+// ============================================================================
+
+void InMemoryTelemetry::writeEngineState(const EngineStateTelemetry& state) {
+    data_.currentRPM.store(state.currentRPM, std::memory_order_relaxed);
+    data_.currentLoad.store(state.currentLoad, std::memory_order_relaxed);
+    data_.exhaustFlow.store(state.exhaustFlow, std::memory_order_relaxed);
+    data_.manifoldPressure.store(state.manifoldPressure, std::memory_order_relaxed);
+    data_.activeChannels.store(state.activeChannels, std::memory_order_relaxed);
+}
+
+void InMemoryTelemetry::writeFramePerformance(const FramePerformanceTelemetry& perf) {
+    data_.processingTimeMs.store(perf.processingTimeMs, std::memory_order_relaxed);
+}
+
+void InMemoryTelemetry::writeAudioDiagnostics(const AudioDiagnosticsTelemetry& diag) {
+    data_.underrunCount.store(diag.underrunCount, std::memory_order_relaxed);
+    data_.bufferHealthPct.store(diag.bufferHealthPct, std::memory_order_relaxed);
+}
+
+void InMemoryTelemetry::writeVehicleInputs(const VehicleInputsTelemetry& inputs) {
+    data_.throttlePosition.store(inputs.throttlePosition, std::memory_order_relaxed);
+    data_.ignitionOn.store(inputs.ignitionOn, std::memory_order_relaxed);
+    data_.starterMotorEngaged.store(inputs.starterMotorEngaged, std::memory_order_relaxed);
+}
+
+void InMemoryTelemetry::writeSimulatorMetrics(const SimulatorMetricsTelemetry& metrics) {
+    data_.timestamp.store(metrics.timestamp, std::memory_order_relaxed);
+}
+
+// ============================================================================
+// ISP per-component read methods
+// ============================================================================
+
+EngineStateTelemetry InMemoryTelemetry::getEngineState() const {
+    EngineStateTelemetry state;
+    state.currentRPM = data_.currentRPM.load(std::memory_order_relaxed);
+    state.currentLoad = data_.currentLoad.load(std::memory_order_relaxed);
+    state.exhaustFlow = data_.exhaustFlow.load(std::memory_order_relaxed);
+    state.manifoldPressure = data_.manifoldPressure.load(std::memory_order_relaxed);
+    state.activeChannels = data_.activeChannels.load(std::memory_order_relaxed);
+    return state;
+}
+
+FramePerformanceTelemetry InMemoryTelemetry::getFramePerformance() const {
+    FramePerformanceTelemetry perf;
+    perf.processingTimeMs = data_.processingTimeMs.load(std::memory_order_relaxed);
+    return perf;
+}
+
+AudioDiagnosticsTelemetry InMemoryTelemetry::getAudioDiagnostics() const {
+    AudioDiagnosticsTelemetry diag;
+    diag.underrunCount = data_.underrunCount.load(std::memory_order_relaxed);
+    diag.bufferHealthPct = data_.bufferHealthPct.load(std::memory_order_relaxed);
+    return diag;
+}
+
+VehicleInputsTelemetry InMemoryTelemetry::getVehicleInputs() const {
+    VehicleInputsTelemetry inputs;
+    inputs.throttlePosition = data_.throttlePosition.load(std::memory_order_relaxed);
+    inputs.ignitionOn = data_.ignitionOn.load(std::memory_order_relaxed);
+    inputs.starterMotorEngaged = data_.starterMotorEngaged.load(std::memory_order_relaxed);
+    return inputs;
+}
+
+SimulatorMetricsTelemetry InMemoryTelemetry::getSimulatorMetrics() const {
+    SimulatorMetricsTelemetry metrics;
+    metrics.timestamp = data_.timestamp.load(std::memory_order_relaxed);
+    return metrics;
+}
+
 } // namespace telemetry
