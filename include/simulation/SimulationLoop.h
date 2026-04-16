@@ -6,7 +6,7 @@
 #ifndef SIMULATION_LOOP_H
 #define SIMULATION_LOOP_H
 
-#include "EngineConfig.h"
+#include "simulator/EngineConfig.h"
 
 class IAudioStrategy;
 class ISimulator;

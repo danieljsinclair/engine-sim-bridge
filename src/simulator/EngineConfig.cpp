@@ -1,7 +1,7 @@
 // EngineConfig.cpp - Engine configuration and script loading
 // Phase F: Moved to engine-sim-bridge for reusability
 
-#include "EngineConfig.h"
+#include "simulator/EngineConfig.h"
 
 EngineConfig::EngineConfig() {}
 EngineConfig::~EngineConfig() {}

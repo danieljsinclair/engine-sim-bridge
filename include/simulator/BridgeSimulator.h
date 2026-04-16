@@ -6,10 +6,10 @@
 #ifndef BRIDGE_SIMULATOR_H
 #define BRIDGE_SIMULATOR_H
 
-#include "ISimulator.h"
-#include "engine_sim_bridge.h"
-#include "engine_sim_loader.h"
-#include "ITelemetryProvider.h"
+#include "simulator/ISimulator.h"
+#include "simulator/engine_sim_bridge.h"
+#include "simulator/engine_sim_loader.h"
+#include "telemetry/ITelemetryProvider.h"
 #include <string>
 
 class BridgeSimulator : public ISimulator {

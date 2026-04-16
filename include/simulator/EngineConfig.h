@@ -7,9 +7,9 @@
 
 #include <string>
 
-#include "AudioLoopConfig.h"
-#include "engine_sim_bridge.h"
-#include "engine_sim_loader.h"
+#include "strategy/AudioLoopConfig.h"
+#include "simulator/engine_sim_bridge.h"
+#include "simulator/engine_sim_loader.h"
 
 class EngineSimAPI;
 

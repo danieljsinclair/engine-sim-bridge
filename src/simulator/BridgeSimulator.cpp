@@ -1,8 +1,8 @@
 // BridgeSimulator.cpp - Production ISimulator wrapping EngineSimAPI
 // Forwards all ISimulator calls to the C-style EngineSim bridge functions.
 
-#include "BridgeSimulator.h"
-#include "ILogging.h"
+#include "simulator/BridgeSimulator.h"
+#include "common/ILogging.h"
 
 // Static ISimulator::getVersion() -- delegates to bridge C API
 const char* ISimulator::getVersion() {

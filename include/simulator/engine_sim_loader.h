@@ -10,8 +10,8 @@
 // LoadEngineSimLibrary / UnloadEngineSimLibrary are kept as no-ops so existing
 // call sites in CLIMain.cpp continue to compile without modification.
 
-#include "engine_sim_bridge.h"
-#include "ILogging.h"
+#include "simulator/engine_sim_bridge.h"
+#include "common/ILogging.h"
 
 struct EngineSimAPI {
     EngineSimResult Create(const EngineSimConfig* cfg, EngineSimHandle* h) const {

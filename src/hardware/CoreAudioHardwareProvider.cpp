@@ -3,7 +3,7 @@
 // Thread-safe callback handling with proper resource management
 // Phase F: Moved to engine-sim-bridge submodule
 
-#include "CoreAudioHardwareProvider.h"
+#include "hardware/CoreAudioHardwareProvider.h"
 
 #include <cstring>
 #include <thread>

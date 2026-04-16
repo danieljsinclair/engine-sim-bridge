@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 #include <cstdint>
-#include "engine_sim_bridge.h"
+#include "simulator/engine_sim_bridge.h"
 
 class ILogging;
 

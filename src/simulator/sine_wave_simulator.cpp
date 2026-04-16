@@ -1,4 +1,4 @@
-#include "sine_wave_simulator.h"
+#include "simulator/sine_wave_simulator.h"
 #include "throttle.h"
 #include "units.h"
 #include <cmath>

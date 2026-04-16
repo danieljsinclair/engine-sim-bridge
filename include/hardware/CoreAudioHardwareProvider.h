@@ -8,8 +8,8 @@
 #ifndef CORE_AUDIO_HARDWARE_PROVIDER_H
 #define CORE_AUDIO_HARDWARE_PROVIDER_H
 
-#include "IAudioHardwareProvider.h"
-#include "ILogging.h"
+#include "hardware/IAudioHardwareProvider.h"
+#include "common/ILogging.h"
 
 #include <AudioUnit/AudioUnit.h>
 #include <AudioToolbox/AudioToolbox.h>

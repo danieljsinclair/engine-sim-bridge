@@ -28,24 +28,25 @@ add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_
 # Real bridge library (uses actual engine-sim with polymorphic simulator selection)
 # Phase F: Audio infrastructure moved from CLI into bridge
 add_library(engine-sim-bridge SHARED
-    src/engine_sim_bridge.cpp
-    src/sine_wave_simulator.cpp
-    src/InMemoryTelemetry.cpp
-    src/ConsoleLogger.cpp
-    # Phase F: Audio strategy implementations
-    src/ThreadedStrategy.cpp
-    src/SyncPullStrategy.cpp
-    src/CircularBuffer.cpp
-    # Phase F: Audio hardware providers
-    src/CoreAudioHardwareProvider.cpp
-    # Phase F: BridgeSimulator (ISimulator implementation)
-    src/BridgeSimulator.cpp
-    # Phase F: Factories (moved from CLI)
-    src/IAudioStrategyFactory.cpp
-    src/AudioHardwareProviderFactory.cpp
-    # Phase F: Simulation loop and engine config (moved from CLI)
-    src/SimulationLoop.cpp
-    src/EngineConfig.cpp
+    # Simulator core
+    src/simulator/engine_sim_bridge.cpp
+    src/simulator/sine_wave_simulator.cpp
+    src/simulator/BridgeSimulator.cpp
+    src/simulator/EngineConfig.cpp
+    # Audio strategies
+    src/strategy/ThreadedStrategy.cpp
+    src/strategy/SyncPullStrategy.cpp
+    src/strategy/IAudioStrategyFactory.cpp
+    # Audio hardware
+    src/hardware/CoreAudioHardwareProvider.cpp
+    src/hardware/AudioHardwareProviderFactory.cpp
+    # Telemetry
+    src/telemetry/InMemoryTelemetry.cpp
+    # Simulation loop
+    src/simulation/SimulationLoop.cpp
+    # Common utilities
+    src/common/ConsoleLogger.cpp
+    src/common/CircularBuffer.cpp
 )
 
 # Platform-specific audio libraries
@@ -83,7 +84,7 @@ set_target_properties(engine-sim-bridge PROPERTIES
     OUTPUT_NAME "enginesim"
     VERSION ${PROJECT_VERSION}
     SOVERSION 1
-    PUBLIC_HEADER include/engine_sim_bridge.h
+    PUBLIC_HEADER include/simulator/engine_sim_bridge.h
 )
 
 # Platform-specific settings

@@ -3,21 +3,21 @@
 // Phase E: Uses ISimulator* instead of EngineSimHandle/EngineSimAPI&
 // Phase F: Moved to engine-sim-bridge for reusability (GUI, iOS, headless)
 
-#include "SimulationLoop.h"
+#include "simulation/SimulationLoop.h"
 
-#include "ISimulator.h"
-#include "BridgeSimulator.h"
-#include "AudioLoopConfig.h"
-#include "IAudioHardwareProvider.h"
-#include "CoreAudioHardwareProvider.h"
-#include "IAudioStrategy.h"
-#include "Diagnostics.h"
-#include "IInputProvider.h"
-#include "IPresentation.h"
-#include "EngineConfig.h"
-#include "ILogging.h"
-#include "ITelemetryProvider.h"
-#include "Verification.h"
+#include "simulator/ISimulator.h"
+#include "simulator/BridgeSimulator.h"
+#include "strategy/AudioLoopConfig.h"
+#include "hardware/IAudioHardwareProvider.h"
+#include "hardware/CoreAudioHardwareProvider.h"
+#include "strategy/IAudioStrategy.h"
+#include "strategy/Diagnostics.h"
+#include "io/IInputProvider.h"
+#include "io/IPresentation.h"
+#include "simulator/EngineConfig.h"
+#include "common/ILogging.h"
+#include "telemetry/ITelemetryProvider.h"
+#include "common/Verification.h"
 
 #include <cstring>
 #include <stdexcept>

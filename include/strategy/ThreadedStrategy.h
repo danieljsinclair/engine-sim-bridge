@@ -14,12 +14,12 @@
 #include <AudioUnit/AudioUnit.h>
 #include <AudioToolbox/AudioToolbox.h>
 
-#include "IAudioStrategy.h"
-#include "CircularBuffer.h"
-#include "AudioState.h"
-#include "Diagnostics.h"
-#include "ITelemetryProvider.h"
-#include "ILogging.h"
+#include "strategy/IAudioStrategy.h"
+#include "common/CircularBuffer.h"
+#include "strategy/AudioState.h"
+#include "strategy/Diagnostics.h"
+#include "telemetry/ITelemetryProvider.h"
+#include "common/ILogging.h"
 
 class ISimulator;
 

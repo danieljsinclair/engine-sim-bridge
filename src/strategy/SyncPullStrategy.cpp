@@ -5,12 +5,12 @@
 // DIP: Depends on abstractions (ISimulator), not concrete implementations
 // Phase F: Moved to engine-sim-bridge submodule
 
-#include "SyncPullStrategy.h"
-#include "IAudioStrategy.h"
-#include "ISimulator.h"
-#include "ILogging.h"
-#include "Verification.h"
-#include "engine_sim_bridge.h"
+#include "strategy/SyncPullStrategy.h"
+#include "strategy/IAudioStrategy.h"
+#include "simulator/ISimulator.h"
+#include "common/ILogging.h"
+#include "common/Verification.h"
+#include "simulator/engine_sim_bridge.h"
 
 #include <cstring>
 

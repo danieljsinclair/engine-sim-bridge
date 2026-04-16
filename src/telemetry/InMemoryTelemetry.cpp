@@ -2,7 +2,7 @@
 // Implements both ITelemetryWriter and ITelemetryReader interfaces
 // Per-concern atomic sub-structs mirror the ISP structs
 
-#include "ITelemetryProvider.h"
+#include "telemetry/ITelemetryProvider.h"
 
 namespace telemetry {
 

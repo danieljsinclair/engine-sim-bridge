@@ -3,7 +3,7 @@
 #define ENGINE_SIM_BRIDGE_SINE_WAVE_SIMULATOR_H
 
 #include "simulator.h"
-#include "ILogging.h"
+#include "common/ILogging.h"
 #include "engine.h"
 #include "vehicle.h"
 #include "transmission.h"

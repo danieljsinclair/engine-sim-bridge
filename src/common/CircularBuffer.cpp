@@ -1,7 +1,7 @@
 // CircularBuffer.cpp - Pure ring buffer implementation
 // Phase F: Moved to engine-sim-bridge submodule
 
-#include "CircularBuffer.h"
+#include "common/CircularBuffer.h"
 
 #include <cstring>
 #include <algorithm>

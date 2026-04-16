@@ -4,10 +4,10 @@
 // DIP: Depends on abstractions (ISimulator), not concrete implementations
 // Phase F: Moved to engine-sim-bridge submodule
 
-#include "ThreadedStrategy.h"
-#include "ISimulator.h"
-#include "ILogging.h"
-#include "Verification.h"
+#include "strategy/ThreadedStrategy.h"
+#include "simulator/ISimulator.h"
+#include "common/ILogging.h"
+#include "common/Verification.h"
 
 #include <cstring>
 #include <algorithm>

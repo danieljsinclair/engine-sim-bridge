@@ -1,7 +1,7 @@
 // ConsoleLogger.cpp - Default console logging implementation
 // stdout for debug/info, stderr for warn/error
 
-#include "../include/ILogging.h"
+#include "common/ILogging.h"
 #include <cstdarg>
 #include <cstdio>
 

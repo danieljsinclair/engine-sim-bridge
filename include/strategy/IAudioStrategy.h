@@ -17,7 +17,7 @@
 #include <AudioUnit/AudioUnit.h>
 #include <AudioToolbox/AudioToolbox.h>
 
-#include "ILogging.h"
+#include "common/ILogging.h"
 
 class ISimulator;
 
