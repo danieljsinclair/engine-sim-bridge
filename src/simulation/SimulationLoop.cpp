@@ -46,8 +46,6 @@ SimulationConfig::SimulationConfig()
     , outputWav(nullptr)
     , simulationFrequency(10000)
     , preFillMs(50)
-    , telemetryWriter(nullptr)
-    , telemetryReader(nullptr)
 {
 }
 
@@ -407,6 +405,8 @@ int runSimulation(
     IAudioStrategy* audioStrategy,
     input::IInputProvider* inputProvider,
     presentation::IPresentation* presentation,
+    telemetry::ITelemetryWriter* telemetryWriter,
+    telemetry::ITelemetryReader* telemetryReader,
     ILogging* logger)
 {
     const int sampleRate = AudioLoopConfig::SAMPLE_RATE;
@@ -465,7 +465,7 @@ int runSimulation(
         logger->error(LogMask::AUDIO, "Failed to start hardware playback");
     }
 
-    int exitCode = runUnifiedAudioLoop(simulator, config, *audioStrategy, inputProvider, presentation, config.telemetryWriter, config.telemetryReader, logger);
+    int exitCode = runUnifiedAudioLoop(simulator, config, *audioStrategy, inputProvider, presentation, telemetryWriter, telemetryReader, logger);
 
     // Cleanup
     audioStrategy->stopPlayback(&simulator);

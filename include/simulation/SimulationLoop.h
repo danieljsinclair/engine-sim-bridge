@@ -49,9 +49,6 @@ public:
 
     // Optional display label for logging (e.g. ANSI-colored by CLI). Empty = auto-derive.
     std::string simulatorLabel;
-
-    telemetry::ITelemetryWriter* telemetryWriter = nullptr;
-    telemetry::ITelemetryReader* telemetryReader = nullptr;
 };
 
 // ============================================================================
@@ -76,6 +73,8 @@ int runSimulation(
     IAudioStrategy* audioStrategy,
     input::IInputProvider* inputProvider,
     presentation::IPresentation* presentation,
+    telemetry::ITelemetryWriter* telemetryWriter,
+    telemetry::ITelemetryReader* telemetryReader,
     ILogging* logger
 );
 
