@@ -6,6 +6,8 @@
 #include "CoreAudioHardwareProvider.h"
 
 #include <cstring>
+#include <thread>
+#include <chrono>
 #include <AudioUnit/AudioComponent.h>
 #include <AudioUnit/AudioUnit.h>
 
@@ -65,6 +67,13 @@ bool CoreAudioHardwareProvider::initialize(const AudioStreamFormat& format) {
 void CoreAudioHardwareProvider::cleanup() {
     if (audioUnit) {
         stopPlayback();
+
+        // Allow in-flight CoreAudio render callbacks to drain.
+        // AudioOutputUnitStop is asynchronous -- the render thread may still
+        // invoke our callback after it returns.  A brief sleep ensures any
+        // pending callback completes before we destroy the AudioUnit, which
+        // prevents clicks caused by disposing the unit mid-render.
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
         // Uninitialize AudioUnit
         OSStatus status = AudioUnitUninitialize(audioUnit);
