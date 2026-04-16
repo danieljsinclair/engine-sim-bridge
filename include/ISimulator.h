@@ -23,6 +23,6 @@ public:
     virtual void setStarterMotor(bool on) = 0;
     virtual bool renderOnDemand(float* buffer, int32_t frames, int32_t* written) = 0;
     virtual bool readAudioBuffer(float* buffer, int32_t frames, int32_t* read) = 0;
-    virtual bool startAudioThread() = 0;
+    virtual bool start() = 0;
     static const char* getVersion();
 };

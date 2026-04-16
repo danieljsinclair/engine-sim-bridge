@@ -150,7 +150,7 @@ bool ThreadedStrategy::startPlayback(ISimulator* simulator) {
         return false;
     }
 
-    bool result = simulator->startAudioThread();
+    bool result = simulator->start();
     if (!result) {
         logger_->error(LogMask::AUDIO, "ThreadedStrategy::startPlayback: Failed to start audio thread");
         return false;

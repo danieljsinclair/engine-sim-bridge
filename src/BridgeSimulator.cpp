@@ -136,7 +136,7 @@ bool BridgeSimulator::readAudioBuffer(float* buffer, int32_t frames, int32_t* re
     return result == ESIM_SUCCESS;
 }
 
-bool BridgeSimulator::startAudioThread() {
+bool BridgeSimulator::start() {
     if (!handle_) return false;
     EngineSimResult result = api_.StartAudioThread(handle_);
     return result == ESIM_SUCCESS;
