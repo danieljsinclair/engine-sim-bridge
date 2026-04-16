@@ -58,6 +58,7 @@ bool SyncPullStrategy::initialize(const AudioStrategyConfig& config) {
 
     audioState_.sampleRate = config.sampleRate;
     audioState_.isPlaying = false;
+    shuttingDown_.store(false);
     diagnostics_.setSampleRate(config.sampleRate);
 
     logger_->info(LogMask::AUDIO,
@@ -72,6 +73,7 @@ void SyncPullStrategy::prepareBuffer() {
 }
 
 bool SyncPullStrategy::startPlayback(ISimulator* simulator) {
+    shuttingDown_.store(false);
     simulator_ = simulator;
     audioState_.isPlaying.store(true);
 
@@ -81,6 +83,7 @@ bool SyncPullStrategy::startPlayback(ISimulator* simulator) {
 }
 
 void SyncPullStrategy::stopPlayback(ISimulator* simulator) {
+    shuttingDown_.store(true);
     simulator_ = nullptr;
     audioState_.isPlaying.store(false);
 
@@ -103,8 +106,13 @@ bool SyncPullStrategy::render(
         return false;
     }
 
-    if (!simulator_) {
-        return false;
+    if (!simulator_ || shuttingDown_.load()) {
+        // Fill silence on shutdown or null simulator to prevent crackles
+        if (ioData->mBuffers[0].mData) {
+            float* data = static_cast<float*>(ioData->mBuffers[0].mData);
+            EngineSimAudio::fillSilence(data, static_cast<int>(numberFrames));
+        }
+        return true;
     }
 
     auto callbackStart = std::chrono::high_resolution_clock::now();
@@ -117,7 +125,7 @@ bool SyncPullStrategy::render(
     float* audioData = static_cast<float*>(ioData->mBuffers[0].mData);
     int remainingFrames = framesToGenerate;
 
-    while (remainingFrames > 0 && framesRendered < framesToGenerate) {
+    while (remainingFrames > 0 && framesRendered < framesToGenerate && !shuttingDown_.load()) {
         int32_t framesWritten = 0;
         bool result = simulator_->renderOnDemand(
             audioData + (framesRendered * 2),
@@ -143,7 +151,7 @@ bool SyncPullStrategy::render(
         if (framesWritten == 0 && remainingFrames > 0) {
             // No frames produced: advance simulation and retry
             int retryCount = 0;
-            while (retryCount < MAX_RETRIES) {
+            while (retryCount < MAX_RETRIES && !shuttingDown_.load()) {
                 simulator_->update(1.0 / 48000.0);  // One sample period to feed synthesizer
                 result = simulator_->renderOnDemand(
                     audioData + (framesRendered * 2),

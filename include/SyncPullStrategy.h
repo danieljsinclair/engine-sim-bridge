@@ -67,6 +67,9 @@ private:
     AudioState audioState_;
     Diagnostics diagnostics_;
 
+    // Shutdown flag: set in stopPlayback() so render() can bail out quickly
+    std::atomic<bool> shuttingDown_{false};
+
     // Simulator reference (set during startPlayback)
     ISimulator* simulator_ = nullptr;
 };
