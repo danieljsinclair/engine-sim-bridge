@@ -26,13 +26,26 @@ set(ENGINE_SIM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_ALL)
 
 # Real bridge library (uses actual engine-sim with polymorphic simulator selection)
-# Bridge is platform-agnostic - audio infrastructure stays in CLI
+# Phase F: Audio infrastructure moved from CLI into bridge
 add_library(engine-sim-bridge SHARED
     src/engine_sim_bridge.cpp
     src/sine_wave_simulator.cpp
     src/InMemoryTelemetry.cpp
     src/ConsoleLogger.cpp
+    # Phase F: Audio strategy implementations
+    src/ThreadedStrategy.cpp
+    src/SyncPullStrategy.cpp
+    src/CircularBuffer.cpp
+    # Phase F: Audio hardware providers
+    src/CoreAudioHardwareProvider.cpp
+    # Phase F: BridgeSimulator (ISimulator implementation)
+    src/BridgeSimulator.cpp
 )
+
+# Platform-specific audio libraries
+if(APPLE)
+    set(AUDIO_LIBRARY "-framework AudioToolbox -framework CoreAudio -framework CoreFoundation")
+endif()
 
 target_include_directories(engine-sim-bridge
     PUBLIC
@@ -46,6 +59,7 @@ target_include_directories(engine-sim-bridge
 target_link_libraries(engine-sim-bridge
     PRIVATE
         engine-sim
+        ${AUDIO_LIBRARY}
 )
 
 target_compile_options(engine-sim-bridge PRIVATE -g)
