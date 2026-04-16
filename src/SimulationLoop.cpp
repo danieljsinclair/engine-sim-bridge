@@ -247,8 +247,10 @@ void initializeSimulator(
         throw std::runtime_error(scriptConfig.errorMessage);
     }
 
-    logger->info(LogMask::BRIDGE, "Loading simulator: %s",
-                        config.sineMode ? "[SINE]" : scriptConfig.scriptPath.c_str());
+    std::string label = config.simulatorLabel.empty()
+        ? (config.sineMode ? std::string("[SINE]") : scriptConfig.scriptPath)
+        : config.simulatorLabel;
+    logger->info(LogMask::BRIDGE, "Loading simulator: %s", label.c_str());
 
     EngineSimConfig engineConfig = EngineConfig::createDefault(sampleRate, config.simulationFrequency);
     engineConfig.sineMode = config.sineMode ? 1 : 0;

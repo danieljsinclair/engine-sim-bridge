@@ -47,6 +47,9 @@ public:
     int simulationFrequency = 10000;
     int preFillMs = 50;
 
+    // Optional display label for logging (e.g. ANSI-colored by CLI). Empty = auto-derive.
+    std::string simulatorLabel;
+
     telemetry::ITelemetryWriter* telemetryWriter = nullptr;
     telemetry::ITelemetryReader* telemetryReader = nullptr;
 };
