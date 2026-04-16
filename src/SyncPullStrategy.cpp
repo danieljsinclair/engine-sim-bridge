@@ -58,6 +58,7 @@ bool SyncPullStrategy::initialize(const AudioStrategyConfig& config) {
 
     audioState_.sampleRate = config.sampleRate;
     audioState_.isPlaying = false;
+    diagnostics_.setSampleRate(config.sampleRate);
 
     logger_->info(LogMask::AUDIO,
                   "SyncPullStrategy initialized: sampleRate=%dHz, channels=%d",

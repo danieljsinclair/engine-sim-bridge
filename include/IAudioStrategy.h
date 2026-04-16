@@ -102,6 +102,9 @@ public:
 
     // Returns render timing diagnostics snapshot for presentation
     virtual Diagnostics::Snapshot getDiagnosticsSnapshot() const = 0;
+
+    // Update throughput rate calculations (call periodically)
+    virtual void updateDiagnosticsThroughput(double elapsedSeconds) = 0;
 };
 
 /**

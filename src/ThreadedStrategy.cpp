@@ -119,6 +119,7 @@ bool ThreadedStrategy::initialize(const AudioStrategyConfig& config) {
 
     audioState_.sampleRate = config.sampleRate;
     audioState_.isPlaying = false;
+    diagnostics_.setSampleRate(config.sampleRate);
     circularBuffer_.reset();
 
     logger_->info(LogMask::AUDIO,

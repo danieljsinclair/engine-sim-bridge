@@ -41,6 +41,11 @@ struct Diagnostics {
         , totalFramesRendered(0)
         , lastFramesRequested(0)
         , lastFramesRendered(0)
+        , sampleRate_(48000)
+        , callbackCount_(0)
+        , lastCallbackRateHz(0.0)
+        , generatingRateFps(0.0)
+        , previousGeneratingRateFps(0.0)
     {}
 
     /**
@@ -84,6 +89,27 @@ struct Diagnostics {
     std::atomic<int> lastFramesRequested{0};
     std::atomic<int> lastFramesRendered{0};
 
+    // Sample rate for accurate budget calculation
+    int sampleRate_;
+
+    // Callback throughput tracking
+    std::atomic<int64_t> callbackCount_{0};
+    std::atomic<double> lastCallbackRateHz{0.0};
+    std::atomic<double> generatingRateFps{0.0};
+    std::atomic<double> previousGeneratingRateFps{0.0};
+
+    void setSampleRate(int sampleRate) {
+        sampleRate_ = sampleRate;
+    }
+
+    /**
+     * Compute callback interval in ms from framesRequested and sampleRate
+     */
+    double callbackIntervalMs(int framesRequested) const {
+        if (sampleRate_ <= 0) return 16.0;  // fallback
+        return (static_cast<double>(framesRequested) / sampleRate_) * 1000.0;
+    }
+
     /**
      * Record render time
      * @param renderTimeMs Time taken for this render in milliseconds
@@ -91,21 +117,19 @@ struct Diagnostics {
      * @param framesRequested Number of frames requested
      */
     void recordRender(double renderTimeMs, int framesRendered, int framesRequested) {
-        auto now = Clock::now();
-
         lastRenderMs.store(renderTimeMs);
 
-        // Calculate headroom (assumes ~16ms callback interval)
-        lastHeadroomMs.store(16.0 - renderTimeMs);
+        // Calculate budget from actual callback interval, not hardcoded 16ms
+        double budgetMs = callbackIntervalMs(framesRequested);
+        lastHeadroomMs.store(budgetMs - renderTimeMs);
 
-        // Calculate budget percentage
-        double budgetPct = (renderTimeMs / 16.0) * 100.0;
+        double budgetPct = (budgetMs > 0.0) ? (renderTimeMs / budgetMs) * 100.0 : 0.0;
         lastBudgetPct.store(budgetPct);
 
-        // Calculate frame budget (simplified estimate)
+        // Calculate frame budget
         double frameBudgetPct = 0.0;
-        if (renderTimeMs > 0.0) {
-            frameBudgetPct = static_cast<double>(framesRendered) / (renderTimeMs * 44100.0 / 1000.0) * 100.0;
+        if (renderTimeMs > 0.0 && sampleRate_ > 0) {
+            frameBudgetPct = static_cast<double>(framesRendered) / (renderTimeMs * sampleRate_ / 1000.0) * 100.0;
         }
         lastFrameBudgetPct.store(frameBudgetPct);
 
@@ -113,6 +137,27 @@ struct Diagnostics {
         lastFramesRendered.store(framesRendered);
 
         totalFramesRendered.fetch_add(framesRendered);
+
+        // Track callback throughput
+        callbackCount_.fetch_add(1);
+    }
+
+    /**
+     * Update throughput rates. Called periodically (e.g., once per second).
+     * @param elapsedSeconds Time since last update
+     */
+    void updateThroughput(double elapsedSeconds) {
+        if (elapsedSeconds <= 0.0) return;
+
+        int64_t callbacks = callbackCount_.exchange(0);
+        int64_t frames = totalFramesRendered.exchange(0);
+
+        double callbackHz = static_cast<double>(callbacks) / elapsedSeconds;
+        double genFps = static_cast<double>(frames) / elapsedSeconds;
+
+        previousGeneratingRateFps.store(generatingRateFps.load());
+        lastCallbackRateHz.store(callbackHz);
+        generatingRateFps.store(genFps);
     }
 
     /**
@@ -127,6 +172,10 @@ struct Diagnostics {
         totalFramesRendered.store(0);
         lastFramesRequested.store(0);
         lastFramesRendered.store(0);
+        callbackCount_.store(0);
+        lastCallbackRateHz.store(0.0);
+        generatingRateFps.store(0.0);
+        previousGeneratingRateFps.store(0.0);
     }
 
     /**
@@ -141,6 +190,9 @@ struct Diagnostics {
         int64_t totalFramesRendered;
         int lastFramesRequested;
         int lastFramesRendered;
+        double callbackRateHz;
+        double generatingRateFps;
+        double trendPct;
 
         Snapshot()
             : lastRenderMs(0.0)
@@ -150,6 +202,9 @@ struct Diagnostics {
             , totalFramesRendered(0)
             , lastFramesRequested(0)
             , lastFramesRendered(0)
+            , callbackRateHz(0.0)
+            , generatingRateFps(0.0)
+            , trendPct(0.0)
         {}
     };
 
@@ -167,6 +222,11 @@ struct Diagnostics {
         snapshot.totalFramesRendered = totalFramesRendered.load();
         snapshot.lastFramesRequested = lastFramesRequested.load();
         snapshot.lastFramesRendered = lastFramesRendered.load();
+        snapshot.callbackRateHz = lastCallbackRateHz.load();
+        snapshot.generatingRateFps = generatingRateFps.load();
+        double prev = previousGeneratingRateFps.load();
+        double curr = generatingRateFps.load();
+        snapshot.trendPct = (prev > 0.0) ? ((curr - prev) / prev) * 100.0 : 0.0;
         return snapshot;
     }
 };

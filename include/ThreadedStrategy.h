@@ -61,6 +61,7 @@ public:
     // Returns render timing diagnostics for presentation
     const Diagnostics& diagnostics() const { return diagnostics_; }
     Diagnostics::Snapshot getDiagnosticsSnapshot() const override { return diagnostics_.getSnapshot(); }
+    void updateDiagnosticsThroughput(double elapsedSeconds) override { diagnostics_.updateThroughput(elapsedSeconds); }
 
 private:
     // Logger: always non-null (defaults to ConsoleLogger if not injected)
