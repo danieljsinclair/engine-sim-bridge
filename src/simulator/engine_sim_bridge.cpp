@@ -13,8 +13,10 @@
 #include "exhaust_system.h"
 #include "common/wav_loader.h"
 
-// Scripting includes
+// Scripting includes (only when piranha is enabled)
+#ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
 #include "../scripting/include/compiler.h"
+#endif
 
 #include <string>
 #include <cstring>
@@ -55,10 +57,11 @@ struct EngineSimContext {
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
     // Scripting
     es_script::Compiler* compiler;
+#endif
+    // Engine state pointers (available with or without scripting)
     Engine* engine;
     Vehicle* vehicle;
     Transmission* transmission;
-#endif
 
     // Statistics
     EngineSimStats stats;
@@ -76,10 +79,10 @@ struct EngineSimContext {
         , conversionBufferSize(0)
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
         , compiler(nullptr)
+#endif
         , engine(nullptr)
         , vehicle(nullptr)
         , transmission(nullptr)
-#endif
         , logger(&defaultLogger)
     {
         std::memset(&config, 0, sizeof(config));

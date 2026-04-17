@@ -4,10 +4,21 @@
 // DIP: Client code depends on IAudioHardwareProvider, not concrete implementations
 
 #include "hardware/IAudioHardwareProvider.h"
-#include "hardware/CoreAudioHardwareProvider.h"
 #include "common/ILogging.h"
 
 #include <memory>
+
+// Platform-specific includes
+#if defined(__APPLE__) && defined(__MACH__)
+    #if TARGET_OS_MAC && !TARGET_OS_IPHONE
+        #include "hardware/CoreAudioHardwareProvider.h"
+    #elif TARGET_OS_IPHONE
+        // AVAudioEngineHardwareProvider.h includes AVFoundation (ObjC headers)
+        // Must be compiled as .mm, not included from .cpp
+        // Forward declare for pointer usage
+        class AVAudioEngineHardwareProvider;
+    #endif
+#endif
 
 // ================================================================
 // Platform Detection
@@ -28,12 +39,12 @@ std::unique_ptr<IAudioHardwareProvider> AudioHardwareProviderFactory::createProv
     // Future platforms (iOS, ESP32, etc.) can be added here
 
 #if defined(__APPLE__) && defined(__MACH__)
-    #if TARGET_OS_MAC
+    #if TARGET_OS_MAC && !TARGET_OS_IPHONE
         // macOS platform - use CoreAudio implementation
         return std::make_unique<CoreAudioHardwareProvider>(logger);
     #elif TARGET_OS_IPHONE
-        // iOS platform - would use AVAudioEngine implementation (TODO)
-        // For now, return nullptr as iOS is not yet implemented
+        // iOS platform - AVAudioEngineHardwareProvider must be instantiated
+        // from .mm code (ObjC++), not from this .cpp file
         return nullptr;
     #endif
 #else

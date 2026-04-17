@@ -23,11 +23,20 @@ set(DISCORD_ENABLED OFF CACHE BOOL "Enable Discord Rich Presence" FORCE)
 # Disable engine-sim's internal testing
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(ENGINE_SIM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+# iOS builds disable script interpreter (piranha needs Boost, not available for iOS arm64)
+# Piranha's CMakeLists unconditionally calls find_package(Boost REQUIRED).
+# We can't cross-compile Boost for iOS, so we must skip the entire piranha subdirectory.
+# The approach: override add_subdirectory to skip piranha when building for iOS.
+if(IOS)
+    set(PIRANHA_ENABLED OFF CACHE BOOL "Disable scripting for iOS" FORCE)
+endif()
 add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_ALL)
 
 # Real bridge library (uses actual engine-sim with polymorphic simulator selection)
 # Phase F: Audio infrastructure moved from CLI into bridge
-add_library(engine-sim-bridge SHARED
+
+# Bridge source files (shared between macOS and iOS)
+set(BRIDGE_SOURCES
     # Simulator core
     src/simulator/engine_sim_bridge.cpp
     src/simulator/sine_wave_simulator.cpp
@@ -38,7 +47,6 @@ add_library(engine-sim-bridge SHARED
     src/strategy/SyncPullStrategy.cpp
     src/strategy/IAudioBufferFactory.cpp
     # Audio hardware
-    src/hardware/CoreAudioHardwareProvider.cpp
     src/hardware/AudioHardwareProviderFactory.cpp
     # Telemetry
     src/telemetry/InMemoryTelemetry.cpp
@@ -49,8 +57,37 @@ add_library(engine-sim-bridge SHARED
     src/common/CircularBuffer.cpp
 )
 
+# Platform-specific audio hardware and factory
+if(IOS)
+    # iOS: Use AVAudioEngine-based hardware provider (ObjC++)
+    # Factory must be .mm to include AVAudioEngine headers
+    list(APPEND BRIDGE_SOURCES
+        src/hardware/AVAudioEngineHardwareProvider.mm
+        src/hardware/AudioHardwareProviderFactory.mm
+    )
+    # Remove the .cpp factory (replaced by .mm version above)
+    list(REMOVE_ITEM BRIDGE_SOURCES
+        src/hardware/AudioHardwareProviderFactory.cpp
+    )
+else()
+    # macOS: Use CoreAudio AudioQueue-based hardware provider
+    list(APPEND BRIDGE_SOURCES
+        src/hardware/CoreAudioHardwareProvider.cpp
+    )
+endif()
+
+# iOS builds produce a static library for linking into Xcode project
+# macOS builds produce a shared library (.dylib) for the CLI app
+if(IOS)
+    add_library(engine-sim-bridge STATIC ${BRIDGE_SOURCES})
+else()
+    add_library(engine-sim-bridge SHARED ${BRIDGE_SOURCES})
+endif()
+
 # Platform-specific audio libraries
-if(APPLE)
+if(IOS)
+    set(AUDIO_LIBRARY "-framework AudioToolbox -framework CoreAudio -framework CoreFoundation -framework AVFoundation")
+elseif(APPLE)
     set(AUDIO_LIBRARY "-framework AudioToolbox -framework CoreAudio -framework CoreFoundation")
 endif()
 
@@ -82,50 +119,74 @@ endif()
 # Set library output properties
 set_target_properties(engine-sim-bridge PROPERTIES
     OUTPUT_NAME "enginesim"
-    VERSION ${PROJECT_VERSION}
-    SOVERSION 1
     PUBLIC_HEADER include/simulator/engine_sim_bridge.h
 )
 
-# Platform-specific settings
-if(APPLE)
+# Platform-specific settings (not for iOS static lib)
+if(APPLE AND NOT IOS)
     set_target_properties(engine-sim-bridge PROPERTIES
+        VERSION ${PROJECT_VERSION}
+        SOVERSION 1
         MACOSX_RPATH TRUE
         INSTALL_NAME_DIR "@rpath"
     )
+
+    # Custom target that always runs to copy library files
+    add_custom_target(copy-engine-sim-bridge ALL
+        COMMAND ${CMAKE_COMMAND} -E remove -f
+            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.dylib
+            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.dylib
+            ${CMAKE_BINARY_DIR}/libenginesim.dylib
+        COMMAND ${CMAKE_COMMAND} -E copy
+            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
+            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.dylib
+        COMMAND ${CMAKE_COMMAND} -E copy
+            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
+            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.dylib
+        COMMAND ${CMAKE_COMMAND} -E copy
+            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
+            ${CMAKE_BINARY_DIR}/libenginesim.dylib
+        DEPENDS engine-sim-bridge
+        COMMENT "Copying libenginesim to build directories"
+    )
 endif()
 
-# Custom target that always runs to copy library files
-add_custom_target(copy-engine-sim-bridge ALL
-    COMMAND ${CMAKE_COMMAND} -E remove -f
-        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.dylib
-        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.dylib
-        ${CMAKE_BINARY_DIR}/libenginesim.dylib
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
-        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.dylib
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
-        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.dylib
-    COMMAND ${CMAKE_COMMAND} -E copy
-        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
-        ${CMAKE_BINARY_DIR}/libenginesim.dylib
-    DEPENDS engine-sim-bridge
-    COMMENT "Copying libenginesim to build directories"
-)
+# iOS: Merge bridge + engine-sim + dependencies into a single fat static library
+# This ensures the Xcode project only needs to link one .a file
+if(IOS)
+    # Collect all static library locations that engine-sim-bridge depends on
+    set(IOS_MERGED_LIBS
+        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.a
+        ${CMAKE_BINARY_DIR}/engine-sim/libengine-sim.a
+        ${CMAKE_BINARY_DIR}/engine-sim/dependencies/submodules/simple-2d-constraint-solver/libsimple-2d-constraint-solver.a
+        ${CMAKE_BINARY_DIR}/engine-sim/dependencies/submodules/csv-io/libcsv-io.a
+    )
 
-# Installation
-install(TARGETS engine-sim-bridge
-    LIBRARY DESTINATION lib
-    PUBLIC_HEADER DESTINATION include
-)
+    add_custom_command(TARGET engine-sim-bridge POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E echo "Merging iOS static libraries..."
+        COMMAND libtool -static -o ${CMAKE_BINARY_DIR}/libenginesim.a ${IOS_MERGED_LIBS}
+        COMMENT "Merging all static libs into single libenginesim.a for iOS"
+    )
+endif()
+
+# Installation (skip for iOS static lib builds)
+if(NOT IOS)
+    install(TARGETS engine-sim-bridge
+        LIBRARY DESTINATION lib
+        PUBLIC_HEADER DESTINATION include
+    )
+endif()
 
 # -----------------------------------------------------------------------------
 # Unit tests (bridge owns its own tests)
 # Standalone build: `make test` works directly
 # As CLI subdirectory: CLI registers bridge_unit_tests with its own CTest
+# iOS builds skip tests entirely
 # -----------------------------------------------------------------------------
 option(BUILD_BRIDGE_TESTS "Build engine-sim-bridge unit tests" ON)
+if(IOS)
+    set(BUILD_BRIDGE_TESTS OFF CACHE BOOL "Skip tests for iOS build" FORCE)
+endif()
 if(BUILD_BRIDGE_TESTS)
     # Fetch GoogleTest if not available
     include(FetchContent)
@@ -156,5 +217,26 @@ if(BUILD_BRIDGE_TESTS)
 
     if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME bridge_unit_tests COMMAND bridge_unit_tests --gtest_color=yes)
+    endif()
+
+    # iOS adapter tests - only built when AudioBufferDescriptor and
+    # AVAudioEngineHardwareProvider headers exist (after Phase 1 and Phase 2)
+    option(BUILD_IOS_ADAPTER_TESTS "Build iOS adapter tests" OFF)
+    if(BUILD_IOS_ADAPTER_TESTS)
+        add_executable(ios_adapter_tests
+            test/iOSAdapterTests.cpp
+        )
+        target_include_directories(ios_adapter_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+        )
+        target_link_libraries(ios_adapter_tests
+            PRIVATE
+                GTest::gtest_main
+                engine-sim-bridge
+                ${AUDIO_LIBRARY}
+        )
+        if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+            add_test(NAME ios_adapter_tests COMMAND ios_adapter_tests --gtest_color=yes)
+        endif()
     endif()
 endif()
