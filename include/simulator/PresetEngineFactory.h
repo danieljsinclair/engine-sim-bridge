@@ -35,18 +35,25 @@ struct PresetLoadResult {
 
 // PresetEngineFactory - Reads JSON presets and constructs engine object graphs
 //
+// Two loading modes:
+// 1. loadFromFile() - reads JSON from a file path (macOS/desktop)
+// 2. loadFromJson() - reads JSON from an in-memory string (iOS/embedded)
+//
 // Usage:
-//   PresetLoadResult result = PresetEngineFactory::loadFromFile("/path/to/preset.json");
+//   PresetLoadResult result = PresetEngineFactory::loadFromJson(jsonStr, jsonLen);
 //   if (result.success()) {
 //       simulator->loadSimulation(result.engine, result.vehicle, result.transmission);
 //   }
 class PresetEngineFactory {
 public:
-    // Load preset from JSON file
+    // Load preset from JSON file (desktop path)
     static PresetLoadResult loadFromFile(const std::string& jsonPath);
 
     // Load preset from JSON string (for embedded presets or in-memory data)
     static PresetLoadResult loadFromString(const std::string& jsonContent, const std::string& sourceName = "<string>");
+
+    // Load preset from raw JSON bytes (C API friendly, for iOS bridge)
+    static PresetLoadResult loadFromJson(const char* jsonContent, size_t jsonSize);
 
 private:
     // Construction helpers (internal, maps JSON values to engine-sim Parameters)

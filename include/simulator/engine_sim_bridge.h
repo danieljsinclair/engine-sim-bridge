@@ -492,6 +492,30 @@ EngineSimResult EngineSimLoadPresetById(
 );
 
 /**
+ * Loads an engine preset from raw JSON content in memory.
+ * Uses PresetEngineFactory to deserialize the JSON and construct
+ * Engine/Vehicle/Transmission objects.
+ *
+ * This is the iOS-friendly API - no file system access needed.
+ * The JSON content can come from bundled resources, network, etc.
+ *
+ * @param handle Simulator handle (must have been created with EngineSimCreate)
+ * @param presetJson Pointer to JSON content (UTF-8, not null-terminated required)
+ * @param presetJsonSize Number of bytes in presetJson
+ * @return ESIM_SUCCESS on success, error code otherwise
+ *
+ * Thread Safety: Must be called from main thread
+ * Allocations: Yes (engine construction)
+ *
+ * Example: EngineSimLoadPresetFromJson(handle, jsonStr, strlen(jsonStr))
+ */
+EngineSimResult EngineSimLoadPresetFromJson(
+    EngineSimHandle handle,
+    const char* presetJson,
+    size_t presetJsonSize
+);
+
+/**
  * Gets the number of available hardcoded engine presets.
  * @return Number of available presets
  */

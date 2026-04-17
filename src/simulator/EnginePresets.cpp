@@ -36,6 +36,7 @@
 #include "vehicle.h"
 #include "transmission.h"
 #include "simulator.h"
+#include "piston_engine_simulator.h"
 #include "units.h"
 
 #include <cmath>
@@ -172,8 +173,10 @@ void initCombustionChambers(Engine* engine) {
 namespace {
 
 // PresetSimulator - base for hardcoded engine preset simulators
+// Extends PistonEngineSimulator for real audio output (writeToSynthesizer,
+// physics constraints, combustion force generators, delay filters for exhaust pulses)
 // Owns the Engine, Vehicle, Transmission objects and passes them to base via loadSimulation()
-class PresetSimulator : public Simulator {
+class PresetSimulator : public PistonEngineSimulator {
 public:
     PresetSimulator(ILogging* logger)
         : defaultLogger_(logger ? nullptr : new ConsoleLogger())
@@ -183,8 +186,9 @@ public:
         , m_ownedTransmission(nullptr) {}
 
     virtual ~PresetSimulator() {
-        // Release simulation first (base class cleans up its own state)
-        releaseSimulation();
+        // PistonEngineSimulator::destroy() cleans up physics constraints and synthesizer
+        // We must destroy before deleting owned objects since they are referenced by constraints
+        destroy();
 
         if (m_ownedTransmission) { delete m_ownedTransmission; m_ownedTransmission = nullptr; }
         if (m_ownedVehicle)      { delete m_ownedVehicle;      m_ownedVehicle = nullptr; }
@@ -445,8 +449,6 @@ public:
         finalize(engine, vehicle, transmission);
     }
 
-protected:
-    void writeToSynthesizer() override {}
 };
 
 // ============================================================================
@@ -784,8 +786,6 @@ public:
         finalize(engine, vehicle, transmission);
     }
 
-protected:
-    void writeToSynthesizer() override {}
 };
 
 // ============================================================================
@@ -1127,8 +1127,6 @@ public:
         finalize(engine, vehicle, transmission);
     }
 
-protected:
-    void writeToSynthesizer() override {}
 };
 
 } // anonymous namespace
