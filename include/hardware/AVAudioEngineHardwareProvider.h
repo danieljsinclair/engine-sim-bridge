@@ -110,9 +110,6 @@ private:
     bool configureAudioFormat(const AudioStreamFormat& format);
     bool createSourceNode();
 
-    // AVAudioSourceNode render block - called by AVAudioEngine
-    AVAudioPCMBuffer* (^renderBlock_)(AVAudioFormat* format, AVAudioFrameCount frameCount);
-
 #endif
 };
 

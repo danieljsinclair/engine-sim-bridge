@@ -25,8 +25,7 @@ AVAudioEngineHardwareProvider::AVAudioEngineHardwareProvider(ILogging* logger)
       overrunCount_(0),
       defaultLogger_(logger ? nullptr : new ConsoleLogger()),
       logger_(logger ? logger : defaultLogger_.get()),
-      audioCallback_(nullptr),
-      renderBlock_(nil) {
+      audioCallback_(nullptr) {
 }
 
 AVAudioEngineHardwareProvider::~AVAudioEngineHardwareProvider() {
@@ -95,7 +94,6 @@ void AVAudioEngineHardwareProvider::cleanup() {
     }
 
     isPlaying_ = false;
-    renderBlock_ = nil;
     logger_->info(LogMask::AUDIO, "AVAudioEngineHardwareProvider cleaned up");
 }
 
@@ -147,17 +145,10 @@ void AVAudioEngineHardwareProvider::setVolume(double volume) {
 
     logger_->debug(LogMask::AUDIO, "Setting volume to %.2f", clampedVolume);
 
-    // AVAudioEngine doesn't have direct volume control - use AVAudioSession
-    if (audioSession_) {
-        AVAudioSession* session = [AVAudioSession sharedInstance];
-        NSError* error = nil;
-        [session setOutputVolume:static_cast<float>(clampedVolume) error:&error];
-        if (error) {
-            logger_->warning(LogMask::AUDIO, "Failed to set AVAudioSession volume: %s",
-                          [[error localizedDescription] UTF8String]);
-        } else {
-            currentVolume_ = clampedVolume;
-        }
+    // Use AVAudioEngine's mainMixerNode for volume control
+    if (audioEngine_) {
+        audioEngine_.mainMixerNode.outputVolume = static_cast<float>(clampedVolume);
+        currentVolume_ = clampedVolume;
     } else {
         currentVolume_ = clampedVolume;
     }
@@ -176,8 +167,8 @@ bool AVAudioEngineHardwareProvider::registerAudioCallback(const AudioCallback& c
     audioCallback_ = callback;
     logger_->info(LogMask::AUDIO, "Audio callback registered");
 
-    // Note: The callback is used within the renderBlock_ which is already created
-    // If we need to update the callback, we would recreate the source node here
+    // Note: The callback is captured by the AVAudioSourceNode render block created
+    // during initialize(). If we need to update the callback, we would recreate the source node.
     return true;
 }
 
@@ -254,8 +245,8 @@ bool AVAudioEngineHardwareProvider::configureAudioFormat(const AudioStreamFormat
         return false;
     }
 
-    // Configure the main mixer node format
-    [audioEngine_.mainMixerNode setOutputFormat:audioFormat forBus:0];
+    // Note: output format is established via the connection in createSourceNode(),
+    // not by setting it directly on the mixer node.
 
     logger_->info(LogMask::AUDIO, "Audio format configured: %dHz, %d channels, float32 interleaved",
                   format.sampleRate, format.channels);
@@ -278,29 +269,28 @@ bool AVAudioEngineHardwareProvider::createSourceNode() {
         return false;
     }
 
-    // Create render block for AVAudioSourceNode
-    // This block is called by AVAudioEngine when it needs audio samples
-    renderBlock_ = ^AVAudioPCMBuffer* (AVAudioFormat* format, AVAudioFrameCount frameCount) {
-        // Create output buffer
-        AVAudioPCMBuffer* buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:format
-                                                                frameCapacity:frameCount];
-
-        if (!buffer) {
-            logger_->error(LogMask::AUDIO, "Failed to allocate AVAudioPCMBuffer");
-            underrunCount_++;
-            return nullptr;
-        }
-
-        buffer.frameLength = frameCount;
-
-        // Get float pointer to buffer data (interleaved)
-        float* channelData = buffer.floatChannelData[0];
-
-        // Convert to our platform-agnostic AudioBufferDescriptor
-        AudioBufferDescriptor descriptor(channelData, static_cast<int>(frameCount), format_.channels);
-
+    // Create render block matching AVAudioSourceNodeRenderBlock signature:
+    //   OSStatus (^)(BOOL* isSilence, const AudioTimeStamp* timestamp,
+    //                AVAudioFrameCount frameCount, AudioBufferList* outputData)
+    //
+    // This block is called by AVAudioEngine on the render thread when it needs audio samples.
+    // IMPORTANT: Avoid blocking calls, ObjC message sends, and allocations in this block.
+    AVAudioSourceNodeRenderBlock renderBlock = ^(BOOL* isSilence,
+                                                  const AudioTimeStamp* timestamp,
+                                                  AVAudioFrameCount frameCount,
+                                                  AudioBufferList* outputData) {
         // Suppress unused parameters
-        (void)format;
+        (void)timestamp;
+
+        // Get pointer to the output buffer (interleaved float data)
+        AudioBuffer* buffer = &outputData->mBuffers[0];
+        float* channelData = static_cast<float*>(buffer->mData);
+
+        if (!channelData) {
+            if (isSilence) *isSilence = YES;
+            underrunCount_++;
+            return static_cast<OSStatus>(noErr);
+        }
 
         // Invoke user-provided callback if registered
         if (audioCallback_) {
@@ -311,20 +301,35 @@ bool AVAudioEngineHardwareProvider::createSourceNode() {
             std::memset(channelData, 0, frameCount * format_.channels * sizeof(float));
         }
 
-        return buffer;
+        if (isSilence) *isSilence = NO;
+        return static_cast<OSStatus>(noErr);
     };
 
-    // Create source node with our render block
+    // Create AVAudioSourceNode with format and render block
     @try {
-        sourceNode_ = [audioEngine_ attachSourceNodeWithFormat:audioFormat
-                                                  renderBlock:renderBlock_];
+        sourceNode_ = [[AVAudioSourceNode alloc] initWithFormat:audioFormat
+                                                    renderBlock:renderBlock];
+        if (!sourceNode_) {
+            logger_->error(LogMask::AUDIO, "Failed to create AVAudioSourceNode");
+            return false;
+        }
     } @catch (NSException* exception) {
-        logger_->error(LogMask::AUDIO, "Failed to attach source node: %s",
+        logger_->error(LogMask::AUDIO, "Failed to create AVAudioSourceNode: %s",
                       [[exception reason] UTF8String]);
         return false;
     }
 
-    // Connect source node to main mixer
+    // Attach source node to engine
+    @try {
+        [audioEngine_ attachNode:sourceNode_];
+    } @catch (NSException* exception) {
+        logger_->error(LogMask::AUDIO, "Failed to attach source node to engine: %s",
+                      [[exception reason] UTF8String]);
+        sourceNode_ = nullptr;
+        return false;
+    }
+
+    // Connect source node to main mixer (format established via connection)
     @try {
         [audioEngine_ connect:sourceNode_ to:audioEngine_.mainMixerNode fromBus:0 toBus:0 format:audioFormat];
     } @catch (NSException* exception) {
