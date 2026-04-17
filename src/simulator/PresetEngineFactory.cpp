@@ -220,7 +220,13 @@ PresetLoadResult PresetEngineFactory::loadFromString(const std::string& jsonCont
                 ExhaustSystem::Parameters exParams;
                 exParams.length = exJson["length"].numberOr(0);
                 exParams.collectorCrossSectionArea = exJson["collectorCrossSectionArea"].numberOr(0);
+                // outletFlowRate: controls exhaust gas flow to atmosphere.
+                // CRITICAL: Must be non-zero or exhaust gas cannot escape.
+                // .mr scripts typically use k_carb(300..800). Default to k_carb(500).
                 exParams.outletFlowRate = exJson["outletFlowRate"].numberOr(0);
+                if (exParams.outletFlowRate <= 0) {
+                    exParams.outletFlowRate = GasSystem::k_carb(500.0);
+                }
                 exParams.primaryTubeLength = exJson["primaryTubeLength"].numberOr(0);
                 exParams.primaryFlowRate = exJson["primaryFlowRate"].numberOr(0);
                 exParams.velocityDecay = exJson["velocityDecay"].numberOr(0);
@@ -480,11 +486,11 @@ PresetLoadResult PresetEngineFactory::loadFromString(const std::string& jsonCont
         timingCurve->initialize(10, 1);
         // Typical timing curve: 12 deg at idle, ramping to 35 deg at high RPM
         // X-axis: crankshaft angular velocity (rad/s), Y-axis: advance angle (rad)
-        timingCurve->addSample(0, units::degrees(12.0));               // 0 RPM
-        timingCurve->addSample(units::rpm(1000.0), units::degrees(12.0));  // 1000 RPM
-        timingCurve->addSample(units::rpm(2000.0), units::degrees(20.0));  // 2000 RPM
-        timingCurve->addSample(units::rpm(3000.0), units::degrees(35.0));  // 3000 RPM
-        timingCurve->addSample(units::rpm(4000.0), units::degrees(35.0));  // 4000 RPM
+        timingCurve->addSample(0, 12.0 * units::deg);
+        timingCurve->addSample(units::rpm(1000.0), 12.0 * units::deg);
+        timingCurve->addSample(units::rpm(2000.0), 20.0 * units::deg);
+        timingCurve->addSample(units::rpm(3000.0), 35.0 * units::deg);
+        timingCurve->addSample(units::rpm(4000.0), 35.0 * units::deg);
         igParams.timingCurve = timingCurve;
         igParams.revLimit = engine->getRedline() * 1.15;
         igParams.limiterDuration = 0.1;
