@@ -10,7 +10,7 @@
 #include "strategy/AudioLoopConfig.h"
 #include "hardware/IAudioHardwareProvider.h"
 #include "hardware/CoreAudioHardwareProvider.h"
-#include "strategy/IAudioStrategy.h"
+#include "strategy/IAudioBuffer.h"
 #include "strategy/Diagnostics.h"
 #include "io/IInputProvider.h"
 #include "io/IPresentation.h"
@@ -72,7 +72,7 @@ struct LoopTimer {
 };
 
 // Named audio render callback -- bridges platform audio buffers to strategy->render()
-int audioRenderCallback(IAudioStrategy* strategy, int numberFrames,
+int audioRenderCallback(IAudioBuffer* strategy, int numberFrames,
                         PlatformAudioBufferList* platformBufferList) {
     if (!strategy->isPlaying()) {
         if (platformBufferList && platformBufferList->bufferData) {
@@ -147,7 +147,7 @@ input::EngineInput getTimedInput(double currentTime) {
 
 void updatePresentation(presentation::IPresentation* presentation, double currentTime,
                         const EngineSimStats& stats, double throttle, bool ignition,
-                        int underrunCount, IAudioStrategy& audioStrategy,
+                        int underrunCount, IAudioBuffer& audioBuffer,
                         telemetry::ITelemetryReader* telemetryReader) {
     if (!presentation) return;
 
@@ -164,7 +164,7 @@ void updatePresentation(presentation::IPresentation* presentation, double curren
     state.load = stats.currentLoad;
     state.speed = 0;
     state.underrunCount = underrunCount;
-    state.audioMode = audioStrategy.getModeString();
+    state.audioMode = audioBuffer.getModeString();
     state.ignition = ignition;
     state.starterMotor = false;
     state.exhaustFlow = stats.exhaustFlow;
@@ -326,7 +326,7 @@ void warnWavExportNotSupported(bool outputWavRequested, ILogging* logger) {
 int runUnifiedAudioLoop(
     ISimulator& simulator,
     const SimulationConfig& config,
-    IAudioStrategy& audioStrategy,
+    IAudioBuffer& audioBuffer,
     input::IInputProvider* inputProvider,
     presentation::IPresentation* presentation,
     telemetry::ITelemetryWriter* telemetryWriter,
@@ -367,12 +367,12 @@ int runUnifiedAudioLoop(
         simulator.setIgnition(ignition);
 
         // Update simulation via strategy (threaded mode updates here; sync-pull is no-op)
-        audioStrategy.updateSimulation(&simulator, AudioLoopConfig::UPDATE_INTERVAL * 1000.0);
+        audioBuffer.updateSimulation(&simulator, AudioLoopConfig::UPDATE_INTERVAL * 1000.0);
 
         EngineSimStats stats = simulator.getStats();
 
         // Generate audio: strategy decides whether to fill buffer (Threaded fills, SyncPull no-ops)
-        audioStrategy.fillBufferFromEngine(&simulator, AudioLoopConfig::FRAMES_PER_UPDATE);
+        audioBuffer.fillBufferFromEngine(&simulator, AudioLoopConfig::FRAMES_PER_UPDATE);
 
         writeTelemetry(telemetryWriter, currentTime, throttle, ignition);
 
@@ -386,7 +386,7 @@ int runUnifiedAudioLoop(
         currentTime += AudioLoopConfig::UPDATE_INTERVAL;
 
         // Display via presentation (ConsolePresentation formats the complete output line)
-        updatePresentation(presentation, currentTime, stats, throttle, ignition, underrunCount, audioStrategy, telemetryReader);
+        updatePresentation(presentation, currentTime, stats, throttle, ignition, underrunCount, audioBuffer, telemetryReader);
 
         // Pace to 60Hz using sleep_until for accuracy
         timer.waitUntilNextTick();
@@ -402,7 +402,7 @@ int runUnifiedAudioLoop(
 int runSimulation(
     const SimulationConfig& config,
     ISimulator& simulator,
-    IAudioStrategy* audioStrategy,
+    IAudioBuffer* audioBuffer,
     input::IInputProvider* inputProvider,
     presentation::IPresentation* presentation,
     telemetry::ITelemetryWriter* telemetryWriter,
@@ -411,7 +411,7 @@ int runSimulation(
 {
     const int sampleRate = AudioLoopConfig::SAMPLE_RATE;
 
-    ASSERT(audioStrategy, "audioStrategy must be provided");
+    ASSERT(audioBuffer, "audioBuffer must be provided");
 
     // Initialize simulator (throws on failure)
     initializeSimulator(simulator, config, logger, sampleRate);
@@ -421,28 +421,28 @@ int runSimulation(
     strategyConfig.sampleRate = sampleRate;
     strategyConfig.channels = 2;
 
-    if (!audioStrategy->initialize(strategyConfig)) {
+    if (!audioBuffer->initialize(strategyConfig)) {
         throw std::runtime_error("Failed to initialize audio strategy");
     }
 
     // Create and initialize audio hardware provider (throws on failure)
-    auto callback = [audioStrategy](void* refCon, void* actionFlags,
+    auto callback = [audioBuffer](void* refCon, void* actionFlags,
                            const void* timeStamp, int busNumber, int numberFrames,
                            PlatformAudioBufferList* platformBufferList) -> int {
         (void)refCon;
         (void)actionFlags;
         (void)timeStamp;
         (void)busNumber;
-        return audioRenderCallback(audioStrategy, numberFrames, platformBufferList);
+        return audioRenderCallback(audioBuffer, numberFrames, platformBufferList);
     };
 
     auto hardwareProvider = createHardwareProvider(sampleRate, callback, logger);
 
     logger->info(LogMask::AUDIO, "Audio initialized: strategy=%s, sr=%d",
-                         audioStrategy->getName(), sampleRate);
+                         audioBuffer->getName(), sampleRate);
 
     // Start strategy playback
-    if (!audioStrategy->startPlayback(&simulator)) {
+    if (!audioBuffer->startPlayback(&simulator)) {
         throw std::runtime_error("Failed to start audio playback");
     }
 
@@ -451,24 +451,24 @@ int runSimulation(
 
     enableStarterMotor(simulator);
 
-    bool drainDuringWarmup = config.playAudio && audioStrategy->shouldDrainDuringWarmup();
+    bool drainDuringWarmup = config.playAudio && audioBuffer->shouldDrainDuringWarmup();
     runWarmupPhase(simulator, drainDuringWarmup);
 
     // Prepare buffer via strategy (threaded: pre-fills, sync-pull: no-op)
-    audioStrategy->prepareBuffer();
+    audioBuffer->prepareBuffer();
 
     // Reset buffer after warmup via strategy
-    audioStrategy->resetBufferAfterWarmup();
+    audioBuffer->resetBufferAfterWarmup();
 
     // Start audio hardware playback
     if (!hardwareProvider->startPlayback()) {
         logger->error(LogMask::AUDIO, "Failed to start hardware playback");
     }
 
-    int exitCode = runUnifiedAudioLoop(simulator, config, *audioStrategy, inputProvider, presentation, telemetryWriter, telemetryReader, logger);
+    int exitCode = runUnifiedAudioLoop(simulator, config, *audioBuffer, inputProvider, presentation, telemetryWriter, telemetryReader, logger);
 
     // Cleanup
-    audioStrategy->stopPlayback(&simulator);
+    audioBuffer->stopPlayback(&simulator);
     cleanupSimulation(hardwareProvider.get(), simulator);
 
     warnWavExportNotSupported(config.outputWav, logger);

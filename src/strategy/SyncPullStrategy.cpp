@@ -6,7 +6,7 @@
 // Phase F: Moved to engine-sim-bridge submodule
 
 #include "strategy/SyncPullStrategy.h"
-#include "strategy/IAudioStrategy.h"
+#include "strategy/IAudioBuffer.h"
 #include "simulator/ISimulator.h"
 #include "common/ILogging.h"
 #include "common/Verification.h"
@@ -49,7 +49,7 @@ SyncPullStrategy::SyncPullStrategy(ILogging* logger, telemetry::ITelemetryWriter
 }
 
 // ============================================================================
-// IAudioStrategy Implementation
+// IAudioBuffer Implementation
 // ============================================================================
 
 const char* SyncPullStrategy::getName() const {

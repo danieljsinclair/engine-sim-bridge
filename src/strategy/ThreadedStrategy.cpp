@@ -51,7 +51,7 @@ ThreadedStrategy::ThreadedStrategy(ILogging* logger, telemetry::ITelemetryWriter
 }
 
 // ============================================================================
-// IAudioStrategy Implementation
+// IAudioBuffer Implementation
 // ============================================================================
 
 const char* ThreadedStrategy::getName() const {

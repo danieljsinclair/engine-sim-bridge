@@ -36,7 +36,7 @@ add_library(engine-sim-bridge SHARED
     # Audio strategies
     src/strategy/ThreadedStrategy.cpp
     src/strategy/SyncPullStrategy.cpp
-    src/strategy/IAudioStrategyFactory.cpp
+    src/strategy/IAudioBufferFactory.cpp
     # Audio hardware
     src/hardware/CoreAudioHardwareProvider.cpp
     src/hardware/AudioHardwareProviderFactory.cpp

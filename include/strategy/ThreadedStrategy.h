@@ -14,7 +14,7 @@
 #include <AudioUnit/AudioUnit.h>
 #include <AudioToolbox/AudioToolbox.h>
 
-#include "strategy/IAudioStrategy.h"
+#include "strategy/IAudioBuffer.h"
 #include "common/CircularBuffer.h"
 #include "strategy/AudioState.h"
 #include "strategy/Diagnostics.h"
@@ -32,12 +32,12 @@ class ISimulator;
  *
  * Owns its own state: AudioState, Diagnostics, CircularBuffer.
  */
-class ThreadedStrategy : public IAudioStrategy {
+class ThreadedStrategy : public IAudioBuffer {
 public:
     explicit ThreadedStrategy(ILogging* logger = nullptr,
                               telemetry::ITelemetryWriter* telemetry = nullptr);
 
-    // IAudioStrategy Implementation
+    // IAudioBuffer Implementation
     const char* getName() const override;
     bool isEnabled() const override;
     bool isPlaying() const override;

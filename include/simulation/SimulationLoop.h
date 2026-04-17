@@ -8,7 +8,7 @@
 
 #include "simulator/EngineConfig.h"
 
-class IAudioStrategy;
+class IAudioBuffer;
 class ISimulator;
 
 // Forward declarations for injectable interfaces
@@ -60,7 +60,7 @@ public:
 int runUnifiedAudioLoop(
     ISimulator& simulator,
     const SimulationConfig& config,
-    IAudioStrategy& audioStrategy,
+    IAudioBuffer& audioStrategy,
     input::IInputProvider* inputProvider,
     presentation::IPresentation* presentation,
     telemetry::ITelemetryWriter* telemetryWriter,
@@ -70,7 +70,7 @@ int runUnifiedAudioLoop(
 int runSimulation(
     const SimulationConfig& config,
     ISimulator& simulator,
-    IAudioStrategy* audioStrategy,
+    IAudioBuffer* audioStrategy,
     input::IInputProvider* inputProvider,
     presentation::IPresentation* presentation,
     telemetry::ITelemetryWriter* telemetryWriter,

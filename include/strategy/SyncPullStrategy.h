@@ -14,7 +14,7 @@
 #include <chrono>
 #include <memory>
 
-#include "strategy/IAudioStrategy.h"
+#include "strategy/IAudioBuffer.h"
 #include "strategy/AudioState.h"
 #include "strategy/Diagnostics.h"
 #include "telemetry/ITelemetryProvider.h"
@@ -31,7 +31,7 @@ class ISimulator;
  *
  * Owns its own state: AudioState, Diagnostics.
  */
-class SyncPullStrategy : public IAudioStrategy {
+class SyncPullStrategy : public IAudioBuffer {
 public:
     explicit SyncPullStrategy(ILogging* logger = nullptr,
                               telemetry::ITelemetryWriter* telemetry = nullptr);

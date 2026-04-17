@@ -1,14 +1,14 @@
-// IAudioStrategy.h - Audio strategy interface
-// Strategy pattern - abstracts audio generation strategy behavior
-// SRP: Single responsibility for audio generation strategy
+// IAudioBuffer.h - Audio buffer interface
+// Strategy pattern - abstracts audio generation behavior
+// SRP: Single responsibility for audio generation
 // OCP: New strategies can be added without modifying core code
-// DI: Strategy is injected via IAudioStrategyFactory
+// DI: Strategy is injected via IAudioBufferFactory
 //
 // Phase E: All methods take ISimulator* instead of EngineSimHandle/EngineSimAPI
 // Phase F: Moved to engine-sim-bridge submodule
 
-#ifndef IAUDIO_STRATEGY_H
-#define IAUDIO_STRATEGY_H
+#ifndef IAUDIO_BUFFER_H
+#define IAUDIO_BUFFER_H
 
 #include <memory>
 #include <string>
@@ -36,7 +36,7 @@ enum class AudioMode {
 };
 
 /**
- * IAudioStrategy - Interface for audio generation strategies
+ * IAudioBuffer - Interface for audio generation strategies
  *
  * Each strategy implements a different approach to generating audio:
  * - ThreadedStrategy: Cursor-chasing mode with separate audio thread
@@ -45,9 +45,9 @@ enum class AudioMode {
  * SRP: Strategy has single responsibility for audio generation approach
  * OCP: New strategies extend this interface without modification
  */
-class IAudioStrategy {
+class IAudioBuffer {
 public:
-    virtual ~IAudioStrategy() = default;
+    virtual ~IAudioBuffer() = default;
 
     // === Core Strategy Methods ===
 
@@ -106,13 +106,13 @@ public:
  * Factory for creating audio strategies.
  * OCP: New strategies can be added by extending the factory.
  */
-class IAudioStrategyFactory {
+class IAudioBufferFactory {
 public:
-    static std::unique_ptr<IAudioStrategy> createStrategy(
+    static std::unique_ptr<IAudioBuffer> createStrategy(
         AudioMode mode,
         ILogging* logger = nullptr,
         telemetry::ITelemetryWriter* telemetry = nullptr
     );
 };
 
-#endif // IAUDIO_STRATEGY_H
+#endif // IAUDIO_BUFFER_H
