@@ -1,6 +1,7 @@
 #include "simulator/engine_sim_bridge.h"
 #include "common/ILogging.h"
 #include "simulator/sine_wave_simulator.h"
+#include "simulator/PresetEngineFactory.h"
 
 // Core engine-sim includes
 #include "piston_engine_simulator.h"
@@ -1098,6 +1099,63 @@ EngineSimResult EngineSimLoadImpulseResponse(
         volume,
         exhaustIndex
     );
+
+    return ESIM_SUCCESS;
+}
+
+// ============================================================================
+// PRESET LOADING (for iOS and platforms without Piranha)
+// ============================================================================
+
+EngineSimResult EngineSimLoadPreset(
+    EngineSimHandle handle,
+    const char* presetPath)
+{
+    if (!validateHandle(handle)) {
+        return ESIM_ERROR_INVALID_HANDLE;
+    }
+
+    if (!presetPath || strlen(presetPath) == 0) {
+        return ESIM_ERROR_INVALID_PARAMETER;
+    }
+
+    EngineSimContext* ctx = getContext(handle);
+
+    // Bypass if simulator already has engine (e.g., SineWaveSimulator)
+    if (ctx->simulator->getEngine() != nullptr) {
+        ctx->engine = ctx->simulator->getEngine();
+        ctx->vehicle = ctx->simulator->getVehicle();
+        ctx->transmission = ctx->simulator->getTransmission();
+        ctx->throttlePosition.store(0.0, std::memory_order_relaxed);
+        return ESIM_SUCCESS;
+    }
+
+    // Load preset using factory
+    PresetLoadResult result = PresetEngineFactory::loadFromFile(presetPath);
+
+    if (!result.success()) {
+        ctx->setError("Preset load failed: " + result.error);
+        return ESIM_ERROR_LOAD_FAILED;
+    }
+
+    ctx->logger->info(LogMask::AUDIO, "Loaded preset: %s", result.presetName.c_str());
+
+    // Store engine pointers
+    ctx->engine = result.engine;
+    ctx->vehicle = result.vehicle;
+    ctx->transmission = result.transmission;
+
+    if (!ctx->engine) {
+        ctx->setError("Preset did not produce an engine");
+        return ESIM_ERROR_LOAD_FAILED;
+    }
+
+    // Load the simulation (same path as script loading)
+    ctx->simulator->loadSimulation(ctx->engine, ctx->vehicle, ctx->transmission);
+
+    ctx->logger->info(LogMask::AUDIO, "Engine: %s (%d cylinders)",
+        ctx->engine->getName().c_str(),
+        ctx->engine->getCylinderCount());
 
     return ESIM_SUCCESS;
 }

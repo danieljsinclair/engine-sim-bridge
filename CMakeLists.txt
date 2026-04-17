@@ -55,6 +55,10 @@ set(BRIDGE_SOURCES
     # Common utilities
     src/common/ConsoleLogger.cpp
     src/common/CircularBuffer.cpp
+    src/common/JsonParser.cpp
+    # Preset engine factory (JSON-based, for preset compiler output)
+    src/simulator/PresetEngineFactory.cpp
+    src/simulator/EnginePresets.cpp
 )
 
 # Platform-specific audio hardware and factory
@@ -178,6 +182,29 @@ if(NOT IOS)
 endif()
 
 # -----------------------------------------------------------------------------
+# Preset Compiler (macOS build-time tool only)
+# Compiles .mr scripts to JSON presets for iOS consumption
+# Piranha/Boost required -- not available on iOS
+# -----------------------------------------------------------------------------
+if(NOT IOS AND TARGET engine-sim-script-interpreter)
+    add_executable(engine-sim-preset-compiler tools/preset_compiler.cpp)
+    target_include_directories(engine-sim-preset-compiler
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${ENGINE_SIM_PATH}/dependencies/dr_libs
+            ${ENGINE_SIM_PATH}/include
+            ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(engine-sim-preset-compiler
+        PRIVATE
+            engine-sim
+            engine-sim-script-interpreter
+    )
+    target_compile_definitions(engine-sim-preset-compiler PRIVATE ATG_ENGINE_SIM_PIRANHA_ENABLED)
+endif()
+
+# -----------------------------------------------------------------------------
 # Unit tests (bridge owns its own tests)
 # Standalone build: `make test` works directly
 # As CLI subdirectory: CLI registers bridge_unit_tests with its own CTest
@@ -217,6 +244,33 @@ if(BUILD_BRIDGE_TESTS)
 
     if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME bridge_unit_tests COMMAND bridge_unit_tests --gtest_color=yes)
+    endif()
+
+    # Preset engine tests - verifies C++ factory engines match Piranha scripts
+    # Off by default until Task #100/#101 deliver the factory implementations
+    option(BUILD_PRESET_ENGINE_TESTS "Build preset engine tests" OFF)
+    if(BUILD_PRESET_ENGINE_TESTS)
+        add_executable(preset_engine_tests
+            test/PresetEngineTests.cpp
+        )
+        target_include_directories(preset_engine_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${ENGINE_SIM_PATH}/include
+        )
+        target_compile_definitions(preset_engine_tests PRIVATE
+            TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
+        )
+        target_link_libraries(preset_engine_tests
+            PRIVATE
+                GTest::gtest_main
+                engine-sim-bridge
+        )
+        if(ENGINE_SIM_PIRANHA_ENABLED)
+            target_compile_definitions(preset_engine_tests PRIVATE ENGINE_SIM_PIRANHA_ENABLED)
+        endif()
+        if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+            add_test(NAME preset_engine_tests COMMAND preset_engine_tests --gtest_color=yes)
+        endif()
     endif()
 
     # iOS adapter tests - only built when AudioBufferView and
