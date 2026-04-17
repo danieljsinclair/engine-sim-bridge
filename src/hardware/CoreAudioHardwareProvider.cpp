@@ -314,7 +314,7 @@ OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
         return noErr;  // Should not happen if properly initialized
     }
 
-    // Convert CoreAudio buffer to platform-agnostic AudioBufferDescriptor
+    // Convert CoreAudio buffer to platform-agnostic AudioBufferView
     float* audioData = ioData->mNumberBuffers > 0
         ? static_cast<float*>(ioData->mBuffers[0].mData)
         : nullptr;
@@ -322,7 +322,7 @@ OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
         ? static_cast<int>(ioData->mBuffers[0].mNumberChannels)
         : 2;
 
-    AudioBufferDescriptor buffer(audioData, static_cast<int>(numberFrames), channels);
+    AudioBufferView buffer(audioData, static_cast<int>(numberFrames), channels);
 
     // Suppress CoreAudio parameters we don't use
     (void)actionFlags;

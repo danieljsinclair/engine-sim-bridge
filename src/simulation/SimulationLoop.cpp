@@ -71,12 +71,13 @@ struct LoopTimer {
     }
 };
 
-// Named audio render callback -- bridges AudioBufferDescriptor to strategy->render()
-int audioRenderCallback(IAudioBuffer* strategy, AudioBufferDescriptor& buffer) {
+// Named audio render callback -- bridges AudioBufferView to strategy->render()
+int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer) {
     if (!strategy->isPlaying()) {
-        if (buffer.buffer) {
+        float* dst = buffer.asFloat();
+        if (dst) {
             size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
-            std::memset(buffer.buffer, 0, totalSamples * sizeof(float));
+            std::memset(dst, 0, totalSamples * sizeof(float));
         }
         return 0;
     }
@@ -412,7 +413,7 @@ int runSimulation(
     }
 
     // Create and initialize audio hardware provider (throws on failure)
-    auto callback = [audioBuffer](AudioBufferDescriptor& buffer) -> int {
+    auto callback = [audioBuffer](AudioBufferView& buffer) -> int {
         return audioRenderCallback(audioBuffer, buffer);
     };
 

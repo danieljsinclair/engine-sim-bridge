@@ -294,7 +294,7 @@ bool AVAudioEngineHardwareProvider::createSourceNode() {
 
         // Invoke user-provided callback if registered
         if (audioCallback_) {
-            AudioBufferDescriptor descriptor(channelData, static_cast<int>(frameCount), format_.channels);
+            AudioBufferView descriptor(channelData, static_cast<int>(frameCount), format_.channels);
             audioCallback_(descriptor);
         } else {
             // Fill with silence if no callback registered

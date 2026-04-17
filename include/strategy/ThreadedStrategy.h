@@ -40,7 +40,7 @@ public:
     bool isEnabled() const override;
     bool isPlaying() const override;
 
-    bool render(AudioBufferDescriptor& buffer) override;
+    bool render(AudioBufferView& buffer) override;
     bool AddFrames(float* buffer, int frameCount) override;
 
     // Lifecycle Methods

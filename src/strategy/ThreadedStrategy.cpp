@@ -189,8 +189,9 @@ void ThreadedStrategy::updateSimulation(ISimulator* simulator, double deltaTimeM
     }
 }
 
-bool ThreadedStrategy::render(AudioBufferDescriptor& buffer) {
-    if (!buffer.buffer) {
+bool ThreadedStrategy::render(AudioBufferView& buffer) {
+    float* dst = buffer.asFloat();
+    if (!dst) {
         return false;
     }
 
@@ -203,14 +204,14 @@ bool ThreadedStrategy::render(AudioBufferDescriptor& buffer) {
 
     if (framesToRead <= 0) {
         size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
-        std::memset(buffer.buffer, 0, totalSamples * sizeof(float));
+        std::memset(dst, 0, totalSamples * sizeof(float));
         updateDiagnostics(0, buffer.frameCount);
         diagnostics_.recordRender(0.0, 0, buffer.frameCount);
         publishAudioTiming();
         return true;
     }
 
-    circularBuffer_.read(buffer.buffer, framesToRead);
+    circularBuffer_.read(dst, framesToRead);
 
     updateDiagnostics(availableFrames, buffer.frameCount);
     diagnostics_.recordRender(0.0, framesToRead, buffer.frameCount);

@@ -219,7 +219,7 @@ if(BUILD_BRIDGE_TESTS)
         add_test(NAME bridge_unit_tests COMMAND bridge_unit_tests --gtest_color=yes)
     endif()
 
-    # iOS adapter tests - only built when AudioBufferDescriptor and
+    # iOS adapter tests - only built when AudioBufferView and
     # AVAudioEngineHardwareProvider headers exist (after Phase 1 and Phase 2)
     option(BUILD_IOS_ADAPTER_TESTS "Build iOS adapter tests" OFF)
     if(BUILD_IOS_ADAPTER_TESTS)

@@ -1,22 +1,17 @@
-// iOSAdapterTests.cpp - TDD RED-phase tests for iOS audio adapter
+// iOSAdapterTests.cpp - TDD tests for iOS audio adapter
 //
-// Purpose: Test the AudioBufferDescriptor and AVAudioEngineHardwareProvider
+// Purpose: Test the AudioBufferView and AVAudioEngineHardwareProvider
 // that enable the engine-sim-bridge to run on iOS.
 //
-// RED PHASE: These tests will NOT compile until:
-//   - Phase 1: AudioBufferDescriptor exists (replaces CoreAudio AudioBufferList)
-//   - Phase 2: AVAudioEngineHardwareProvider exists (implements IAudioHardwareProvider)
+// Architecture:
+//   Group 1: AudioBufferView (pure C++, runs everywhere)
+//   Groups 2-6: AVAudioEngineHardwareProvider (iOS only, behind TARGET_OS_IPHONE)
 //
-// Test count target: 15 (cut from 29 for value over volume)
+// Build: cmake -DBUILD_IOS_ADAPTER_TESTS=ON
+//   macOS: Only Group 1 tests compile/run (3 tests)
+//   iOS: All 15 tests compile/run
 //
-// Layers tested:
-//   Layer 1: AVAudioEngineHardwareProvider lifecycle and playback
-//   Layer 3: Full pipeline integration with real engine (sine mode)
-//   Layer 4: Callback stress tests (shutdown race, rapid start/stop)
-//
-// NOT tested here (will be separate files):
-//   Layer 2: ObjC++ wrapper tests (needs Swift/ObjC++ interop)
-// Phase G: Uses AudioBufferDescriptor + simplified AudioCallback signature
+// Phase G: Uses AudioBufferView + simplified AudioCallback signature
 
 #include <gtest/gtest.h>
 #include <memory>
@@ -27,52 +22,55 @@
 #include <cmath>
 #include <cstring>
 
-// Phase 1 header
+// Phase 1 header - platform-agnostic buffer type
 #include "hardware/AudioTypes.h"
 
-// Phase 2 header -- does not exist yet (RED phase)
+// Phase 2 header - iOS hardware provider (declaration always visible,
+// but implementation only exists when compiled for iOS)
 #include "hardware/AVAudioEngineHardwareProvider.h"
 
-// Existing headers that DO exist
+// Shared headers
 #include "hardware/IAudioHardwareProvider.h"
+#include "common/ILogging.h"
+
+#if TARGET_OS_IPHONE
 #include "simulator/ISimulator.h"
 #include "simulator/BridgeSimulator.h"
 #include "strategy/IAudioBuffer.h"
 #include "strategy/SyncPullStrategy.h"
 #include "strategy/ThreadedStrategy.h"
 #include "simulator/engine_sim_bridge.h"
-#include "common/ILogging.h"
+#endif
 
 // ============================================================================
-// GROUP 1: AudioBufferDescriptor construction and data access (Phase 1)
+// GROUP 1: AudioBufferView construction and data access
 //
-// AudioBufferDescriptor replaces the CoreAudio AudioBufferList dependency.
-// It provides a platform-agnostic buffer descriptor that IAudioBuffer::render()
-// uses instead of AudioBufferList*.
+// Pure C++ tests -- no platform dependencies.
+// These run on macOS, iOS, and any other platform.
 // ============================================================================
 
-class AudioBufferDescriptorTest : public ::testing::Test {
+class AudioBufferViewTest : public ::testing::Test {
 protected:
     void SetUp() override {}
     void TearDown() override {}
 };
 
-TEST_F(AudioBufferDescriptorTest, ConstructsWithValidParams) {
+TEST_F(AudioBufferViewTest, ConstructsWithValidParams) {
     // Arrange: Create a buffer descriptor for 256 stereo float frames
     const int frames = 256;
     const int channels = 2;
     std::vector<float> buffer(frames * channels, 0.0f);
 
     // Act
-    AudioBufferDescriptor desc(buffer.data(), frames, channels);
+    AudioBufferView desc(buffer.data(), frames, channels);
 
-    // Assert: Data pointer is valid
-    EXPECT_NE(desc.buffer, nullptr);
+    // Assert
+    EXPECT_NE(desc.asFloat(), nullptr);
     EXPECT_EQ(desc.frameCount, frames);
     EXPECT_EQ(desc.channelCount, channels);
 }
 
-TEST_F(AudioBufferDescriptorTest, DataPointerMatchesProvidedBuffer) {
+TEST_F(AudioBufferViewTest, DataPointerMatchesProvidedBuffer) {
     // Arrange
     const int frames = 128;
     const int channels = 2;
@@ -80,29 +78,36 @@ TEST_F(AudioBufferDescriptorTest, DataPointerMatchesProvidedBuffer) {
     float* expectedPtr = buffer.data();
 
     // Act
-    AudioBufferDescriptor desc(expectedPtr, frames, channels);
+    AudioBufferView desc(expectedPtr, frames, channels);
 
     // Assert: The descriptor references the same memory
-    EXPECT_EQ(desc.buffer, expectedPtr);
+    EXPECT_EQ(desc.asFloat(), expectedPtr);
 }
 
-TEST_F(AudioBufferDescriptorTest, SampleCountEqualsFramesTimesChannels) {
+TEST_F(AudioBufferViewTest, SampleCountEqualsFramesTimesChannels) {
     // Arrange
     const int frames = 64;
     const int channels = 2;
 
     std::vector<float> buffer(frames * channels, 0.0f);
-    AudioBufferDescriptor desc(buffer.data(), frames, channels);
+    AudioBufferView desc(buffer.data(), frames, channels);
 
-    // Assert
+    // Assert: Total sample count is frames * channels
     EXPECT_EQ(desc.frameCount * desc.channelCount, frames * channels);
 }
 
 // ============================================================================
-// GROUP 2: AVAudioEngineHardwareProvider lifecycle (Phase 2)
+// GROUPS 2-6: AVAudioEngineHardwareProvider tests (iOS only)
 //
-// AVAudioEngineHardwareProvider implements IAudioHardwareProvider using
-// iOS AVAudioEngine. Tests verify lifecycle, playback, and callback wiring.
+// These tests require AVAudioEngineHardwareProvider implementation which
+// is only compiled for iOS targets (TARGET_OS_IPHONE). On macOS they
+// are compiled away to avoid linker errors.
+// ============================================================================
+
+#if TARGET_OS_IPHONE
+
+// ============================================================================
+// GROUP 2: AVAudioEngineHardwareProvider lifecycle
 // ============================================================================
 
 class AVAudioEngineProviderTest : public ::testing::Test {
@@ -157,10 +162,9 @@ TEST_F(AVAudioEngineProviderTest, StartPlayback_AfterInit_Succeeds) {
     ASSERT_TRUE(provider_->initialize(format));
 
     // Register a silence-producing callback (required before start)
-    auto callback = [](AudioBufferDescriptor& buffer) -> int {
-        // Fill silence
-        if (buffer.buffer) {
-            std::memset(buffer.buffer, 0,
+    auto callback = [](AudioBufferView& buffer) -> int {
+        if (buffer.asFloat()) {
+            std::memset(buffer.asFloat(), 0,
                         static_cast<size_t>(buffer.frameCount) * buffer.channelCount * sizeof(float));
         }
         return 0;
@@ -187,9 +191,9 @@ TEST_F(AVAudioEngineProviderTest, StopPlayback_StopsCallbackThread) {
     format.isInterleaved = true;
     ASSERT_TRUE(provider_->initialize(format));
 
-    auto callback = [](AudioBufferDescriptor& buffer) -> int {
-        if (buffer.buffer) {
-            std::memset(buffer.buffer, 0, 512 * 2 * sizeof(float));
+    auto callback = [](AudioBufferView& buffer) -> int {
+        if (buffer.asFloat()) {
+            std::memset(buffer.asFloat(), 0, 512 * 2 * sizeof(float));
         }
         return 0;
     };
@@ -227,10 +231,6 @@ TEST_F(AVAudioEngineProviderTest, SetVolume_ClampsToRange) {
 
 // ============================================================================
 // GROUP 3: Callback wiring -- the critical tests
-//
-// These tests prove the AudioUnit/AVAudioEngine pipeline is correctly wired.
-// They register a callback and verify it actually gets invoked by the
-// hardware with real frame data.
 // ============================================================================
 
 TEST_F(AVAudioEngineProviderTest, CallbackReceivesFrames_WhenPlaybackStarted) {
@@ -247,13 +247,13 @@ TEST_F(AVAudioEngineProviderTest, CallbackReceivesFrames_WhenPlaybackStarted) {
     std::atomic<int> callbackCount{0};
     std::atomic<int> lastFrameCount{0};
 
-    auto callback = [&callbackCount, &lastFrameCount](AudioBufferDescriptor& buffer) -> int {
+    auto callback = [&callbackCount, &lastFrameCount](AudioBufferView& buffer) -> int {
         callbackCount.fetch_add(1);
         lastFrameCount.store(buffer.frameCount);
 
         // Fill silence
-        if (buffer.buffer) {
-            std::memset(buffer.buffer, 0,
+        if (buffer.asFloat()) {
+            std::memset(buffer.asFloat(), 0,
                         static_cast<size_t>(buffer.frameCount) * buffer.channelCount * sizeof(float));
         }
         return 0;
@@ -292,12 +292,11 @@ TEST_F(AVAudioEngineProviderTest, CallbackBufferIsWritable) {
     std::atomic<bool> bufferWasValid{false};
     std::atomic<bool> writeSucceeded{false};
 
-    auto callback = [&bufferWasValid, &writeSucceeded](AudioBufferDescriptor& buffer) -> int {
-        // Verify buffer is valid
-        if (buffer.buffer) {
+    auto callback = [&bufferWasValid, &writeSucceeded](AudioBufferView& buffer) -> int {
+        if (buffer.asFloat()) {
             bufferWasValid.store(true);
             // Try to write to the buffer
-            std::memset(buffer.buffer, 0,
+            std::memset(buffer.asFloat(), 0,
                         static_cast<size_t>(buffer.frameCount) * buffer.channelCount * sizeof(float));
             writeSucceeded.store(true);
         }
@@ -319,10 +318,6 @@ TEST_F(AVAudioEngineProviderTest, CallbackBufferIsWritable) {
 
 // ============================================================================
 // GROUP 4: Full pipeline integration with real engine (sine mode)
-//
-// These tests wire together real components: BridgeSimulator (sine mode),
-// SyncPullStrategy or ThreadedStrategy, and AVAudioEngineHardwareProvider.
-// They prove the entire Holy Trinity pipeline works on iOS.
 // ============================================================================
 
 class iOSPipelineIntegrationTest : public ::testing::Test {
@@ -380,17 +375,17 @@ TEST_F(iOSPipelineIntegrationTest, SineModeProducesAudio) {
     std::atomic<bool> gotNonSilentAudio{false};
     BridgeSimulator* simPtr = simulator.get();
 
-    auto callback = [&gotNonSilentAudio, simPtr](AudioBufferDescriptor& buffer) -> int {
-        if (!buffer.buffer) return 0;
+    auto callback = [&gotNonSilentAudio, simPtr](AudioBufferView& buffer) -> int {
+        if (!buffer.asFloat()) return 0;
 
         // Advance simulation and render
         int32_t written = 0;
-        simPtr->renderOnDemand(buffer.buffer, buffer.frameCount, &written);
+        simPtr->renderOnDemand(buffer.asFloat(), buffer.frameCount, &written);
 
         if (written > 0) {
             // Check if non-silent
             for (int i = 0; i < written * 2; ++i) {
-                if (std::abs(buffer.buffer[i]) > 1e-6f) {
+                if (std::abs(buffer.asFloat()[i]) > 1e-6f) {
                     gotNonSilentAudio.store(true);
                     break;
                 }
@@ -433,9 +428,9 @@ TEST_F(iOSPipelineIntegrationTest, CleanShutdownAfterPlayback) {
     format.isInterleaved = true;
     ASSERT_TRUE(hardware_->initialize(format));
 
-    auto callback = [](AudioBufferDescriptor& buffer) -> int {
-        if (buffer.buffer) {
-            std::memset(buffer.buffer, 0, 512 * 2 * sizeof(float));
+    auto callback = [](AudioBufferView& buffer) -> int {
+        if (buffer.asFloat()) {
+            std::memset(buffer.asFloat(), 0, 512 * 2 * sizeof(float));
         }
         return 0;
     };
@@ -481,19 +476,14 @@ TEST_F(iOSPipelineIntegrationTest, SyncPullAndThreadedBothWork) {
         ASSERT_TRUE(hw->initialize(format));
 
         std::atomic<bool> callbackFired{false};
-        auto cb = [&callbackFired](AudioBufferDescriptor& buffer) -> int {
+        auto cb = [&callbackFired](AudioBufferView& buffer) -> int {
             (void)buffer;
             callbackFired.store(true);
             return 0;
         };
         ASSERT_TRUE(hw->registerAudioCallback(cb));
 
-        if (std::string(mode) == "SyncPull") {
-            ASSERT_TRUE(strategy->startPlayback(simulator.get()));
-        } else {
-            ASSERT_TRUE(strategy->startPlayback(simulator.get()));
-        }
-
+        ASSERT_TRUE(strategy->startPlayback(simulator.get()));
         ASSERT_TRUE(hw->startPlayback());
 
         // Wait for callback
@@ -515,8 +505,6 @@ TEST_F(iOSPipelineIntegrationTest, SyncPullAndThreadedBothWork) {
 
 // ============================================================================
 // GROUP 5: Callback stress tests
-//
-// These tests catch race conditions and resource leaks.
 // ============================================================================
 
 class iOSCallbackStressTest : public ::testing::Test {
@@ -547,10 +535,10 @@ TEST_F(iOSCallbackStressTest, CallbackDoesNotDeadlock_WhenStopPlaybackCalledFrom
     std::atomic<int> callbackCount{0};
     IAudioHardwareProvider* providerPtr = provider.get();
 
-    auto callback = [&callbackCount, providerPtr](AudioBufferDescriptor& buffer) -> int {
+    auto callback = [&callbackCount, providerPtr](AudioBufferView& buffer) -> int {
         // Fill silence
-        if (buffer.buffer) {
-            std::memset(buffer.buffer, 0,
+        if (buffer.asFloat()) {
+            std::memset(buffer.asFloat(), 0,
                         static_cast<size_t>(buffer.frameCount) * buffer.channelCount * sizeof(float));
         }
 
@@ -595,9 +583,9 @@ TEST_F(iOSCallbackStressTest, RapidStartStopCycle_DoesNotLeakOrCrash) {
     format.isInterleaved = true;
     ASSERT_TRUE(provider->initialize(format));
 
-    auto callback = [](AudioBufferDescriptor& buffer) -> int {
-        if (buffer.buffer) {
-            std::memset(buffer.buffer, 0,
+    auto callback = [](AudioBufferView& buffer) -> int {
+        if (buffer.asFloat()) {
+            std::memset(buffer.asFloat(), 0,
                         static_cast<size_t>(buffer.frameCount) * buffer.channelCount * sizeof(float));
         }
         return 0;
@@ -622,10 +610,7 @@ TEST_F(iOSCallbackStressTest, RapidStartStopCycle_DoesNotLeakOrCrash) {
 }
 
 // ============================================================================
-// GROUP 6: ObjC++ wrapper lifecycle (Layer 2 subset)
-//
-// These tests verify the wrapper creates and destroys components correctly.
-// Full Layer 2 tests will be in a separate file when the wrapper is implemented.
+// GROUP 6: ObjC++ wrapper lifecycle (destructor safety)
 // ============================================================================
 
 TEST_F(AVAudioEngineProviderTest, DestroyWhilePlaying_DoesNotCrash) {
@@ -639,9 +624,9 @@ TEST_F(AVAudioEngineProviderTest, DestroyWhilePlaying_DoesNotCrash) {
     format.isInterleaved = true;
     ASSERT_TRUE(provider->initialize(format));
 
-    auto callback = [](AudioBufferDescriptor& buffer) -> int {
-        if (buffer.buffer) {
-            std::memset(buffer.buffer, 0,
+    auto callback = [](AudioBufferView& buffer) -> int {
+        if (buffer.asFloat()) {
+            std::memset(buffer.asFloat(), 0,
                         static_cast<size_t>(buffer.frameCount) * buffer.channelCount * sizeof(float));
         }
         return 0;
@@ -656,3 +641,5 @@ TEST_F(AVAudioEngineProviderTest, DestroyWhilePlaying_DoesNotCrash) {
     // Assert: Reaching here without crash or deadlock is success
     SUCCEED();
 }
+
+#endif // TARGET_OS_IPHONE

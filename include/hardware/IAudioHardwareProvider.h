@@ -157,7 +157,7 @@ public:
      *
      * Return value: Platform-specific status code (0 for success)
      */
-    using AudioCallback = std::function<int(AudioBufferDescriptor& buffer)>;
+    using AudioCallback = std::function<int(AudioBufferView& buffer)>;
 
     /**
      * Register audio rendering callback

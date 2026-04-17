@@ -62,7 +62,7 @@ public:
      * Render audio to the provided buffer.
      * Called by the real-time audio callback.
      */
-    virtual bool render(AudioBufferDescriptor& buffer) = 0;
+    virtual bool render(AudioBufferView& buffer) = 0;
 
     /**
      * Add frames to the strategy's internal buffer.

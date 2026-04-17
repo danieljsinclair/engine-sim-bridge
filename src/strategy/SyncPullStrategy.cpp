@@ -122,14 +122,15 @@ void SyncPullStrategy::updateSimulation(ISimulator* simulator, double deltaTimeM
     // Sync-pull mode updates simulation during render callback
 }
 
-bool SyncPullStrategy::render(AudioBufferDescriptor& buffer) {
-    if (!buffer.buffer) {
+bool SyncPullStrategy::render(AudioBufferView& buffer) {
+    float* dst = buffer.asFloat();
+    if (!dst) {
         return false;
     }
 
     if (!simulator_ || shuttingDown_.load()) {
         // Fill silence on shutdown or null simulator to prevent crackles
-        EngineSimAudio::fillSilence(buffer.buffer, buffer.frameCount);
+        EngineSimAudio::fillSilence(dst, buffer.frameCount);
         return true;
     }
 
@@ -140,20 +141,19 @@ bool SyncPullStrategy::render(AudioBufferDescriptor& buffer) {
     int framesToGenerate = buffer.frameCount;
     int framesRendered = 0;
 
-    float* audioData = buffer.buffer;
     int remainingFrames = framesToGenerate;
 
     while (remainingFrames > 0 && framesRendered < framesToGenerate && !shuttingDown_.load()) {
         int32_t framesWritten = 0;
         bool result = simulator_->renderOnDemand(
-            audioData + (framesRendered * 2),
+            dst + (framesRendered * 2),
             remainingFrames,
             &framesWritten
         );
 
         if (!result) {
             logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed, filling silence");
-            EngineSimAudio::fillSilence(audioData, framesToGenerate);
+            EngineSimAudio::fillSilence(dst, framesToGenerate);
             return true;
         }
 
@@ -172,14 +172,14 @@ bool SyncPullStrategy::render(AudioBufferDescriptor& buffer) {
             while (retryCount < MAX_RETRIES && !shuttingDown_.load()) {
                 simulator_->update(1.0 / 48000.0);  // One sample period to feed synthesizer
                 result = simulator_->renderOnDemand(
-                    audioData + (framesRendered * 2),
+                    dst + (framesRendered * 2),
                     remainingFrames,
                     &framesWritten
                 );
 
                 if (!result) {
                     logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed during retry, filling silence");
-                    EngineSimAudio::fillSilence(audioData, framesToGenerate);
+                    EngineSimAudio::fillSilence(dst, framesToGenerate);
                     return true;
                 }
 
@@ -202,7 +202,7 @@ bool SyncPullStrategy::render(AudioBufferDescriptor& buffer) {
 
     // Fill remaining buffer with silence on partial render to prevent crackles
     if (framesRendered < framesToGenerate) {
-        float* remaining = audioData + (framesRendered * 2);
+        float* remaining = dst + (framesRendered * 2);
         EngineSimAudio::fillSilence(remaining, framesToGenerate - framesRendered);
     }
 
