@@ -21,6 +21,7 @@
 #include "combustion_chamber.h"
 #include "fuel.h"
 #include "function.h"
+#include "gas_system.h"
 #include "units.h"
 #include "throttle.h"
 #include "direct_throttle_linkage.h"
@@ -33,16 +34,56 @@
 using json::JsonValue;
 
 // ============================================================================
-// Helper: Create a default port flow function (linear flow vs valve lift)
-// Used when the preset compiler doesn't serialize port flow data.
-// Models a simple linear port flow: flow = lift * maxFlowRate
+// Helper: Create a default port flow function
+// Models a typical small engine head with flow_attenuation ~2.0
+// Flow values are in k_28inH2O units (GasSystem flow constants)
+// Lift values are in meters (matching cam lobe output)
+// This matches the generic_small_engine_head(flow_attenuation=2.0) from .mr scripts
 static Function* createDefaultPortFlow() {
+    // Approximate a generic small engine head port flow curve
+    // Values match what .mr scripts generate via generic_small_engine_head
+    const double lifts[] = {
+        0, 0.00127, 0.00254, 0.00381, 0.00508,
+        0.00635, 0.00762, 0.00889, 0.01016, 0.01143,
+        0.01270, 0.01397, 0.01524, 0.01651, 0.01778
+    };
+    // Flow in k_28inH2O units, scaled by flow_attenuation=2.0
+    const double intakeBase[] = {
+        0, 25, 75, 100, 130, 180, 190, 220, 240, 250, 260, 260, 260, 255, 250
+    };
+    const double exhaustBase[] = {
+        0, 25, 50, 75, 100, 125, 160, 175, 180, 190, 200, 205, 210, 210, 210
+    };
+    const double attenuation = 2.0;
+    const int count = 15;
+
     Function* fn = new Function;
-    fn->initialize(4, 1);
-    fn->addSample(0.0, 0.0);      // zero lift = zero flow
-    fn->addSample(0.003, 0.001);   // low lift
-    fn->addSample(0.006, 0.003);   // mid lift
-    fn->addSample(0.009, 0.005);   // max lift = max flow
+    fn->initialize(count, 0);
+    for (int i = 0; i < count; ++i) {
+        double flowK = GasSystem::k_28inH2O(intakeBase[i] * attenuation);
+        fn->addSample(lifts[i], flowK);
+    }
+    return fn;
+}
+
+static Function* createDefaultExhaustPortFlow() {
+    const double lifts[] = {
+        0, 0.00127, 0.00254, 0.00381, 0.00508,
+        0.00635, 0.00762, 0.00889, 0.01016, 0.01143,
+        0.01270, 0.01397, 0.01524, 0.01651, 0.01778
+    };
+    const double exhaustBase[] = {
+        0, 25, 50, 75, 100, 125, 160, 175, 180, 190, 200, 205, 210, 210, 210
+    };
+    const double attenuation = 2.0;
+    const int count = 15;
+
+    Function* fn = new Function;
+    fn->initialize(count, 0);
+    for (int i = 0; i < count; ++i) {
+        double flowK = GasSystem::k_28inH2O(exhaustBase[i] * attenuation);
+        fn->addSample(lifts[i], flowK);
+    }
     return fn;
 }
 // ============================================================================
@@ -197,12 +238,40 @@ PresetLoadResult PresetEngineFactory::loadFromString(const std::string& jsonCont
                 Intake* intake = engine->getIntake(static_cast<int>(i));
 
                 Intake::Parameters inParams;
-                inParams.volume = 0;  // Volume derived from CrossSectionArea * runner length
                 inParams.CrossSectionArea = inJson["plenumCrossSectionArea"].numberOr(0);
                 inParams.RunnerFlowRate = inJson["runnerFlowRate"].numberOr(0);
                 inParams.RunnerLength = inJson["runnerLength"].numberOr(0);
                 inParams.VelocityDecay = inJson["velocityDecay"].numberOr(0.5);
-                inParams.InputFlowK = 0;
+                inParams.IdleThrottlePlatePosition = inJson["idleThrottlePlatePosition"].numberOr(0.993);
+                inParams.IdleFlowK = inJson.has("idleFlowRate")
+                    ? inJson["idleFlowRate"].asNumber()
+                    : GasSystem::k_carb(0.0);
+
+                // InputFlowK: the flow rate of air into the plenum from atmosphere.
+                // CRITICAL: This must be non-zero or the engine suffocates (NaN in gas system).
+                // The preset compiler doesn't serialize this, so we derive it:
+                // - If explicitly in JSON, use that value
+                // - Otherwise, use the same flow rate as RunnerFlowRate (typical for carb engines)
+                //   The .mr scripts typically set intake_flow_rate = k_carb(100..800)
+                if (inJson.has("inputFlowK")) {
+                    inParams.InputFlowK = inJson["inputFlowK"].asNumber();
+                } else if (inJson.has("intakeFlowRate")) {
+                    inParams.InputFlowK = inJson["intakeFlowRate"].asNumber();
+                } else {
+                    // Default: use runner flow rate as a reasonable approximation
+                    // k_carb(100) ~ 0.00637 which is a typical intake flow rate
+                    inParams.InputFlowK = (inParams.RunnerFlowRate > 0)
+                        ? inParams.RunnerFlowRate
+                        : GasSystem::k_carb(100.0);
+                }
+
+                // Plenum volume: read from JSON if available, otherwise use sensible default
+                if (inJson.has("plenumVolume")) {
+                    inParams.volume = inJson["plenumVolume"].numberOr(0);
+                } else {
+                    // Use 1.5L default (common for small engines, matches TRX520 script)
+                    inParams.volume = units::volume(1.5, units::L);
+                }
                 intake->initialize(inParams);
             }
         }
@@ -348,7 +417,7 @@ PresetLoadResult PresetEngineFactory::loadFromString(const std::string& jsonCont
                     if (headJson.has("exhaustPortFlowSamples")) {
                         hParams.ExhaustPortFlow = reconstructFunction(headJson["exhaustPortFlowSamples"]);
                     } else {
-                        hParams.ExhaustPortFlow = createDefaultPortFlow();
+                        hParams.ExhaustPortFlow = createDefaultExhaustPortFlow();
                     }
 
                     head->initialize(hParams);
@@ -409,12 +478,27 @@ PresetLoadResult PresetEngineFactory::loadFromString(const std::string& jsonCont
 
         Function* timingCurve = new Function;
         timingCurve->initialize(10, 1);
-        timingCurve->addSample(0, 0.349066);
-        timingCurve->addSample(523.599, 0.523599);
+        // Typical timing curve: 12 deg at idle, ramping to 35 deg at high RPM
+        // X-axis: crankshaft angular velocity (rad/s), Y-axis: advance angle (rad)
+        timingCurve->addSample(0, units::degrees(12.0));               // 0 RPM
+        timingCurve->addSample(units::rpm(1000.0), units::degrees(12.0));  // 1000 RPM
+        timingCurve->addSample(units::rpm(2000.0), units::degrees(20.0));  // 2000 RPM
+        timingCurve->addSample(units::rpm(3000.0), units::degrees(35.0));  // 3000 RPM
+        timingCurve->addSample(units::rpm(4000.0), units::degrees(35.0));  // 4000 RPM
         igParams.timingCurve = timingCurve;
-        igParams.revLimit = engine->getRedline() * 1.1;
+        igParams.revLimit = engine->getRedline() * 1.15;
         igParams.limiterDuration = 0.1;
         ignition->initialize(igParams);
+
+        // Set firing order: each cylinder fires once per 4-stroke cycle (4*pi rad).
+        // For a single bank, evenly space cylinders across the cycle.
+        // For a single-cylinder engine, angle = 0 (fires at TDC).
+        const double fourPi = 4.0 * constants::pi;
+        for (int i = 0; i < engine->getCylinderCount(); i++) {
+            double firingAngle = (static_cast<double>(i) /
+                static_cast<double>(engine->getCylinderCount())) * fourPi;
+            ignition->setFiringOrder(i, firingAngle);
+        }
 
         // --- Combustion chambers ---
         Function* turbFn = new Function;
@@ -434,6 +518,7 @@ PresetLoadResult PresetEngineFactory::loadFromString(const std::string& jsonCont
             ccParams.Piston = engine->getPiston(i);
             ccParams.Head = engine->getHead(ccParams.Piston->getCylinderBank()->getIndex());
             engine->getChamber(i)->initialize(ccParams);
+            engine->getChamber(i)->setEngine(engine);
         }
 
         engine->calculateDisplacement();
@@ -478,6 +563,16 @@ PresetLoadResult PresetEngineFactory::loadFromString(const std::string& jsonCont
     }
 
     return result;
+}
+
+PresetLoadResult PresetEngineFactory::loadFromJson(const char* jsonContent, size_t jsonSize) {
+    if (!jsonContent || jsonSize == 0) {
+        PresetLoadResult result;
+        result.error = "Null or empty JSON content";
+        return result;
+    }
+    std::string content(jsonContent, jsonSize);
+    return loadFromString(content, "<json>");
 }
 
 // Static configure methods delegate to the inline code in loadFromString
