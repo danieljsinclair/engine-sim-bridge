@@ -11,8 +11,6 @@
 #include <string>
 #include <memory>
 #include <chrono>
-#include <AudioUnit/AudioUnit.h>
-#include <AudioToolbox/AudioToolbox.h>
 
 #include "strategy/IAudioBuffer.h"
 #include "common/CircularBuffer.h"
@@ -42,7 +40,7 @@ public:
     bool isEnabled() const override;
     bool isPlaying() const override;
 
-    bool render(AudioBufferList* ioData, UInt32 numberFrames) override;
+    bool render(AudioBufferDescriptor& buffer) override;
     bool AddFrames(float* buffer, int frameCount) override;
 
     // Lifecycle Methods

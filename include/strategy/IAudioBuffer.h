@@ -14,9 +14,7 @@
 #include <string>
 #include <atomic>
 
-#include <AudioUnit/AudioUnit.h>
-#include <AudioToolbox/AudioToolbox.h>
-
+#include "hardware/AudioTypes.h"
 #include "common/ILogging.h"
 
 class ISimulator;
@@ -61,13 +59,10 @@ public:
     virtual bool isPlaying() const = 0;
 
     /**
-     * Render audio to the provided buffer list.
+     * Render audio to the provided buffer.
      * Called by the real-time audio callback.
      */
-    virtual bool render(
-        AudioBufferList* ioData,
-        UInt32 numberFrames
-    ) = 0;
+    virtual bool render(AudioBufferDescriptor& buffer) = 0;
 
     /**
      * Add frames to the strategy's internal buffer.

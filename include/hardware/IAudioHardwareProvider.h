@@ -12,9 +12,10 @@
 #include <memory>
 #include <cstdint>
 
+#include "hardware/AudioTypes.h"
+
 // Forward declarations
 struct AudioStreamFormat;
-struct PlatformAudioBufferList;
 
 /**
  * Audio format specification (platform-agnostic)
@@ -30,23 +31,6 @@ struct AudioStreamFormat {
     AudioStreamFormat()
         : sampleRate(44100), channels(2), bitsPerSample(32),
           isFloat(true), isInterleaved(true) {}
-};
-
-/**
- * Audio buffer list wrapper (platform-agnostic)
- * Used for audio rendering callbacks
- */
-struct PlatformAudioBufferList {
-    int numberBuffers;                    // Number of buffers
-    void* buffers;                       // Platform-specific buffer array
-    int* bufferSizes;                  // Array of buffer sizes in bytes
-    int* bufferChannels;                // Array of channel counts per buffer
-    void** bufferData;                   // Array of data pointers
-
-    PlatformAudioBufferList()
-        : numberBuffers(0), buffers(nullptr),
-          bufferSizes(nullptr), bufferChannels(nullptr),
-          bufferData(nullptr) {}
 };
 
 /**
@@ -169,19 +153,11 @@ public:
      *
      * Platform implementations call this callback when audio hardware needs samples.
      *
-     * @param refCon Reference to connection (platform-specific context)
-     * @param actionFlags Action flags (platform-specific)
-     * @param timeStamp Timestamp of callback
-     * @param busNumber Bus number (for multi-bus scenarios)
-     * @param numberFrames Number of audio frames requested
-     * @param ioData Audio buffer list to fill with samples
+     * @param buffer Platform-agnostic audio buffer descriptor to fill with samples
      *
      * Return value: Platform-specific status code (0 for success)
      */
-    using AudioCallback = std::function<int(void* refCon, void* actionFlags,
-                                           const void* timeStamp,
-                                           int busNumber, int numberFrames,
-                                           PlatformAudioBufferList* ioData)>;
+    using AudioCallback = std::function<int(AudioBufferDescriptor& buffer)>;
 
     /**
      * Register audio rendering callback

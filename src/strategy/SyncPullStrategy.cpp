@@ -122,20 +122,14 @@ void SyncPullStrategy::updateSimulation(ISimulator* simulator, double deltaTimeM
     // Sync-pull mode updates simulation during render callback
 }
 
-bool SyncPullStrategy::render(
-    AudioBufferList* ioData,
-    UInt32 numberFrames
-) {
-    if (!ioData) {
+bool SyncPullStrategy::render(AudioBufferDescriptor& buffer) {
+    if (!buffer.buffer) {
         return false;
     }
 
     if (!simulator_ || shuttingDown_.load()) {
         // Fill silence on shutdown or null simulator to prevent crackles
-        if (ioData->mBuffers[0].mData) {
-            float* data = static_cast<float*>(ioData->mBuffers[0].mData);
-            EngineSimAudio::fillSilence(data, static_cast<int>(numberFrames));
-        }
+        EngineSimAudio::fillSilence(buffer.buffer, buffer.frameCount);
         return true;
     }
 
@@ -143,10 +137,10 @@ bool SyncPullStrategy::render(
 
     constexpr int MAX_RETRIES = 3;
 
-    int framesToGenerate = static_cast<int>(numberFrames);
+    int framesToGenerate = buffer.frameCount;
     int framesRendered = 0;
 
-    float* audioData = static_cast<float*>(ioData->mBuffers[0].mData);
+    float* audioData = buffer.buffer;
     int remainingFrames = framesToGenerate;
 
     while (remainingFrames > 0 && framesRendered < framesToGenerate && !shuttingDown_.load()) {

@@ -189,11 +189,8 @@ void ThreadedStrategy::updateSimulation(ISimulator* simulator, double deltaTimeM
     }
 }
 
-bool ThreadedStrategy::render(
-    AudioBufferList* ioData,
-    UInt32 numberFrames
-) {
-    if (!ioData) {
+bool ThreadedStrategy::render(AudioBufferDescriptor& buffer) {
+    if (!buffer.buffer) {
         return false;
     }
 
@@ -202,20 +199,21 @@ bool ThreadedStrategy::render(
     }
 
     int availableFrames = getAvailableFrames();
-    int framesToRead = std::min(static_cast<int>(numberFrames), availableFrames);
+    int framesToRead = std::min(buffer.frameCount, availableFrames);
 
     if (framesToRead <= 0) {
-        std::memset(ioData->mBuffers[0].mData, 0, ioData->mBuffers[0].mDataByteSize);
-        updateDiagnostics(0, static_cast<int>(numberFrames));
-        diagnostics_.recordRender(0.0, 0, static_cast<int>(numberFrames));
+        size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
+        std::memset(buffer.buffer, 0, totalSamples * sizeof(float));
+        updateDiagnostics(0, buffer.frameCount);
+        diagnostics_.recordRender(0.0, 0, buffer.frameCount);
         publishAudioTiming();
         return true;
     }
 
-    circularBuffer_.read(static_cast<float*>(ioData->mBuffers[0].mData), framesToRead);
+    circularBuffer_.read(buffer.buffer, framesToRead);
 
-    updateDiagnostics(availableFrames, numberFrames);
-    diagnostics_.recordRender(0.0, framesToRead, static_cast<int>(numberFrames));
+    updateDiagnostics(availableFrames, buffer.frameCount);
+    diagnostics_.recordRender(0.0, framesToRead, buffer.frameCount);
     publishAudioTiming();
 
     return true;

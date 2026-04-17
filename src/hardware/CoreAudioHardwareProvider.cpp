@@ -314,23 +314,23 @@ OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
         return noErr;  // Should not happen if properly initialized
     }
 
-    // Convert CoreAudio buffer structure to our platform-agnostic structure
-    PlatformAudioBufferList bufferList;
-    bufferList.numberBuffers = ioData->mNumberBuffers;
-    bufferList.buffers = ioData->mBuffers;  // This is the array pointer
-    bufferList.bufferSizes = nullptr;  // Not needed for our use case
-    bufferList.bufferChannels = nullptr;  // Not needed for our use case
-    bufferList.bufferData = reinterpret_cast<void**>(ioData->mBuffers);  // Get pointer to buffer data
+    // Convert CoreAudio buffer to platform-agnostic AudioBufferDescriptor
+    float* audioData = ioData->mNumberBuffers > 0
+        ? static_cast<float*>(ioData->mBuffers[0].mData)
+        : nullptr;
+    int channels = ioData->mNumberBuffers > 0
+        ? static_cast<int>(ioData->mBuffers[0].mNumberChannels)
+        : 2;
+
+    AudioBufferDescriptor buffer(audioData, static_cast<int>(numberFrames), channels);
 
     // Suppress CoreAudio parameters we don't use
     (void)actionFlags;
     (void)timeStamp;
     (void)busNumber;
 
-    // Invoke the user-provided callback
-    return static_cast<OSStatus>(
-        provider->audioCallback_(refCon, actionFlags, timeStamp, busNumber, numberFrames, &bufferList)
-    );
+    // Invoke the user-provided callback with platform-agnostic buffer
+    return static_cast<OSStatus>(provider->audioCallback_(buffer));
 }
 
 const char* CoreAudioHardwareProvider::getStatusDescription(OSStatus status) {

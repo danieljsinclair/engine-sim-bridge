@@ -9,7 +9,7 @@
 #include "simulator/BridgeSimulator.h"
 #include "strategy/AudioLoopConfig.h"
 #include "hardware/IAudioHardwareProvider.h"
-#include "hardware/CoreAudioHardwareProvider.h"
+#include "hardware/IAudioHardwareProvider.h"
 #include "strategy/IAudioBuffer.h"
 #include "strategy/Diagnostics.h"
 #include "io/IInputProvider.h"
@@ -71,31 +71,17 @@ struct LoopTimer {
     }
 };
 
-// Named audio render callback -- bridges platform audio buffers to strategy->render()
-int audioRenderCallback(IAudioBuffer* strategy, int numberFrames,
-                        PlatformAudioBufferList* platformBufferList) {
+// Named audio render callback -- bridges AudioBufferDescriptor to strategy->render()
+int audioRenderCallback(IAudioBuffer* strategy, AudioBufferDescriptor& buffer) {
     if (!strategy->isPlaying()) {
-        if (platformBufferList && platformBufferList->bufferData) {
-            for (int i = 0; i < platformBufferList->numberBuffers; i++) {
-                if (platformBufferList->bufferData[i]) {
-                    AudioBuffer* buffers = static_cast<AudioBuffer*>(platformBufferList->buffers);
-                    std::memset(buffers[i].mData, 0, buffers[i].mDataByteSize);
-                }
-            }
+        if (buffer.buffer) {
+            size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
+            std::memset(buffer.buffer, 0, totalSamples * sizeof(float));
         }
         return 0;
     }
 
-    if (platformBufferList && platformBufferList->buffers) {
-        AudioBuffer* audioBuffers = static_cast<AudioBuffer*>(platformBufferList->buffers);
-        AudioBufferList bufferList;
-        bufferList.mNumberBuffers = static_cast<UInt32>(platformBufferList->numberBuffers);
-        for (int i = 0; i < platformBufferList->numberBuffers; i++) {
-            bufferList.mBuffers[i] = audioBuffers[i];
-        }
-        strategy->render(&bufferList, numberFrames);
-    }
-
+    strategy->render(buffer);
     return 0;
 }
 
@@ -105,7 +91,7 @@ std::unique_ptr<IAudioHardwareProvider> createHardwareProvider(
     const IAudioHardwareProvider::AudioCallback& callback,
     ILogging* logger)
 {
-    auto provider = std::make_unique<CoreAudioHardwareProvider>(logger);
+    auto provider = AudioHardwareProviderFactory::createProvider(logger);
     provider->registerAudioCallback(callback);
 
     AudioStreamFormat format;
@@ -426,14 +412,8 @@ int runSimulation(
     }
 
     // Create and initialize audio hardware provider (throws on failure)
-    auto callback = [audioBuffer](void* refCon, void* actionFlags,
-                           const void* timeStamp, int busNumber, int numberFrames,
-                           PlatformAudioBufferList* platformBufferList) -> int {
-        (void)refCon;
-        (void)actionFlags;
-        (void)timeStamp;
-        (void)busNumber;
-        return audioRenderCallback(audioBuffer, numberFrames, platformBufferList);
+    auto callback = [audioBuffer](AudioBufferDescriptor& buffer) -> int {
+        return audioRenderCallback(audioBuffer, buffer);
     };
 
     auto hardwareProvider = createHardwareProvider(sampleRate, callback, logger);

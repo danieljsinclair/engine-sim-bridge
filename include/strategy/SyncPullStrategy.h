@@ -42,7 +42,7 @@ public:
     bool shouldDrainDuringWarmup() const override;
     void fillBufferFromEngine(ISimulator* simulator, int defaultFramesPerUpdate) override;
 
-    bool render(AudioBufferList* ioData, UInt32 numberFrames) override;
+    bool render(AudioBufferDescriptor& buffer) override;
     bool AddFrames(float* buffer, int frameCount) override;
 
     // Lifecycle Methods
