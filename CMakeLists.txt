@@ -58,6 +58,7 @@ set(BRIDGE_SOURCES
     src/common/JsonParser.cpp
     # Preset engine factory (JSON-based, for preset compiler output)
     src/simulator/PresetEngineFactory.cpp
+    # Hardcoded C++ engine preset factories (works on iOS without Piranha)
     src/simulator/EnginePresets.cpp
 )
 

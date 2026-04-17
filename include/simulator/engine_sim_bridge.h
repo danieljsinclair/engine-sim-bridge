@@ -470,6 +470,50 @@ EngineSimResult EngineSimLoadPreset(
     const char* presetPath
 );
 
+/**
+ * Loads a hardcoded engine preset by ID (no file needed).
+ * Uses C++ factories compiled into the binary - no Piranha/JSON required.
+ * Works on all platforms including iOS.
+ *
+ * Available preset IDs: "honda_trx520", "subaru_ej25", "gm_ls"
+ *
+ * @param handle Simulator handle (must have been created with EngineSimCreate)
+ * @param presetId Preset identifier string
+ * @return ESIM_SUCCESS on success, error code otherwise
+ *
+ * Thread Safety: Must be called from main thread
+ * Allocations: Yes (engine construction)
+ *
+ * Example: EngineSimLoadPresetById(handle, "subaru_ej25")
+ */
+EngineSimResult EngineSimLoadPresetById(
+    EngineSimHandle handle,
+    const char* presetId
+);
+
+/**
+ * Gets the number of available hardcoded engine presets.
+ * @return Number of available presets
+ */
+int32_t EngineSimGetPresetCount(void);
+
+/**
+ * Gets preset info by index.
+ * @param index Zero-based preset index (0 to EngineSimGetPresetCount()-1)
+ * @param outName Buffer to receive preset display name (can be NULL)
+ * @param outId Buffer to receive preset ID string (can be NULL)
+ * @param nameSize Size of outName buffer
+ * @param idSize Size of outId buffer
+ * @return ESIM_SUCCESS on success, error code otherwise
+ */
+EngineSimResult EngineSimGetPresetInfo(
+    int32_t index,
+    char* outName,
+    char* outId,
+    int32_t nameSize,
+    int32_t idSize
+);
+
 #ifdef __cplusplus
 }
 #endif

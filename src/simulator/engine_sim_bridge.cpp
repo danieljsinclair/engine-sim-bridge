@@ -2,6 +2,7 @@
 #include "common/ILogging.h"
 #include "simulator/sine_wave_simulator.h"
 #include "simulator/PresetEngineFactory.h"
+#include "simulator/EnginePresets.h"
 
 // Core engine-sim includes
 #include "piston_engine_simulator.h"
@@ -1156,6 +1157,84 @@ EngineSimResult EngineSimLoadPreset(
     ctx->logger->info(LogMask::AUDIO, "Engine: %s (%d cylinders)",
         ctx->engine->getName().c_str(),
         ctx->engine->getCylinderCount());
+
+    return ESIM_SUCCESS;
+}
+
+// ============================================================================
+// HARDCODED PRESET API (no Piranha, no JSON needed)
+// ============================================================================
+
+EngineSimResult EngineSimLoadPresetById(
+    EngineSimHandle handle,
+    const char* presetId)
+{
+    if (!validateHandle(handle)) {
+        return ESIM_ERROR_INVALID_HANDLE;
+    }
+
+    if (!presetId || strlen(presetId) == 0) {
+        return ESIM_ERROR_INVALID_PARAMETER;
+    }
+
+    EngineSimContext* ctx = getContext(handle);
+
+    // Delete existing simulator if present
+    if (ctx->simulator) {
+        ctx->simulator->destroy();
+        delete ctx->simulator;
+        ctx->simulator = nullptr;
+    }
+
+    // Create new simulator from hardcoded preset
+    Simulator* sim = EnginePresets::createPreset(presetId, ctx->logger);
+    if (!sim) {
+        ctx->setError(std::string("Unknown preset ID: ") + presetId);
+        return ESIM_ERROR_LOAD_FAILED;
+    }
+
+    ctx->simulator = sim;
+    ctx->engine = sim->getEngine();
+    ctx->vehicle = sim->getVehicle();
+    ctx->transmission = sim->getTransmission();
+    ctx->throttlePosition.store(0.0, std::memory_order_relaxed);
+
+    if (ctx->engine) {
+        ctx->logger->info(LogMask::AUDIO, "Loaded preset '%s': %s (%d cylinders)",
+            presetId, ctx->engine->getName().c_str(),
+            ctx->engine->getCylinderCount());
+    }
+
+    return ESIM_SUCCESS;
+}
+
+int32_t EngineSimGetPresetCount(void) {
+    return static_cast<int32_t>(EnginePresets::getAvailablePresets().size());
+}
+
+EngineSimResult EngineSimGetPresetInfo(
+    int32_t index,
+    char* outName,
+    char* outId,
+    int32_t nameSize,
+    int32_t idSize)
+{
+    const auto& presets = EnginePresets::getAvailablePresets();
+    if (index < 0 || index >= static_cast<int32_t>(presets.size())) {
+        return ESIM_ERROR_INVALID_PARAMETER;
+    }
+
+    const EnginePresetInfo& info = presets[index];
+
+    if (outName && nameSize > 0) {
+        strncpy(outName, info.displayName.c_str(), nameSize - 1);
+        outName[nameSize - 1] = '\0';
+    }
+
+    if (outId && idSize > 0) {
+        strncpy(outId, info.id.c_str(), idSize - 1);
+        outId[idSize - 1] = '\0';
+    }
 
     return ESIM_SUCCESS;
 }

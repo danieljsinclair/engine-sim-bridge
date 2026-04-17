@@ -33,7 +33,18 @@
 using json::JsonValue;
 
 // ============================================================================
-// Helper: Reconstruct a Function from JSON array of [x, y] samples
+// Helper: Create a default port flow function (linear flow vs valve lift)
+// Used when the preset compiler doesn't serialize port flow data.
+// Models a simple linear port flow: flow = lift * maxFlowRate
+static Function* createDefaultPortFlow() {
+    Function* fn = new Function;
+    fn->initialize(4, 1);
+    fn->addSample(0.0, 0.0);      // zero lift = zero flow
+    fn->addSample(0.003, 0.001);   // low lift
+    fn->addSample(0.006, 0.003);   // mid lift
+    fn->addSample(0.009, 0.005);   // max lift = max flow
+    return fn;
+}
 // ============================================================================
 static Function* reconstructFunction(const JsonValue& samples) {
     if (!samples.isArray() || samples.size() == 0) return nullptr;
@@ -331,9 +342,13 @@ PresetLoadResult PresetEngineFactory::loadFromString(const std::string& jsonCont
 
                     if (headJson.has("intakePortFlowSamples")) {
                         hParams.IntakePortFlow = reconstructFunction(headJson["intakePortFlowSamples"]);
+                    } else {
+                        hParams.IntakePortFlow = createDefaultPortFlow();
                     }
                     if (headJson.has("exhaustPortFlowSamples")) {
                         hParams.ExhaustPortFlow = reconstructFunction(headJson["exhaustPortFlowSamples"]);
+                    } else {
+                        hParams.ExhaustPortFlow = createDefaultPortFlow();
                     }
 
                     head->initialize(hParams);
