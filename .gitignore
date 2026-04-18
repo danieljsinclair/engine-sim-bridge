@@ -26,3 +26,4 @@ Makefile
 # OS
 .DS_Store
 Thumbs.db
+build-ios-test/_deps/

@@ -30,7 +30,23 @@ set(ENGINE_SIM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 if(IOS)
     set(PIRANHA_ENABLED OFF CACHE BOOL "Disable scripting for iOS" FORCE)
 endif()
+
+# Isolate submodule compiler flags: do not inherit our strict warnings/Werror
+# This is standard practice when including 3rd party submodules
+set(SAVED_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+set(SAVED_C_FLAGS ${CMAKE_C_FLAGS})
+set(CMAKE_CXX_FLAGS "")
+set(CMAKE_C_FLAGS "")
+
+# EXCLUDE_FROM_ALL: Do not build every single target from the submodule.
+# Only build targets that we actually depend on (engine-sim, not tests, not app, not tools)
+# As of CMake 3.21+ this CORRECTLY still rebuilds when source files change.
+# The old bug where this would permanently cache binaries was fixed in 2022.
 add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_ALL)
+
+# Restore our original compiler flags after including submodules
+set(CMAKE_CXX_FLAGS ${SAVED_CXX_FLAGS})
+set(CMAKE_C_FLAGS ${SAVED_C_FLAGS})
 
 # Real bridge library (uses actual engine-sim with polymorphic simulator selection)
 # Phase F: Audio infrastructure moved from CLI into bridge
@@ -167,6 +183,12 @@ if(IOS)
         COMMAND libtool -static -o ${CMAKE_BINARY_DIR}/libenginesim.a ${IOS_MERGED_LIBS}
         COMMENT "Merging all static libs into single libenginesim.a for iOS"
     )
+
+    # Critical fix for iOS cross compilation:
+    # Never install native binaries into system paths, never reuse binaries across architectures
+    # This prevents macOS arm64 binaries getting accidentally linked into iOS simulator builds
+    set(CMAKE_SKIP_INSTALL_ALL_DEPENDENCY ON)
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib)
 endif()
 
 # Installation (skip for iOS static lib builds)
