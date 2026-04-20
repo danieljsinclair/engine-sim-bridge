@@ -78,6 +78,9 @@ private:
     // Simulator reference (set during startPlayback)
     ISimulator* simulator_ = nullptr;
 
+    // Sample rate (for update() retry calculations)
+    int sampleRate_ = 48000;
+
     // Throughput timing
     std::chrono::steady_clock::time_point lastThroughputTime_;
 };

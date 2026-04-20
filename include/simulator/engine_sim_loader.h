@@ -14,8 +14,8 @@
 #include "common/ILogging.h"
 
 struct EngineSimAPI {
-    EngineSimResult Create(const EngineSimConfig* cfg, EngineSimHandle* h) const {
-        return EngineSimCreate(cfg, h);
+    EngineSimResult Create(const EngineSimConfig* cfg, Simulator* simulatorInstance, EngineSimHandle* h) const {
+        return EngineSimCreate(cfg, simulatorInstance, h);
     }
     EngineSimResult LoadScript(EngineSimHandle h, const char* cfg, const char* asset) const {
         return EngineSimLoadScript(h, cfg, asset);

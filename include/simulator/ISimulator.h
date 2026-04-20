@@ -10,12 +10,11 @@ namespace telemetry { class ITelemetryWriter; }
 class ISimulator {
 public:
     virtual ~ISimulator() = default;
-    virtual bool create(const EngineSimConfig& config) = 0;
+    virtual bool create(const EngineSimConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) = 0;
     virtual bool loadScript(const std::string& path, const std::string& assetBase) = 0;
-    virtual bool setLogging(ILogging* logger) = 0;
-    virtual void setTelemetryWriter(telemetry::ITelemetryWriter* writer) = 0;
     virtual void destroy() = 0;
     virtual std::string getLastError() const = 0;
+    virtual const char* getName() const = 0;
     virtual void update(double deltaTime) = 0;
     virtual EngineSimStats getStats() const = 0;
     virtual void setThrottle(double position) = 0;

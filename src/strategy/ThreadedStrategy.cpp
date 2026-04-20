@@ -73,31 +73,56 @@ bool ThreadedStrategy::shouldDrainDuringWarmup() const {
 void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFramesPerUpdate) {
     if (!simulator) return;
 
-    // Cursor chasing: adjust how many frames to read based on buffer fill level
-    size_t available = circularBuffer_.available();
-    int bufferSize = static_cast<int>(circularBuffer_.capacity());
+    // Calculate current lead distance based on total frames written vs read
+    int64_t leadFrames = totalFramesWritten_ - totalFramesRead_;
     int sampleRate = audioState_.sampleRate;
-    int targetLead = static_cast<int>(sampleRate * 0.1);  // 100ms lead
 
+    // Target lead: 50ms ideal (half of current 100ms for lower latency)
+    // Maximum lead: 100ms (prevents buffer from growing too large)
+    int targetLeadFrames = static_cast<int>(sampleRate * 0.05);
+    int maxLeadFrames = static_cast<int>(sampleRate * 0.1);
+
+    // Self-correction: if lead has drifted too far, reset buffer
+    int bufferSize = static_cast<int>(circularBuffer_.capacity());
+    if (leadFrames > maxLeadFrames * 2) {
+        logger_->warning(LogMask::AUDIO,
+                      "ThreadedStrategy: Lead drift detected (%.0fms > 200ms), resetting to target",
+                      leadFrames * 1000.0 / sampleRate);
+        // Reset buffer by draining excess
+        int framesToDiscard = static_cast<int>(leadFrames - maxLeadFrames);
+        std::vector<float> discard(framesToDiscard * 2);
+        circularBuffer_.read(discard.data(), framesToDiscard);
+        totalFramesRead_ += framesToDiscard;
+        leadFrames = totalFramesWritten_ - totalFramesRead_;
+    }
+
+    // Calculate how many frames to write based on current lead
     int framesToWrite;
-    if (static_cast<int>(available) < targetLead) {
-        framesToWrite = defaultFramesPerUpdate + (targetLead - static_cast<int>(available));
-    } else if (static_cast<int>(available) > targetLead * 2) {
-        framesToWrite = std::max(defaultFramesPerUpdate - (static_cast<int>(available) - targetLead), 0);
+    if (leadFrames < targetLeadFrames) {
+        // Buffer is low - catch up by writing more
+        int deficit = targetLeadFrames - static_cast<int>(leadFrames);
+        framesToWrite = defaultFramesPerUpdate + deficit;
+    } else if (leadFrames > maxLeadFrames) {
+        // Buffer is too full - slow down or skip writing
+        framesToWrite = 0;
     } else {
+        // Buffer is in target range - write default amount
         framesToWrite = defaultFramesPerUpdate;
     }
 
+    // Clamp to reasonable limits
     constexpr int MAX_FRAMES_PER_READ = 4096;
     framesToWrite = std::min(framesToWrite, MAX_FRAMES_PER_READ);
     framesToWrite = std::min(framesToWrite, bufferSize);
 
+    // Read from simulator and write to buffer
     std::vector<float> buffer(framesToWrite * 2);
     int totalRead = 0;
     simulator->readAudioBuffer(buffer.data(), framesToWrite, &totalRead);
 
     if (totalRead > 0) {
         AddFrames(buffer.data(), totalRead);
+        totalFramesWritten_ += totalRead;
     }
 }
 
@@ -130,8 +155,12 @@ bool ThreadedStrategy::initialize(const AudioStrategyConfig& config) {
 }
 
 void ThreadedStrategy::prepareBuffer() {
+    // Reset tracking counters
+    totalFramesWritten_ = 0;
+    totalFramesRead_ = 0;
+
     // Pre-fill circular buffer with silence for smooth playback start
-    int preFillFrames = static_cast<int>(audioState_.sampleRate * 0.1);
+    int preFillFrames = static_cast<int>(audioState_.sampleRate * 0.05);  // 50ms pre-fill (was 100ms)
     int capacity = static_cast<int>(circularBuffer_.capacity());
     preFillFrames = std::min(preFillFrames, capacity);
 
@@ -139,7 +168,7 @@ void ThreadedStrategy::prepareBuffer() {
     std::fill(silence.begin(), silence.end(), 0.0f);
 
     size_t framesWritten = circularBuffer_.write(silence.data(), preFillFrames);
-    (void)framesWritten;
+    totalFramesWritten_ += static_cast<int64_t>(framesWritten);  // Track the pre-fill
 
     logger_->debug(LogMask::AUDIO, "ThreadedStrategy::prepareBuffer: Pre-filled %d frames with silence", static_cast<int>(framesWritten));
 }
@@ -178,6 +207,9 @@ void ThreadedStrategy::stopPlayback(ISimulator* simulator) {
 
 void ThreadedStrategy::resetBufferAfterWarmup() {
     circularBuffer_.reset();
+    // Reset tracking counters to start fresh after warmup
+    totalFramesWritten_ = 0;
+    totalFramesRead_ = 0;
 
     logger_->info(LogMask::AUDIO, "ThreadedStrategy::resetBufferAfterWarmup: Buffer reset complete");
 }
@@ -212,6 +244,9 @@ bool ThreadedStrategy::render(AudioBufferView& buffer) {
     }
 
     circularBuffer_.read(dst, framesToRead);
+
+    // Track total frames read for lead distance calculation
+    totalFramesRead_ += framesToRead;
 
     updateDiagnostics(availableFrames, buffer.frameCount);
     diagnostics_.recordRender(0.0, framesToRead, buffer.frameCount);

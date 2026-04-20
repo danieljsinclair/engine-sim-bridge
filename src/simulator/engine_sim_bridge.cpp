@@ -1,9 +1,9 @@
 #include "simulator/engine_sim_bridge.h"
+#include "simulator/ScriptLoadHelpers.h"
 #include "common/ILogging.h"
-#include "simulator/sine_wave_simulator.h"
 
 // Core engine-sim includes
-#include "piston_engine_simulator.h"
+#include "simulator.h"
 #include "engine.h"
 #include "vehicle.h"
 #include "transmission.h"
@@ -11,6 +11,9 @@
 #include "units.h"
 #include "impulse_response.h"
 #include "exhaust_system.h"
+
+// DR_WAV_IMPLEMENTATION: Must be defined in exactly one TU before including wav_loader.h
+#define DR_WAV_IMPLEMENTATION
 #include "common/wav_loader.h"
 
 // Scripting includes (only when piranha is enabled)
@@ -148,153 +151,39 @@ static void setDefaultConfig(EngineSimConfig* config) {
 
 // ============================================================================
 // HELPER FUNCTIONS FOR SCRIPT LOADING (SRP)
+// Delegated to ScriptLoadHelpers.h (DRY)
 // ============================================================================
 
 /**
- * Normalize script path to absolute path.
+ * Normalize script path (C-string overload for C API).
+ * Delegates to ScriptLoadHelpers::normalizeScriptPath.
  */
 static std::string normalizeScriptPath(const char* scriptPath) {
     if (!scriptPath || strlen(scriptPath) == 0) {
         return "";
     }
-
-    std::string path(scriptPath);
-
-    // Normalize all paths to absolute
-    // std::filesystem::absolute() handles both absolute and relative paths correctly
-    return std::filesystem::absolute(path).lexically_normal().string();
+    return ScriptLoadHelpers::normalizeScriptPath(std::string(scriptPath));
 }
 
 /**
- * Resolve asset base path from script path or explicit override.
+ * Resolve asset base path (C-string overload for C API).
+ * Delegates to ScriptLoadHelpers::resolveAssetBasePath.
  */
 static std::string resolveAssetBasePath(const std::string& scriptPath, const char* assetBasePath) {
+    std::string assetBase;
     if (assetBasePath != nullptr && strlen(assetBasePath) > 0) {
-        return std::string(assetBasePath);
+        assetBase = std::string(assetBasePath);
     }
-    
-    // Default: derive from script path
-    size_t assetsPos = scriptPath.find("/assets/");
-    if (assetsPos != std::string::npos) {
-        // Audio files are in the parent of assets directory
-        // e.g., script is "engine-sim/assets/main.mr", audio is in "engine-sim/es/..."
-        return scriptPath.substr(0, assetsPos);
-    }
-    
-    size_t lastSlash = scriptPath.find_last_of('/');
-    if (lastSlash != std::string::npos) {
-        return scriptPath.substr(0, lastSlash);
-    }
-    
-    return ".";
+    return ScriptLoadHelpers::resolveAssetBasePath(scriptPath, assetBase);
 }
 
-/**
- * Create default vehicle with sensible parameters.
- */
+// Delegated to shared helpers (DRY)
 static Vehicle* createDefaultVehicle() {
-    Vehicle::Parameters vehParams;
-    vehParams.mass = units::mass(1597, units::kg);
-    vehParams.diffRatio = 3.42;
-    vehParams.tireRadius = units::distance(10, units::inch);
-    vehParams.dragCoefficient = 0.25;
-    vehParams.crossSectionArea = units::distance(6.0, units::foot) * units::distance(6.0, units::foot);
-    vehParams.rollingResistance = 2000.0;
-    
-    Vehicle* vehicle = new Vehicle;
-    vehicle->initialize(vehParams);
-    return vehicle;
+    return ScriptLoadHelpers::createDefaultVehicle();
 }
 
-/**
- * Create default transmission with sensible gear ratios.
- */
 static Transmission* createDefaultTransmission() {
-    const double gearRatios[] = { 2.97, 2.07, 1.43, 1.00, 0.84, 0.56 };
-    
-    Transmission::Parameters tParams;
-    tParams.GearCount = 6;
-    tParams.GearRatios = gearRatios;
-    tParams.MaxClutchTorque = units::torque(1000.0, units::ft_lb);
-    
-    Transmission* transmission = new Transmission;
-    transmission->initialize(tParams);
-    return transmission;
-}
-
-// ============================================================================
-// IMPULSE RESPONSE LOADING
-// ============================================================================
-
-/**
- * Load impulse responses for all exhaust systems in the engine.
- * Delegates to WavLoader module for actual WAV file parsing (SRP).
- */
-static bool loadImpulseResponses(
-    EngineSimContext* ctx,
-    const std::string& assetBasePath)
-{
-    if (!ctx->engine) {
-        return false;
-    }
-
-    const int exhaustCount = ctx->engine->getExhaustSystemCount();
-    for (int i = 0; i < exhaustCount; ++i) {
-        ExhaustSystem* exhaust = ctx->engine->getExhaustSystem(i);
-        if (!exhaust) continue;
-
-        ImpulseResponse* impulse = exhaust->getImpulseResponse();
-        if (!impulse) continue;
-
-        std::string filename = impulse->getFilename();
-        if (filename.empty()) {
-            continue;  // No impulse response specified
-        }
-
-        // Construct full path
-        std::string fullPath;
-        if (filename[0] == '/' || (filename.length() > 1 && filename[1] == ':')) {
-            // Absolute path
-            fullPath = filename;
-        } else {
-            // Relative path - check if first component matches last component of assetBasePath
-            size_t firstSlash = filename.find('/');
-            if (firstSlash != std::string::npos) {
-                size_t lastSlash = assetBasePath.find_last_of('/');
-                std::string lastComponent = assetBasePath.substr(lastSlash + 1);
-                if (filename.find(lastComponent + "/") == 0) {
-                    // Filename already includes the base path component (e.g., "es/..." when base is ".../es")
-                    fullPath = filename;
-                } else {
-                    fullPath = assetBasePath + "/" + filename;
-                }
-            } else {
-                fullPath = assetBasePath + "/" + filename;
-            }
-        }
-
-        // Load WAV file using WavLoader module
-        WavLoader::Result wavResult = WavLoader::load(fullPath);
-        if (!wavResult.valid) {
-            ctx->logger->error(LogMask::ASSET, "Failed to load required audio file: %s", fullPath.c_str());
-            ctx->logger->error(LogMask::ASSET, "(asset base: %s, from script: %s)", assetBasePath.c_str(), filename.c_str());
-            ctx->setError("Failed to load impulse response: " + fullPath);
-            return false;  // Fast-fail: halt execution immediately
-        }
-
-        // Success
-        ctx->logger->info(LogMask::ASSET, "Loaded impulse response: %s (%zu samples)", fullPath.c_str(), wavResult.getSampleCount());
-
-        // Initialize synthesizer with impulse response
-        ctx->simulator->synthesizer().initializeImpulseResponse(
-            wavResult.getData(),
-            static_cast<unsigned int>(wavResult.getSampleCount()),
-            static_cast<float>(impulse->getVolume()),
-            i
-        );
-    }
-
-    return true;
+    return ScriptLoadHelpers::createDefaultTransmission();
 }
 
 // ============================================================================
@@ -303,14 +192,18 @@ static bool loadImpulseResponses(
 
 EngineSimResult EngineSimCreate(
     const EngineSimConfig* config,
+    Simulator* simulatorInstance,
     EngineSimHandle* outHandle)
 {
-    if (!outHandle) {
+    if (!outHandle || !simulatorInstance) {
         return ESIM_ERROR_INVALID_PARAMETER;
     }
 
     // Allocate context
     EngineSimContext* ctx = new EngineSimContext();
+
+    // Use provided simulator instance (injected by caller)
+    ctx->simulator = simulatorInstance;
 
     // Use default config if none provided
     if (config) {
@@ -326,31 +219,14 @@ EngineSimResult EngineSimCreate(
         return validateResult;
     }
 
-    // Create simulator based on mode (Factory pattern)
-    if (ctx->config.sineMode == 1) {
-        // Sine wave mode: create SineWaveSimulator with logger injection
-        // Pass nullptr to use default ConsoleLogger, or pass ctx->logger to use bridge's logger
-        // For consistency, use the bridge's logger
-        ctx->simulator = new SineWaveSimulator(ctx->logger);
-    } else {
-        // Normal mode: create full physics simulator
-        ctx->simulator = new PistonEngineSimulator();
-    }
-
     // Initialize simulator with common parameters
     Simulator::Parameters simParams;
     simParams.systemType = Simulator::SystemType::NsvOptimized;
 
     ctx->simulator->initialize(simParams);
     ctx->simulator->setSimulationFrequency(ctx->config.simulationFrequency);
-
-    // Only set fluid simulation steps for PistonEngineSimulator
-    // SineWaveSimulator doesn't use physics, so skip this call
-    if (ctx->config.sineMode != 1) {
-        PistonEngineSimulator* pistonSim = static_cast<PistonEngineSimulator*>(ctx->simulator);
-        pistonSim->setFluidSimulationSteps(ctx->config.fluidSimulationSteps);
-    }
     ctx->simulator->setTargetSynthesizerLatency(ctx->config.targetSynthesizerLatency);
+    ctx->simulator->setFluidSimulationSteps(ctx->config.fluidSimulationSteps);
 
     // Allocate audio conversion buffer (stereo)
     ctx->conversionBufferSize = 4096 * 2; // Max frames * 2 channels
@@ -428,7 +304,7 @@ EngineSimResult EngineSimLoadScript(
 
     // Resolve asset path and load impulse responses (SRP: path handling extracted)
     std::string resolvedAssetPath = resolveAssetBasePath(scriptPathStr, assetBasePath);
-    if (!loadImpulseResponses(ctx, resolvedAssetPath)) {
+    if (!ScriptLoadHelpers::loadImpulseResponses(ctx->simulator, ctx->engine, resolvedAssetPath, ctx->logger)) {
         ctx->setError("Failed to load impulse responses");
         return ESIM_ERROR_LOAD_FAILED;
     }

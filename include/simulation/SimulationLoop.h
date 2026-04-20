@@ -6,7 +6,7 @@
 #ifndef SIMULATION_LOOP_H
 #define SIMULATION_LOOP_H
 
-#include "simulator/EngineConfig.h"
+#include <string>
 
 class IAudioBuffer;
 class ISimulator;
@@ -38,7 +38,6 @@ public:
     bool interactive = false;
     bool playAudio = false;
     float volume = 1.0f;
-    bool sineMode = false;
     bool syncPull = true;
     double targetRPM = 0.0;
     double targetLoad = -1.0;

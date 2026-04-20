@@ -38,7 +38,6 @@ SimulationConfig::SimulationConfig()
     , interactive(false)
     , playAudio(false)
     , volume(1.0f)
-    , sineMode(false)
     , syncPull(true)
     , targetRPM(0.0)
     , targetLoad(-1.0)
@@ -191,72 +190,40 @@ void writeTelemetry(telemetry::ITelemetryWriter* telemetryWriter,
     // Note: AudioDiagnostics and AudioTiming are pushed by strategies
 }
 
-struct ScriptConfig {
-    std::string scriptPath;
-    std::string assetBasePath;
-    bool valid = false;
-    std::string errorMessage;
-};
-
-ScriptConfig prepareScriptConfig(const SimulationConfig& config) {
-    ScriptConfig result;
-
-    if (config.sineMode) {
-        result.valid = true;
-        return result;
-    }
+std::string prepareScriptConfig(const SimulationConfig& config) {
+    std::string result = config.configPath;
 
     if (config.useDefaultEngine) {
-        result.scriptPath = "engine-sim-bridge/engine-sim/assets/main.mr";
-    } else if (!config.configPath.empty()) {
-        result.scriptPath = config.configPath;
-    } else {
-        result.errorMessage = "No engine configuration specified. Use --script <config.mr>, --default-engine, or --sine";
-        return result;
+        result = "engine-sim-bridge/engine-sim/assets/main.mr"; // default engine config
     }
 
-    result.valid = true;
+    // Always valid. Simulators decide for themselves if empty script path is acceptable.
     return result;
 }
 
-// Initialize the simulator: create, set logging, load script or sine mode.
+// Initialize the simulator: create, load script or sine mode.
 // Throws std::runtime_error on failure.
 void initializeSimulator(
     ISimulator& simulator,
     const SimulationConfig& config,
     ILogging* logger,
+    telemetry::ITelemetryWriter* telemetryWriter,
     int sampleRate)
 {
-    ScriptConfig scriptConfig = prepareScriptConfig(config);
-    if (!scriptConfig.valid) {
-        throw std::runtime_error(scriptConfig.errorMessage);
-    }
+    std::string scriptConfigPath = prepareScriptConfig(config);
 
-    std::string label = config.simulatorLabel.empty()
-        ? (config.sineMode ? std::string("[SINE]") : scriptConfig.scriptPath)
-        : config.simulatorLabel;
+    // Use provided label directly, no internal logic about simulator type
+    const std::string& label = config.simulatorLabel;
     logger->info(LogMask::BRIDGE, "Loading simulator: %s", label.c_str());
 
     EngineSimConfig engineConfig = EngineConfig::createDefault(sampleRate, config.simulationFrequency);
-    engineConfig.sineMode = config.sineMode ? 1 : 0;
 
-    if (!simulator.create(engineConfig)) {
+    if (!simulator.create(engineConfig, logger, telemetryWriter)) {
         throw std::runtime_error("Failed to create simulator: " + simulator.getLastError());
     }
 
-    if (!simulator.setLogging(logger)) {
-        logger->warning(LogMask::BRIDGE, "Failed to set logging");
-    }
-
-    if (!scriptConfig.scriptPath.empty()) {
-        if (!simulator.loadScript(scriptConfig.scriptPath, scriptConfig.assetBasePath)) {
-            throw std::runtime_error("Failed to load script: " + simulator.getLastError());
-        }
-    } else {
-        // Sine mode or no script -- still need to initialize synthesizer
-        if (!simulator.loadScript("", "")) {
-            throw std::runtime_error("Failed to initialize synthesizer: " + simulator.getLastError());
-        }
+    if (!simulator.loadScript(scriptConfigPath, config.assetBasePath)) {
+        throw std::runtime_error("Failed to load script: " + simulator.getLastError());
     }
 }
 
@@ -328,7 +295,7 @@ int runUnifiedAudioLoop(
     double throttle = 0.1;
     bool ignition = true;
 
-    logger->info(LogMask::BRIDGE, "runUnifiedAudioLoop starting simulation loop with %s mode", config.sineMode ? "SINE" : "ENGINE");
+    logger->info(LogMask::BRIDGE, "runUnifiedAudioLoop starting simulation loop with %s", config.simulatorLabel.c_str());
 
     while (true) {
         checkStarterMotorRPM(simulator, minSustainedRPM);
@@ -401,7 +368,7 @@ int runSimulation(
     ASSERT(audioBuffer, "audioBuffer must be provided");
 
     // Initialize simulator (throws on failure)
-    initializeSimulator(simulator, config, logger, sampleRate);
+    initializeSimulator(simulator, config, logger, telemetryWriter, sampleRate);
 
     // Initialize strategy
     AudioStrategyConfig strategyConfig;

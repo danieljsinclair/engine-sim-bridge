@@ -72,70 +72,56 @@ SineWaveSimulator::SineWaveSimulator(ILogging* logger)
     , m_dummyVehicle(nullptr)
     , m_dummyTransmission(nullptr)
     , m_phase(0.0)
-    , defaultLogger_(logger ? nullptr : new ConsoleLogger())
-    , logger_(logger ? logger : defaultLogger_.get())
+    , created_(false)
+    , lastError_()
 {
+    (void)logger;  // Logger is now injected via create() -> initDependencies()
+    name_ = "SineWave";
 }
 
 SineWaveSimulator::~SineWaveSimulator() {
     destroy();
 }
 
-void SineWaveSimulator::initialize(const Parameters &params) {
-    // Initialize base simulator (sets up synthesizer, physics system, etc.)
-    Simulator::initialize(params);
+// ============================================================================
+// ISimulator Interface Implementation
+// ============================================================================
 
-    // Create minimal dummy objects - required by base Simulator class
+bool SineWaveSimulator::create(const EngineSimConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) {
+    initDependencies(logger, telemetryWriter);
+
+    // Store for renderOnDemand() simulation stepping
+    sampleRate_ = (config.sampleRate > 0) ? config.sampleRate : 48000;
+    simulationFrequency_ = (config.simulationFrequency > 0) ? config.simulationFrequency : 10000;
+
+    // Allocate audio conversion buffer (RAII in base class)
+    ensureAudioConversionBufferSize(4096 * 2);
+
+    Simulator::Parameters simParams;
+    simParams.systemType = Simulator::SystemType::NsvOptimized;
+    initialize(simParams);
+    setSimulationFrequency(simulationFrequency_);
+
     m_dummyEngine        = new SineEngine();
     m_dummyVehicle       = new SineVehicle();
     m_dummyTransmission  = new SineTransmission();
 
-    // Load simulation (sets up physics constraints)
+    // loadSimulation() handles all physics wiring + synthesizer setup
     loadSimulation(m_dummyEngine, m_dummyVehicle, m_dummyTransmission);
 
-    // Logger is always available (default or injected)
-    logger_->debug(LogMask::PHYSICS, "SineWaveSimulator initialized (1 dummy crankshaft, 0 cylinders)");
+    created_ = true;
+    return true;
 }
 
-void SineWaveSimulator::loadSimulation(Engine* engine, Vehicle* vehicle, Transmission* transmission) {
-    // Call base to set m_engine, m_vehicle, m_transmission pointers
-    Simulator::loadSimulation(engine, vehicle, transmission);
-
-    // Initialize synthesizer after engine is attached so channel count is valid.
-    initializeSynthesizer();
-    static const int16_t kUnitImpulse[1] = { INT16_MAX };
-    synthesizer().initializeImpulseResponse(kUnitImpulse, 1, 1.0f, 0);
-
-    // Override defaults for a clean sine: the real-engine defaults apply air noise
-    // (random amplitude modulation) and jitter, which are meaningless for a sine wave.
-    Synthesizer::AudioParameters p;
-    p.airNoise         = 0.0f;  // no random noise overlay
-    p.inputSampleNoise = 0.0f;  // no jitter
-    p.dF_F_mix         = 0.0f;  // skip derivative path, straight signal passthrough
-    synthesizer().setAudioParameters(p);
-    
-    // Setup physics system connections (required by Simulator::simulateStep())
-    m_vehicleMass.reset();
-    m_vehicleMass.m = 1.0;
-    m_vehicleMass.I = 1.0;
-    m_system->addRigidBody(&m_vehicleMass);
-    
-    transmission->addToSystem(m_system, &m_vehicleMass, vehicle, engine);
-    vehicle->addToSystem(m_system, &m_vehicleMass);
-    
-    // Connect dyno and starter motor to crankshaft (required by Simulator::simulateStep())
-    m_dyno.connectCrankshaft(engine->getOutputCrankshaft());
-    m_system->addConstraint(&m_dyno);
-    
-    m_starterMotor.connectCrankshaft(engine->getOutputCrankshaft());
-    m_starterMotor.m_maxTorque = engine->getStarterTorque();
-    m_starterMotor.m_rotationSpeed = -engine->getStarterSpeed();
-    m_system->addConstraint(&m_starterMotor);
+bool SineWaveSimulator::loadScript(const std::string& path, const std::string& assetBase) {
+    (void)path;
+    (void)assetBase;
+    return true;
 }
 
 void SineWaveSimulator::destroy() {
-    // Stop audio/render state before releasing owned objects.
     endAudioRenderingThread();
+
     if (m_system != nullptr) {
         m_system->reset();
         delete m_system;
@@ -147,6 +133,154 @@ void SineWaveSimulator::destroy() {
     if (m_dummyTransmission) { delete m_dummyTransmission;                           m_dummyTransmission = nullptr; }
 
     Simulator::destroy();
+    created_ = false;
+
+    // Audio conversion buffer is RAII-managed by base class, no cleanup needed
+}
+
+std::string SineWaveSimulator::getLastError() const {
+    return lastError_;
+}
+
+void SineWaveSimulator::update(double deltaTime) {
+    if (!created_) return;
+
+    // ceil=true: slight over-production prevents Threaded underruns, ensures at least
+    // 1 step for tiny dt (e.g. SyncPull retry calls update(1/sampleRate)).
+    advanceFixedSteps(this, simulationFrequency_, deltaTime, true);
+
+    EngineSimStats stats = getStats();
+    pushTelemetry(stats);
+}
+
+EngineSimStats SineWaveSimulator::getStats() const {
+    EngineSimStats stats = {};
+
+    if (m_dummyEngine && created_) {
+        stats.currentRPM = m_dummyEngine->getRpm();
+        stats.currentLoad = 0.0;
+        stats.exhaustFlow = getTotalExhaustFlow();
+        stats.manifoldPressure = 0.0;
+        stats.activeChannels = 1;
+        stats.processingTimeMs = getAverageProcessingTime() * 1000.0;
+    }
+
+    return stats;
+}
+
+void SineWaveSimulator::setThrottle(double position) {
+    if (!m_dummyEngine) return;
+
+    if (position < 0.0) position = 0.0;
+    if (position > 1.0) position = 1.0;
+
+    m_dummyEngine->setSpeedControl(position);
+}
+
+void SineWaveSimulator::setIgnition(bool on) {
+    (void)on;
+}
+
+void SineWaveSimulator::setStarterMotor(bool on) {
+    (void)on;
+}
+
+bool SineWaveSimulator::renderOnDemand(float* buffer, int32_t frames, int32_t* written) {
+    if (!created_ || !buffer || frames <= 0) {
+        if (written) *written = 0;
+        return false;
+    }
+
+    // Run simulation to feed synthesizer with sine samples.
+    // ceil=false: SyncPull retry loop handles any deficit from truncation.
+    const double dt = static_cast<double>(frames) / sampleRate_;
+    advanceFixedSteps(this, simulationFrequency_, dt, false);
+
+    // Render and read audio into separate int16 buffer (avoids float/int16 aliasing)
+    synthesizer().renderAudioOnDemand();
+
+    // Ensure conversion buffer is large enough
+    int16_t* conversionBuffer = ensureAudioConversionBufferSize(frames);
+    int samplesRead = readAudioOutput(frames, conversionBuffer);
+
+    // Convert mono int16 to stereo float using separate buffers (no aliasing)
+    EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, buffer, samplesRead);
+
+    if (written) *written = samplesRead;
+
+    return true;
+}
+
+bool SineWaveSimulator::readAudioBuffer(float* buffer, int32_t frames, int32_t* read) {
+    if (!created_ || !buffer || frames <= 0) {
+        if (read) *read = 0;
+        return false;
+    }
+
+    // Ensure conversion buffer is large enough
+    int16_t* conversionBuffer = ensureAudioConversionBufferSize(frames);
+    int samplesRead = readAudioOutput(frames, conversionBuffer);
+
+    // Convert mono int16 to stereo float using separate buffers (no aliasing)
+    EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, buffer, samplesRead);
+
+    if (read) *read = samplesRead;
+
+    return true;
+}
+
+bool SineWaveSimulator::start() {
+    if (!created_) return false;
+
+    drainSynthesizerBuffer(this);
+    startAudioRenderingThread();
+    return true;
+}
+
+void SineWaveSimulator::stop() {
+    if (!created_) return;
+
+    endAudioRenderingThread();
+}
+
+// ============================================================================
+// Simulator Protected Overrides
+// ============================================================================
+
+void SineWaveSimulator::initialize(const Parameters &params) {
+    Simulator::initialize(params);
+}
+
+void SineWaveSimulator::loadSimulation(Engine* engine, Vehicle* vehicle, Transmission* transmission) {
+    Simulator::loadSimulation(engine, vehicle, transmission);
+
+    // Initialize synthesizer with clean parameters for sine wave mode
+    initializeSynthesizer();
+    static const int16_t kUnitImpulse[1] = { INT16_MAX };
+    synthesizer().initializeImpulseResponse(kUnitImpulse, 1, 1.0f, 0);
+
+    Synthesizer::AudioParameters p;
+    p.airNoise         = 0.0f;
+    p.inputSampleNoise = 0.0f;
+    p.dF_F_mix         = 0.0f;
+    synthesizer().setAudioParameters(p);
+
+    // Physics setup
+    m_vehicleMass.reset();
+    m_vehicleMass.m = 1.0;
+    m_vehicleMass.I = 1.0;
+    m_system->addRigidBody(&m_vehicleMass);
+
+    m_dummyTransmission->addToSystem(m_system, &m_vehicleMass, m_dummyVehicle, m_dummyEngine);
+    m_dummyVehicle->addToSystem(m_system, &m_vehicleMass);
+
+    m_dyno.connectCrankshaft(engine->getOutputCrankshaft());
+    m_system->addConstraint(&m_dyno);
+
+    m_starterMotor.connectCrankshaft(engine->getOutputCrankshaft());
+    m_starterMotor.m_maxTorque = engine->getStarterTorque();
+    m_starterMotor.m_rotationSpeed = -engine->getStarterSpeed();
+    m_system->addConstraint(&m_starterMotor);
 }
 
 void SineWaveSimulator::simulateStep_() {
@@ -159,13 +293,9 @@ void SineWaveSimulator::writeToSynthesizer() {
     const double frequency = rpm / 6.0;
     const double phaseIncrement = TWO_PI / (synthesizer().getInputSampleRate() / frequency);
 
-    // Scale to INT16 range so the synthesizer leveler has signal to work with.
-    // The leveler target is 30000 with max gain 1.9 — normalized [-1,1] values
-    // would be rounded to zero before leveling could take effect.
     double sample = std::sin(m_phase) * 28000.0;
     synthesizer().writeInput(&sample);
-    
-    // Update phase accumulator
+
     m_phase += phaseIncrement;
     if (m_phase >= TWO_PI) {
         m_phase -= TWO_PI;

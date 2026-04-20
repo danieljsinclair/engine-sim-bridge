@@ -80,6 +80,7 @@ bool SyncPullStrategy::initialize(const AudioStrategyConfig& config) {
     ASSERT(logger_, "SyncPullStrategy::initialize: logger must not be null");
 
     audioState_.sampleRate = config.sampleRate;
+    sampleRate_ = config.sampleRate;
     audioState_.isPlaying = false;
     shuttingDown_.store(false);
     diagnostics_.setSampleRate(config.sampleRate);
@@ -170,7 +171,7 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
             // No frames produced: advance simulation and retry
             int retryCount = 0;
             while (retryCount < MAX_RETRIES && !shuttingDown_.load()) {
-                simulator_->update(1.0 / 48000.0);  // One sample period to feed synthesizer
+                simulator_->update(1.0 / sampleRate_);  // One sample period to feed synthesizer
                 result = simulator_->renderOnDemand(
                     dst + (framesRendered * 2),
                     remainingFrames,

@@ -17,7 +17,6 @@ EngineSimConfig EngineConfig::createDefault(int sampleRate, int simulationFreque
     config.volume = 1.0f;
     config.convolutionLevel = 0.5f;
     config.airNoise = 1.0f;
-    config.sineMode = 0;  // Default: no sine mode (requires engine script)
     return config;
 }
 
@@ -29,7 +28,7 @@ EngineSimHandle EngineConfig::createAndLoad(
     std::string& error)
 {
     EngineSimHandle handle = nullptr;
-    EngineSimResult result = api.Create(&config, &handle);
+    EngineSimResult result = api.Create(&config, nullptr, &handle);
     if (result != ESIM_SUCCESS || !handle) {
         error = "Failed to create simulator";
         return nullptr;

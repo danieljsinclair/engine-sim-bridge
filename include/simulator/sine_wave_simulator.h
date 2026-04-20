@@ -3,65 +3,52 @@
 #define ENGINE_SIM_BRIDGE_SINE_WAVE_SIMULATOR_H
 
 #include "simulator.h"
-#include "common/ILogging.h"
+#include "simulator/SimulatorBase.h"
 #include "engine.h"
 #include "vehicle.h"
 #include "transmission.h"
 #include "throttle.h"
 #include <cmath>
 #include <memory>
+#include <string>
 
 /**
  * SineWaveSimulator - Test simulator with dummy engine for consistent output.
  *
- * Derives from Simulator (same as PistonEngineSimulator) and implements the
- * same DRY interface. Creates dummy Engine/Vehicle/Transmission objects
- * and uses the base class loadSimulation() method.
+ * Derives from Simulator AND SimulatorBase.
+ * Creates dummy Engine/Vehicle/Transmission objects and uses base class methods.
  *
  * Key differences from PistonEngineSimulator:
  * - No physics simulation (crankshaft, pistons, valves, etc.)
  * - Throttle directly controls RPM with no lag
  * - Predictable sine wave audio output for testing
- *
- * From the bridge's perspective, this is identical to PistonEngineSimulator:
- * - call loadSimulation()
- * - call engine->setSpeedControl()
- * - call startFrame()/simulateStep()/endFrame()
- *
- * This proves buffer management, threading, and control flow work correctly
- * without requiring complex physics simulation.
  */
-class SineWaveSimulator : public Simulator {
+class SineWaveSimulator : public Simulator, public SimulatorBase {
 public:
-    // Constructor: inject logger (uses ConsoleLogger if null)
     explicit SineWaveSimulator(ILogging* logger = nullptr);
     virtual ~SineWaveSimulator();
 
-    /**
-     * Initialize with dummy engine/vehicle/transmission.
-     * Creates minimal objects and calls parent loadSimulation().
-     */
-    virtual void initialize(const Parameters &params) override;
+    // ISimulator interface methods
+    bool create(const EngineSimConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) override;
+    bool loadScript(const std::string& path, const std::string& assetBase) override;
+    void destroy() override;
+    std::string getLastError() const override;
+    void update(double deltaTime) override;
+    EngineSimStats getStats() const override;
+    void setThrottle(double position) override;
+    void setIgnition(bool on) override;
+    void setStarterMotor(bool on) override;
+    bool renderOnDemand(float* buffer, int32_t frames, int32_t* written) override;
+    bool readAudioBuffer(float* buffer, int32_t frames, int32_t* read) override;
+    bool start() override;
+    void stop() override;
 
-    /**
-     * Override loadSimulation to connect physics constraints (dyno, starter).
-     */
+    // Simulator overrides (required by Simulator base class)
+    virtual void initialize(const Parameters &params) override;
     virtual void loadSimulation(Engine* engine, Vehicle* vehicle, Transmission* transmission) override;
 
-    /**
-     * Clean up dummy objects.
-     */
-    virtual void destroy() override;
-
 protected:
-    /**
-     * Override physics simulation - just update RPM from throttle.
-     */
     virtual void simulateStep_() override;
-
-    /**
-     * Override synthesizer writing - generate simple sine wave.
-     */
     virtual void writeToSynthesizer() override;
 
 private:
@@ -72,9 +59,13 @@ private:
 
     double m_phase;       // Sine wave phase accumulator
 
-    // Logging: owns ConsoleLogger by default, or uses injected logger
-    std::unique_ptr<ConsoleLogger> defaultLogger_;
-    ILogging* logger_;    // Non-null, points to defaultLogger_ or injected logger
+    // Stored from EngineSimConfig for renderOnDemand simulation stepping
+    int sampleRate_ = 48000;
+    int simulationFrequency_ = 10000;
+
+    // ISimulator state
+    bool created_;
+    std::string lastError_;
 
     static constexpr double TWO_PI = 2.0 * M_PI;
 };

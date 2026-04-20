@@ -337,7 +337,6 @@ protected:
     std::unique_ptr<BridgeSimulator> createSineSimulator() {
         EngineSimConfig config{};
         config.sampleRate = 48000;
-        config.sineMode = 1;
         config.simulationFrequency = 10000;
 
         auto sim = std::make_unique<BridgeSimulator>();

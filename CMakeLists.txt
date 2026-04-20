@@ -56,7 +56,10 @@ set(BRIDGE_SOURCES
     # Simulator core
     src/simulator/engine_sim_bridge.cpp
     src/simulator/sine_wave_simulator.cpp
+    src/simulator/SimulatorFactory.cpp
     src/simulator/BridgeSimulator.cpp
+    src/simulator/ScriptLoadHelpers.cpp
+    src/simulator/ISimulator.cpp
     src/simulator/EngineConfig.cpp
     # Audio strategies
     src/strategy/ThreadedStrategy.cpp
@@ -239,6 +242,29 @@ if(BUILD_BRIDGE_TESTS)
 
     if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME bridge_unit_tests COMMAND bridge_unit_tests --gtest_color=yes)
+    endif()
+
+    # Sine wave regression tests - proves the int16/float buffer aliasing bug
+    # These tests link against engine-sim-bridge (unlike bridge_unit_tests
+    # which is standalone). They exercise SineWaveSimulator::renderOnDemand().
+    add_executable(sine_wave_regression_tests
+        test/SineWaveRegressionTests.cpp
+    )
+    target_include_directories(sine_wave_regression_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${ENGINE_SIM_PATH}/dependencies/dr_libs
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(sine_wave_regression_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+            ${AUDIO_LIBRARY}
+    )
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME sine_wave_regression_tests COMMAND sine_wave_regression_tests --gtest_color=yes)
     endif()
 
     # iOS adapter tests - only built when AudioBufferView and

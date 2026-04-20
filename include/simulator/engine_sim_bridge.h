@@ -55,9 +55,6 @@ typedef struct {
     float convolutionLevel;          // Convolution mix (0.0 - 1.0)
     float airNoise;                  // Air intake noise (0.0 - 2.0)
 
-    // Sine wave mode (for testing/development without engine script)
-    int32_t sineMode;                 // 1 = sine wave mode, 0 = normal physics mode
-
 } EngineSimConfig;
 
 // Runtime statistics (optional, for diagnostics)
@@ -89,8 +86,13 @@ typedef struct {
  *
  * Example: EngineSimCreate(&config, &handle)
  */
+#ifdef __cplusplus
+class Simulator;
+#endif
+
 EngineSimResult EngineSimCreate(
     const EngineSimConfig* config,
+    Simulator* simulatorInstance,
     EngineSimHandle* outHandle
 );
 

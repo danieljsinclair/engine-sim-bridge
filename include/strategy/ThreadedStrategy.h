@@ -83,6 +83,10 @@ private:
     // Throughput timing
     std::chrono::steady_clock::time_point lastThroughputTime_;
 
+    // Cursor-chasing tracking (for drift correction)
+    int64_t totalFramesWritten_ = 0;
+    int64_t totalFramesRead_ = 0;
+
     int getAvailableFrames() const;
     void updateDiagnostics(int availableFrames, int framesRequested);
     void publishAudioDiagnostics(int underrunCount, double bufferHealthPct);
