@@ -27,3 +27,8 @@ Makefile
 .DS_Store
 Thumbs.db
 build-ios-test/_deps/
+
+# Temporary files
+*.log
+*.dat
+*.tmp
