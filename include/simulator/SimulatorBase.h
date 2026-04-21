@@ -9,6 +9,7 @@
 #include "simulator/ISimulator.h"
 #include "common/ILogging.h"
 #include "telemetry/ITelemetryProvider.h"
+#include "telemetry/NullTelemetryWriter.h"
 #include "simulator/engine_sim_bridge.h"
 #include "engine-sim/include/simulator.h"
 #include <cmath>
@@ -16,24 +17,24 @@
 #include <string>
 #include <vector>
 
-// Minimal no-op telemetry writer - used as default when no writer is injected
-class NullTelemetryWriter : public telemetry::ITelemetryWriter {
-public:
-    void writeEngineState(const telemetry::EngineStateTelemetry&) override {}
-    void writeFramePerformance(const telemetry::FramePerformanceTelemetry&) override {}
-    void writeAudioDiagnostics(const telemetry::AudioDiagnosticsTelemetry&) override {}
-    void writeAudioTiming(const telemetry::AudioTimingTelemetry&) override {}
-    void writeVehicleInputs(const telemetry::VehicleInputsTelemetry&) override {}
-    void writeSimulatorMetrics(const telemetry::SimulatorMetricsTelemetry&) override {}
-    void reset() override {}
-    const char* getName() const override { return "NullTelemetryWriter"; }
-};
-
 class SimulatorBase : public ISimulator {
 public:
     ~SimulatorBase() override = default;
 
     const char* getName() const override { return name_.c_str(); }
+
+    // ISimulator audio pipeline — shared by all subclasses, marked final to prevent divergence.
+    void update(double deltaTime) override final;
+    bool renderOnDemand(float* buffer, int32_t frames, int32_t* written) override final;
+    bool readAudioBuffer(float* buffer, int32_t frames, int32_t* read) override final;
+    bool start() override final;
+    void stop() override final;
+
+    // ISimulator telemetry & control — shared via getSimulator(), marked final.
+    EngineSimStats getStats() const override final;
+    void setThrottle(double position) override final;
+    void setIgnition(bool on) override final;
+    void setStarterMotor(bool on) override final;
 
 protected:
     // Call from subclass create() to initialize dependencies.
@@ -126,6 +127,22 @@ protected:
     // Shared audio configuration (set from EngineSimConfig in create())
     int sampleRate_ = 48000;
     int simulationFrequency_ = 10000;
+
+    // Apply audio config from EngineSimConfig with safe defaults.
+    // Call from subclass create() — guarantees both modes use identical parameters.
+    void initAudioConfig(const EngineSimConfig& config) {
+        sampleRate_ = (config.sampleRate > 0) ? config.sampleRate : 48000;
+        simulationFrequency_ = (config.simulationFrequency > 0) ? config.simulationFrequency : 10000;
+        ensureAudioConversionBufferSize(4096 * 2);
+    }
+
+    // Subclass must return the underlying Simulator for audio pipeline access.
+    // BridgeSimulator returns m_simulator.get(); SineWaveSimulator returns this.
+    virtual Simulator* getSimulator() = 0;
+    virtual const Simulator* getSimulator() const = 0;
+
+    // Subclass must indicate readiness (replaces heterogeneous guard checks).
+    virtual bool isReady() const = 0;
 
     // Fixed-step simulation advance, bypassing the latency regulator.
     // The regulator in startFrame() boosts step count by 10% when input latency is low,

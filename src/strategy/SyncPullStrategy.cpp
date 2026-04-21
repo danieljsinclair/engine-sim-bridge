@@ -11,28 +11,9 @@
 #include "common/ILogging.h"
 #include "common/Verification.h"
 #include "simulator/engine_sim_bridge.h"
+#include "telemetry/NullTelemetryWriter.h"
 
 #include <cstring>
-
-// ============================================================================
-// NullTelemetryWriter - Silently discards all telemetry writes
-// ============================================================================
-
-namespace {
-
-class NullTelemetryWriter : public telemetry::ITelemetryWriter {
-public:
-    void writeEngineState(const telemetry::EngineStateTelemetry&) override {}
-    void writeFramePerformance(const telemetry::FramePerformanceTelemetry&) override {}
-    void writeAudioDiagnostics(const telemetry::AudioDiagnosticsTelemetry&) override {}
-    void writeAudioTiming(const telemetry::AudioTimingTelemetry&) override {}
-    void writeVehicleInputs(const telemetry::VehicleInputsTelemetry&) override {}
-    void writeSimulatorMetrics(const telemetry::SimulatorMetricsTelemetry&) override {}
-    void reset() override {}
-    const char* getName() const override { return "NullTelemetryWriter"; }
-};
-
-} // anonymous namespace
 
 // ============================================================================
 // SyncPullStrategy Implementation

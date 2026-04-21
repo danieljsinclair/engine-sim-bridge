@@ -58,6 +58,7 @@ set(BRIDGE_SOURCES
     src/simulator/sine_wave_simulator.cpp
     src/simulator/SimulatorFactory.cpp
     src/simulator/BridgeSimulator.cpp
+    src/simulator/SimulatorBase.cpp
     src/simulator/ScriptLoadHelpers.cpp
     src/simulator/ISimulator.cpp
     src/simulator/EngineConfig.cpp

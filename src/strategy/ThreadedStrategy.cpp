@@ -8,33 +8,13 @@
 #include "simulator/ISimulator.h"
 #include "common/ILogging.h"
 #include "common/Verification.h"
+#include "telemetry/NullTelemetryWriter.h"
 
 #include <cstring>
 #include <algorithm>
 #include <chrono>
 
 using namespace std::chrono;
-
-// ============================================================================
-// NullTelemetryWriter - Silently discards all telemetry writes
-// Used as default when no telemetry is injected (Null Object Pattern)
-// ============================================================================
-
-namespace {
-
-class NullTelemetryWriter : public telemetry::ITelemetryWriter {
-public:
-    void writeEngineState(const telemetry::EngineStateTelemetry&) override {}
-    void writeFramePerformance(const telemetry::FramePerformanceTelemetry&) override {}
-    void writeAudioDiagnostics(const telemetry::AudioDiagnosticsTelemetry&) override {}
-    void writeAudioTiming(const telemetry::AudioTimingTelemetry&) override {}
-    void writeVehicleInputs(const telemetry::VehicleInputsTelemetry&) override {}
-    void writeSimulatorMetrics(const telemetry::SimulatorMetricsTelemetry&) override {}
-    void reset() override {}
-    const char* getName() const override { return "NullTelemetryWriter"; }
-};
-
-} // anonymous namespace
 
 // ============================================================================
 // ThreadedStrategy Implementation
