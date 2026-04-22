@@ -55,10 +55,10 @@ set(CMAKE_C_FLAGS ${SAVED_C_FLAGS})
 set(BRIDGE_SOURCES
     # Simulator core
     src/simulator/engine_sim_bridge.cpp
-    src/simulator/sine_wave_simulator.cpp
+    src/simulator/SineSimulator.cpp
+    src/simulator/SimulatorInitHelpers.cpp
     src/simulator/SimulatorFactory.cpp
     src/simulator/BridgeSimulator.cpp
-    src/simulator/SimulatorBase.cpp
     src/simulator/ScriptLoadHelpers.cpp
     src/simulator/ISimulator.cpp
     src/simulator/EngineConfig.cpp

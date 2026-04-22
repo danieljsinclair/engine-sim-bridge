@@ -1,54 +1,68 @@
-// SimulatorFactory.h - Factory for creating simulator instances
-// Implements Factory pattern for DI and OCP compliance
-// Phase 1: Creates appropriate ISimulator* based on SimulatorType enum
+// SimulatorFactory.h - Composition root for creating simulator instances
+// Creates Simulator subclass, wires mode-specific details, wraps in BridgeSimulator.
+// OCP: Factory is the only place that knows about SineSimulator vs PistonEngineSimulator.
 
 #ifndef SIMULATOR_FACTORY_H
 #define SIMULATOR_FACTORY_H
 
 #include "simulator/ISimulator.h"
+#include "simulator/engine_sim_bridge.h"
 #include <memory>
+#include <string>
+#include <optional>
 
 class ILogging;
+
+namespace telemetry { class ITelemetryWriter; }
 
 // ============================================================================
 // SimulatorType - Enum for factory creation
 // ============================================================================
 
 enum class SimulatorType {
-    SineWave,    // Simple sine wave test simulator
-    PistonEngine  // Full physics engine simulator
+    SineWave,      // SineSimulator (test mode)
+    PistonEngine   // PistonEngineSimulator (real physics)
 };
 
 // ============================================================================
-// SimulatorFactory - Factory for creating simulator instances
+// SimulatorConfig - Configuration for factory creation
+// ============================================================================
+
+struct SimulatorConfig {
+    SimulatorType type = SimulatorType::PistonEngine;
+    std::string scriptPath;
+    std::string assetBasePath;
+    int sampleRate = 0;  // Resolved from EngineSimDefaults if unset
+    std::optional<int> simulationFrequency;        // Override SIMULATION_FREQUENCY if set
+    std::optional<double> synthLatency;            // Override TARGET_SYNTH_LATENCY if set
+};
+
+// ============================================================================
+// SimulatorFactory - Creates fully-wired ISimulator instances
 // ============================================================================
 
 class SimulatorFactory {
 public:
     /**
-     * Creates a simulator instance of the specified type.
+     * Creates a fully-wired ISimulator instance.
      *
-     * @param type The type of simulator to create
+     * For SineWave: creates SineSimulator (self-contained), wraps in BridgeSimulator.
+     * For PistonEngine: creates PistonEngineSimulator, compiles script (if provided),
+     *   loads impulse responses, wraps in BridgeSimulator.
+     *
+     * @param config Simulator type and configuration
      * @param logger Optional logging interface (can be nullptr)
-     * @return Unique pointer to ISimulator instance
-     *
-     * Factory is responsible for lifetime management of the created simulator.
-     * Caller should use std::move() to transfer ownership.
+     * @param telemetryWriter Optional telemetry writer (can be nullptr)
+     * @return Unique pointer to ready-to-use ISimulator
      */
     static std::unique_ptr<ISimulator> create(
-        SimulatorType type,
-        ILogging* logger = nullptr);
+        const SimulatorConfig& config,
+        ILogging* logger = nullptr,
+        telemetry::ITelemetryWriter* telemetryWriter = nullptr);
 
-    /**
-     * Gets the default simulator type for the current platform.
-     * Currently defaults to PistonEngine for production use.
-     *
-     * @return Default simulator type
-     */
     static SimulatorType getDefaultType();
 
 private:
-    // Factory pattern - private constructor to prevent instantiation
     SimulatorFactory() = delete;
     ~SimulatorFactory() = delete;
 };

@@ -41,7 +41,7 @@ struct Diagnostics {
         , totalFramesRendered(0)
         , lastFramesRequested(0)
         , lastFramesRendered(0)
-        , sampleRate_(48000)
+        , sampleRate_(0)
         , callbackCount_(0)
         , lastCallbackRateHz(0.0)
         , generatingRateFps(0.0)

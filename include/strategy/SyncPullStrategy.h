@@ -19,6 +19,7 @@
 #include "strategy/Diagnostics.h"
 #include "telemetry/ITelemetryProvider.h"
 #include "common/ILogging.h"
+#include "simulator/engine_sim_bridge.h"
 
 class ISimulator;
 
@@ -79,7 +80,7 @@ private:
     ISimulator* simulator_ = nullptr;
 
     // Sample rate (for update() retry calculations)
-    int sampleRate_ = 48000;
+    int sampleRate_ = 0;
 
     // Throughput timing
     std::chrono::steady_clock::time_point lastThroughputTime_;

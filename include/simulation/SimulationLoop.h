@@ -6,7 +6,9 @@
 #ifndef SIMULATION_LOOP_H
 #define SIMULATION_LOOP_H
 
+#include "simulator/engine_sim_bridge.h"
 #include <string>
+#include <optional>
 
 class IAudioBuffer;
 class ISimulator;
@@ -43,7 +45,8 @@ public:
     double targetLoad = -1.0;
     bool useDefaultEngine = false;
     const char* outputWav = nullptr;
-    int simulationFrequency = 10000;
+    std::optional<int> simulationFrequency;   // Override SIMULATION_FREQUENCY if set
+    std::optional<double> synthLatency;       // Override TARGET_SYNTH_LATENCY if set
     int preFillMs = 50;
 
     // Optional display label for logging (e.g. ANSI-colored by CLI). Empty = auto-derive.

@@ -14,7 +14,8 @@
 #include <algorithm>
 #include <numeric>
 
-#include "simulator/sine_wave_simulator.h"
+#include "simulator/BridgeSimulator.h"
+#include "simulator/SineSimulator.h"
 
 // ============================================================================
 // Helper: Compute smoothness metric for a sequence of float samples.
@@ -74,14 +75,22 @@ static double computeDifferenceStdDev(const std::vector<float>& samples) {
 class SineWaveRenderTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        simulator_ = std::make_unique<SineWaveSimulator>();
+        auto sineSim = std::make_unique<SineSimulator>();
+        Simulator::Parameters simParams;
+        simParams.systemType = Simulator::SystemType::NsvOptimized;
+        sineSim->initialize(simParams);
+        sineSim->setSimulationFrequency(EngineSimDefaults::SIMULATION_FREQUENCY);
+        sineSim->setFluidSimulationSteps(EngineSimDefaults::FLUID_SIMULATION_STEPS);
+        sineSim->setTargetSynthesizerLatency(EngineSimDefaults::TARGET_SYNTH_LATENCY);
+        sineSim->loadSimulation(nullptr, nullptr, nullptr);
+        simulator_ = std::make_unique<BridgeSimulator>(std::move(sineSim));
 
         EngineSimConfig config = {};
-        config.sampleRate = 48000;
-        config.simulationFrequency = 10000;
+        config.sampleRate = EngineSimDefaults::SAMPLE_RATE;
+        config.simulationFrequency = EngineSimDefaults::SIMULATION_FREQUENCY;
 
         bool created = simulator_->create(config, nullptr, nullptr);
-        ASSERT_TRUE(created) << "SineWaveSimulator::create() failed";
+        ASSERT_TRUE(created) << "BridgeSimulator::create() failed";
 
         // Advance simulation to populate synthesizer with sine samples.
         // Without update(), renderOnDemand() has no data to render.
@@ -94,7 +103,7 @@ protected:
         }
     }
 
-    std::unique_ptr<SineWaveSimulator> simulator_;
+    std::unique_ptr<BridgeSimulator> simulator_;
 };
 
 // ============================================================================
@@ -141,7 +150,7 @@ TEST_F(SineWaveRenderTest, RenderOnDemand_ProducesSmoothSineWaveNotNoise) {
 
     // Check 2: Smoothness - max adjacent jump ratio.
     // For a sine wave at 133Hz (800RPM/6), sampled at 48kHz, each sample
-    // advances by 133/48000 * 2pi ~ 0.0174 radians. The max delta between
+    // advances by 133/SAMPLE_RATE * 2pi ~ 0.019 radians. The max delta between
     // adjacent samples of a sine wave of amplitude A is approximately:
     //   A * 2 * sin(pi * freq / sampleRate) ~ A * 0.0174
     // So the jump ratio (maxJump/range) is ~ 0.0174/2 ~ 0.0087 for a clean sine.
@@ -211,7 +220,7 @@ TEST_F(SineWaveRenderTest, RenderOnDemand_FirstSamplesAreNotAliased) {
 
     // Compute expected maximum delta for a sine wave at the simulator's RPM.
     // SineEngine default: speedControl=0, RPM = 800, frequency = 800/6 ~ 133Hz
-    // At 48kHz, angular step per sample = 2*pi*133/48000 ~ 0.0174 rad
+    // At 44100Hz, angular step per sample = 2*pi*133/44100 ~ 0.019 rad
     // Max amplitude ~ 28000/32768 ~ 0.854
     // Max delta between adjacent samples ~ 0.854 * 2 * sin(0.0087) ~ 0.0148
     // With generous tolerance for synthesizer interpolation: 0.15

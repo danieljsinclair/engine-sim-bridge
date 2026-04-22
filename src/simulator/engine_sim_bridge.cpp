@@ -1,5 +1,6 @@
 #include "simulator/engine_sim_bridge.h"
 #include "simulator/ScriptLoadHelpers.h"
+#include "simulator/EngineConfig.h"
 #include "common/ILogging.h"
 
 // Core engine-sim includes
@@ -138,15 +139,7 @@ static EngineSimContext* getContext(EngineSimHandle handle) {
 }
 
 static void setDefaultConfig(EngineSimConfig* config) {
-    config->sampleRate = 48000;
-    config->inputBufferSize = 1024;
-    config->audioBufferSize = 96000; // 2 seconds @ 48kHz
-    config->simulationFrequency = 10000;
-    config->fluidSimulationSteps = 8;
-    config->targetSynthesizerLatency = 0.05; // 50ms
-    config->volume = 0.5f;
-    config->convolutionLevel = 1.0f;
-    config->airNoise = 1.0f;
+    *config = EngineConfig::createDefault(0, 0);
 }
 
 // ============================================================================
@@ -229,7 +222,7 @@ EngineSimResult EngineSimCreate(
     ctx->simulator->setFluidSimulationSteps(ctx->config.fluidSimulationSteps);
 
     // Allocate audio conversion buffer (stereo)
-    ctx->conversionBufferSize = 4096 * 2; // Max frames * 2 channels
+    ctx->conversionBufferSize = EngineSimDefaults::MAX_AUDIO_CHUNK_FRAMES * EngineSimDefaults::AUDIO_CHANNELS_STEREO;
     ctx->audioConversionBuffer = new int16_t[ctx->conversionBufferSize];
 
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
@@ -335,13 +328,13 @@ EngineSimResult EngineSimStartAudioThread(
         return ESIM_ERROR_NOT_INITIALIZED;
     }
 
-    // Drain the synthesizer's pre-fill buffer (96000 samples of silence)
+    // Drain the synthesizer's pre-fill buffer (AUDIO_BUFFER_SIZE samples of silence)
     // This must be done BEFORE starting the audio thread
-    // The audio thread waits for buffer.size() < 2000, but pre-fill is 96000
-    int16_t drainBuffer[4096];
+    constexpr int drainChunk = EngineSimDefaults::MAX_AUDIO_CHUNK_FRAMES;
+    int16_t drainBuffer[drainChunk];
     int totalDrained = 0;
     int samplesDrained;
-    while ((samplesDrained = ctx->simulator->readAudioOutput(4096, drainBuffer)) > 0) {
+    while ((samplesDrained = ctx->simulator->readAudioOutput(drainChunk, drainBuffer)) > 0) {
         totalDrained += samplesDrained;
     }
     ctx->logger->debug(LogMask::BUFFER, "Drained %d pre-fill samples", totalDrained);
@@ -744,6 +737,9 @@ const char* EngineSimGetVersion(void)
 EngineSimResult EngineSimValidateConfig(
     const EngineSimConfig* config)
 {
+    constexpr double MIN_SIMULATION_FREQUENCY = (EngineSimDefaults::SIMULATION_FREQUENCY / 10);
+    constexpr double MAX_SIMULATION_FREQUENCY = (EngineSimDefaults::SIMULATION_FREQUENCY * 10);
+
     if (!config) {
         return ESIM_ERROR_INVALID_PARAMETER;
     }
@@ -754,7 +750,7 @@ EngineSimResult EngineSimValidateConfig(
     }
 
     // Validate buffer sizes
-    // Allow inputBufferSize up to sampleRate (GUI uses 44100, which is > 8192)
+    // Allow inputBufferSize up to sampleRate (GUI uses 44.1k, which is > 8192)
     if (config->inputBufferSize < 64 || config->inputBufferSize > config->sampleRate) {
         return ESIM_ERROR_INVALID_PARAMETER;
     }
@@ -764,7 +760,7 @@ EngineSimResult EngineSimValidateConfig(
     }
 
     // Validate simulation frequency
-    if (config->simulationFrequency < 1000 || config->simulationFrequency > 100000) {
+    if (config->simulationFrequency < MIN_SIMULATION_FREQUENCY || config->simulationFrequency > MAX_SIMULATION_FREQUENCY) {
         return ESIM_ERROR_INVALID_PARAMETER;
     }
 

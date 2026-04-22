@@ -12,6 +12,7 @@
 #include <memory>
 #include <cstdint>
 
+#include "simulator/engine_sim_bridge.h"
 #include "hardware/AudioTypes.h"
 
 // Forward declarations
@@ -22,14 +23,14 @@ struct AudioStreamFormat;
  * Used to configure audio hardware with sample rate and channel configuration
  */
 struct AudioStreamFormat {
-    int sampleRate;           // Sample rate in Hz (e.g., 44100, 48000)
+    int sampleRate;           // Sample rate in Hz (e.g., 44k, 48k)
     int channels;              // Number of audio channels (typically 2 for stereo)
     int bitsPerSample;         // Bits per sample (typically 32 for float)
     bool isFloat;             // True if floating-point samples (false for integer)
     bool isInterleaved;       // True if channels are interleaved (LRLR...)
 
     AudioStreamFormat()
-        : sampleRate(44100), channels(2), bitsPerSample(32),
+        : sampleRate(0), channels(2), bitsPerSample(32),
           isFloat(true), isInterleaved(true) {}
 };
 

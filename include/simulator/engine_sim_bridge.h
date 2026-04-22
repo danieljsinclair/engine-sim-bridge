@@ -41,14 +41,14 @@ typedef enum {
 // Configuration structure for initialization
 typedef struct {
     // Audio configuration
-    int32_t sampleRate;              // Target sample rate (e.g., 48000)
-    int32_t inputBufferSize;         // Internal buffer size (1024 recommended)
-    int32_t audioBufferSize;         // Ring buffer size (96000 = 2s @ 48kHz)
+    int32_t sampleRate;              // Hz (default: EngineSimDefaults::SAMPLE_RATE)
+    int32_t inputBufferSize;         // Internal buffer size (default: EngineSimDefaults::INPUT_BUFFER_SIZE)
+    int32_t audioBufferSize;         // Ring buffer size (default: EngineSimDefaults::AUDIO_BUFFER_SIZE)
 
     // Simulation parameters
-    int32_t simulationFrequency;     // Hz (10000 recommended)
-    int32_t fluidSimulationSteps;    // Substeps per physics step (8 recommended)
-    double targetSynthesizerLatency; // seconds (0.05 = 50ms recommended)
+    int32_t simulationFrequency;     // Hz (default: EngineSimDefaults::SIMULATION_FREQUENCY)
+    int32_t fluidSimulationSteps;    // Substeps per physics step (default: EngineSimDefaults::FLUID_SIMULATION_STEPS)
+    double targetSynthesizerLatency; // seconds (default: EngineSimDefaults::TARGET_SYNTH_LATENCY)
 
     // Audio DSP parameters
     float volume;                    // Master volume (0.0 - 2.0)
@@ -462,6 +462,50 @@ EngineSimResult EngineSimLoadImpulseResponse(
 #ifdef __cplusplus
 
 #include <cstring>
+
+// ============================================================================
+// DEFAULTS — single source of truth for simulation parameters
+// ============================================================================
+//
+// Constant relationships:
+//
+// SIMULATION_FREQUENCY (10000 Hz) — physics step rate
+//   |-- Synthesizer inputSampleRate = SIMULATION_FREQUENCY
+//   |   |-- Upsampling ratio = SAMPLE_RATE / SIMULATION_FREQUENCY = 44100/10000 = 4.41x
+//   |   |-- Each simulateStep() advances the synth input write pointer by this ratio
+//   |-- Steps per 60Hz tick = SIMULATION_FREQUENCY / UPDATE_RATE_HZ = 10000/60 ~ 167
+//   |   |-- Dynamically adjusted +/-10% by TARGET_SYNTH_LATENCY feedback loop
+//   |-- Physics timestep = 1/SIMULATION_FREQUENCY = 0.1ms
+//       |-- Overridable via --sim-freq CLI flag
+//
+// SAMPLE_RATE (44100 Hz) — audio output rate, matches upstream engine-sim
+//   |-- Synthesizer audioSampleRate
+//   |-- CoreAudio hardware device rate
+//   |-- AUDIO_BUFFER_SIZE = SAMPLE_RATE * 2 seconds = 88200
+//   |-- FRAMES_PER_UPDATE = SAMPLE_RATE / 60 = 735
+
+namespace EngineSimDefaults {
+    // Primary constants
+    constexpr int32_t SAMPLE_RATE            = 44100;   // Hz — matches upstream engine-sim (simulator.cpp:226)
+    constexpr int32_t SIMULATION_FREQUENCY   = 10000;   // Hz — physics step rate
+    constexpr int32_t FLUID_SIMULATION_STEPS = 8;       // Substeps per physics step
+    constexpr double  TARGET_SYNTH_LATENCY   = 0.02;    // seconds — M4 Pro best latency tested (0.01 too fast for threaded mode) - can be overridden with --synth-latency CLI flag
+
+    // Derived constants — relationships are explicit
+    constexpr int32_t UPDATE_RATE_HZ             = 60;                              // Main loop tick rate (from original 60 FPS GUI)
+    constexpr double  BUFFER_DURATION_SECONDS    = 2.0;                             // Ring buffer safety margin for threaded mode
+    constexpr int32_t AUDIO_BUFFER_SIZE          = SAMPLE_RATE * static_cast<int32_t>(BUFFER_DURATION_SECONDS);  // 88200
+    constexpr int32_t INPUT_BUFFER_SIZE          = 1024;                            // Per-channel input ring buffer
+    constexpr int32_t FRAMES_PER_UPDATE          = SAMPLE_RATE / UPDATE_RATE_HZ;   // 735 frames per 60Hz tick
+    constexpr double  UPDATE_INTERVAL            = 1.0 / UPDATE_RATE_HZ;           // 16.67ms
+
+    // Audio channel constants
+    constexpr int32_t AUDIO_CHANNELS_MONO        = 1;   // Synthesizer output is mono (summed exhaust)
+    constexpr int32_t AUDIO_CHANNELS_STEREO      = AUDIO_CHANNELS_MONO * 2;  // Hardware output is stereo (L+R duplicate)
+
+    // Audio I/O constants
+    constexpr int32_t MAX_AUDIO_CHUNK_FRAMES     = 4096; // Max frames per single read/drain operation
+}
 
 namespace EngineSimAudio {
 

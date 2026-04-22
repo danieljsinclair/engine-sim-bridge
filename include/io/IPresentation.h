@@ -38,7 +38,7 @@ struct EngineState {
     double callbackRateHz = 0.0;
     double generatingRateFps = 0.0;
     double trendPct = 0.0;
-    int sampleRate = 48000;
+    int sampleRate = 0;  // Set by SimulationLoop from upstream provider
 };
 
 // ============================================================================

@@ -6,7 +6,7 @@
 #include "simulation/SimulationLoop.h"
 
 #include "simulator/ISimulator.h"
-#include "simulator/BridgeSimulator.h"
+#include "simulator/engine_sim_bridge.h"
 #include "strategy/AudioLoopConfig.h"
 #include "hardware/IAudioHardwareProvider.h"
 #include "hardware/IAudioHardwareProvider.h"
@@ -43,7 +43,7 @@ SimulationConfig::SimulationConfig()
     , targetLoad(-1.0)
     , useDefaultEngine(false)
     , outputWav(nullptr)
-    , simulationFrequency(10000)
+    , simulationFrequency(std::nullopt)
     , preFillMs(50)
 {
 }
@@ -162,7 +162,7 @@ void updatePresentation(presentation::IPresentation* presentation, double curren
     state.callbackRateHz = timing.callbackRateHz;
     state.generatingRateFps = timing.generatingRateFps;
     state.trendPct = timing.trendPct;
-    state.sampleRate = 48000;
+    state.sampleRate = AudioLoopConfig::SAMPLE_RATE;
 
     presentation->ShowEngineState(state);
 }
@@ -190,18 +190,8 @@ void writeTelemetry(telemetry::ITelemetryWriter* telemetryWriter,
     // Note: AudioDiagnostics and AudioTiming are pushed by strategies
 }
 
-std::string prepareScriptConfig(const SimulationConfig& config) {
-    std::string result = config.configPath;
-
-    if (config.useDefaultEngine) {
-        result = "engine-sim-bridge/engine-sim/assets/main.mr"; // default engine config
-    }
-
-    // Always valid. Simulators decide for themselves if empty script path is acceptable.
-    return result;
-}
-
-// Initialize the simulator: create, load script or sine mode.
+// Initialize the simulator: create with audio config.
+// Script loading is handled by SimulatorFactory before this is called.
 // Throws std::runtime_error on failure.
 void initializeSimulator(
     ISimulator& simulator,
@@ -210,20 +200,14 @@ void initializeSimulator(
     telemetry::ITelemetryWriter* telemetryWriter,
     int sampleRate)
 {
-    std::string scriptConfigPath = prepareScriptConfig(config);
-
     // Use provided label directly, no internal logic about simulator type
     const std::string& label = config.simulatorLabel;
     logger->info(LogMask::BRIDGE, "Loading simulator: %s", label.c_str());
 
-    EngineSimConfig engineConfig = EngineConfig::createDefault(sampleRate, config.simulationFrequency);
+    EngineSimConfig engineConfig = EngineConfig::createDefault(sampleRate, config.simulationFrequency.value_or(EngineSimDefaults::SIMULATION_FREQUENCY));
 
     if (!simulator.create(engineConfig, logger, telemetryWriter)) {
         throw std::runtime_error("Failed to create simulator: " + simulator.getLastError());
-    }
-
-    if (!simulator.loadScript(scriptConfigPath, config.assetBasePath)) {
-        throw std::runtime_error("Failed to load script: " + simulator.getLastError());
     }
 }
 

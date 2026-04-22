@@ -1,52 +1,76 @@
-// BridgeSimulator.h - Production implementation of ISimulator
-// Uses composition to wrap PistonEngineSimulator directly (no C API).
-// DIP: Consumers depend on ISimulator, not on raw bridge types.
-// Phase B: Refactored to use composition instead of inheritance
+// BridgeSimulator.h - Universal ISimulator implementation
+// Composes an injected Simulator subclass (PistonEngineSimulator or SineSimulator).
+// OCP: BridgeSimulator doesn't know or care which Simulator it has.
+// Factory is the composition root that wires mode-specific details.
 
 #ifndef BRIDGE_SIMULATOR_H
 #define BRIDGE_SIMULATOR_H
 
-#include "simulator/SimulatorBase.h"
+#include "simulator/ISimulator.h"
 #include "simulator/engine_sim_bridge.h"
-#include "piston_engine_simulator.h"
-
-// Forward declarations for script loading (only used when Piranha is enabled)
-#ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
-namespace es_script { class Compiler; }
-#endif
+#include "common/ILogging.h"
+#include "telemetry/ITelemetryProvider.h"
+#include "telemetry/NullTelemetryWriter.h"
+#include "engine-sim/include/simulator.h"
 
 #include <memory>
 #include <string>
+#include <vector>
 
-class BridgeSimulator : public SimulatorBase {
+class BridgeSimulator : public ISimulator {
 public:
-    BridgeSimulator();
+    // Constructor takes an already-initialized Simulator subclass.
+    // The factory is responsible for creating and wiring the Simulator.
+    explicit BridgeSimulator(std::unique_ptr<Simulator> simulator);
     ~BridgeSimulator() override;
 
     // ISimulator lifecycle
     bool create(const EngineSimConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) override;
-    bool loadScript(const std::string& path, const std::string& assetBase) override;
     void destroy() override;
     std::string getLastError() const override;
+    const char* getName() const override { return name_.c_str(); }
+
+    // ISimulator audio pipeline
+    void update(double deltaTime) override;
+    bool renderOnDemand(float* buffer, int32_t frames, int32_t* written) override;
+    bool readAudioBuffer(float* buffer, int32_t frames, int32_t* read) override;
+    bool start() override;
+    void stop() override;
+
+    // ISimulator telemetry & control
+    EngineSimStats getStats() const override;
+    void setThrottle(double position) override;
+    void setIgnition(bool on) override;
+    void setStarterMotor(bool on) override;
+
+    // Set display name from script path (called by factory for PistonEngine mode)
+    void setNameFromScript(const std::string& scriptPath);
 
 private:
-    // SimulatorBase pure virtuals
-    Simulator* getSimulator() override { return m_simulator.get(); }
-    const Simulator* getSimulator() const override { return m_simulator.get(); }
-    bool isReady() const override { return m_created && m_simulator != nullptr; }
+    void initDependencies(ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter);
+    void initAudioConfig(const EngineSimConfig& config);
+    void pushTelemetry(const EngineSimStats& stats);
 
-    // Compile a Piranha script and return engine/vehicle/transmission.
-    // Returns nullptr for engine on failure (sets m_lastError).
-    bool compileScript(const std::string& scriptPath,
-                       Engine** outEngine, Vehicle** outVehicle, Transmission** outTransmission);
+    static void advanceFixedSteps(Simulator* sim, int simulationFrequency, double dt, bool ceil);
+    static void drainSynthesizerBuffer(Simulator* sim);
 
-    std::unique_ptr<PistonEngineSimulator> m_simulator;
+    int16_t* ensureAudioConversionBufferSize(size_t requiredSize);
+
+    std::unique_ptr<Simulator> m_simulator;
     std::string m_lastError;
+    std::string name_;
     bool m_created = false;
 
-#ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
-    es_script::Compiler* m_compiler = nullptr;
-#endif
+    // Dependencies (never null after create())
+    ILogging* logger_ = nullptr;
+    telemetry::ITelemetryWriter* telemetryWriter_ = nullptr;
+    std::unique_ptr<ConsoleLogger> defaultLogger_;
+    std::unique_ptr<NullTelemetryWriter> defaultTelemetryWriter_;
+
+    // Audio config
+    std::vector<int16_t> m_audioConversionBuffer;
+    int sampleRate_ = 0;
+    int simulationFrequency_ = 0;
 };
 
 #endif // BRIDGE_SIMULATOR_H

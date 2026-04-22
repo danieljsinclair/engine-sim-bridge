@@ -57,10 +57,10 @@ void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFr
     int64_t leadFrames = totalFramesWritten_ - totalFramesRead_;
     int sampleRate = audioState_.sampleRate;
 
-    // Target lead: 50ms ideal (half of current 100ms for lower latency)
-    // Maximum lead: 100ms (prevents buffer from growing too large)
-    int targetLeadFrames = static_cast<int>(sampleRate * 0.05);
-    int maxLeadFrames = static_cast<int>(sampleRate * 0.1);
+    // Target lead: derived from TARGET_SYNTH_LATENCY
+    // Maximum lead: 2x target (prevents buffer from growing too large)
+    int targetLeadFrames = static_cast<int>(sampleRate * EngineSimDefaults::TARGET_SYNTH_LATENCY);
+    int maxLeadFrames = targetLeadFrames * 2;
 
     // Self-correction: if lead has drifted too far, reset buffer
     int bufferSize = static_cast<int>(circularBuffer_.capacity());
@@ -91,7 +91,7 @@ void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFr
     }
 
     // Clamp to reasonable limits
-    constexpr int MAX_FRAMES_PER_READ = 4096;
+    constexpr int MAX_FRAMES_PER_READ = EngineSimDefaults::MAX_AUDIO_CHUNK_FRAMES;
     framesToWrite = std::min(framesToWrite, MAX_FRAMES_PER_READ);
     framesToWrite = std::min(framesToWrite, bufferSize);
 
@@ -140,7 +140,7 @@ void ThreadedStrategy::prepareBuffer() {
     totalFramesRead_ = 0;
 
     // Pre-fill circular buffer with silence for smooth playback start
-    int preFillFrames = static_cast<int>(audioState_.sampleRate * 0.05);  // 50ms pre-fill (was 100ms)
+    int preFillFrames = static_cast<int>(audioState_.sampleRate * EngineSimDefaults::TARGET_SYNTH_LATENCY);
     int capacity = static_cast<int>(circularBuffer_.capacity());
     preFillFrames = std::min(preFillFrames, capacity);
 
