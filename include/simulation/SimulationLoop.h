@@ -6,9 +6,8 @@
 #ifndef SIMULATION_LOOP_H
 #define SIMULATION_LOOP_H
 
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
 #include <string>
-#include <optional>
 
 class IAudioBuffer;
 class ISimulator;
@@ -25,13 +24,15 @@ namespace telemetry { class ITelemetryWriter; class ITelemetryReader; }
 
 class SimulationConfig {
 public:
-    SimulationConfig();
+    SimulationConfig() = default;  // Inline initializers provide all defaults
 
     SimulationConfig(const SimulationConfig&) = delete;
     SimulationConfig& operator=(const SimulationConfig&) = delete;
 
     SimulationConfig(SimulationConfig&&) = default;
     SimulationConfig& operator=(SimulationConfig&&) = default;
+
+    ~SimulationConfig();  // Clean up owned ISimulatorConfig
 
     // Public members
     std::string configPath;
@@ -45,12 +46,18 @@ public:
     double targetLoad = -1.0;
     bool useDefaultEngine = false;
     const char* outputWav = nullptr;
-    std::optional<int> simulationFrequency;   // Override SIMULATION_FREQUENCY if set
-    std::optional<double> synthLatency;       // Override TARGET_SYNTH_LATENCY if set
     int preFillMs = 50;
+
+    // Engine configuration - single source of truth for audio/simulation constants
+    const ISimulatorConfig* engineConfig = nullptr;  // Owned by this struct
 
     // Optional display label for logging (e.g. ANSI-colored by CLI). Empty = auto-derive.
     std::string simulatorLabel;
+
+    // Computed helpers - inline to avoid storing duplicates
+    inline double updateInterval() const { return 1.0 / 60.0; }  // 60Hz loop
+    inline int framesPerUpdate() const { return engineConfig ? engineConfig->sampleRate / 60 : 0; }
+    inline int sampleRate() const { return engineConfig ? engineConfig->sampleRate : 0; }
 };
 
 // ============================================================================
@@ -62,7 +69,7 @@ public:
 int runUnifiedAudioLoop(
     ISimulator& simulator,
     const SimulationConfig& config,
-    IAudioBuffer& audioStrategy,
+    IAudioBuffer& audioBuffer,
     input::IInputProvider* inputProvider,
     presentation::IPresentation* presentation,
     telemetry::ITelemetryWriter* telemetryWriter,
@@ -72,7 +79,7 @@ int runUnifiedAudioLoop(
 int runSimulation(
     const SimulationConfig& config,
     ISimulator& simulator,
-    IAudioBuffer* audioStrategy,
+    IAudioBuffer* audioBuffer,
     input::IInputProvider* inputProvider,
     presentation::IPresentation* presentation,
     telemetry::ITelemetryWriter* telemetryWriter,

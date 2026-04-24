@@ -10,7 +10,7 @@
 #include "simulator/ISimulator.h"
 #include "common/ILogging.h"
 #include "common/Verification.h"
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
 #include "telemetry/NullTelemetryWriter.h"
 
 #include <cstring>
@@ -57,18 +57,18 @@ void SyncPullStrategy::fillBufferFromEngine(ISimulator*, int) {
 // Lifecycle Method Implementations
 // ============================================================================
 
-bool SyncPullStrategy::initialize(const AudioStrategyConfig& config) {
+bool SyncPullStrategy::initialize(const AudioBufferConfig& config, int sampleRate) {
     ASSERT(logger_, "SyncPullStrategy::initialize: logger must not be null");
 
-    audioState_.sampleRate = config.sampleRate;
-    sampleRate_ = config.sampleRate;
+    audioState_.sampleRate = sampleRate;
+    sampleRate_ = sampleRate;
     audioState_.isPlaying = false;
     shuttingDown_.store(false);
-    diagnostics_.setSampleRate(config.sampleRate);
+    diagnostics_.setSampleRate(sampleRate);
 
     logger_->info(LogMask::AUDIO,
                   "SyncPullStrategy initialized: sampleRate=%dHz, channels=%d",
-                  config.sampleRate, config.channels);
+                  sampleRate, config.channels);
 
     return true;
 }

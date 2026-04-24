@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 #include <cstdint>
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
 
 class ILogging;
 
@@ -10,7 +10,7 @@ namespace telemetry { class ITelemetryWriter; }
 class ISimulator {
 public:
     virtual ~ISimulator() = default;
-    virtual bool create(const EngineSimConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) = 0;
+    virtual bool create(const ISimulatorConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) = 0;
     virtual void destroy() = 0;
     virtual std::string getLastError() const = 0;
     virtual const char* getName() const = 0;

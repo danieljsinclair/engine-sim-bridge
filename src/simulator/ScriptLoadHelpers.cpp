@@ -1,8 +1,9 @@
 // ScriptLoadHelpers.cpp - Implementation of shared script loading helpers
-// DRY: Used by both engine_sim_bridge.cpp (C API) and BridgeSimulator (C++ API)
+// DRY: Shared helpers for engine simulation setup
 
+#define DR_WAV_IMPLEMENTATION
 #include "simulator/ScriptLoadHelpers.h"
-#include "common/wav_loader.h"  // Declarations only; DR_WAV_IMPLEMENTATION is in engine_sim_bridge.cpp
+#include "common/wav_loader.h"
 
 namespace ScriptLoadHelpers {
 

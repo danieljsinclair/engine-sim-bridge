@@ -6,10 +6,9 @@
 #define SIMULATOR_FACTORY_H
 
 #include "simulator/ISimulator.h"
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
 #include <memory>
 #include <string>
-#include <optional>
 
 class ILogging;
 
@@ -25,19 +24,6 @@ enum class SimulatorType {
 };
 
 // ============================================================================
-// SimulatorConfig - Configuration for factory creation
-// ============================================================================
-
-struct SimulatorConfig {
-    SimulatorType type = SimulatorType::PistonEngine;
-    std::string scriptPath;
-    std::string assetBasePath;
-    int sampleRate = 0;  // Resolved from EngineSimDefaults if unset
-    std::optional<int> simulationFrequency;        // Override SIMULATION_FREQUENCY if set
-    std::optional<double> synthLatency;            // Override TARGET_SYNTH_LATENCY if set
-};
-
-// ============================================================================
 // SimulatorFactory - Creates fully-wired ISimulator instances
 // ============================================================================
 
@@ -50,13 +36,23 @@ public:
      * For PistonEngine: creates PistonEngineSimulator, compiles script (if provided),
      *   loads impulse responses, wraps in BridgeSimulator.
      *
-     * @param config Simulator type and configuration
+     * The factory extracts simulationFrequency, fluidSimulationSteps, and synthLatency
+     * from the ISimulatorConfig to initialize the Simulator subclass directly.
+     * The ISimulatorConfig is then passed to BridgeSimulator::create() for runtime use.
+     *
+     * @param type What kind of simulator to create
+     * @param scriptPath Path to engine script (for PistonEngine type)
+     * @param assetBasePath Base path for resolving asset files (impulse responses)
+     * @param config ISimulator configuration (used for both Simulator subclass init and BridgeSimulator)
      * @param logger Optional logging interface (can be nullptr)
      * @param telemetryWriter Optional telemetry writer (can be nullptr)
      * @return Unique pointer to ready-to-use ISimulator
      */
     static std::unique_ptr<ISimulator> create(
-        const SimulatorConfig& config,
+        SimulatorType type,
+        const std::string& scriptPath,
+        const std::string& assetBasePath,
+        const ISimulatorConfig& config,
         ILogging* logger = nullptr,
         telemetry::ITelemetryWriter* telemetryWriter = nullptr);
 

@@ -6,7 +6,7 @@
 #include <vector>
 #include <string>
 #include <cstring>
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
 
 // Test basic math utilities
 TEST(BridgeMathTest, SineCalculation) {

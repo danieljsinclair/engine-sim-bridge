@@ -2,7 +2,7 @@
 // Phase 2: Provides getVersion() static method implementation
 
 #include "simulator/ISimulator.h"
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
 
 const char* ISimulator::getVersion() {
     return EngineSimGetVersion();

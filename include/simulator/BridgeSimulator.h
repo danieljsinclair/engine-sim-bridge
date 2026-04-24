@@ -7,7 +7,7 @@
 #define BRIDGE_SIMULATOR_H
 
 #include "simulator/ISimulator.h"
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
 #include "common/ILogging.h"
 #include "telemetry/ITelemetryProvider.h"
 #include "telemetry/NullTelemetryWriter.h"
@@ -25,7 +25,7 @@ public:
     ~BridgeSimulator() override;
 
     // ISimulator lifecycle
-    bool create(const EngineSimConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) override;
+    bool create(const ISimulatorConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) override;
     void destroy() override;
     std::string getLastError() const override;
     const char* getName() const override { return name_.c_str(); }
@@ -48,11 +48,11 @@ public:
 
 private:
     void initDependencies(ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter);
-    void initAudioConfig(const EngineSimConfig& config);
+    void initAudioConfig(const ISimulatorConfig& config);
     void pushTelemetry(const EngineSimStats& stats);
 
     static void advanceFixedSteps(Simulator* sim, int simulationFrequency, double dt, bool ceil);
-    static void drainSynthesizerBuffer(Simulator* sim);
+    void drainSynthesizerBuffer(Simulator* sim);
 
     int16_t* ensureAudioConversionBufferSize(size_t requiredSize);
 
@@ -69,8 +69,7 @@ private:
 
     // Audio config
     std::vector<int16_t> m_audioConversionBuffer;
-    int sampleRate_ = 0;
-    int simulationFrequency_ = 0;
+    ISimulatorConfig engineConfig_;
 };
 
 #endif // BRIDGE_SIMULATOR_H

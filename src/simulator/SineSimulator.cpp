@@ -7,7 +7,7 @@
 #include "simulator/SineVehicle.h"
 #include "simulator/SineTransmission.h"
 #include "simulator/SimulatorInitHelpers.h"
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
 #include "synthesizer.h"
 #include <cmath>
 

@@ -48,7 +48,6 @@ struct EngineState {
 struct PresentationConfig {
     bool interactive = false;
     double duration = 0.0;  // 0 = infinite
-    int diagnosticIntervalMs = 100;
     bool showProgress = true;
     bool showDiagnostics = true;
 };

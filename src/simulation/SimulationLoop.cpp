@@ -6,7 +6,8 @@
 #include "simulation/SimulationLoop.h"
 
 #include "simulator/ISimulator.h"
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
+
 #include "strategy/AudioLoopConfig.h"
 #include "hardware/IAudioHardwareProvider.h"
 #include "hardware/IAudioHardwareProvider.h"
@@ -14,7 +15,6 @@
 #include "strategy/Diagnostics.h"
 #include "io/IInputProvider.h"
 #include "io/IPresentation.h"
-#include "simulator/EngineConfig.h"
 #include "common/ILogging.h"
 #include "telemetry/ITelemetryProvider.h"
 #include "common/Verification.h"
@@ -31,21 +31,8 @@
 // SimulationConfig Implementation
 // ============================================================================
 
-SimulationConfig::SimulationConfig()
-    : configPath()
-    , assetBasePath()
-    , duration(3.0)
-    , interactive(false)
-    , playAudio(false)
-    , volume(1.0f)
-    , syncPull(true)
-    , targetRPM(0.0)
-    , targetLoad(-1.0)
-    , useDefaultEngine(false)
-    , outputWav(nullptr)
-    , simulationFrequency(std::nullopt)
-    , preFillMs(50)
-{
+SimulationConfig::~SimulationConfig() {
+    delete engineConfig;
 }
 
 // ============================================================================
@@ -54,14 +41,19 @@ SimulationConfig::SimulationConfig()
 
 namespace {
 
+// Timed input simulation constants
+static constexpr double THROTTLE_RAMP_DURATION_SECONDS = 0.5;  // Time to ramp from 0 to 1
+static constexpr double FULL_THROTTLE = 1.0;                     // Maximum throttle value
+static constexpr double SECONDS_TO_MICROSECONDS = 1000000.0;
+
 // Timing control for 60Hz loop pacing using sleep_until for accuracy
 struct LoopTimer {
     std::chrono::steady_clock::time_point nextWakeTime;
     std::chrono::microseconds intervalUs;
 
-    LoopTimer()
+    explicit LoopTimer(double intervalSeconds)
         : nextWakeTime(std::chrono::steady_clock::now())
-        , intervalUs(static_cast<long long>(AudioLoopConfig::UPDATE_INTERVAL * 1000000.0))
+        , intervalUs(static_cast<long long>(intervalSeconds * SECONDS_TO_MICROSECONDS))
     {}
 
     void waitUntilNextTick() {
@@ -94,12 +86,9 @@ std::unique_ptr<IAudioHardwareProvider> createHardwareProvider(
     auto provider = AudioHardwareProviderFactory::createProvider(logger);
     provider->registerAudioCallback(callback);
 
+    // Use AudioStreamFormat defaults (stereo float32 interleaved), only override sampleRate
     AudioStreamFormat format;
     format.sampleRate = sampleRate;
-    format.channels = 2;
-    format.bitsPerSample = 32;
-    format.isFloat = true;
-    format.isInterleaved = true;
 
     if (!provider->initialize(format)) {
         throw std::runtime_error("Failed to initialize audio hardware");
@@ -121,17 +110,17 @@ bool checkStarterMotorRPM(ISimulator& simulator, double minSustainedRPM) {
     return false;
 }
 
-// Get input for non-interactive (timed) mode: ramp throttle from 0 to 1 over 0.5s
+// Get input for non-interactive (timed) mode: ramp throttle from 0 to 1 over THROTTLE_RAMP_DURATION_SECONDS
 input::EngineInput getTimedInput(double currentTime) {
-    input::EngineInput input;
-    input.throttle = currentTime < 0.5 ? currentTime / 0.5 : 1.0;
-    input.ignition = true;
-    input.starterMotor = false;
-    input.shouldContinue = true;
+    input::EngineInput input;  // Uses struct defaults: ignition=true, starterMotor=false, shouldContinue=true
+    input.throttle = currentTime < THROTTLE_RAMP_DURATION_SECONDS
+        ? currentTime / THROTTLE_RAMP_DURATION_SECONDS
+        : FULL_THROTTLE;
     return input;
 }
 
-void updatePresentation(presentation::IPresentation* presentation, double currentTime,
+void updatePresentation(presentation::IPresentation* presentation, const SimulationConfig& config,
+                        double currentTime,
                         const EngineSimStats& stats, double throttle, bool ignition,
                         int underrunCount, IAudioBuffer& audioBuffer,
                         telemetry::ITelemetryReader* telemetryReader) {
@@ -162,7 +151,7 @@ void updatePresentation(presentation::IPresentation* presentation, double curren
     state.callbackRateHz = timing.callbackRateHz;
     state.generatingRateFps = timing.generatingRateFps;
     state.trendPct = timing.trendPct;
-    state.sampleRate = AudioLoopConfig::SAMPLE_RATE;
+    state.sampleRate = config.sampleRate();
 
     presentation->ShowEngineState(state);
 }
@@ -198,20 +187,23 @@ void initializeSimulator(
     const SimulationConfig& config,
     ILogging* logger,
     telemetry::ITelemetryWriter* telemetryWriter,
-    int sampleRate)
+    const ISimulatorConfig* engineConfig)
 {
+    if (!engineConfig) {
+        throw std::runtime_error("engineConfig must not be null");
+    }
+
     // Use provided label directly, no internal logic about simulator type
     const std::string& label = config.simulatorLabel;
     logger->info(LogMask::BRIDGE, "Loading simulator: %s", label.c_str());
 
-    EngineSimConfig engineConfig = EngineConfig::createDefault(sampleRate, config.simulationFrequency.value_or(EngineSimDefaults::SIMULATION_FREQUENCY));
-
-    if (!simulator.create(engineConfig, logger, telemetryWriter)) {
+    if (!simulator.create(*engineConfig, logger, telemetryWriter)) {
         throw std::runtime_error("Failed to create simulator: " + simulator.getLastError());
     }
 }
 
 void runWarmupPhase(ISimulator& simulator,
+                   const SimulationConfig& config,
                    bool drainDuringWarmup) {
     double smoothedThrottle = 0.6;
     double currentTime = 0.0;
@@ -220,19 +212,19 @@ void runWarmupPhase(ISimulator& simulator,
         EngineSimStats stats = simulator.getStats();
 
         simulator.setThrottle(smoothedThrottle);
-        simulator.update(AudioLoopConfig::UPDATE_INTERVAL);
+        simulator.update(config.updateInterval());
 
-        currentTime += AudioLoopConfig::UPDATE_INTERVAL;
+        currentTime += config.updateInterval();
 
         if (drainDuringWarmup) {
-            std::vector<float> discardBuffer(AudioLoopConfig::FRAMES_PER_UPDATE * 2);
+            std::vector<float> discardBuffer(config.framesPerUpdate() * EngineSimAudio::STEREO);
             int warmupRead = 0;
 
-            for (int retry = 0; retry <= 3 && warmupRead < AudioLoopConfig::FRAMES_PER_UPDATE; retry++) {
+            for (int retry = 0; retry <= 3 && warmupRead < config.framesPerUpdate(); retry++) {
                 int readThisTime = 0;
                 simulator.renderOnDemand(
-                    discardBuffer.data() + warmupRead * 2,
-                    AudioLoopConfig::FRAMES_PER_UPDATE - warmupRead,
+                    discardBuffer.data() + warmupRead * EngineSimAudio::STEREO,
+                    config.framesPerUpdate() - warmupRead,
                     &readThisTime);
 
                 if (readThisTime > 0) warmupRead += readThisTime;
@@ -272,7 +264,7 @@ int runUnifiedAudioLoop(
     ILogging* logger)
 {
     double currentTime = 0.0;
-    LoopTimer timer;
+    LoopTimer timer(config.updateInterval());
 
     const double minSustainedRPM = 550.0;
 
@@ -286,7 +278,7 @@ int runUnifiedAudioLoop(
 
         // Poll input: interactive mode uses OnUpdateSimulation, timed mode uses duration check
         if (inputProvider) {
-            input::EngineInput engineInput = inputProvider->OnUpdateSimulation(AudioLoopConfig::UPDATE_INTERVAL);
+            input::EngineInput engineInput = inputProvider->OnUpdateSimulation(config.updateInterval());
             if (!engineInput.shouldContinue) {
                 break;  // Input provider signalled termination
             }
@@ -305,12 +297,12 @@ int runUnifiedAudioLoop(
         simulator.setIgnition(ignition);
 
         // Update simulation via strategy (threaded mode updates here; sync-pull is no-op)
-        audioBuffer.updateSimulation(&simulator, AudioLoopConfig::UPDATE_INTERVAL * 1000.0);
+        audioBuffer.updateSimulation(&simulator, config.updateInterval() * 1000.0);
 
         EngineSimStats stats = simulator.getStats();
 
         // Generate audio: strategy decides whether to fill buffer (Threaded fills, SyncPull no-ops)
-        audioBuffer.fillBufferFromEngine(&simulator, AudioLoopConfig::FRAMES_PER_UPDATE);
+        audioBuffer.fillBufferFromEngine(&simulator, config.framesPerUpdate());
 
         writeTelemetry(telemetryWriter, currentTime, throttle, ignition);
 
@@ -321,10 +313,10 @@ int runUnifiedAudioLoop(
             underrunCount = audioDiag.underrunCount;
         }
 
-        currentTime += AudioLoopConfig::UPDATE_INTERVAL;
+        currentTime += config.updateInterval();
 
         // Display via presentation (ConsolePresentation formats the complete output line)
-        updatePresentation(presentation, currentTime, stats, throttle, ignition, underrunCount, audioBuffer, telemetryReader);
+        updatePresentation(presentation, config, currentTime, stats, throttle, ignition, underrunCount, audioBuffer, telemetryReader);
 
         // Pace to 60Hz using sleep_until for accuracy
         timer.waitUntilNextTick();
@@ -347,19 +339,21 @@ int runSimulation(
     telemetry::ITelemetryReader* telemetryReader,
     ILogging* logger)
 {
-    const int sampleRate = AudioLoopConfig::SAMPLE_RATE;
-
     ASSERT(audioBuffer, "audioBuffer must be provided");
+    ASSERT(config.engineConfig, "config.engineConfig must be set");
+    ASSERT(config.engineConfig->sampleRate > 0, "config.sampleRate must be set");
+    ASSERT(config.updateInterval() > 0.0, "config.updateInterval must be set");
+    ASSERT(config.framesPerUpdate() > 0, "config.framesPerUpdate must be set");
 
     // Initialize simulator (throws on failure)
-    initializeSimulator(simulator, config, logger, telemetryWriter, sampleRate);
+    initializeSimulator(simulator, config, logger, telemetryWriter, config.engineConfig);
 
     // Initialize strategy
-    AudioStrategyConfig strategyConfig;
-    strategyConfig.sampleRate = sampleRate;
+    AudioBufferConfig strategyConfig;
     strategyConfig.channels = 2;
+    strategyConfig.synthLatency = config.engineConfig->targetSynthesizerLatency;
 
-    if (!audioBuffer->initialize(strategyConfig)) {
+    if (!audioBuffer->initialize(strategyConfig, config.sampleRate())) {
         throw std::runtime_error("Failed to initialize audio strategy");
     }
 
@@ -368,10 +362,10 @@ int runSimulation(
         return audioRenderCallback(audioBuffer, buffer);
     };
 
-    auto hardwareProvider = createHardwareProvider(sampleRate, callback, logger);
+    auto hardwareProvider = createHardwareProvider(config.sampleRate(), callback, logger);
 
     logger->info(LogMask::AUDIO, "Audio initialized: strategy=%s, sr=%d",
-                         audioBuffer->getName(), sampleRate);
+                         audioBuffer->getName(), config.sampleRate());
 
     // Start strategy playback
     if (!audioBuffer->startPlayback(&simulator)) {
@@ -384,7 +378,7 @@ int runSimulation(
     enableStarterMotor(simulator);
 
     bool drainDuringWarmup = config.playAudio && audioBuffer->shouldDrainDuringWarmup();
-    runWarmupPhase(simulator, drainDuringWarmup);
+    runWarmupPhase(simulator, config, drainDuringWarmup);
 
     // Prepare buffer via strategy (threaded: pre-fills, sync-pull: no-op)
     audioBuffer->prepareBuffer();

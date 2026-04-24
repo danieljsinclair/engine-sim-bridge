@@ -6,7 +6,7 @@
 #include "simulator/BridgeSimulator.h"
 #include "simulator/SineSimulator.h"
 #include "simulator/ScriptLoadHelpers.h"
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
 #include "common/ILogging.h"
 #include "telemetry/ITelemetryProvider.h"
 #include "piston_engine_simulator.h"
@@ -22,13 +22,14 @@
 // Shared Simulator init — common to all Simulator subclasses
 // ============================================================================
 
-static void initSimulator(Simulator* sim, const SimulatorConfig& config) {
+static void initSimulator(Simulator* sim, const ISimulatorConfig& config) {
     Simulator::Parameters simParams;
     simParams.systemType = Simulator::SystemType::NsvOptimized;
     sim->initialize(simParams);
-    sim->setSimulationFrequency(config.simulationFrequency.value_or(EngineSimDefaults::SIMULATION_FREQUENCY));
-    sim->setFluidSimulationSteps(EngineSimDefaults::FLUID_SIMULATION_STEPS);
-    sim->setTargetSynthesizerLatency(config.synthLatency.value_or(EngineSimDefaults::TARGET_SYNTH_LATENCY));
+
+    sim->setSimulationFrequency(config.simulationFrequency);
+    sim->setFluidSimulationSteps(config.fluidSimulationSteps);
+    sim->setTargetSynthesizerLatency(config.targetSynthesizerLatency);
 }
 
 // ============================================================================
@@ -36,13 +37,16 @@ static void initSimulator(Simulator* sim, const SimulatorConfig& config) {
 // ============================================================================
 
 std::unique_ptr<ISimulator> SimulatorFactory::create(
-    const SimulatorConfig& config,
+    SimulatorType type,
+    const std::string& scriptPath,
+    const std::string& assetBasePath,
+    const ISimulatorConfig& config,
     ILogging* logger,
     telemetry::ITelemetryWriter* telemetryWriter)
 {
     std::unique_ptr<Simulator> sim;
 
-    switch (config.type) {
+    switch (type) {
         case SimulatorType::SineWave: {
             auto sineSim = std::make_unique<SineSimulator>();
             initSimulator(sineSim.get(), config);
@@ -56,9 +60,9 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
             initSimulator(pistonSim.get(), config);
 
             // Compile and load script if path provided
-            if (!config.scriptPath.empty()) {
-                std::string normalizedPath = ScriptLoadHelpers::normalizeScriptPath(config.scriptPath);
-                std::string resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath, config.assetBasePath);
+            if (!scriptPath.empty()) {
+                std::string normalizedPath = ScriptLoadHelpers::normalizeScriptPath(scriptPath);
+                std::string resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath, assetBasePath);
 
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
                 // Lazily create compiler
@@ -102,8 +106,8 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
     auto bridgeSim = std::make_unique<BridgeSimulator>(std::move(sim));
 
     // Set display name from script path for PistonEngine mode
-    if (config.type == SimulatorType::PistonEngine && !config.scriptPath.empty()) {
-        bridgeSim->setNameFromScript(config.scriptPath);
+    if (type == SimulatorType::PistonEngine && !scriptPath.empty()) {
+        bridgeSim->setNameFromScript(scriptPath);
     }
 
     return bridgeSim;

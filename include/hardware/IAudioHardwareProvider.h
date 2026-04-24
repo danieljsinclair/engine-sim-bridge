@@ -12,7 +12,7 @@
 #include <memory>
 #include <cstdint>
 
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
 #include "hardware/AudioTypes.h"
 
 // Forward declarations
@@ -30,8 +30,12 @@ struct AudioStreamFormat {
     bool isInterleaved;       // True if channels are interleaved (LRLR...)
 
     AudioStreamFormat()
-        : sampleRate(0), channels(2), bitsPerSample(32),
-          isFloat(true), isInterleaved(true) {}
+        : sampleRate(0),
+          channels(EngineSimAudio::STEREO),
+          bitsPerSample(sizeof(float) * 8), // num bytes * 8 bits = 32 bits for float
+          isFloat(true), 
+          isInterleaved(true) 
+        {}
 };
 
 /**

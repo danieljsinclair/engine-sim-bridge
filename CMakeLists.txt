@@ -54,14 +54,12 @@ set(CMAKE_C_FLAGS ${SAVED_C_FLAGS})
 # Bridge source files (shared between macOS and iOS)
 set(BRIDGE_SOURCES
     # Simulator core
-    src/simulator/engine_sim_bridge.cpp
     src/simulator/SineSimulator.cpp
     src/simulator/SimulatorInitHelpers.cpp
     src/simulator/SimulatorFactory.cpp
     src/simulator/BridgeSimulator.cpp
     src/simulator/ScriptLoadHelpers.cpp
     src/simulator/ISimulator.cpp
-    src/simulator/EngineConfig.cpp
     # Audio strategies
     src/strategy/ThreadedStrategy.cpp
     src/strategy/SyncPullStrategy.cpp
@@ -139,7 +137,7 @@ endif()
 # Set library output properties
 set_target_properties(engine-sim-bridge PROPERTIES
     OUTPUT_NAME "enginesim"
-    PUBLIC_HEADER include/simulator/engine_sim_bridge.h
+    PUBLIC_HEADER include/simulator/EngineSimTypes.h
 )
 
 # Platform-specific settings (not for iOS static lib)
@@ -171,28 +169,17 @@ if(APPLE AND NOT IOS)
     )
 endif()
 
-# iOS: Merge bridge + engine-sim + dependencies into a single fat static library
-# This ensures the Xcode project only needs to link one .a file
+# Critical fix for iOS cross compilation:
+# Never install native binaries into system paths, never reuse binaries across architectures
+# This prevents macOS arm64 binaries getting accidentally linked into iOS simulator builds
 if(IOS)
-    # Collect all static library locations that engine-sim-bridge depends on
-    set(IOS_MERGED_LIBS
-        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.a
-        ${CMAKE_BINARY_DIR}/engine-sim/libengine-sim.a
-        ${CMAKE_BINARY_DIR}/engine-sim/dependencies/submodules/simple-2d-constraint-solver/libsimple-2d-constraint-solver.a
-        ${CMAKE_BINARY_DIR}/engine-sim/dependencies/submodules/csv-io/libcsv-io.a
-    )
-
-    add_custom_command(TARGET engine-sim-bridge POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E echo "Merging iOS static libraries..."
-        COMMAND libtool -static -o ${CMAKE_BINARY_DIR}/libenginesim.a ${IOS_MERGED_LIBS}
-        COMMENT "Merging all static libs into single libenginesim.a for iOS"
-    )
-
-    # Critical fix for iOS cross compilation:
-    # Never install native binaries into system paths, never reuse binaries across architectures
-    # This prevents macOS arm64 binaries getting accidentally linked into iOS simulator builds
     set(CMAKE_SKIP_INSTALL_ALL_DEPENDENCY ON)
-    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib)
+    # Copy the bridge library to the parent build directory for Xcode to find
+    # Xcode expects the library at ../build-$(PLATFORM_NAME)/libenginesim.a
+    add_custom_command(TARGET engine-sim-bridge POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.a ${CMAKE_BINARY_DIR}/libenginesim.a
+        COMMENT "Copying libenginesim.a for Xcode linking"
+    )
 endif()
 
 # Installation (skip for iOS static lib builds)

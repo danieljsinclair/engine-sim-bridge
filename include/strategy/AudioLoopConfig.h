@@ -5,17 +5,14 @@
 #ifndef AUDIO_LOOP_CONFIG_H
 #define AUDIO_LOOP_CONFIG_H
 
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
 
 // ============================================================================
 // Audio Loop Configuration
 // ============================================================================
 
 struct AudioLoopConfig {
-    static constexpr int SAMPLE_RATE           = EngineSimDefaults::SAMPLE_RATE;
-    static constexpr int CHANNELS              = EngineSimDefaults::AUDIO_CHANNELS_STEREO;
-    static constexpr double UPDATE_INTERVAL    = EngineSimDefaults::UPDATE_INTERVAL;
-    static constexpr int FRAMES_PER_UPDATE     = EngineSimDefaults::FRAMES_PER_UPDATE;
+    // Loop-specific constants (not in EngineSimDefaults)
     static constexpr int WARMUP_ITERATIONS     = 3;
     static constexpr int PRE_FILL_ITERATIONS   = 40;   // ~0.67s initial buffer
     static constexpr int RE_PRE_FILL_ITERATIONS = 0;

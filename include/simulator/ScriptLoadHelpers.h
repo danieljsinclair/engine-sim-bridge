@@ -1,5 +1,5 @@
 // ScriptLoadHelpers.h - Shared helpers for Piranha script loading
-// DRY: Used by both engine_sim_bridge.cpp (C API) and BridgeSimulator (C++ API)
+// DRY: Shared helpers for engine simulation setup
 // SRP: Each function has a single responsibility
 
 #ifndef SCRIPT_LOAD_HELPERS_H

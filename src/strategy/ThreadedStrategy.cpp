@@ -57,9 +57,9 @@ void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFr
     int64_t leadFrames = totalFramesWritten_ - totalFramesRead_;
     int sampleRate = audioState_.sampleRate;
 
-    // Target lead: derived from TARGET_SYNTH_LATENCY
+    // Target lead: derived from configured synth latency
     // Maximum lead: 2x target (prevents buffer from growing too large)
-    int targetLeadFrames = static_cast<int>(sampleRate * EngineSimDefaults::TARGET_SYNTH_LATENCY);
+    int targetLeadFrames = static_cast<int>(sampleRate * synthLatency_);
     int maxLeadFrames = targetLeadFrames * 2;
 
     // Self-correction: if lead has drifted too far, reset buffer
@@ -110,26 +110,28 @@ void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFr
 // Lifecycle Method Implementations
 // ============================================================================
 
-bool ThreadedStrategy::initialize(const AudioStrategyConfig& config) {
+bool ThreadedStrategy::initialize(const AudioBufferConfig& config, int sampleRate) {
     ASSERT(logger_, "ThreadedStrategy::initialize: logger must not be null");
     ASSERT(telemetry_, "ThreadedStrategy::initialize: telemetry must not be null");
 
+    synthLatency_ = config.synthLatency;
+
     // Initialize circular buffer with appropriate capacity
-    int bufferCapacity = config.sampleRate * 2;
+    int bufferCapacity = static_cast<int>(sampleRate * EngineSimDefaults::BUFFER_DURATION_SECONDS);
 
     if (!circularBuffer_.initialize(bufferCapacity)) {
         logger_->error(LogMask::AUDIO, "ThreadedStrategy::initialize: Failed to initialize circular buffer");
         return false;
     }
 
-    audioState_.sampleRate = config.sampleRate;
+    audioState_.sampleRate = sampleRate;
     audioState_.isPlaying = false;
-    diagnostics_.setSampleRate(config.sampleRate);
+    diagnostics_.setSampleRate(sampleRate);
     circularBuffer_.reset();
 
     logger_->info(LogMask::AUDIO,
-                  "ThreadedStrategy initialized: bufferCapacity=%d frames (%.2f seconds)",
-                  bufferCapacity, bufferCapacity / static_cast<double>(config.sampleRate));
+                  "ThreadedStrategy initialized: bufferCapacity=%d frames (%.2f seconds), synthLatency=%.3fs",
+                  bufferCapacity, bufferCapacity / static_cast<double>(sampleRate), synthLatency_);
 
     return true;
 }
@@ -140,7 +142,7 @@ void ThreadedStrategy::prepareBuffer() {
     totalFramesRead_ = 0;
 
     // Pre-fill circular buffer with silence for smooth playback start
-    int preFillFrames = static_cast<int>(audioState_.sampleRate * EngineSimDefaults::TARGET_SYNTH_LATENCY);
+    int preFillFrames = static_cast<int>(audioState_.sampleRate * synthLatency_);
     int capacity = static_cast<int>(circularBuffer_.capacity());
     preFillFrames = std::min(preFillFrames, capacity);
 

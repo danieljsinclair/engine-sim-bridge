@@ -85,7 +85,8 @@ protected:
         sineSim->loadSimulation(nullptr, nullptr, nullptr);
         simulator_ = std::make_unique<BridgeSimulator>(std::move(sineSim));
 
-        EngineSimConfig config = {};
+        // Use default constructor to get proper defaults from EngineSimDefaults
+        ISimulatorConfig config;
         config.sampleRate = EngineSimDefaults::SAMPLE_RATE;
         config.simulationFrequency = EngineSimDefaults::SIMULATION_FREQUENCY;
 

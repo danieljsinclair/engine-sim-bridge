@@ -21,7 +21,7 @@ BridgeSimulator::~BridgeSimulator() {
 // ISimulator Lifecycle
 // ============================================================================
 
-bool BridgeSimulator::create(const EngineSimConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) {
+bool BridgeSimulator::create(const ISimulatorConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) {
     initDependencies(logger, telemetryWriter);
     initAudioConfig(config);
     m_created = true;
@@ -47,7 +47,7 @@ std::string BridgeSimulator::getLastError() const {
 
 void BridgeSimulator::update(double deltaTime) {
     if (!m_created || !m_simulator) return;
-    advanceFixedSteps(m_simulator.get(), simulationFrequency_, deltaTime, true);
+    advanceFixedSteps(m_simulator.get(), engineConfig_.simulationFrequency, deltaTime, true);
     pushTelemetry(getStats());
 }
 
@@ -57,13 +57,13 @@ bool BridgeSimulator::renderOnDemand(float* buffer, int32_t frames, int32_t* wri
         return false;
     }
 
-    const double dt = static_cast<double>(frames) / sampleRate_;
-    advanceFixedSteps(m_simulator.get(), simulationFrequency_, dt, false);
+    const double dt = static_cast<double>(frames) / engineConfig_.sampleRate;
+    advanceFixedSteps(m_simulator.get(), engineConfig_.simulationFrequency, dt, false);
     m_simulator->synthesizer().renderAudioOnDemand();
 
     int16_t* conversionBuffer = ensureAudioConversionBufferSize(frames);
     int samplesRead = m_simulator->readAudioOutput(frames, conversionBuffer);
-    EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, buffer, samplesRead);
+    EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, samplesRead, buffer, engineConfig_.volume, engineConfig_.convolutionLevel);
 
     if (samplesRead < frames) {
         EngineSimAudio::fillSilence(buffer + samplesRead * 2, frames - samplesRead);
@@ -80,7 +80,7 @@ bool BridgeSimulator::readAudioBuffer(float* buffer, int32_t frames, int32_t* re
 
     int16_t* conversionBuffer = ensureAudioConversionBufferSize(frames);
     int samplesRead = m_simulator->readAudioOutput(frames, conversionBuffer);
-    EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, buffer, samplesRead);
+    EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, samplesRead, buffer, engineConfig_.volume, engineConfig_.convolutionLevel);
 
     if (samplesRead < frames) {
         EngineSimAudio::fillSilence(buffer + samplesRead * 2, frames - samplesRead);
@@ -156,10 +156,11 @@ void BridgeSimulator::initDependencies(ILogging* logger, telemetry::ITelemetryWr
     }
 }
 
-void BridgeSimulator::initAudioConfig(const EngineSimConfig& config) {
-    sampleRate_ = (config.sampleRate > 0) ? config.sampleRate : EngineSimDefaults::SAMPLE_RATE;
-    simulationFrequency_ = (config.simulationFrequency > 0) ? config.simulationFrequency : EngineSimDefaults::SIMULATION_FREQUENCY;
-    ensureAudioConversionBufferSize(EngineSimDefaults::MAX_AUDIO_CHUNK_FRAMES * EngineSimDefaults::AUDIO_CHANNELS_STEREO);
+void BridgeSimulator::initAudioConfig(const ISimulatorConfig& config) {
+    engineConfig_ = config;
+    // Pre-allocate conversion buffer for mono int16 samples (stereo float conversion happens elsewhere)
+    // Buffer will be resized on-demand if larger frames are requested
+    ensureAudioConversionBufferSize(engineConfig_.maxChunkFrames);
 }
 
 void BridgeSimulator::pushTelemetry(const EngineSimStats& stats) {
@@ -203,9 +204,8 @@ void BridgeSimulator::advanceFixedSteps(Simulator* sim, int simulationFrequency,
 }
 
 void BridgeSimulator::drainSynthesizerBuffer(Simulator* sim) {
-    constexpr int chunkSize = EngineSimDefaults::MAX_AUDIO_CHUNK_FRAMES;
-    int16_t drainBuffer[chunkSize];
-    while (sim->readAudioOutput(chunkSize, drainBuffer) > 0) {
+    std::vector<int16_t> drainBuffer(engineConfig_.maxChunkFrames);
+    while (sim->readAudioOutput(engineConfig_.maxChunkFrames, drainBuffer.data()) > 0) {
         // Drain all pre-fill
     }
 }

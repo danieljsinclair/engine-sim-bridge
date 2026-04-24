@@ -40,7 +40,7 @@
 #include "strategy/IAudioBuffer.h"
 #include "strategy/SyncPullStrategy.h"
 #include "strategy/ThreadedStrategy.h"
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
 #endif
 
 // ============================================================================
@@ -336,17 +336,15 @@ protected:
 
     // Helper: Create a BridgeSimulator in sine mode for testing
     std::unique_ptr<BridgeSimulator> createSineSimulator() {
-        EngineSimConfig config{};
-        config.sampleRate = EngineSimDefaults::SAMPLE_RATE;
-        config.simulationFrequency = EngineSimDefaults::SIMULATION_FREQUENCY;
+        ISimulatorConfig config;
 
         auto sineSim = std::make_unique<SineSimulator>();
         Simulator::Parameters simParams;
         simParams.systemType = Simulator::SystemType::NsvOptimized;
         sineSim->initialize(simParams);
-        sineSim->setSimulationFrequency(EngineSimDefaults::SIMULATION_FREQUENCY);
-        sineSim->setFluidSimulationSteps(EngineSimDefaults::FLUID_SIMULATION_STEPS);
-        sineSim->setTargetSynthesizerLatency(EngineSimDefaults::TARGET_SYNTH_LATENCY);
+        sineSim->setSimulationFrequency(config.simulationFrequency);
+        sineSim->setFluidSimulationSteps(config.fluidSimulationSteps);
+        sineSim->setTargetSynthesizerLatency(config.targetSynthesizerLatency);
         sineSim->init();
         auto sim = std::make_unique<BridgeSimulator>(std::move(sineSim));
         if (!sim->create(config)) return nullptr;
@@ -364,15 +362,16 @@ TEST_F(iOSPipelineIntegrationTest, SineModeProducesAudio) {
 
     auto strategy = std::make_unique<SyncPullStrategy>(logger_.get());
     AudioStrategyConfig config;
-    config.sampleRate = EngineSimDefaults::SAMPLE_RATE;
+    config.sampleRate = ISimulatorConfig().sampleRate;
     config.channels = 2;
+    config.synthLatency = ISimulatorConfig().targetSynthesizerLatency;
     ASSERT_TRUE(strategy->initialize(config));
     ASSERT_TRUE(strategy->startPlayback(simulator.get()));
 
     // Create real hardware provider
     hardware_ = std::make_unique<AVAudioEngineHardwareProvider>(logger_.get());
     AudioStreamFormat format;
-    format.sampleRate = EngineSimDefaults::SAMPLE_RATE;
+    format.sampleRate = ISimulatorConfig().sampleRate;
     format.channels = 2;
     format.isFloat = true;
     format.isInterleaved = true;
@@ -424,6 +423,7 @@ TEST_F(iOSPipelineIntegrationTest, CleanShutdownAfterPlayback) {
     AudioStrategyConfig config;
     config.sampleRate = EngineSimDefaults::SAMPLE_RATE;
     config.channels = 2;
+    config.synthLatency = 0.0;  // Use default
     ASSERT_TRUE(strategy->initialize(config));
     ASSERT_TRUE(strategy->startPlayback(simulator.get()));
 
@@ -472,6 +472,7 @@ TEST_F(iOSPipelineIntegrationTest, SyncPullAndThreadedBothWork) {
         AudioStrategyConfig config;
         config.sampleRate = EngineSimDefaults::SAMPLE_RATE;
         config.channels = 2;
+        config.synthLatency = 0.0;  // Use default
         ASSERT_TRUE(strategy->initialize(config));
 
         auto hw = std::make_unique<AVAudioEngineHardwareProvider>(logger_.get());
