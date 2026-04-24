@@ -50,6 +50,11 @@ namespace EngineSimDefaults {
 
     // Audio I/O constants
     constexpr int32_t MAX_AUDIO_CHUNK_FRAMES     = 4096; // Max frames per single read/drain operation
+
+    // Simulation defaults
+    constexpr double  DEFAULT_DURATION_SECONDS   = 3.0;  // Default non-interactive simulation duration
+    constexpr float   DEFAULT_HARDWARE_VOLUME    = 1.0f; // Default hardware output volume (0.0 to 1.0)
+    constexpr int32_t DEFAULT_PREFILL_MS         = 50;   // Default pre-fill buffer duration in ms for sync-pull mode
 }
 
 // ISimulatorConfig — Configuration for ISimulator implementations

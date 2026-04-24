@@ -37,16 +37,16 @@ public:
     // Public members
     std::string configPath;
     std::string assetBasePath;
-    double duration = 3.0;
+    double duration = EngineSimDefaults::DEFAULT_DURATION_SECONDS;
     bool interactive = false;
     bool playAudio = false;
-    float volume = 1.0f;
+    float volume = EngineSimDefaults::DEFAULT_HARDWARE_VOLUME;
     bool syncPull = true;
     double targetRPM = 0.0;
     double targetLoad = -1.0;
     bool useDefaultEngine = false;
     const char* outputWav = nullptr;
-    int preFillMs = 50;
+    int preFillMs = EngineSimDefaults::DEFAULT_PREFILL_MS;
 
     // Engine configuration - single source of truth for audio/simulation constants
     const ISimulatorConfig* engineConfig = nullptr;  // Owned by this struct

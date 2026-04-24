@@ -10,7 +10,6 @@
 
 #include "strategy/AudioLoopConfig.h"
 #include "hardware/IAudioHardwareProvider.h"
-#include "hardware/IAudioHardwareProvider.h"
 #include "strategy/IAudioBuffer.h"
 #include "strategy/Diagnostics.h"
 #include "io/IInputProvider.h"
@@ -21,9 +20,6 @@
 
 #include <cstring>
 #include <stdexcept>
-#include <atomic>
-#include <csignal>
-#include <iostream>
 #include <thread>
 #include <chrono>
 
