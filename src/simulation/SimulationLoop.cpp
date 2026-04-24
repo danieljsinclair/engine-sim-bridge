@@ -23,13 +23,7 @@
 #include <thread>
 #include <chrono>
 
-// ============================================================================
-// SimulationConfig Implementation
-// ============================================================================
-
-SimulationConfig::~SimulationConfig() {
-    delete engineConfig;
-}
+// SimulationConfig — value type, compiler-generated special members
 
 // ============================================================================
 // Private Helper Functions - SRP Compliance
@@ -336,18 +330,17 @@ int runSimulation(
     ILogging* logger)
 {
     ASSERT(audioBuffer, "audioBuffer must be provided");
-    ASSERT(config.engineConfig, "config.engineConfig must be set");
-    ASSERT(config.engineConfig->sampleRate > 0, "config.sampleRate must be set");
+    ASSERT(config.engineConfig.sampleRate > 0, "config.sampleRate must be set");
     ASSERT(config.updateInterval() > 0.0, "config.updateInterval must be set");
     ASSERT(config.framesPerUpdate() > 0, "config.framesPerUpdate must be set");
 
     // Initialize simulator (throws on failure)
-    initializeSimulator(simulator, config, logger, telemetryWriter, config.engineConfig);
+    initializeSimulator(simulator, config, logger, telemetryWriter, &config.engineConfig);
 
     // Initialize strategy
     AudioBufferConfig strategyConfig;
     strategyConfig.channels = 2;
-    strategyConfig.synthLatency = config.engineConfig->targetSynthesizerLatency;
+    strategyConfig.synthLatency = config.engineConfig.targetSynthesizerLatency;
 
     if (!audioBuffer->initialize(strategyConfig, config.sampleRate())) {
         throw std::runtime_error("Failed to initialize audio strategy");

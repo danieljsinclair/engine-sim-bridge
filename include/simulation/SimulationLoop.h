@@ -22,19 +22,11 @@ namespace telemetry { class ITelemetryWriter; class ITelemetryReader; }
 // SimulationConfig - Simulation parameters only (no infrastructure deps)
 // ============================================================================
 
-class SimulationConfig {
-public:
-    SimulationConfig() = default;  // Inline initializers provide all defaults
+struct SimulationConfig {
+    // Engine config — value type, inline defaults from EngineSimDefaults
+    ISimulatorConfig engineConfig;
 
-    SimulationConfig(const SimulationConfig&) = delete;
-    SimulationConfig& operator=(const SimulationConfig&) = delete;
-
-    SimulationConfig(SimulationConfig&&) = default;
-    SimulationConfig& operator=(SimulationConfig&&) = default;
-
-    ~SimulationConfig();  // Clean up owned ISimulatorConfig
-
-    // Public members
+    // Simulation parameters
     std::string configPath;
     std::string assetBasePath;
     double duration = EngineSimDefaults::DEFAULT_DURATION_SECONDS;
@@ -48,16 +40,13 @@ public:
     const char* outputWav = nullptr;
     int preFillMs = EngineSimDefaults::DEFAULT_PREFILL_MS;
 
-    // Engine configuration - single source of truth for audio/simulation constants
-    const ISimulatorConfig* engineConfig = nullptr;  // Owned by this struct
-
     // Optional display label for logging (e.g. ANSI-colored by CLI). Empty = auto-derive.
     std::string simulatorLabel;
 
-    // Computed helpers - inline to avoid storing duplicates
-    inline double updateInterval() const { return 1.0 / 60.0; }  // 60Hz loop
-    inline int framesPerUpdate() const { return engineConfig ? engineConfig->sampleRate / 60 : 0; }
-    inline int sampleRate() const { return engineConfig ? engineConfig->sampleRate : 0; }
+    // Computed helpers
+    double updateInterval() const { return 1.0 / 60.0; }
+    int framesPerUpdate() const { return engineConfig.sampleRate / 60; }
+    int sampleRate() const { return engineConfig.sampleRate; }
 };
 
 // ============================================================================

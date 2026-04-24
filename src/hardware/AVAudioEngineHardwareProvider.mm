@@ -235,11 +235,11 @@ bool AVAudioEngineHardwareProvider::configureAudioFormat(const AudioStreamFormat
         return false;
     }
 
-    // Create AVAudioFormat from our platform-agnostic format
+    // Create AVAudioFormat — AVAudioEngine requires non-interleaved (planar) format
     AVAudioFormat* audioFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
                                                                   sampleRate:static_cast<double>(format.sampleRate)
                                                                     channels:static_cast<AVAudioChannelCount>(format.channels)
-                                                                 interleaved:YES];
+                                                                 interleaved:NO];
     if (!audioFormat) {
         logger_->error(LogMask::AUDIO, "Failed to create AVAudioFormat");
         return false;
@@ -248,7 +248,7 @@ bool AVAudioEngineHardwareProvider::configureAudioFormat(const AudioStreamFormat
     // Note: output format is established via the connection in createSourceNode(),
     // not by setting it directly on the mixer node.
 
-    logger_->info(LogMask::AUDIO, "Audio format configured: %dHz, %d channels, float32 interleaved",
+    logger_->info(LogMask::AUDIO, "Audio format configured: %dHz, %d channels, float32 non-interleaved",
                   format.sampleRate, format.channels);
     return true;
 }
@@ -258,11 +258,11 @@ bool AVAudioEngineHardwareProvider::createSourceNode() {
         return false;
     }
 
-    // Create AVAudioFormat matching our configuration
+    // Create AVAudioFormat — non-interleaved for AVAudioEngine compatibility
     AVAudioFormat* audioFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
                                                                   sampleRate:static_cast<double>(format_.sampleRate)
                                                                     channels:static_cast<AVAudioChannelCount>(format_.channels)
-                                                                 interleaved:YES];
+                                                                 interleaved:NO];
 
     if (!audioFormat) {
         logger_->error(LogMask::AUDIO, "Failed to create AVAudioFormat for source node");
@@ -279,26 +279,44 @@ bool AVAudioEngineHardwareProvider::createSourceNode() {
                                                   const AudioTimeStamp* timestamp,
                                                   AVAudioFrameCount frameCount,
                                                   AudioBufferList* outputData) {
-        // Suppress unused parameters
         (void)timestamp;
 
-        // Get pointer to the output buffer (interleaved float data)
-        AudioBuffer* buffer = &outputData->mBuffers[0];
-        float* channelData = static_cast<float*>(buffer->mData);
+        // Non-interleaved: separate buffer per channel
+        float* left = static_cast<float*>(outputData->mBuffers[0].mData);
+        float* right = (format_.channels > 1 && outputData->mNumberBuffers > 1)
+                         ? static_cast<float*>(outputData->mBuffers[1].mData)
+                         : nullptr;
 
-        if (!channelData) {
+        if (!left) {
             if (isSilence) *isSilence = YES;
             underrunCount_++;
             return static_cast<OSStatus>(noErr);
         }
 
-        // Invoke user-provided callback if registered
         if (audioCallback_) {
-            AudioBufferView descriptor(channelData, static_cast<int>(frameCount), format_.channels);
+            // Pipeline produces interleaved — use stack buffer, then de-interleave
+            float interleaved[4096 * 2];
+            int totalSamples = static_cast<int>(frameCount) * format_.channels;
+
+            if (totalSamples > 4096 * 2) {
+                // Unexpectedly large request — output silence
+                std::memset(left, 0, frameCount * sizeof(float));
+                if (right) std::memset(right, 0, frameCount * sizeof(float));
+                if (isSilence) *isSilence = YES;
+                return static_cast<OSStatus>(noErr);
+            }
+
+            AudioBufferView descriptor(interleaved, static_cast<int>(frameCount), format_.channels);
             audioCallback_(descriptor);
+
+            // De-interleave LRLR... → LLLL..., RRRR...
+            for (AVAudioFrameCount i = 0; i < frameCount; i++) {
+                left[i] = interleaved[i * 2];
+                if (right) right[i] = interleaved[i * 2 + 1];
+            }
         } else {
-            // Fill with silence if no callback registered
-            std::memset(channelData, 0, frameCount * format_.channels * sizeof(float));
+            std::memset(left, 0, frameCount * sizeof(float));
+            if (right) std::memset(right, 0, frameCount * sizeof(float));
         }
 
         if (isSilence) *isSilence = NO;

@@ -29,7 +29,7 @@ namespace LogMask {
     constexpr uint32_t ALL_CATS       = 0x0000FFFF;
 
     // Levels (upper 16 bits)
-    constexpr uint32_t DEBUG          = 0x00010000;
+    constexpr uint32_t DBG            = 0x00010000;
     constexpr uint32_t INFO           = 0x00020000;
     constexpr uint32_t WARN           = 0x00040000;
     constexpr uint32_t ERROR          = 0x00080000;
@@ -48,7 +48,7 @@ public:
     virtual void log(uint32_t mask, const char* format, ...) = 0;
 
     // Convenience methods - level baked in, pass category
-    // debug(LogMask::AUDIO, "format", ...) -> log(AUDIO | DEBUG, ...)
+    // debug(LogMask::AUDIO, "format", ...) -> log(AUDIO | DBG, ...)
     virtual void debug(uint32_t category, const char* format, ...) = 0;
     virtual void info(uint32_t category, const char* format, ...) = 0;
     virtual void warning(uint32_t category, const char* format, ...) = 0;
