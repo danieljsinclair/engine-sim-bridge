@@ -6,7 +6,6 @@ cmake-build-*/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
-Makefile
 *.cmake
 
 # Compiled libraries
@@ -33,3 +32,5 @@ build-ios-test/_deps/
 *.dat
 *.tmp
 /**/Temporary/
+build-ios-test/
+build-test/
