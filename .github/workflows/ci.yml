@@ -61,4 +61,6 @@ jobs:
       run: cmake --build build -- -j$(sysctl -n hw.logicalcpu)
 
     - name: Run tests
-      run: ctest --test-dir build --output-on-failure
+      # Exclude *_NOT_BUILT entries: engine-sim registers its own test binary but
+      # the bridge includes engine-sim with EXCLUDE_FROM_ALL so that binary is not built.
+      run: ctest --test-dir build --output-on-failure -E "_NOT_BUILT"
