@@ -1,0 +1,5 @@
+- [Twin Module SOLID Interface Design](INTERFACE_DESIGN.md) — Complete C++ interface definitions for ITelemetrySource, IEngineController, ITwinStrategy, ITwinModel, IGearbox, IClutch, IWheel with ownership, threading, and DI wiring
+- [Test Strategy for VirtualICE Twin](.claude/memory/TEST_STRATEGY.md) — Unit/integration/e2e test matrix, deterministic scenarios, objective acceptance criteria with quantified tolerances, CI integration plan
+- [Interface Contracts & Acceptance Criteria](.claude/memory/INTERFACE_CONTRACTS.md) — Unambiguous pre/post conditions for every module boundary, error policy (fail-fast), performance guarantees (<100μs update latency)
+- [PR Quality Gate Checklist](.claude/memory/PR_CHECKLIST.md) — Pre-commit checklist enforcing SRP/OCP/LSP/ISP/DIP/DRY, coverage thresholds (≥90%), zero-warnings build, performance regression guard, documentation updates
+- [Phase 0 Spike Scripts & Instructions](.claude/memory/PHASE0_SPIKE_SCRIPTS.md) — Source code + run instructions for the three evidence-gathering executables (audio sweep, clutch parameter sweep, telemetry jitter test)
