@@ -91,6 +91,7 @@ private:
     // ================================================================
 
     bool setupAudioUnit();
+    bool setDeviceSampleRate(Float64 targetRate);
     bool configureAudioFormat(const AudioStreamFormat& format);
     bool registerCallbackWithAudioUnit();
 

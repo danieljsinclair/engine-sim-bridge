@@ -6,7 +6,7 @@
 #include <cstdio>
 
 const char* ConsoleLogger::levelToString(uint32_t level) {
-    if (level == LogMask::DEBUG) return "DEBUG";
+    if (level == LogMask::DBG)   return "DEBUG";
     if (level == LogMask::INFO)  return "INFO";
     if (level == LogMask::WARN)  return "WARN";
     if (level == LogMask::ERROR) return "ERROR";
@@ -14,7 +14,7 @@ const char* ConsoleLogger::levelToString(uint32_t level) {
 }
 
 FILE* ConsoleLogger::getStream(uint32_t level) {
-    return (level == LogMask::DEBUG || level == LogMask::INFO) ? stdout : stderr;
+    return (level == LogMask::DBG   || level == LogMask::INFO) ? stdout : stderr;
 }
 
 bool ConsoleLogger::shouldLog(uint32_t mask) {
@@ -47,7 +47,7 @@ void ConsoleLogger::vlog(uint32_t mask, const char* format, va_list args) {
 // Convenience methods - OR level with category
 void ConsoleLogger::debug(uint32_t category, const char* format, ...) {
     va_list args; va_start(args, format);
-    vlog(category | LogMask::DEBUG, format, args);
+    vlog(category | LogMask::DBG,   format, args);
     va_end(args);
 }
 

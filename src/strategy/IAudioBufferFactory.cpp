@@ -1,4 +1,4 @@
-// IAudioBufferFactory.cpp - Factory for creating audio buffer strategies
+// IAudioBufferFactory.cpp - Factory for creating audio buffers
 // Implements the factory pattern to create appropriate IAudioBuffer implementations
 
 #include "strategy/IAudioBuffer.h"
@@ -8,7 +8,7 @@
 
 #include <memory>
 
-std::unique_ptr<IAudioBuffer> IAudioBufferFactory::createStrategy(
+std::unique_ptr<IAudioBuffer> IAudioBufferFactory::createBuffer(
     AudioMode mode,
     ILogging* logger,
     telemetry::ITelemetryWriter* telemetry

@@ -18,6 +18,7 @@
 #include "strategy/Diagnostics.h"
 #include "telemetry/ITelemetryProvider.h"
 #include "common/ILogging.h"
+#include "simulator/EngineSimTypes.h"
 
 class ISimulator;
 
@@ -44,7 +45,7 @@ public:
     bool AddFrames(float* buffer, int frameCount) override;
 
     // Lifecycle Methods
-    bool initialize(const AudioStrategyConfig& config) override;
+    bool initialize(const AudioBufferConfig& config, int sampleRate) override;
     void prepareBuffer() override;
     bool startPlayback(ISimulator* simulator) override;
     void stopPlayback(ISimulator* simulator) override;
@@ -82,6 +83,12 @@ private:
 
     // Throughput timing
     std::chrono::steady_clock::time_point lastThroughputTime_;
+
+    // Cursor-chasing tracking (for drift correction)
+    int64_t totalFramesWritten_ = 0;
+    int64_t totalFramesRead_ = 0;
+
+    double synthLatency_ = 0.0;
 
     int getAvailableFrames() const;
     void updateDiagnostics(int availableFrames, int framesRequested);

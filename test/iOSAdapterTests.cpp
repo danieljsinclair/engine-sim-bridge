@@ -36,10 +36,11 @@
 #if TARGET_OS_IPHONE
 #include "simulator/ISimulator.h"
 #include "simulator/BridgeSimulator.h"
+#include "simulator/SineSimulator.h"
 #include "strategy/IAudioBuffer.h"
 #include "strategy/SyncPullStrategy.h"
 #include "strategy/ThreadedStrategy.h"
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
 #endif
 
 // ============================================================================
@@ -132,7 +133,7 @@ TEST_F(AVAudioEngineProviderTest, Initialize_SucceedsWithValidFormat) {
     provider_ = std::make_unique<AVAudioEngineHardwareProvider>(logger_.get());
 
     AudioStreamFormat format;
-    format.sampleRate = 48000;
+    format.sampleRate = EngineSimDefaults::SAMPLE_RATE;
     format.channels = 2;
     format.bitsPerSample = 32;
     format.isFloat = true;
@@ -154,7 +155,7 @@ TEST_F(AVAudioEngineProviderTest, StartPlayback_AfterInit_Succeeds) {
     provider_ = std::make_unique<AVAudioEngineHardwareProvider>(logger_.get());
 
     AudioStreamFormat format;
-    format.sampleRate = 48000;
+    format.sampleRate = EngineSimDefaults::SAMPLE_RATE;
     format.channels = 2;
     format.isFloat = true;
     format.isInterleaved = true;
@@ -185,7 +186,7 @@ TEST_F(AVAudioEngineProviderTest, StopPlayback_StopsCallbackThread) {
     provider_ = std::make_unique<AVAudioEngineHardwareProvider>(logger_.get());
 
     AudioStreamFormat format;
-    format.sampleRate = 48000;
+    format.sampleRate = EngineSimDefaults::SAMPLE_RATE;
     format.channels = 2;
     format.isFloat = true;
     format.isInterleaved = true;
@@ -214,7 +215,7 @@ TEST_F(AVAudioEngineProviderTest, SetVolume_ClampsToRange) {
     provider_ = std::make_unique<AVAudioEngineHardwareProvider>(logger_.get());
 
     AudioStreamFormat format;
-    format.sampleRate = 48000;
+    format.sampleRate = EngineSimDefaults::SAMPLE_RATE;
     format.channels = 2;
     format.isFloat = true;
     format.isInterleaved = true;
@@ -238,7 +239,7 @@ TEST_F(AVAudioEngineProviderTest, CallbackReceivesFrames_WhenPlaybackStarted) {
     provider_ = std::make_unique<AVAudioEngineHardwareProvider>(logger_.get());
 
     AudioStreamFormat format;
-    format.sampleRate = 48000;
+    format.sampleRate = EngineSimDefaults::SAMPLE_RATE;
     format.channels = 2;
     format.isFloat = true;
     format.isInterleaved = true;
@@ -283,7 +284,7 @@ TEST_F(AVAudioEngineProviderTest, CallbackBufferIsWritable) {
     provider_ = std::make_unique<AVAudioEngineHardwareProvider>(logger_.get());
 
     AudioStreamFormat format;
-    format.sampleRate = 48000;
+    format.sampleRate = EngineSimDefaults::SAMPLE_RATE;
     format.channels = 2;
     format.isFloat = true;
     format.isInterleaved = true;
@@ -335,14 +336,18 @@ protected:
 
     // Helper: Create a BridgeSimulator in sine mode for testing
     std::unique_ptr<BridgeSimulator> createSineSimulator() {
-        EngineSimConfig config{};
-        config.sampleRate = 48000;
-        config.sineMode = 1;
-        config.simulationFrequency = 10000;
+        ISimulatorConfig config;
 
-        auto sim = std::make_unique<BridgeSimulator>();
+        auto sineSim = std::make_unique<SineSimulator>();
+        Simulator::Parameters simParams;
+        simParams.systemType = Simulator::SystemType::NsvOptimized;
+        sineSim->initialize(simParams);
+        sineSim->setSimulationFrequency(config.simulationFrequency);
+        sineSim->setFluidSimulationSteps(config.fluidSimulationSteps);
+        sineSim->setTargetSynthesizerLatency(config.targetSynthesizerLatency);
+        sineSim->init();
+        auto sim = std::make_unique<BridgeSimulator>(std::move(sineSim));
         if (!sim->create(config)) return nullptr;
-        if (!sim->loadScript("", "")) return nullptr;
         return sim;
     }
 
@@ -357,15 +362,16 @@ TEST_F(iOSPipelineIntegrationTest, SineModeProducesAudio) {
 
     auto strategy = std::make_unique<SyncPullStrategy>(logger_.get());
     AudioStrategyConfig config;
-    config.sampleRate = 48000;
+    config.sampleRate = ISimulatorConfig().sampleRate;
     config.channels = 2;
+    config.synthLatency = ISimulatorConfig().targetSynthesizerLatency;
     ASSERT_TRUE(strategy->initialize(config));
     ASSERT_TRUE(strategy->startPlayback(simulator.get()));
 
     // Create real hardware provider
     hardware_ = std::make_unique<AVAudioEngineHardwareProvider>(logger_.get());
     AudioStreamFormat format;
-    format.sampleRate = 48000;
+    format.sampleRate = ISimulatorConfig().sampleRate;
     format.channels = 2;
     format.isFloat = true;
     format.isInterleaved = true;
@@ -415,14 +421,15 @@ TEST_F(iOSPipelineIntegrationTest, CleanShutdownAfterPlayback) {
 
     auto strategy = std::make_unique<SyncPullStrategy>(logger_.get());
     AudioStrategyConfig config;
-    config.sampleRate = 48000;
+    config.sampleRate = EngineSimDefaults::SAMPLE_RATE;
     config.channels = 2;
+    config.synthLatency = 0.0;  // Use default
     ASSERT_TRUE(strategy->initialize(config));
     ASSERT_TRUE(strategy->startPlayback(simulator.get()));
 
     hardware_ = std::make_unique<AVAudioEngineHardwareProvider>(logger_.get());
     AudioStreamFormat format;
-    format.sampleRate = 48000;
+    format.sampleRate = EngineSimDefaults::SAMPLE_RATE;
     format.channels = 2;
     format.isFloat = true;
     format.isInterleaved = true;
@@ -463,13 +470,14 @@ TEST_F(iOSPipelineIntegrationTest, SyncPullAndThreadedBothWork) {
         }
 
         AudioStrategyConfig config;
-        config.sampleRate = 48000;
+        config.sampleRate = EngineSimDefaults::SAMPLE_RATE;
         config.channels = 2;
+        config.synthLatency = 0.0;  // Use default
         ASSERT_TRUE(strategy->initialize(config));
 
         auto hw = std::make_unique<AVAudioEngineHardwareProvider>(logger_.get());
         AudioStreamFormat format;
-        format.sampleRate = 48000;
+        format.sampleRate = EngineSimDefaults::SAMPLE_RATE;
         format.channels = 2;
         format.isFloat = true;
         format.isInterleaved = true;
@@ -526,7 +534,7 @@ TEST_F(iOSCallbackStressTest, CallbackDoesNotDeadlock_WhenStopPlaybackCalledFrom
     auto provider = std::make_unique<AVAudioEngineHardwareProvider>(logger_.get());
 
     AudioStreamFormat format;
-    format.sampleRate = 48000;
+    format.sampleRate = EngineSimDefaults::SAMPLE_RATE;
     format.channels = 2;
     format.isFloat = true;
     format.isInterleaved = true;
@@ -577,7 +585,7 @@ TEST_F(iOSCallbackStressTest, RapidStartStopCycle_DoesNotLeakOrCrash) {
     auto provider = std::make_unique<AVAudioEngineHardwareProvider>(logger_.get());
 
     AudioStreamFormat format;
-    format.sampleRate = 48000;
+    format.sampleRate = EngineSimDefaults::SAMPLE_RATE;
     format.channels = 2;
     format.isFloat = true;
     format.isInterleaved = true;
@@ -618,7 +626,7 @@ TEST_F(AVAudioEngineProviderTest, DestroyWhilePlaying_DoesNotCrash) {
     auto provider = std::make_unique<AVAudioEngineHardwareProvider>(logger_.get());
 
     AudioStreamFormat format;
-    format.sampleRate = 48000;
+    format.sampleRate = EngineSimDefaults::SAMPLE_RATE;
     format.channels = 2;
     format.isFloat = true;
     format.isInterleaved = true;

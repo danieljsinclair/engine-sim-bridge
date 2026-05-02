@@ -38,7 +38,7 @@ struct EngineState {
     double callbackRateHz = 0.0;
     double generatingRateFps = 0.0;
     double trendPct = 0.0;
-    int sampleRate = 48000;
+    int sampleRate = 0;  // Set by SimulationLoop from upstream provider
 };
 
 // ============================================================================
@@ -48,7 +48,6 @@ struct EngineState {
 struct PresentationConfig {
     bool interactive = false;
     double duration = 0.0;  // 0 = infinite
-    int diagnosticIntervalMs = 100;
     bool showProgress = true;
     bool showDiagnostics = true;
 };

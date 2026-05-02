@@ -10,29 +10,10 @@
 #include "simulator/ISimulator.h"
 #include "common/ILogging.h"
 #include "common/Verification.h"
-#include "simulator/engine_sim_bridge.h"
+#include "simulator/EngineSimTypes.h"
+#include "telemetry/NullTelemetryWriter.h"
 
 #include <cstring>
-
-// ============================================================================
-// NullTelemetryWriter - Silently discards all telemetry writes
-// ============================================================================
-
-namespace {
-
-class NullTelemetryWriter : public telemetry::ITelemetryWriter {
-public:
-    void writeEngineState(const telemetry::EngineStateTelemetry&) override {}
-    void writeFramePerformance(const telemetry::FramePerformanceTelemetry&) override {}
-    void writeAudioDiagnostics(const telemetry::AudioDiagnosticsTelemetry&) override {}
-    void writeAudioTiming(const telemetry::AudioTimingTelemetry&) override {}
-    void writeVehicleInputs(const telemetry::VehicleInputsTelemetry&) override {}
-    void writeSimulatorMetrics(const telemetry::SimulatorMetricsTelemetry&) override {}
-    void reset() override {}
-    const char* getName() const override { return "NullTelemetryWriter"; }
-};
-
-} // anonymous namespace
 
 // ============================================================================
 // SyncPullStrategy Implementation
@@ -76,17 +57,18 @@ void SyncPullStrategy::fillBufferFromEngine(ISimulator*, int) {
 // Lifecycle Method Implementations
 // ============================================================================
 
-bool SyncPullStrategy::initialize(const AudioStrategyConfig& config) {
+bool SyncPullStrategy::initialize(const AudioBufferConfig& config, int sampleRate) {
     ASSERT(logger_, "SyncPullStrategy::initialize: logger must not be null");
 
-    audioState_.sampleRate = config.sampleRate;
+    audioState_.sampleRate = sampleRate;
+    sampleRate_ = sampleRate;
     audioState_.isPlaying = false;
     shuttingDown_.store(false);
-    diagnostics_.setSampleRate(config.sampleRate);
+    diagnostics_.setSampleRate(sampleRate);
 
     logger_->info(LogMask::AUDIO,
                   "SyncPullStrategy initialized: sampleRate=%dHz, channels=%d",
-                  config.sampleRate, config.channels);
+                  sampleRate, config.channels);
 
     return true;
 }
@@ -170,7 +152,7 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
             // No frames produced: advance simulation and retry
             int retryCount = 0;
             while (retryCount < MAX_RETRIES && !shuttingDown_.load()) {
-                simulator_->update(1.0 / 48000.0);  // One sample period to feed synthesizer
+                simulator_->update(1.0 / sampleRate_);  // One sample period to feed synthesizer
                 result = simulator_->renderOnDemand(
                     dst + (framesRendered * 2),
                     remainingFrames,

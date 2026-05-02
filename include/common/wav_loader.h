@@ -1,7 +1,11 @@
 #ifndef ATG_ENGINE_SIM_WAV_LOADER_H
 #define ATG_ENGINE_SIM_WAV_LOADER_H
 
-#define DR_WAV_IMPLEMENTATION
+// DR_WAV_IMPLEMENTATION must be defined in exactly ONE .cpp file before including this header.
+// This is the standard pattern for stb-style single-header libraries.
+// Example (in one .cpp file):
+//   #define DR_WAV_IMPLEMENTATION
+//   #include "common/wav_loader.h"
 #include <dr_wav.h>
 
 #include <vector>

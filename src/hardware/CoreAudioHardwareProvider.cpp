@@ -226,10 +226,58 @@ bool CoreAudioHardwareProvider::setupAudioUnit() {
     return true;
 }
 
+bool CoreAudioHardwareProvider::setDeviceSampleRate(Float64 targetRate) {
+    AudioDeviceID deviceId = kAudioObjectUnknown;
+    UInt32 size = sizeof(deviceId);
+    OSStatus status = AudioUnitGetProperty(
+        audioUnit,
+        kAudioOutputUnitProperty_CurrentDevice,
+        kAudioUnitScope_Global,
+        0,
+        &deviceId,
+        &size
+    );
+    if (status != noErr) {
+        logCoreAudioError("AudioUnitGetProperty (device)", status);
+        return false;
+    }
+
+    Float64 currentRate = 0;
+    AudioObjectPropertyAddress addr = {
+        kAudioDevicePropertyNominalSampleRate,
+        kAudioObjectPropertyScopeOutput,
+        kAudioObjectPropertyElementMain
+    };
+    size = sizeof(currentRate);
+    status = AudioObjectGetPropertyData(deviceId, &addr, 0, nullptr, &size, &currentRate);
+    if (status != noErr) {
+        logCoreAudioError("AudioObjectGetPropertyData (current rate)", status);
+        return false;
+    }
+
+    if (currentRate == targetRate) {
+        logger_->info(LogMask::AUDIO, "Device already at %.0f Hz", targetRate);
+        return true;
+    }
+
+    status = AudioObjectSetPropertyData(deviceId, &addr, 0, nullptr, sizeof(targetRate), &targetRate);
+    if (status != noErr) {
+        logger_->warning(LogMask::AUDIO, "Could not set device rate to %.0f Hz (status: %d) — will use implicit SRC",
+                        targetRate, status);
+        return false;
+    }
+
+    logger_->info(LogMask::AUDIO, "Device sample rate set to %.0f Hz", targetRate);
+    return true;
+}
+
 bool CoreAudioHardwareProvider::configureAudioFormat(const AudioStreamFormat& format) {
     if (!audioUnit) {
         return false;
     }
+
+    // Set hardware device sample rate to match our requested rate
+    setDeviceSampleRate(static_cast<Float64>(format.sampleRate));
 
     // Build AudioStreamBasicDescription
     AudioStreamBasicDescription streamFormat = {};
@@ -264,8 +312,7 @@ bool CoreAudioHardwareProvider::configureAudioFormat(const AudioStreamFormat& fo
     );
 
     if (status != noErr) {
-        logCoreAudioError("AudioUnitSetProperty (format)", status,
-                         "44100Hz stereo float not supported");
+        logCoreAudioError("AudioUnitSetProperty (format)", status, "44.1kHz stereo float not supported");
         return false;
     }
 

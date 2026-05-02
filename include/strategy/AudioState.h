@@ -9,45 +9,21 @@
 
 #include <atomic>
 
-/**
- * AudioState - Core audio playback state
- *
- * Responsibilities:
- * - Track if audio is currently playing
- * - Maintain sample rate for timing calculations
- * - Thread-safe state management
- *
- * SRP: Only manages playback state, not buffer or diagnostics
- */
+// AudioState is a passive data holder — its owner (strategy) sets sampleRate
+// during initialize(). No dependency on EngineSimDefaults.
+
 struct AudioState {
-    /**
-     * Initialize with default values
-     */
     AudioState()
         : isPlaying(false)
-        , sampleRate(44100)
+        , sampleRate(0)
     {}
 
-    /**
-     * Current playback state
-     * - true: Audio is actively playing
-     * - false: Audio is stopped or paused
-     */
     std::atomic<bool> isPlaying;
-
-    /**
-     * Sample rate in Hz (e.g., 44100, 48000)
-     * Used for timing calculations throughout the audio pipeline
-     */
     int sampleRate;
 
-    /**
-     * Reset state to initial values
-     * Useful for cleanup or re-initialization scenarios
-     */
     void reset() {
         isPlaying.store(false);
-        sampleRate = 44100;
+        sampleRate = 0;
     }
 };
 

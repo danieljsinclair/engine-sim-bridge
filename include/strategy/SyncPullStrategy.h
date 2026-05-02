@@ -19,6 +19,7 @@
 #include "strategy/Diagnostics.h"
 #include "telemetry/ITelemetryProvider.h"
 #include "common/ILogging.h"
+#include "simulator/EngineSimTypes.h"
 
 class ISimulator;
 
@@ -46,7 +47,7 @@ public:
     bool AddFrames(float* buffer, int frameCount) override;
 
     // Lifecycle Methods
-    bool initialize(const AudioStrategyConfig& config) override;
+    bool initialize(const AudioBufferConfig& config, int sampleRate) override;
     void prepareBuffer() override;
     bool startPlayback(ISimulator* simulator) override;
     void stopPlayback(ISimulator* simulator) override;
@@ -77,6 +78,9 @@ private:
 
     // Simulator reference (set during startPlayback)
     ISimulator* simulator_ = nullptr;
+
+    // Sample rate (for update() retry calculations)
+    int sampleRate_ = 0;
 
     // Throughput timing
     std::chrono::steady_clock::time_point lastThroughputTime_;

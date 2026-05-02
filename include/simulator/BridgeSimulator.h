@@ -1,51 +1,75 @@
-// BridgeSimulator.h - Production implementation of ISimulator
-// Wraps the C-style EngineSimAPI behind the ISimulator interface.
-// DIP: Consumers depend on ISimulator, not on raw bridge types.
-// Phase F: Moved to engine-sim-bridge submodule
+// BridgeSimulator.h - Universal ISimulator implementation
+// Composes an injected Simulator subclass (PistonEngineSimulator or SineSimulator).
+// OCP: BridgeSimulator doesn't know or care which Simulator it has.
+// Factory is the composition root that wires mode-specific details.
 
 #ifndef BRIDGE_SIMULATOR_H
 #define BRIDGE_SIMULATOR_H
 
 #include "simulator/ISimulator.h"
-#include "simulator/engine_sim_bridge.h"
-#include "simulator/engine_sim_loader.h"
+#include "simulator/EngineSimTypes.h"
+#include "common/ILogging.h"
 #include "telemetry/ITelemetryProvider.h"
+#include "telemetry/NullTelemetryWriter.h"
+#include "engine-sim/include/simulator.h"
+
+#include <memory>
 #include <string>
+#include <vector>
 
 class BridgeSimulator : public ISimulator {
 public:
-    BridgeSimulator();
+    // Constructor takes an already-initialized Simulator subclass.
+    // The factory is responsible for creating and wiring the Simulator.
+    explicit BridgeSimulator(std::unique_ptr<Simulator> simulator);
     ~BridgeSimulator() override;
 
     // ISimulator lifecycle
-    bool create(const EngineSimConfig& config) override;
-    bool loadScript(const std::string& path, const std::string& assetBase) override;
-    bool setLogging(ILogging* logger) override;
-    void setTelemetryWriter(telemetry::ITelemetryWriter* writer) override;
+    bool create(const ISimulatorConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) override;
     void destroy() override;
     std::string getLastError() const override;
+    const char* getName() const override { return name_.c_str(); }
 
-    // ISimulator simulation
+    // ISimulator audio pipeline
     void update(double deltaTime) override;
-    EngineSimStats getStats() const override;
-
-    // ISimulator control inputs
-    void setThrottle(double position) override;
-    void setIgnition(bool on) override;
-    void setStarterMotor(bool on) override;
-
-    // ISimulator audio production
     bool renderOnDemand(float* buffer, int32_t frames, int32_t* written) override;
     bool readAudioBuffer(float* buffer, int32_t frames, int32_t* read) override;
     bool start() override;
     void stop() override;
 
+    // ISimulator telemetry & control
+    EngineSimStats getStats() const override;
+    void setThrottle(double position) override;
+    void setIgnition(bool on) override;
+    void setStarterMotor(bool on) override;
+
+    // Set display name from script path (called by factory for PistonEngine mode)
+    void setNameFromScript(const std::string& scriptPath);
+
 private:
-    EngineSimAPI api_;
-    EngineSimHandle handle_ = nullptr;
-    ILogging* pendingLogger_ = nullptr;
+    void initDependencies(ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter);
+    void initAudioConfig(const ISimulatorConfig& config);
+    void pushTelemetry(const EngineSimStats& stats);
+
+    static void advanceFixedSteps(Simulator* sim, int simulationFrequency, double dt, bool ceil);
+    void drainSynthesizerBuffer(Simulator* sim);
+
+    int16_t* ensureAudioConversionBufferSize(size_t requiredSize);
+
+    std::unique_ptr<Simulator> m_simulator;
+    std::string m_lastError;
+    std::string name_;
+    bool m_created = false;
+
+    // Dependencies (never null after create())
+    ILogging* logger_ = nullptr;
     telemetry::ITelemetryWriter* telemetryWriter_ = nullptr;
-    bool created_ = false;
+    std::unique_ptr<ConsoleLogger> defaultLogger_;
+    std::unique_ptr<NullTelemetryWriter> defaultTelemetryWriter_;
+
+    // Audio config
+    std::vector<int16_t> m_audioConversionBuffer;
+    ISimulatorConfig engineConfig_;
 };
 
 #endif // BRIDGE_SIMULATOR_H

@@ -30,7 +30,23 @@ set(ENGINE_SIM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 if(IOS)
     set(PIRANHA_ENABLED OFF CACHE BOOL "Disable scripting for iOS" FORCE)
 endif()
+
+# Isolate submodule compiler flags: do not inherit our strict warnings/Werror
+# This is standard practice when including 3rd party submodules
+set(SAVED_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+set(SAVED_C_FLAGS ${CMAKE_C_FLAGS})
+set(CMAKE_CXX_FLAGS "")
+set(CMAKE_C_FLAGS "")
+
+# EXCLUDE_FROM_ALL: Do not build every single target from the submodule.
+# Only build targets that we actually depend on (engine-sim, not tests, not app, not tools)
+# As of CMake 3.21+ this CORRECTLY still rebuilds when source files change.
+# The old bug where this would permanently cache binaries was fixed in 2022.
 add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_ALL)
+
+# Restore our original compiler flags after including submodules
+set(CMAKE_CXX_FLAGS ${SAVED_CXX_FLAGS})
+set(CMAKE_C_FLAGS ${SAVED_C_FLAGS})
 
 # Real bridge library (uses actual engine-sim with polymorphic simulator selection)
 # Phase F: Audio infrastructure moved from CLI into bridge
@@ -38,10 +54,12 @@ add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_
 # Bridge source files (shared between macOS and iOS)
 set(BRIDGE_SOURCES
     # Simulator core
-    src/simulator/engine_sim_bridge.cpp
-    src/simulator/sine_wave_simulator.cpp
+    src/simulator/SineSimulator.cpp
+    src/simulator/SimulatorInitHelpers.cpp
+    src/simulator/SimulatorFactory.cpp
     src/simulator/BridgeSimulator.cpp
-    src/simulator/EngineConfig.cpp
+    src/simulator/ScriptLoadHelpers.cpp
+    src/simulator/ISimulator.cpp
     # Audio strategies
     src/strategy/ThreadedStrategy.cpp
     src/strategy/SyncPullStrategy.cpp
@@ -124,7 +142,7 @@ endif()
 # Set library output properties
 set_target_properties(engine-sim-bridge PROPERTIES
     OUTPUT_NAME "enginesim"
-    PUBLIC_HEADER include/simulator/engine_sim_bridge.h
+    PUBLIC_HEADER include/simulator/EngineSimTypes.h
 )
 
 # Platform-specific settings (not for iOS static lib)
@@ -156,21 +174,16 @@ if(APPLE AND NOT IOS)
     )
 endif()
 
-# iOS: Merge bridge + engine-sim + dependencies into a single fat static library
-# This ensures the Xcode project only needs to link one .a file
+# Critical fix for iOS cross compilation:
+# Never install native binaries into system paths, never reuse binaries across architectures
+# This prevents macOS arm64 binaries getting accidentally linked into iOS simulator builds
 if(IOS)
-    # Collect all static library locations that engine-sim-bridge depends on
-    set(IOS_MERGED_LIBS
-        ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.a
-        ${CMAKE_BINARY_DIR}/engine-sim/libengine-sim.a
-        ${CMAKE_BINARY_DIR}/engine-sim/dependencies/submodules/simple-2d-constraint-solver/libsimple-2d-constraint-solver.a
-        ${CMAKE_BINARY_DIR}/engine-sim/dependencies/submodules/csv-io/libcsv-io.a
-    )
-
+    set(CMAKE_SKIP_INSTALL_ALL_DEPENDENCY ON)
+    # Copy the bridge library to the parent build directory for Xcode to find
+    # Xcode expects the library at ../build-$(PLATFORM_NAME)/libenginesim.a
     add_custom_command(TARGET engine-sim-bridge POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E echo "Merging iOS static libraries..."
-        COMMAND libtool -static -o ${CMAKE_BINARY_DIR}/libenginesim.a ${IOS_MERGED_LIBS}
-        COMMENT "Merging all static libs into single libenginesim.a for iOS"
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.a ${CMAKE_BINARY_DIR}/libenginesim.a
+        COMMENT "Copying libenginesim.a for Xcode linking"
     )
 endif()
 
@@ -248,7 +261,6 @@ if(BUILD_BRIDGE_TESTS)
     endif()
 
     # Preset engine tests - verifies C++ factory engines match Piranha scripts
-    # Off by default until Task #100/#101 deliver the factory implementations
     option(BUILD_PRESET_ENGINE_TESTS "Build preset engine tests" OFF)
     if(BUILD_PRESET_ENGINE_TESTS)
         add_executable(preset_engine_tests
@@ -272,6 +284,27 @@ if(BUILD_BRIDGE_TESTS)
         if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
             add_test(NAME preset_engine_tests COMMAND preset_engine_tests --gtest_color=yes)
         endif()
+    endif()
+
+    # Sine wave regression tests - proves the int16/float buffer aliasing bug
+    add_executable(sine_wave_regression_tests
+        test/SineWaveRegressionTests.cpp
+    )
+    target_include_directories(sine_wave_regression_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${ENGINE_SIM_PATH}/dependencies/dr_libs
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(sine_wave_regression_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+            ${AUDIO_LIBRARY}
+    )
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME sine_wave_regression_tests COMMAND sine_wave_regression_tests --gtest_color=yes)
     endif()
 
     # iOS adapter tests - only built when AudioBufferView and

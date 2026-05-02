@@ -1,147 +1,218 @@
-// BridgeSimulator.cpp - Production ISimulator wrapping EngineSimAPI
-// Forwards all ISimulator calls to the C-style EngineSim bridge functions.
+// BridgeSimulator.cpp - Universal ISimulator implementation
+// Composes an injected Simulator subclass.
+// All audio pipeline, telemetry, and control methods are identical
+// regardless of which Simulator subclass is injected (OCP).
 
 #include "simulator/BridgeSimulator.h"
-#include "common/ILogging.h"
 
-// Static ISimulator::getVersion() -- delegates to bridge C API
-const char* ISimulator::getVersion() {
-    return EngineSimGetVersion();
+BridgeSimulator::BridgeSimulator(std::unique_ptr<Simulator> simulator)
+    : m_simulator(std::move(simulator))
+{
+    if (m_simulator) {
+        name_ = "Simulator";
+    }
 }
-
-BridgeSimulator::BridgeSimulator() = default;
 
 BridgeSimulator::~BridgeSimulator() {
-    if (created_ && handle_) {
-        api_.Destroy(handle_);
-        handle_ = nullptr;
-        created_ = false;
-    }
+    destroy();
 }
 
-bool BridgeSimulator::create(const EngineSimConfig& config) {
-    // Apply sensible defaults for any zero-valued fields
-    EngineSimConfig effective = config;
-    if (effective.sampleRate <= 0) effective.sampleRate = 48000;
-    if (effective.inputBufferSize <= 0) effective.inputBufferSize = 1024;
-    if (effective.audioBufferSize <= 0) effective.audioBufferSize = 96000;
-    if (effective.simulationFrequency <= 0) effective.simulationFrequency = 10000;
-    if (effective.fluidSimulationSteps <= 0) effective.fluidSimulationSteps = 8;
-    if (effective.targetSynthesizerLatency <= 0.0) effective.targetSynthesizerLatency = 0.05;
+// ============================================================================
+// ISimulator Lifecycle
+// ============================================================================
 
-    EngineSimResult result = api_.Create(&effective, &handle_);
-    if (result != ESIM_SUCCESS || !handle_) {
-        return false;
-    }
-    created_ = true;
-
-    // Apply any pending logger that was set before create()
-    if (pendingLogger_) {
-        api_.SetLogging(handle_, pendingLogger_);
-        pendingLogger_ = nullptr;
-    }
-
+bool BridgeSimulator::create(const ISimulatorConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) {
+    initDependencies(logger, telemetryWriter);
+    initAudioConfig(config);
+    m_created = true;
     return true;
 }
 
-bool BridgeSimulator::loadScript(const std::string& path, const std::string& assetBase) {
-    if (!handle_) return false;
-    const char* pathPtr = path.empty() ? nullptr : path.c_str();
-    const char* assetPtr = assetBase.empty() ? nullptr : assetBase.c_str();
-    EngineSimResult result = api_.LoadScript(handle_, pathPtr, assetPtr);
-    return result == ESIM_SUCCESS;
-}
-
-bool BridgeSimulator::setLogging(ILogging* logger) {
-    if (!handle_) {
-        // Store for later application after create()
-        pendingLogger_ = logger;
-        return true;
-    }
-    EngineSimResult result = api_.SetLogging(handle_, logger);
-    return result == ESIM_SUCCESS;
-}
-
-void BridgeSimulator::setTelemetryWriter(telemetry::ITelemetryWriter* writer) {
-    telemetryWriter_ = writer;
-}
-
 void BridgeSimulator::destroy() {
-    if (!handle_) return;
-    api_.Destroy(handle_);
-    handle_ = nullptr;
-    created_ = false;
+    if (m_simulator) {
+        m_simulator->endAudioRenderingThread();
+        m_simulator->destroy();
+        m_simulator = nullptr;
+    }
+    m_created = false;
 }
 
 std::string BridgeSimulator::getLastError() const {
-    if (!handle_) return "";
-    return api_.GetLastError(handle_);
+    return m_lastError;
 }
+
+// ============================================================================
+// ISimulator Audio Pipeline
+// ============================================================================
 
 void BridgeSimulator::update(double deltaTime) {
-    if (!handle_) return;
-    api_.Update(handle_, deltaTime);
-
-    // Push engine state to telemetry if writer is set
-    if (telemetryWriter_) {
-        EngineSimStats stats = {};
-        api_.GetStats(handle_, &stats);
-
-        telemetry::EngineStateTelemetry engine;
-        engine.currentRPM = stats.currentRPM;
-        engine.currentLoad = stats.currentLoad;
-        engine.exhaustFlow = stats.exhaustFlow;
-        engine.manifoldPressure = stats.manifoldPressure;
-        engine.activeChannels = stats.activeChannels;
-        telemetryWriter_->writeEngineState(engine);
-
-        telemetry::FramePerformanceTelemetry perf;
-        perf.processingTimeMs = stats.processingTimeMs;
-        telemetryWriter_->writeFramePerformance(perf);
-    }
+    if (!m_created || !m_simulator) return;
+    advanceFixedSteps(m_simulator.get(), engineConfig_.simulationFrequency, deltaTime, true);
+    pushTelemetry(getStats());
 }
+
+bool BridgeSimulator::renderOnDemand(float* buffer, int32_t frames, int32_t* written) {
+    if (!m_created || !m_simulator || !buffer || frames <= 0) {
+        if (written) *written = 0;
+        return false;
+    }
+
+    const double dt = static_cast<double>(frames) / engineConfig_.sampleRate;
+    advanceFixedSteps(m_simulator.get(), engineConfig_.simulationFrequency, dt, false);
+    m_simulator->synthesizer().renderAudioOnDemand();
+
+    int16_t* conversionBuffer = ensureAudioConversionBufferSize(frames);
+    int samplesRead = m_simulator->readAudioOutput(frames, conversionBuffer);
+    EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, samplesRead, buffer, engineConfig_.volume, engineConfig_.convolutionLevel);
+
+    if (samplesRead < frames) {
+        EngineSimAudio::fillSilence(buffer + samplesRead * 2, frames - samplesRead);
+    }
+    if (written) *written = samplesRead;
+    return true;
+}
+
+bool BridgeSimulator::readAudioBuffer(float* buffer, int32_t frames, int32_t* read) {
+    if (!m_created || !m_simulator || !buffer || frames <= 0) {
+        if (read) *read = 0;
+        return false;
+    }
+
+    int16_t* conversionBuffer = ensureAudioConversionBufferSize(frames);
+    int samplesRead = m_simulator->readAudioOutput(frames, conversionBuffer);
+    EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, samplesRead, buffer, engineConfig_.volume, engineConfig_.convolutionLevel);
+
+    if (samplesRead < frames) {
+        EngineSimAudio::fillSilence(buffer + samplesRead * 2, frames - samplesRead);
+    }
+    if (read) *read = samplesRead;
+    return true;
+}
+
+bool BridgeSimulator::start() {
+    if (!m_created || !m_simulator) return false;
+    drainSynthesizerBuffer(m_simulator.get());
+    m_simulator->startAudioRenderingThread();
+    return true;
+}
+
+void BridgeSimulator::stop() {
+    if (!m_created || !m_simulator) return;
+    m_simulator->endAudioRenderingThread();
+}
+
+// ============================================================================
+// ISimulator Telemetry & Control
+// ============================================================================
 
 EngineSimStats BridgeSimulator::getStats() const {
     EngineSimStats stats = {};
-    if (handle_) {
-        api_.GetStats(handle_, &stats);
+    if (m_simulator && m_simulator->getEngine()) {
+        stats.currentRPM = m_simulator->getEngine()->getSpeed() * 60.0 / (2.0 * M_PI);
+        stats.exhaustFlow = m_simulator->getTotalExhaustFlow();
+        stats.processingTimeMs = m_simulator->getAverageProcessingTime() * 1000.0;
     }
     return stats;
 }
 
 void BridgeSimulator::setThrottle(double position) {
-    if (!handle_) return;
-    api_.SetThrottle(handle_, position);
+    if (!m_created || !m_simulator) return;
+    if (position < 0.0) position = 0.0;
+    if (position > 1.0) position = 1.0;
+    if (m_simulator->getEngine()) {
+        m_simulator->getEngine()->setSpeedControl(position);
+    }
 }
 
 void BridgeSimulator::setIgnition(bool on) {
-    if (!handle_) return;
-    api_.SetIgnition(handle_, on ? 1 : 0);
+    if (!m_created || !m_simulator) return;
+    if (m_simulator->getEngine()) {
+        m_simulator->getEngine()->getIgnitionModule()->m_enabled = on;
+    }
 }
 
 void BridgeSimulator::setStarterMotor(bool on) {
-    if (!handle_) return;
-    api_.SetStarterMotor(handle_, on ? 1 : 0);
+    if (!m_created || !m_simulator) return;
+    m_simulator->m_starterMotor.m_enabled = on;
 }
 
-bool BridgeSimulator::renderOnDemand(float* buffer, int32_t frames, int32_t* written) {
-    if (!handle_) return false;
-    EngineSimResult result = api_.RenderOnDemand(handle_, buffer, frames, written);
-    return result == ESIM_SUCCESS;
+// ============================================================================
+// Private Helpers
+// ============================================================================
+
+void BridgeSimulator::initDependencies(ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) {
+    if (logger) {
+        logger_ = logger;
+    } else {
+        defaultLogger_ = std::make_unique<ConsoleLogger>();
+        logger_ = defaultLogger_.get();
+    }
+
+    if (telemetryWriter) {
+        telemetryWriter_ = telemetryWriter;
+    } else {
+        defaultTelemetryWriter_ = std::make_unique<NullTelemetryWriter>();
+        telemetryWriter_ = defaultTelemetryWriter_.get();
+    }
 }
 
-bool BridgeSimulator::readAudioBuffer(float* buffer, int32_t frames, int32_t* read) {
-    if (!handle_) return false;
-    EngineSimResult result = api_.ReadAudioBuffer(handle_, buffer, frames, read);
-    return result == ESIM_SUCCESS;
+void BridgeSimulator::initAudioConfig(const ISimulatorConfig& config) {
+    engineConfig_ = config;
+    // Pre-allocate conversion buffer for mono int16 samples (stereo float conversion happens elsewhere)
+    // Buffer will be resized on-demand if larger frames are requested
+    ensureAudioConversionBufferSize(engineConfig_.maxChunkFrames);
 }
 
-bool BridgeSimulator::start() {
-    if (!handle_) return false;
-    EngineSimResult result = api_.StartAudioThread(handle_);
-    return result == ESIM_SUCCESS;
+void BridgeSimulator::pushTelemetry(const EngineSimStats& stats) {
+    telemetry::EngineStateTelemetry engine;
+    engine.currentRPM = stats.currentRPM;
+    engine.currentLoad = stats.currentLoad;
+    engine.exhaustFlow = stats.exhaustFlow;
+    engine.manifoldPressure = stats.manifoldPressure;
+    engine.activeChannels = stats.activeChannels;
+    telemetryWriter_->writeEngineState(engine);
+
+    telemetry::FramePerformanceTelemetry perf;
+    perf.processingTimeMs = stats.processingTimeMs;
+    telemetryWriter_->writeFramePerformance(perf);
 }
 
-void BridgeSimulator::stop() {
-    // Underlying C API has no StopAudioThread; cleanup happens in destroy()
+void BridgeSimulator::setNameFromScript(const std::string& scriptPath) {
+    if (scriptPath.empty()) {
+        name_ = "Unnamed";
+        return;
+    }
+    auto lastSlash = scriptPath.find_last_of("/\\");
+    std::string filename = (lastSlash != std::string::npos)
+        ? scriptPath.substr(lastSlash + 1)
+        : scriptPath;
+    auto lastDot = filename.find_last_of('.');
+    name_ = (lastDot != std::string::npos)
+        ? filename.substr(0, lastDot)
+        : filename;
+}
+
+void BridgeSimulator::advanceFixedSteps(Simulator* sim, int simulationFrequency, double dt, bool ceil) {
+    sim->startFrame(dt);
+    const int simSteps = ceil
+        ? static_cast<int>(std::ceil(simulationFrequency * dt))
+        : static_cast<int>(simulationFrequency * dt);
+    for (int i = 0; i < simSteps; ++i) {
+        sim->simulateStep();
+    }
+    sim->endFrame();
+}
+
+void BridgeSimulator::drainSynthesizerBuffer(Simulator* sim) {
+    std::vector<int16_t> drainBuffer(engineConfig_.maxChunkFrames);
+    while (sim->readAudioOutput(engineConfig_.maxChunkFrames, drainBuffer.data()) > 0) {
+        // Drain all pre-fill
+    }
+}
+
+int16_t* BridgeSimulator::ensureAudioConversionBufferSize(size_t requiredSize) {
+    if (requiredSize > m_audioConversionBuffer.size()) {
+        m_audioConversionBuffer.resize(requiredSize);
+    }
+    return m_audioConversionBuffer.data();
 }

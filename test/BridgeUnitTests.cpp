@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <cstring>
+#include "simulator/EngineSimTypes.h"
 
 // Test basic math utilities
 TEST(BridgeMathTest, SineCalculation) {
@@ -17,12 +18,13 @@ TEST(BridgeMathTest, SineCalculation) {
 
 TEST(BridgeMathTest, AudioSampleRateConversion) {
     // Test samples per millisecond calculation
-    double samplesPerMs = 44100.0 / 1000.0; // 44.1 samples per ms
+    const double sr = EngineSimDefaults::SAMPLE_RATE;
+    double samplesPerMs = sr / 1000.0;
     EXPECT_NEAR(samplesPerMs, 44.1, 0.01);
 
     // Test buffer size for 10ms at 44100Hz
-    int bufferFrames = static_cast<int>(44100 * 0.01);
-    EXPECT_EQ(bufferFrames, 441);
+    int bufferFrames = static_cast<int>(sr * 0.01);
+    EXPECT_EQ(bufferFrames, static_cast<int>(EngineSimDefaults::SAMPLE_RATE * 0.01));
 }
 
 TEST(BridgeMathTest, FrequencyToRad) {
@@ -79,8 +81,8 @@ TEST(BridgeStringTest, Concatenation) {
 
 // Test numeric conversions
 TEST(BridgeConvertTest, IntToDouble) {
-    int samples = 44100;
-    double seconds = samples / 44100.0;
+    int samples = EngineSimDefaults::SAMPLE_RATE;
+    double seconds = samples / static_cast<double>(EngineSimDefaults::SAMPLE_RATE);
     EXPECT_NEAR(seconds, 1.0, 0.0001);
 }
 

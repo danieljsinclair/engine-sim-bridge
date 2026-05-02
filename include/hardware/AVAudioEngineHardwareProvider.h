@@ -16,34 +16,28 @@
 #include <functional>
 
 #if TARGET_OS_IPHONE
-#import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
 #endif
 
 /**
  * AVAudioEngineHardwareProvider - iOS AVAudioEngine implementation of IAudioHardwareProvider
  *
- * This class wraps all AVAudioEngine operations behind the platform-agnostic
- * IAudioHardwareProvider interface. Uses AVAudioSourceNode for real-time
- * audio generation callback.
+ * This class wraps CoreAudio RemoteIO AudioUnit for iOS behind the
+ * platform-agnostic IAudioHardwareProvider interface. Matches the
+ * CoreAudioHardwareProvider pattern on macOS for consistency.
  *
  * Responsibilities:
- * - AVAudioEngine lifecycle (create, initialize, cleanup)
- * - AVAudioSession management (.playback category, activation)
+ * - AudioUnit lifecycle (create, initialize, cleanup)
  * - Audio format configuration
  * - Playback control (start/stop)
  * - Volume control
- * - Callback registration via AVAudioSourceNode
+ * - Callback registration via render callback
  * - Diagnostic state tracking
  *
- * Thread Safety:
- * - AVAudioSourceNode callback must be thread-safe (real-time audio thread)
- * - AVAudioEngine calls should be on main thread
- *
  * Design Decisions:
- * - AVAudioEngine over RemoteIO: Higher-level API, easier lifecycle management
- * - KISS: No unnecessary complexity for this use case
- * - AVAudioSourceNode: Clean callback interface for real-time audio generation
+ * - RemoteIO AudioUnit: Low-level but consistent across Apple platforms
+ *   (unlike AVAudioEngine which has format constraints and extra buffering)
+ * - Matches CoreAudioHardwareProvider pattern — single clean callback
  */
 class AVAudioEngineHardwareProvider : public IAudioHardwareProvider {
 public:
@@ -75,40 +69,36 @@ public:
 
 private:
 #if TARGET_OS_IPHONE
-    // ================================================================
-    // iOS-specific Members
-    // ================================================================
+    // AudioUnit instance (RemoteIO)
+    AudioUnit audioUnit_;
 
-    AVAudioEngine* audioEngine_;         // AVAudioEngine instance
-    AVAudioSourceNode* sourceNode_;      // Source node for real-time audio generation
-    AVAudioSession* audioSession_;       // Shared audio session instance
-    bool isPlaying_;                    // Playback state
-    double currentVolume_;               // Current volume level (0.0 to 1.0)
-    int underrunCount_;                 // Buffer underrun counter
-    int overrunCount_;                  // Buffer overrun counter
-    AudioStreamFormat format_;           // Stored audio format
+    // State
+    bool isPlaying_;
+    double currentVolume_;
+    int underrunCount_;
+    int overrunCount_;
+    AudioStreamFormat format_;
 
-    // ================================================================
     // Logging
-    // ================================================================
-
     std::unique_ptr<ILogging> defaultLogger_;
-    ILogging* logger_;                  // Non-null, points to defaultLogger_ or injected logger
+    ILogging* logger_;
 
-    // ================================================================
-    // Callback Management
-    // ================================================================
+    // Callback
+    AudioCallback audioCallback_;
 
-    AudioCallback audioCallback_;         // Registered audio callback
-
-    // ================================================================
-    // Private Helper Methods
-    // ================================================================
-
-    bool setupAudioSession();
-    bool setupAudioEngine();
+    // Helpers
+    bool setupAudioUnit();
     bool configureAudioFormat(const AudioStreamFormat& format);
-    bool createSourceNode();
+    bool registerCallbackWithAudioUnit();
+    static OSStatus remoteIORenderCallbackWrapper(
+        void* refCon,
+        AudioUnitRenderActionFlags* actionFlags,
+        const AudioTimeStamp* timeStamp,
+        UInt32 busNumber,
+        UInt32 numberFrames,
+        AudioBufferList* ioData
+    );
+    void logAudioError(const char* operation, OSStatus status, const char* additional = nullptr);
 
 #endif
 };
