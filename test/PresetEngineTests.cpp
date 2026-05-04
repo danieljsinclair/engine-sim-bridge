@@ -64,7 +64,7 @@ namespace {
 //
 // Creates a PistonEngineSimulator, loads a JSON preset via
 // PresetEngineFactory::loadFromFile(), then calls loadSimulation().
-// Follows the same pattern as EngineSimLoadPreset() in engine_sim_bridge.cpp.
+// Uses PresetEngineFactory to load preset JSON and construct engine objects.
 // ============================================================================
 
 class PresetSimulatorHarness {
