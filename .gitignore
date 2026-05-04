@@ -33,3 +33,4 @@ build-ios-test/_deps/
 *.dat
 *.tmp
 /**/Temporary/
+build-test/

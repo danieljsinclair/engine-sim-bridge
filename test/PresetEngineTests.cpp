@@ -126,23 +126,14 @@ public:
             int framesToRead = std::min(framesPerStep, framesToGenerate - framesGenerated);
 
             simulator_->startFrame(1.0 / 60.0);
-            simulator_->simulateStep();
+            while (simulator_->simulateStep()) {}
             simulator_->endFrame();
+            simulator_->synthesizer().renderAudioOnDemand();
 
             int framesRead = simulator_->readAudioOutput(
                 framesToRead,
                 audioOutput.data() + framesGenerated * STEREO_CHANNELS
             );
-
-            if (framesRead <= 0) {
-                simulator_->synthesizer().renderAudioOnDemand();
-                framesRead = simulator_->readAudioOutput(
-                    framesToRead,
-                    audioOutput.data() + framesGenerated * STEREO_CHANNELS
-                );
-            }
-
-            if (framesRead <= 0) break;
 
             framesGenerated += framesRead;
         }
@@ -172,13 +163,15 @@ public:
     // Engine controls
     void setThrottle(float t) {
         if (simulator_ && simulator_->getEngine()) {
-            simulator_->getEngine()->setThrottle(static_cast<double>(t));
+            // Use setSpeedControl: 0=idle(closed), 1=WOT(open)
+            // DirectThrottleLinkage overrides manual setThrottle() calls
+            simulator_->getEngine()->setSpeedControl(static_cast<double>(t));
         }
     }
 
     void setIgnition(bool on) {
         if (simulator_ && simulator_->getEngine()) {
-            simulator_->getEngine()->setSpeedControl(on ? 1.0 : 0.0);
+            simulator_->getEngine()->getIgnitionModule()->m_enabled = on;
         }
     }
 
@@ -387,18 +380,20 @@ TEST_P(PresetAudioIdleTest, ProducesNonSilentAudioAtIdle) {
     ASSERT_TRUE(harness_->initialize(fixturePath))
         << fixturePath << ": Failed to initialize preset simulator";
 
-    // Enable engine: ignition + starter
+    // Enable engine: throttle open + ignition + starter
+    // Must open throttle BEFORE cranking so engine gets air for combustion
+    harness_->setThrottle(1.0f);
     harness_->setIgnition(true);
     harness_->setStarterMotor(true);
 
-    // Act: Run simulation for enough time for engine to "start" and produce audio
-    for (int i = 0; i < 30; ++i) {
+    // Act: Run simulation for enough time for engine to start and produce audio
+    for (int i = 0; i < 90; ++i) {
         harness_->getSimulator()->startFrame(1.0 / 60.0);
-        harness_->getSimulator()->simulateStep();
+        while (harness_->getSimulator()->simulateStep()) {}
         harness_->getSimulator()->endFrame();
     }
 
-    // Disable starter once engine is "running"
+    // Disable starter once engine is running on its own power
     harness_->setStarterMotor(false);
 
     // Capture audio
@@ -453,20 +448,22 @@ TEST_P(PresetThrottleTest, EngineRespondsToThrottleInput) {
 
     harness_->setIgnition(true);
     harness_->setStarterMotor(true);
+    harness_->setThrottle(1.0f);  // Open throttle during cranking for combustion
 
-    // Run engine until started
-    for (int i = 0; i < 30; ++i) {
+    // Run engine until started (1.5s cranking)
+    for (int i = 0; i < 90; ++i) {
         harness_->getSimulator()->startFrame(1.0 / 60.0);
-        harness_->getSimulator()->simulateStep();
+        while (harness_->getSimulator()->simulateStep()) {}
         harness_->getSimulator()->endFrame();
     }
     harness_->setStarterMotor(false);
 
     // Act: Set throttle to idle and measure RPM
+    // setSpeedControl: 0=idle(closed plate), 1=WOT(open plate)
     harness_->setThrottle(0.0f);
     for (int i = 0; i < 30; ++i) {
         harness_->getSimulator()->startFrame(1.0 / 60.0);
-        harness_->getSimulator()->simulateStep();
+        while (harness_->getSimulator()->simulateStep()) {}
         harness_->getSimulator()->endFrame();
     }
     double idleRpm = harness_->getRPM();
@@ -475,7 +472,7 @@ TEST_P(PresetThrottleTest, EngineRespondsToThrottleInput) {
     harness_->setThrottle(1.0f);
     for (int i = 0; i < 60; ++i) {
         harness_->getSimulator()->startFrame(1.0 / 60.0);
-        harness_->getSimulator()->simulateStep();
+        while (harness_->getSimulator()->simulateStep()) {}
         harness_->getSimulator()->endFrame();
     }
     double wotRpm = harness_->getRPM();
