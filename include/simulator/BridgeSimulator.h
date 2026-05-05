@@ -43,6 +43,9 @@ public:
     void setIgnition(bool on) override;
     void setStarterMotor(bool on) override;
 
+    Simulator* getInternalSimulator() { return m_simulator.get(); }
+    const Simulator* getInternalSimulator() const { return m_simulator.get(); }
+
     // Set display name from script path (called by factory for PistonEngine mode)
     void setNameFromScript(const std::string& scriptPath);
 

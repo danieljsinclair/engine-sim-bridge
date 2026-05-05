@@ -1,6 +1,8 @@
 # Build directories
 build/
 cmake-build-*/
+build-ios-test/_deps/
+build-test/
 
 # CMake
 CMakeCache.txt
@@ -26,7 +28,6 @@ Makefile
 # OS
 .DS_Store
 Thumbs.db
-build-ios-test/_deps/
 
 # Temporary files
 *.log
