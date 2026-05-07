@@ -21,6 +21,13 @@ struct EngineInput {
     bool ignition = true;        // true = on (from keyboard/upstream)
     bool starterMotor = false;   // true = engaged (from keyboard/upstream)
     bool shouldContinue = true;  // false = signal loop termination
+
+    // Gear control
+    int gearDelta = 0;           // +1 = shift up, -1 = shift down, 0 = no change
+
+    // Dyno control
+    double dynoTorqueScale = -1.0;  // -1 = unchanged, 0.0-1.0 = fraction of max torque
+
     // Simulator auto-disengages starter when RPM > threshold
 };
 

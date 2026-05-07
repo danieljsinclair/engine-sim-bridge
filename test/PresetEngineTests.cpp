@@ -24,6 +24,7 @@
 #include <cmath>
 #include <cstring>
 #include <chrono>
+#include <thread>
 #include <algorithm>
 #include <fstream>
 
@@ -37,8 +38,10 @@
 #include "starter_motor.h"
 
 // Bridge headers
-#include "simulator/engine_sim_bridge.h"
 #include "simulator/PresetEngineFactory.h"
+#include "simulator/SimulatorFactory.h"
+#include "simulator/BridgeSimulator.h"
+#include "simulator/EngineSimTypes.h"
 #include "common/ILogging.h"
 
 // ============================================================================
@@ -553,51 +556,63 @@ protected:
     void SetUp() override {}
     void TearDown() override {}
 
-    // Run Piranha script and capture audio output
+    // Run Piranha script and capture audio output via SimulatorFactory/BridgeSimulator
     std::vector<int16_t> captureFromScript(
         const std::string& scriptPath,
         const std::string& assetBase,
         int frames)
     {
-        EngineSimAPI api;
-        EngineSimHandle handle = nullptr;
-        EngineSimConfig config = {};
+        ISimulatorConfig config;
         config.sampleRate = TEST_SAMPLE_RATE;
-        config.sineMode = 0;
         config.simulationFrequency = 10000;
 
-        EngineSimResult r = api.Create(&config, &handle);
-        if (r != ESIM_SUCCESS) return {};
-
-        r = api.LoadScript(handle, scriptPath.c_str(), assetBase.c_str());
-        if (r != ESIM_SUCCESS) {
-            api.Destroy(handle);
+        std::unique_ptr<ISimulator> isim;
+        try {
+            isim = SimulatorFactory::create(
+                SimulatorType::PistonEngine,
+                scriptPath,
+                assetBase,
+                config);
+        } catch (const std::exception& e) {
             return {};
         }
 
+        // Get raw Simulator* for direct physics/audio access
+        auto* bridge = dynamic_cast<BridgeSimulator*>(isim.get());
+        if (!bridge) return {};
+        Simulator* sim = bridge->getInternalSimulator();
+        if (!sim) return {};
+
         // Run simulation to let engine start
-        api.SetIgnition(handle, 1);
-        api.SetStarterMotor(handle, 1);
-        for (int i = 0; i < 60; ++i) {
-            api.Update(handle, 1.0 / 60.0);
+        if (sim->getEngine()) {
+            sim->getEngine()->getIgnitionModule()->m_enabled = true;
         }
-        api.SetStarterMotor(handle, 0);
+        sim->m_starterMotor.m_enabled = true;
+        for (int i = 0; i < 60; ++i) {
+            sim->startFrame(1.0 / 60.0);
+            while (sim->simulateStep()) {}
+            sim->endFrame();
+            sim->synthesizer().renderAudioOnDemand();
+        }
+        sim->m_starterMotor.m_enabled = false;
 
         // Capture audio
         std::vector<int16_t> audio(frames * STEREO_CHANNELS, 0);
-        int32_t totalRead = 0;
+        int totalRead = 0;
         while (totalRead < frames) {
-            int32_t toRead = std::min(100, frames - totalRead);
-            int32_t read = 0;
-            api.ReadAudioBuffer(handle,
-                audio.data() + totalRead * STEREO_CHANNELS,
-                toRead, &read);
-            api.Update(handle, 1.0 / 60.0);
+            int toRead = std::min(100, frames - totalRead);
+            sim->startFrame(1.0 / 60.0);
+            while (sim->simulateStep()) {}
+            sim->endFrame();
+            sim->synthesizer().renderAudioOnDemand();
+            int read = sim->readAudioOutput(
+                toRead,
+                audio.data() + totalRead * STEREO_CHANNELS);
             if (read > 0) totalRead += read;
             else break;
         }
 
-        api.Destroy(handle);
+        audio.resize(totalRead * STEREO_CHANNELS);
         return audio;
     }
 

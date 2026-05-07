@@ -6,17 +6,20 @@
 #include "simulation/SimulationLoop.h"
 
 #include "simulator/ISimulator.h"
+#include "simulator/BridgeSimulator.h"
 #include "simulator/EngineSimTypes.h"
 
 #include "strategy/AudioLoopConfig.h"
 #include "hardware/IAudioHardwareProvider.h"
 #include "strategy/IAudioBuffer.h"
-#include "strategy/Diagnostics.h"
 #include "io/IInputProvider.h"
 #include "io/IPresentation.h"
 #include "common/ILogging.h"
 #include "telemetry/ITelemetryProvider.h"
 #include "common/Verification.h"
+
+#include "engine-sim/include/simulator.h"
+#include "engine-sim/include/units.h"
 
 #include <cstring>
 #include <stdexcept>
@@ -133,6 +136,9 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.ignition = ignition;
     state.starterMotor = false;
     state.exhaustFlow = stats.exhaustFlow;
+    state.gear = stats.gear;
+    state.dynoTorque = stats.dynoTorque;
+    state.dynoTargetRPM = stats.dynoTargetRPM;
     state.renderMs = timing.renderMs;
     state.headroomMs = timing.headroomMs;
     state.budgetPct = timing.budgetPct;
@@ -237,6 +243,33 @@ void warnWavExportNotSupported(bool outputWavRequested, ILogging* logger) {
     }
 }
 
+// Apply dyno torque scaling when the input provider reports a scale change.
+void applyDynoControl(Simulator* rawSim, const input::EngineInput& engineInput, double& lastScale) {
+    if (!rawSim || !rawSim->m_dyno.m_enabled) return;
+    if (engineInput.dynoTorqueScale < 0.0) return;
+    if (engineInput.dynoTorqueScale == lastScale) return;
+
+    rawSim->m_dyno.m_maxTorque = units::torque(EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS, units::ft_lb) * engineInput.dynoTorqueScale;
+    lastScale = engineInput.dynoTorqueScale;
+}
+
+// Apply gear changes from keyboard input ([/] keys). Clamps at gear 0 (neutral).
+void applyGearChange(Simulator* rawSim, int gearDelta, ILogging* logger) {
+    if (!rawSim || gearDelta == 0) return;
+    if (!rawSim->getTransmission()) return;
+
+    int currentGear = rawSim->getTransmission()->getGear();
+    int newGear = currentGear + gearDelta;
+    if (newGear >= 0) {
+        rawSim->getTransmission()->changeGear(newGear);
+        // Lock clutch when gear engaged (connects engine to vehicle inertia)
+        // Disengage in neutral (engine free-spins)
+        rawSim->getTransmission()->setClutchPressure(newGear > 0 ? 1.0 : 0.0);
+        logger->info(LogMask::BRIDGE, "Gear: %d -> %d (clutch %s)", currentGear, newGear,
+                     newGear > 0 ? "LOCKED" : "FREE");
+    }
+}
+
 } // anonymous namespace
 
 // ============================================================================
@@ -260,11 +293,29 @@ int runUnifiedAudioLoop(
 
     double throttle = 0.1;
     bool ignition = true;
+    double lastDynoTorqueScale = -1.0;
+    bool engineCaught = false;
+
+    // Get internal simulator for dyno control (if dyno is active)
+    Simulator* rawSim = nullptr;
+    auto* bridgeSim = dynamic_cast<BridgeSimulator*>(&simulator);
+    if (bridgeSim) {
+        rawSim = bridgeSim->getInternalSimulator();
+    }
 
     logger->info(LogMask::BRIDGE, "runUnifiedAudioLoop starting simulation loop with %s", config.simulatorLabel.c_str());
 
     while (true) {
-        checkStarterMotorRPM(simulator, minSustainedRPM);
+        // Track whether engine has caught (combustion self-sustaining)
+        if (checkStarterMotorRPM(simulator, minSustainedRPM)) {
+            engineCaught = true;
+        }
+
+        // Apply initial dyno load when engine first catches (works for both interactive and non-interactive)
+        if (engineCaught && lastDynoTorqueScale < 0.0 && config.targetLoad > 0 && rawSim && rawSim->m_dyno.m_enabled) {
+            rawSim->m_dyno.m_maxTorque = units::torque(EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS, units::ft_lb) * config.targetLoad;
+            lastDynoTorqueScale = config.targetLoad;
+        }
 
         // Poll input: interactive mode uses OnUpdateSimulation, timed mode uses duration check
         if (inputProvider) {
@@ -274,6 +325,14 @@ int runUnifiedAudioLoop(
             }
             throttle = engineInput.throttle;
             ignition = engineInput.ignition;
+
+            // Apply dyno torque scaling only after engine catches (starter can't overcome dyno resistance)
+            if (engineCaught) {
+                applyDynoControl(rawSim, engineInput, lastDynoTorqueScale);
+            }
+
+            // Apply gear changes ([/] keys in keyboard provider)
+            applyGearChange(rawSim, engineInput.gearDelta, logger);
         } else {
             if (currentTime >= config.duration) {
                 break;

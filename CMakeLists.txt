@@ -287,6 +287,8 @@ if(BUILD_BRIDGE_TESTS)
     endif()
 
     # Sine wave regression tests - proves the int16/float buffer aliasing bug
+    # These tests link against engine-sim-bridge (unlike bridge_unit_tests
+    # which is standalone). They exercise SineWaveSimulator::renderOnDemand().
     add_executable(sine_wave_regression_tests
         test/SineWaveRegressionTests.cpp
     )
@@ -328,3 +330,132 @@ if(BUILD_BRIDGE_TESTS)
         endif()
     endif()
 endif()
+
+# ============================================================================
+# Phase 0 Evidence-Gathering Spikes
+# These are GTest-based spike executables that output deterministically
+# collect signal measurements for Phase 0 decisions.
+# ============================================================================
+option(BUILD_PHASE0_SPIKES "Build Phase 0 spike executables" ON)
+if(BUILD_PHASE0_SPIKES)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes")
+
+    # ---- Audio Sweep Spike ----
+    add_executable(audio_sweep_spike
+        test/spikes/AudioSweepSpike.cpp
+    )
+    target_include_directories(audio_sweep_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/dependencies/dr_libs
+        ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(audio_sweep_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    set_target_properties(audio_sweep_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME audio_sweep_spike COMMAND audio_sweep_spike)
+
+    # ---- Clutch Parameter Sweep Spike ----
+    add_executable(clutch_sweep_spike
+        test/spikes/ClutchParameterSweepSpike.cpp
+    )
+    target_include_directories(clutch_sweep_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+    )
+    target_compile_definitions(clutch_sweep_spike PRIVATE
+        TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
+    )
+    target_link_libraries(clutch_sweep_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    set_target_properties(clutch_sweep_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME clutch_sweep_spike COMMAND clutch_sweep_spike)
+
+    # ---- Telemetry Jitter Spike ----
+    add_executable(jitter_test_spike
+        test/spikes/TelemetryJitterSpike.cpp
+    )
+    target_include_directories(jitter_test_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/dependencies/dr_libs
+        ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(jitter_test_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    set_target_properties(jitter_test_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME jitter_test_spike COMMAND jitter_test_spike)
+
+    # ---- Dyno Tracking Spike ----
+    add_executable(dyno_tracking_spike
+        test/spikes/DynoTrackingSpike.cpp
+    )
+    target_include_directories(dyno_tracking_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+    )
+    target_link_libraries(dyno_tracking_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    set_target_properties(dyno_tracking_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME dyno_tracking_spike COMMAND dyno_tracking_spike)
+
+    # ---- Dyno Launch Control Spike ----
+    add_executable(dyno_launch_control_spike
+        test/spikes/DynoLaunchControlSpike.cpp
+    )
+    target_include_directories(dyno_launch_control_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+    )
+    target_link_libraries(dyno_launch_control_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    set_target_properties(dyno_launch_control_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME dyno_launch_control_spike COMMAND dyno_launch_control_spike)
+
+    # ---- Real Engine Audio Spike (Subaru EJ25) ----
+    add_executable(real_engine_audio_spike
+        test/spikes/RealEngineAudioSpike.cpp
+    )
+    target_include_directories(real_engine_audio_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/scripting/include
+        ${ENGINE_SIM_PATH}/dependencies/submodules/piranha
+    )
+    target_link_libraries(real_engine_audio_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+            engine-sim-script-interpreter
+    )
+    set_target_properties(real_engine_audio_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME real_engine_audio_spike COMMAND real_engine_audio_spike)
+endif()
+

@@ -28,6 +28,9 @@ struct EngineState {
     bool ignition;
     bool starterMotor;
     double exhaustFlow;  // m^3/s
+    int gear = 0;
+    double dynoTorque = 0.0;      // ft*lbs (0 when dyno disabled)
+    double dynoTargetRPM = 0.0;   // 0 when dyno disabled
 
     // Audio timing diagnostics (from strategy)
     double renderMs = 0.0;

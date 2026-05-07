@@ -55,6 +55,7 @@ namespace EngineSimDefaults {
     constexpr double  DEFAULT_DURATION_SECONDS   = 3.0;  // Default non-interactive simulation duration
     constexpr float   DEFAULT_HARDWARE_VOLUME    = 1.0f; // Default hardware output volume (0.0 to 1.0)
     constexpr int32_t DEFAULT_PREFILL_MS         = 50;   // Default pre-fill buffer duration in ms for sync-pull mode
+    constexpr double  DYNO_MAX_TORQUE_FT_LBS     = 500.0; // Base dyno brake torque — ~1.5x typical V8 peak, gives usable range
 }
 
 // ISimulatorConfig — Configuration for ISimulator implementations
@@ -88,6 +89,12 @@ struct EngineSimStats {
     double manifoldPressure = 0.0;
     int32_t activeChannels = 0;
     double processingTimeMs = 0.0;
+
+    // Dyno state (0.0 when dyno disabled)
+    double dynoTorque = 0.0;         // Current dyno applied torque (ft*lbs)
+    double dynoTargetRPM = 0.0;      // Dyno target RPM (0 = disabled)
+    double dynoTorqueScale = 1.0;    // Current torque scale (0-1)
+    int gear = 0;                    // Current gear (0 = neutral)
 };
 
 namespace EngineSimAudio {

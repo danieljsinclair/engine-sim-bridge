@@ -39,12 +39,11 @@ public:
 
     // ISimulator telemetry & control
     EngineSimStats getStats() const override;
+    Simulator* getInternalSimulator() { return m_simulator.get(); }
+    const Simulator* getInternalSimulator() const { return m_simulator.get(); }
     void setThrottle(double position) override;
     void setIgnition(bool on) override;
     void setStarterMotor(bool on) override;
-
-    Simulator* getInternalSimulator() { return m_simulator.get(); }
-    const Simulator* getInternalSimulator() const { return m_simulator.get(); }
 
     // Set display name from script path (called by factory for PistonEngine mode)
     void setNameFromScript(const std::string& scriptPath);

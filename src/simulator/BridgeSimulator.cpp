@@ -111,6 +111,15 @@ EngineSimStats BridgeSimulator::getStats() const {
         stats.currentRPM = m_simulator->getEngine()->getSpeed() * 60.0 / (2.0 * M_PI);
         stats.exhaustFlow = m_simulator->getTotalExhaustFlow();
         stats.processingTimeMs = m_simulator->getAverageProcessingTime() * 1000.0;
+
+        if (m_simulator->m_dyno.m_enabled) {
+            stats.dynoTorque = m_simulator->getFilteredDynoTorque();
+            stats.dynoTargetRPM = std::abs(m_simulator->m_dyno.m_rotationSpeed) * 30.0 / M_PI;
+        }
+
+        if (m_simulator->getTransmission()) {
+            stats.gear = m_simulator->getTransmission()->getGear();
+        }
     }
     return stats;
 }
