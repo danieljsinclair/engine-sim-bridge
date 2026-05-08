@@ -523,13 +523,23 @@ The critic MUST explicitly sign off in the commit workflow. If the critic reject
 
 ## Remaining Open Questions
 
-### Q1: .mr script compatibility — scripts without main() crash engine-sim
+### Q1: RESOLVED — .mr script compatibility for headless loading
 
-**Problem**: Most downloadable .mr files (e.g. from AngeTheGreat's repository) crash with a segfault when loaded via `--script` because they reference `main.mr` which expects a full GUI environment. Our adapted scripts (ferrari_f136, C63_M156, merlin) work because we removed the `main.mr` dependency and call `main()` directly.
+**Problem**: Downloadable .mr files crash with segfault via `--script` because they use `run()` which expects a GUI environment, or lack a `main` node to wire engine/vehicle/transmission together.
 
-**Impact**: Limits which vehicles can be simulated without manual .mr editing. C63 AMG is a high-priority target for the twin.
+**Solution**: Replace `run()` with `set_engine()` / `set_vehicle()` / `set_transmission()` pattern. Add a `main` node at the bottom of engine definition files that wires components together, then call `main()`. The pattern:
+```
+public node main {
+    set_engine(MyEngine())
+    set_vehicle(my_vehicle())
+    set_transmission(my_transmission())
+}
+main()
+```
 
-**What's needed to answer**: Investigate what `main.mr` does (likely sets up GUI, default theme, sound settings) and determine the minimum stub needed to make arbitrary .mr scripts loadable headlessly. Likely a bridge-specific `main.mr` stub that provides the same setup without GUI dependencies.
+**Fixed**: C63.mr (was already adapted), C63_M156.mr (added main node), C63_M156_V2.mr (replaced run() with set_engine pattern). All three load successfully via `--script`.
+
+**General approach for new .mr files**: Any downloadable engine definition needs two changes: (1) ensure a `main` node exists that calls `set_engine`/`set_vehicle`/`set_transmission` instead of `run()`, (2) add `main()` call at the end.
 
 ### Q2: Automatic gearbox shift curve validation
 
@@ -541,16 +551,20 @@ The critic MUST explicitly sign off in the commit workflow. If the critic reject
 
 ### Q3: SpeedTrackingForce — is it needed at all?
 
-**Problem**: Approach A+ includes a drift correction ForceGenerator, but we won't know if drift is significant until the pipeline runs end-to-end with real telemetry.
+**Problem**: Approach A+ includes a drift correction ForceGenerator, but we won't know if drift is significant until the pipeline runs end-to-end with real telemetry from vehicle-sim.
 
-**Impact**: If drift is <2%, the ForceGenerator adds unnecessary complexity and potential audio artifacts.
+**Context**: When engine-sim's virtual vehicle runs, its simulated road speed may drift from the real EV's actual road speed because the virtual ICE engine produces different torque than the real EV motor. SpeedTrackingForce is a proposed `ForceGenerator` (engine-sim's extension point for injecting external forces) that applies gentle corrective torque to the vehicle mass body — pushing virtual speed toward real speed. It uses a P-controller: `correctionTorque = gain * (virtualSpeed - realSpeed)`, clamped to a max value. This prevents gear selection errors (gearbox uses real speed but physics uses virtual speed).
 
-**What's needed to answer**: Build the Phase 1 pipeline with SpeedTrackingForce disabled. Measure virtual vs real speed divergence over a test scenario. Enable only if drift exceeds 5%.
+**Impact**: If drift is <2%, the ForceGenerator adds unnecessary complexity and potential audio artifacts (clicks/pops from sudden torque corrections).
+
+**What's needed to answer**: Build the Phase 1 pipeline with SpeedTrackingForce disabled. Feed synthetic telemetry from vehicle-sim. Measure virtual vs real speed divergence over test scenarios (acceleration, cruise, deceleration). Enable only if drift exceeds 5%. Starting values if needed: gain=100, maxCorrection=500 N.
 
 ### Q4: Vehicle profile parameterization from .mr scripts
 
-**Problem**: IceVehicleProfile needs gear ratios, diff ratio, tire radius, mass, idle/redline RPM. The Piranha parser can extract these during .mr compilation, but the accessor methods don't all exist yet on engine-sim's C++ objects.
+**Problem**: IceVehicleProfile needs gear ratios, diff ratio, tire radius, mass, idle/redline RPM. These are currently hardcoded as C++ constants. Can they be auto-extracted from .mr scripts?
 
-**Impact**: Hardcoded profiles work for MVP but don't scale to the 236+ .mr scripts available.
+**Context**: The proposed engine-sim accessors (`getGearRatios()`, `getGearCount()`, `getMaxClutchTorque()` on Transmission) would let the bridge read back what gear ratios a .mr script configured at runtime. However, for Phase 1 these accessors are **not required**. The bridge's `IceVehicleProfile` struct already carries gear ratios, diff ratio, tire radius etc. — populated from the same parameters that configure the Transmission during .mr script execution. They're in sync by definition because both come from the same source. The accessors would only matter in Phase 2+ for auto-discovering parameters from arbitrary scripts without a matching hardcoded profile.
 
-**What's needed to answer**: Add ~10 lines of read-only accessors to engine-sim's Transmission class (getGearRatios, getGearCount, getMaxClutchTorque). These are on our fork, no upstream PR needed.
+**Phase 1 approach**: Hardcode 2-3 profiles (GM LS, Ferrari F136, Honda TRX520) as C++ constants in `IceVehicleProfile`. The profile is selected at startup alongside the .mr script.
+
+**Phase 2 approach**: Extract parameters from Piranha compiler output. Requires ~10 lines of read-only accessors on engine-sim's Transmission class (our fork, no upstream PR). Not blocking for Phase 1.
