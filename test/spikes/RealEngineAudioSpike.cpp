@@ -98,13 +98,10 @@ void loadImpulseResponses(Simulator* sim, Engine* engine, const std::string& eng
 
 TEST(Phase0Spikes, RealEngineAudio_FerrariF136) {
     const std::string engineSimDir = "/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/engine-sim";
-    const std::string scriptPath = "assets/spike_ferrari_f136.mr";
+    const std::string scriptPath = "../es/spike_ferrari_f136.mr";
     const std::string outDir = "/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/build-test/spikes/real_engine_audio/";
     const std::string wavPath = outDir + "ferrari_f136_sweep.wav";
     system(("mkdir -p " + outDir).c_str());
-
-    std::string originalDir = std::filesystem::current_path().string();
-    std::filesystem::current_path(engineSimDir);
 
     printf("CWD: %s\n", std::filesystem::current_path().c_str());
     fflush(stdout);
@@ -121,7 +118,6 @@ TEST(Phase0Spikes, RealEngineAudio_FerrariF136) {
 
     if (!ok) {
         compiler.destroy();
-        std::filesystem::current_path(originalDir);
         ASSERT_TRUE(false) << "Failed to compile script: " << scriptPath;
     }
 
@@ -130,7 +126,6 @@ TEST(Phase0Spikes, RealEngineAudio_FerrariF136) {
 
     if (!engine) {
         compiler.destroy();
-        std::filesystem::current_path(originalDir);
         ASSERT_NE(engine, nullptr) << "Script did not create an engine";
     }
     printf("Engine: %s\n", engine->getName().c_str());
@@ -140,7 +135,6 @@ TEST(Phase0Spikes, RealEngineAudio_FerrariF136) {
     Transmission* transmission = output.transmission;
 
     compiler.destroy();
-    std::filesystem::current_path(originalDir);
 
     // 2. Create PistonEngineSimulator
     auto pistonSim = std::make_unique<PistonEngineSimulator>();
