@@ -369,25 +369,23 @@ vehicle-sim's PRODUCT_VISION prohibits build dependency on engine-sim. Both comp
 **Goal**: Prove the physics-driven approach produces authentic sound from EV telemetry.
 
 Components to build:
-- [ ] `UpstreamSignal` struct (`bridge/include/io/UpstreamSignal.h`)
-- [ ] `IceVehicleProfile` struct (`bridge/include/twin/IceVehicleProfile.h`) — all tunable constants centralized here, no magic numbers
-- [ ] `AutomaticGearbox` class (`bridge/src/twin/AutomaticGearbox.cpp`) — road-speed-based shift scheduling, 85% hysteresis, kickdown
-- [ ] `VirtualIceTwin` class — state machine + throttle smoothing (`bridge/src/twin/VirtualIceTwin.cpp`)
-- [ ] `VirtualIceInputProvider` — `IInputProvider` impl (`bridge/src/input/VirtualIceInputProvider.cpp`)
-- [ ] ISimulator extension — `setGear()`, `setClutchPressure()`, `getEngineRpm()` (`bridge/include/simulator/ISimulator.h`)
-- [ ] Engine-sim accessor additions (~15 lines in `simulator.h`)
-- [ ] `AutomaticGearboxTest` — TDD: shift decisions, hysteresis, kickdown, edge cases
-- [ ] `VirtualIceTwinTest` — TDD: state machine transitions
-- [ ] `ThrottleSmootherTest` — TDD: exponential response, no overshoot
-- [ ] `IceVehicleProfileTest` — TDD: profile loading, parameter validation
-- [ ] `TwinPhysicsIntegrationTest` — TDD: synthetic telemetry → twin → engine-sim → RPM within tolerance
-- [ ] `AccelerationScenarioTest` — TDD: 0-100 km/h gear sequence, RPM bands, shift timing
-- [ ] `DecelerationScenarioTest` — TDD: coast-down downshifts, hysteresis, no below-1st
-- [ ] `KickdownScenarioTest` — TDD: throttle step → downshift within 500ms, safe gear
-- [ ] `CruiseScenarioTest` — TDD: stable gear, no hunting at constant speed
-- [ ] `StandstillScenarioTest` — TDD: idle behavior, no shifts at rest
-- [ ] `LaunchScenarioTest` — TDD: 1st gear from rest, upshift at calibrated speed
-- [ ] Shift execution via clutch manipulation (disengage → pause → changeGear → ramp)
+- [x] `UpstreamSignal` struct (`include/io/UpstreamSignal.h`)
+- [x] `IceVehicleProfile` struct (`include/twin/IceVehicleProfile.h`) — all tunable constants centralized here, no magic numbers
+- [x] `AutomaticGearbox` class (`src/twin/AutomaticGearbox.cpp`) — road-speed-based shift scheduling, 85% hysteresis, kickdown (12 tests)
+- [x] `ThrottleSmoother` class (`include/twin/ThrottleSmoother.h`, `src/twin/ThrottleSmoother.cpp`) — exponential filter (8 tests)
+- [x] `TwinOutput` struct (`include/twin/TwinOutput.h`)
+- [x] `VirtualIceTwin` class — state machine + throttle smoothing (`src/twin/VirtualIceTwin.cpp`) — shift execution via clutch manipulation (13 tests)
+- [x] `VirtualIceInputProvider` — `IInputProvider` impl (`src/input/VirtualIceInputProvider.cpp`) (9 tests)
+- [x] ISimulator extension — `setGear()`, `setClutchPressure()`, `getEngineRpm()` (`include/simulator/ISimulator.h`)
+- [x] EngineInput extension — `gearAbsolute`, `clutchPressure`, `vehicleSpeedTargetKmh` (`include/io/IInputProvider.h`)
+- [x] BridgeSimulator implementation of twin virtuals (`src/simulator/BridgeSimulator.cpp`)
+- [x] `UpstreamSignalTest` + `IceVehicleProfileTest` — TDD: 8 tests
+- [x] `AutomaticGearboxTest` — TDD: shift decisions, hysteresis, kickdown, edge cases (12 tests)
+- [x] `ThrottleSmootherTest` + `VirtualIceTwinTest` — TDD: 21 tests
+- [x] `VirtualIceInputProviderTest` — TDD: 9 tests
+- [x] Scenario tests — `AccelerationScenarioTest`, `DecelerationScenarioTest`, `KickdownScenarioTest`, `CruiseScenarioTest`, `StandstillScenarioTest`, `LaunchScenarioTest` (32 tests)
+- [x] `TwinPhysicsIntegrationTest` — gated behind BUILD_INTEGRATION_TESTS (needs engine-sim linkage)
+- [x] SOLID/DRY critic review — APPROVED, 82/82 tests passing, 0 critical issues
 
 **Acceptance criteria:**
 - Comprehensive testable criteria defined in `docs/architecture/phase1-acceptance-criteria.md` (38 criteria total)

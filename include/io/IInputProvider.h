@@ -29,6 +29,13 @@ struct EngineInput {
 
     // Preset cycling
     bool presetCycle = false;       // true = cycle to next preset engine configuration
+
+    // Twin control
+    int gearAbsolute = -1;          // -1 = use gearDelta logic, 0+ = set this gear directly
+    double clutchPressure = -1.0;   // -1 = unchanged, 0.0-1.0 = set clutch pressure
+    double vehicleSpeedTargetKmh = -1.0; // -1 = unchanged, for future SpeedTrackingForce
+
+    // Simulator auto-disengages starter when RPM > threshold
 };
 
 // ============================================================================

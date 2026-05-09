@@ -47,6 +47,9 @@ public:
     void setStarterMotor(bool on) override;
     EnginePhase getEnginePhase() const override { return enginePhase_; }
     void setEnginePhase(EnginePhase phase) override;
+    void setGear(int gear) override;
+    void setClutchPressure(double pressure) override;
+    double getEngineRpm() const override;
 
     // ISimulator state capture/restore for hot-swap
     std::vector<uint8_t> saveState() const override;
