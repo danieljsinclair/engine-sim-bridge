@@ -44,6 +44,9 @@ public:
     void setThrottle(double position) override;
     void setIgnition(bool on) override;
     void setStarterMotor(bool on) override;
+    void setGear(int gear) override;
+    void setClutchPressure(double pressure) override;
+    double getEngineRpm() const override;
 
     // Set display name from script path (called by factory for PistonEngine mode)
     void setNameFromScript(const std::string& scriptPath);

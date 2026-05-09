@@ -145,6 +145,28 @@ void BridgeSimulator::setStarterMotor(bool on) {
     m_simulator->m_starterMotor.m_enabled = on;
 }
 
+void BridgeSimulator::setGear(int gear) {
+    if (!m_created || !m_simulator) return;
+    if (m_simulator->getTransmission()) {
+        m_simulator->getTransmission()->changeGear(gear);
+    }
+}
+
+void BridgeSimulator::setClutchPressure(double pressure) {
+    if (!m_created || !m_simulator) return;
+    if (m_simulator->getTransmission()) {
+        m_simulator->getTransmission()->setClutchPressure(pressure);
+    }
+}
+
+double BridgeSimulator::getEngineRpm() const {
+    if (!m_created || !m_simulator) return 0.0;
+    if (m_simulator->getEngine()) {
+        return m_simulator->getEngine()->getSpeed() * 60.0 / (2.0 * M_PI);
+    }
+    return 0.0;
+}
+
 // ============================================================================
 // Private Helpers
 // ============================================================================

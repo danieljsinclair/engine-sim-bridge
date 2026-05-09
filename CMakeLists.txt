@@ -78,6 +78,12 @@ set(BRIDGE_SOURCES
     src/simulator/PresetEngineFactory.cpp
     # Hardcoded C++ engine preset factories (works on iOS without Piranha)
     src/simulator/EnginePresets.cpp
+    # Twin components
+    src/twin/AutomaticGearbox.cpp
+    src/twin/ThrottleSmoother.cpp
+    src/twin/VirtualIceTwin.cpp
+    # Input providers
+    src/input/VirtualIceInputProvider.cpp
 )
 
 # Platform-specific audio hardware and factory
@@ -327,6 +333,116 @@ if(BUILD_BRIDGE_TESTS)
         )
         if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
             add_test(NAME ios_adapter_tests COMMAND ios_adapter_tests --gtest_color=yes)
+        endif()
+    endif()
+
+    # Twin foundation tests - tests for UpstreamSignal and IceVehicleProfile
+    add_executable(twin_foundation_tests
+        test/twin/UpstreamSignalTest.cpp
+        test/twin/IceVehicleProfileTest.cpp
+    )
+    target_include_directories(twin_foundation_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_foundation_tests
+        PRIVATE
+            GTest::gtest_main
+    )
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_foundation_tests COMMAND twin_foundation_tests --gtest_color=yes)
+    endif()
+
+    # Twin gearbox tests - tests for AutomaticGearbox
+    add_executable(twin_gearbox_tests
+        test/twin/AutomaticGearboxTest.cpp
+    )
+    target_include_directories(twin_gearbox_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_gearbox_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_gearbox_tests COMMAND twin_gearbox_tests --gtest_color=yes)
+    endif()
+
+    # Twin core tests - tests for ThrottleSmoother and VirtualIceTwin
+    add_executable(twin_core_tests
+        test/twin/ThrottleSmootherTest.cpp
+        test/twin/VirtualIceTwinTest.cpp
+    )
+    target_include_directories(twin_core_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_core_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_core_tests COMMAND twin_core_tests --gtest_color=yes)
+    endif()
+
+    # Twin input provider tests - tests for VirtualIceInputProvider
+    add_executable(twin_input_tests
+        test/input/VirtualIceInputProviderTest.cpp
+    )
+    target_include_directories(twin_input_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_input_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_input_tests COMMAND twin_input_tests --gtest_color=yes)
+    endif()
+
+    # Twin scenario tests - Phase 1 acceptance criteria tests
+    add_executable(twin_scenario_tests
+        test/scenarios/AccelerationScenarioTest.cpp
+        test/scenarios/CruiseScenarioTest.cpp
+        test/scenarios/DecelerationScenarioTest.cpp
+        test/scenarios/KickdownScenarioTest.cpp
+        test/scenarios/StandstillScenarioTest.cpp
+        test/scenarios/LaunchScenarioTest.cpp
+        test/scenarios/TelemetrySequenceBuilder.cpp
+    )
+    target_include_directories(twin_scenario_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(twin_scenario_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_scenario_tests COMMAND twin_scenario_tests --gtest_color=yes)
+    endif()
+
+    # Twin physics integration tests - requires engine-sim linkage
+    option(BUILD_INTEGRATION_TESTS "Build integration tests that require engine-sim" OFF)
+    if(BUILD_INTEGRATION_TESTS)
+        add_executable(twin_integration_tests
+            test/scenarios/TwinPhysicsIntegrationTest.cpp
+            test/scenarios/TelemetrySequenceBuilder.cpp
+        )
+        target_include_directories(twin_integration_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/test
+        )
+        target_link_libraries(twin_integration_tests
+            PRIVATE
+                GTest::gtest_main
+                engine-sim-bridge
+        )
+        target_compile_definitions(twin_integration_tests PRIVATE BUILD_INTEGRATION_TESTS=ON)
+        if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+            add_test(NAME twin_integration_tests COMMAND twin_integration_tests --gtest_color=yes)
         endif()
     endif()
 endif()
