@@ -10,6 +10,8 @@ The problem: EV and ICE drivetrains are fundamentally different. There's no 1:1 
 
 ## Phase 0 Spike Results (Evidence Collected)
 
+**Note**: Phase 0 spikes are opt-in. `BUILD_PHASE0_SPIKES` defaults to `OFF`. Run with `-DBUILD_PHASE0_SPIKES=ON` to build, `ctest -L spike` to execute. Spikes are slow (up to 53 seconds each) and are not part of the CI unit test cycle.
+
 ### DynoTrackingSpike — PASS (dyno tracks RPM perfectly, but WRONG abstraction)
 Real I6 engine with dyno hold=true. Mean RPM error = 0.0. Dyno can precisely hold target RPM.
 - **However**: Dyno is a MEASUREMENT tool (sweep/hold), not a driving simulator.
@@ -229,18 +231,25 @@ These are pure accessors. The Piranha .mr parser already extracts these values d
 
 ### What's entirely missing (new bridge code)
 
-| Component | Responsibility | Est. Lines |
-|---|---|---|
-| `VirtualIceTwin` | Core mapping model: state machine, gearbox, throttle smoothing | ~200 |
-| `VirtualIceInputProvider` | `IInputProvider` impl, holds twin instance, applies outputs | ~100 |
-| `IceVehicleProfile` | Gear ratios, diff, tire, shift points, redline, idle (from .mr) | ~80 |
-| `AutomaticGearbox` | Shift curves, hysteresis, kickdown detection | ~150 |
-| `UpstreamSignal` | Normalized EV telemetry struct (0-1 range) | ~20 |
-| `VehicleSimAdapter` | iOS adapter: VehicleSignal → UpstreamSignal + interpolation | ~100 |
-| ISimulator extension | `setGear()`, `setClutchPressure()`, `getEngineRpm()` virtual methods | ~30 |
-| Tests | TDD for all new components | ~400 |
+| Component | Responsibility | Phase | Est. Lines |
+|---|---|---|---|
+| `VirtualIceTwin` | Core mapping model: state machine, gearbox, throttle smoothing | 1 ✅ | ~200 |
+| `VirtualIceInputProvider` | `IInputProvider` impl, holds twin instance, applies outputs | 1 ✅ | ~100 |
+| `IceVehicleProfile` | Gear ratios, diff, tire, shift points, redline, idle (from .mr) | 1 ✅ | ~80 |
+| `AutomaticGearbox` | Shift curves, hysteresis, kickdown detection | 1 ✅ | ~150 |
+| `UpstreamSignal` | Normalized EV telemetry struct (0-1 range) | 1 ✅ | ~20 |
+| SimulationLoop fix | Wire gearAbsolute/clutchPressure to ISimulator | 2 | ~10 |
+| `DemoVehiclePhysicsProvider` | Kinematic vehicle model producing synthetic UpstreamSignal | 2 | ~150 |
+| `KeyboardThrottleInput` | 1-0 keys → throttle (snap to 0 on release) | 2 | ~80 |
+| CLI `--connect-demo` | Wire demo provider through twin to engine-sim | 2 | ~100 |
+| TorqueConverter | Fluid coupling SCS constraint in engine-sim | 2 | ~200 |
+| AutomaticTransmission | Physics-timestep shift scheduling in engine-sim | 2 | ~150 |
+| ISimulator extension | `setGear()`, `setClutchPressure()`, `getEngineRpm()` virtual methods | 1 ✅ | ~30 |
+| `VehicleSignalAdapter` | VehicleSignal → UpstreamSignal conversion (in composition root) | 3 | ~30 |
+| CLI `--connect` | Live BLE mode wiring | 3 | ~80 |
+| Tests | TDD for all new components | all | ~600 |
 
-**Total new code: ~1000 lines C++, all in the bridge layer except the ~15-line accessor additions to engine-sim.**
+**Phase 1 (complete): ~1000 lines C++. Phase 2 (next): ~900 lines. Phase 3: ~200 lines.**
 
 ---
 
@@ -341,14 +350,102 @@ Any → OFF (no telemetry for 5 seconds)
 
 ## Integration Boundary: vehicle-sim → bridge
 
-### Key constraint
-vehicle-sim's PRODUCT_VISION prohibits build dependency on engine-sim. Both compile independently.
+### Architecture decisions (agreed 2026-05-10)
 
-### Data flow
-- Bridge owns `UpstreamSignal` (not shared from vehicle-sim)
-- iOS app is the integration point — depends on both libraries
-- `VehicleSimAdapter` (in iOS app target) maps `VehicleSignal` → `UpstreamSignal`
-- Threading: vehicle-sim writes at 10Hz, bridge reads at 60Hz, adapter interpolates
+#### Dependency flow
+
+```
+engine-sim (upstream, unchanged)
+    ^
+engine-sim-bridge                    vehicle-sim (standalone)
+    |   owns:                            |   owns:
+    |   - ISimulator, IInputProvider      |   - VehicleSignal (rename to Fraction 0-1)
+    |   - VirtualIceTwin, Gearbox         |   - VehicleSimulator, EventDispatcher
+    |   - IceVehicleProfile               |   - ILogging (symmetric, own namespace)
+    |   - DemoVehiclePhysicsProvider      |   - ITelemetry (symmetric, own namespace)
+    |   - ILogging, ITelemetry            |   - ConsoleLogger (default)
+    |   depends on: engine-sim only       |   depends on: nothing external
+    ^                                    ^
+    |                                    |
+    +--- CLI (composition root) ---------+
+    |        thin wiring only, no business logic
+    |        VehicleSignalAdapter (VehicleSignal → UpstreamSignal)
+    |        KeyboardThrottleInput
+    |
+    +--- escli-ios (composition root)
+             same wiring, same adapter, DRY
+```
+
+**Key constraint**: Neither bridge nor vehicle-sim depends on the other. Both are independent libraries. The composition root (CLI or iOS app) depends on both and writes the adapter.
+
+#### Component ownership
+
+| Component | Owner | Rationale |
+|---|---|---|
+| `UpstreamSignal` | engine-sim-bridge | Twin input contract, bridge domain |
+| `VehicleSignal` | vehicle-sim | Canonical telemetry type (rename fields to `Fraction`) |
+| `VirtualIceTwin`, `AutomaticGearbox` | engine-sim-bridge | Twin physics, tightly coupled to engine-sim params |
+| `DemoVehiclePhysicsProvider` | engine-sim-bridge | Produces bridge-native `UpstreamSignal`, iOS reuses it |
+| `VehicleSignalAdapter` | Composition root (CLI/iOS) | Knows both types, trivial field mapping |
+| `KeyboardThrottleInput` | Composition root (CLI) | App-specific input device |
+| `ILogging` / `ITelemetry` | Each repo defines its own | Symmetric by convention, not shared code |
+
+#### Why DemoVehiclePhysicsProvider lives in bridge, not CLI or vehicle-sim
+
+- **Not CLI**: CLI is a thin composition root — no business logic. iOS must reuse the demo provider DRY.
+- **Not vehicle-sim**: Physics model produces bridge-native `UpstreamSignal` and is tightly coupled to `IceVehicleProfile` (gear ratios, diff, tire). vehicle-sim is a data acquisition layer, not a physics simulation.
+- **In bridge**: Same category as `VirtualIceInputProvider` and `VirtualIceTwin` — synthesizes the telemetry the twin consumes. Already consumed by escli-ios as a static library.
+
+#### Why vehicle-sim defines its own ILogging/ITelemetry
+
+- vehicle-sim should NOT depend on bridge headers (inverted dependency).
+- vehicle-sim defines `vehicle_sim::ILogging` with symmetric shape to bridge's `ILogging`, but vehicle-sim-specific category masks (BLE, CAN, PARSER, DOMAIN).
+- Default `vehicle_sim::ConsoleLogger` implementation included.
+- CLI injects bridge's `ILogging` into bridge and vehicle-sim's `ILogging` into vehicle-sim independently.
+- Dependencies flow downstream only.
+
+#### Property naming alignment
+
+vehicle-sim renames to align with bridge convention:
+- `getThrottlePercent()` (0-100) → `getThrottleFraction()` (0-1)
+- `getBrakePercent()` (0-100) → `getBrakeFraction()` (0-1)
+- OBD2 translators do the `/ 100.0` on parse (wire-format concern)
+- Rationale: 0-1 is the physics-normalized unit used by engine-sim, the twin, and all bridge math
+
+#### SimulationLoop gap (to fix in Phase 2)
+
+`EngineInput.gearAbsolute` and `EngineInput.clutchPressure` are populated by `VirtualIceInputProvider` but never consumed by `SimulationLoop.cpp`. `ISimulator` already has `setGear()` and `setClutchPressure()` virtuals. The loop needs wiring:
+- When `gearAbsolute >= 0`: call `simulator.setGear(gearAbsolute)` instead of keyboard `applyGearChange`
+- When `clutchPressure >= 0.0`: call `simulator.setClutchPressure(clutchPressure)`
+
+### Data flow: Demo mode
+
+```
+Keyboard (1-0 keys, snap to 0) → throttle position (0-1)
+        ↓
+DemoVehiclePhysicsProvider (in bridge)
+    F = throttle × maxForce − drag × v² − rolling × v
+    a = F / m,  v += a × dt
+    produces UpstreamSignal {throttleFraction, speedKmh, accelerationG}
+        ↓
+VirtualIceInputProvider (in bridge)
+    feeds UpstreamSignal → VirtualIceTwin → TwinOutput → EngineInput
+        ↓
+SimulationLoop → ISimulator → engine-sim → audio
+```
+
+### Data flow: Live mode
+
+```
+Vehicle OBD2 → BLE → vehicle-sim VehicleSimulator
+    produces VehicleSignal {throttleFraction, speedKmh, ...}
+        ↓
+VehicleSignalAdapter (in composition root)
+    VehicleSignal → UpstreamSignal (trivial field mapping)
+        ↓
+VirtualIceInputProvider (in bridge)
+    [same path as demo mode from here]
+```
 
 ### Lifecycle
 - Bridge starts first (plays idle audio immediately)
@@ -403,37 +500,48 @@ Components to build:
 
 **MVP scope excludes**: torque converter slip, cranking sound modeling, driver modes (Sport/Eco), torque-aware shifting, brake-dependent coast-down, grade detection.
 
-### Phase 2: Polish + iOS Integration
+### Phase 2: Torque Converter + Demo Mode
 
-**Goal**: Connect vehicle-sim demo data to the twin on iPhone.
+**Goal**: Get the physics model and acoustics right. Validate end-to-end via `--connect-demo` CLI mode. No iOS or live vehicle-sim dependency needed.
+
+**Rationale**: The torque converter is the core of the vehicle twin physics model. If we can't get that right, it doesn't matter whether it runs on iOS or whether we can configure it with .mr scripts. This phase proves the model produces authentic sound before adding plumbing complexity.
 
 Components:
-1. `VehicleSimAdapter` (iOS app target)
-2. 10Hz→60Hz interpolation
-3. Stale data handling (ramp to idle)
-4. iOS UI for vehicle profile selection
+1. [ ] Fix SimulationLoop gap — wire `gearAbsolute` → `simulator.setGear()` and `clutchPressure` → `simulator.setClutchPressure()` (TDD)
+2. [ ] `DemoVehiclePhysicsProvider` (in engine-sim-bridge) — kinematic vehicle model producing synthetic `UpstreamSignal` from keyboard throttle input
+3. [ ] `KeyboardThrottleInput` — reads 1–0 keys (10%–100% throttle), snaps to 0 on release
+4. [ ] CLI `--connect-demo` mode — wires DemoVehiclePhysicsProvider → VirtualIceInputProvider → SimulationLoop
+5. [ ] `TorqueConverter` — new SCS constraint in engine-sim (fluid coupling between two bodies)
+6. [ ] `AutomaticTransmission` — new class in engine-sim parallel to `Transmission`
+7. [ ] Shift scheduling at physics timestep (10kHz), not bridge timestep (60Hz)
+8. [ ] ZF brake-dependent coast-down — earlier downshifts with brake applied (secondary TCU input)
 
 **Acceptance criteria:**
-- vehicle-sim demo data drives engine-sim audio through the twin
+- `--connect-demo` produces authentic ICE sound from keyboard throttle input
+- Automatic gearbox controls all shifts — no manual gear changes in demo mode
+- Torque converter produces realistic slip behavior at launch
+- Shift scheduling runs at physics timestep
+- Brake input triggers earlier coast-down downshifts (ZF TCU behavior validated)
+
+### Phase 3: Live Vehicle Integration
+
+**Goal**: Connect live vehicle-sim data (BLE/OBD2) to the twin. Works on both CLI and iOS.
+
+Components:
+1. [ ] `VehicleSignalAdapter` (in composition root — CLI or iOS app) — converts `VehicleSignal` → `UpstreamSignal`
+2. [ ] CLI `--connect <address>` mode — creates `VehicleSimulator`, wires adapter
+3. [ ] 10Hz→60Hz interpolation in adapter
+4. [ ] Stale data handling (ramp to idle on disconnect)
+5. [ ] iOS UI for vehicle profile selection
+6. [ ] vehicle-sim property naming alignment — rename `throttlePercent`/`brakePercent` to `throttleFraction`/`brakeFraction` (0–1 range)
+7. [ ] vehicle-sim adopts symmetric `ILogging`/`ITelemetry` pattern (own namespace, own default implementations)
+
+**Acceptance criteria:**
+- vehicle-sim live data drives engine-sim audio through the twin
 - No audio artifacts on BLE connect/disconnect
 - Profile selection loads different .mr scripts
-
-### Phase 3: Automatic Transmission in engine-sim (optional upstream contribution)
-
-**Goal**: Add proper `AutomaticTransmission` + `TorqueConverter` to engine-sim.
-
-Components (all in engine-sim):
-1. `TorqueConverter` — new SCS constraint (fluid coupling between two bodies)
-2. `AutomaticTransmission` — new class parallel to `Transmission`
-3. Shift scheduling as part of `AutomaticTransmission::update()`
-
-**Why defer**: Phase 1's bridge-level gearbox works by calling `changeGear()` externally. Proper automatic transmission in engine-sim is cleaner (physics-timestep shift scheduling) but is a larger change that benefits from Phase 1 validating the approach first.
-
-**Acceptance criteria:**
-- `AutomaticTransmission` follows same `initialize(Parameters)` pattern as `Transmission`
-- Shift scheduling runs at physics timestep (10kHz), not bridge timestep (60Hz)
-- Torque converter produces realistic slip behavior at launch
-- Pre-generated C++ support (no .mr parser dependency)
+- vehicle-sim uses `throttleFraction` (0–1) consistently with bridge
+- vehicle-sim accepts `ILogging` via DI with default `ConsoleLogger`
 
 ### Phase 4: Pre-generation + Mobile Targets
 
@@ -487,6 +595,16 @@ Every component is test-driven. RED phase tests MUST compile. Tests assert corre
 4. Test coverage ≥ 90% on new code (happy path + reasonable edge cases)
 5. SOLID/DRY critic agent has reviewed and approved (see Quality Gate below)
 
+### Test cycles
+
+| Cycle | Command | Scope | Expected time |
+|---|---|---|---|
+| Unit tests | `make test` or `ctest` | All unit + integration tests | <1 second |
+| Spikes | `cmake .. -DBUILD_PHASE0_SPIKES=ON && make && ctest -L spike` | Phase 0 evidence-gathering tools | ~3 minutes |
+| Full | `ctest` with spikes enabled | Everything | ~3 minutes |
+
+Phase 0 spikes are GTest-based executables that run actual engine-sim physics (hundreds of ticks). They default to OFF and are excluded from CI. Labeled `spike` for selective execution.
+
 ---
 
 ## Quality Gate: SOLID/DRY Critic
@@ -520,18 +638,25 @@ The critic MUST explicitly sign off in the commit workflow. If the critic reject
 - `engine-sim-bridge/include/twin/TwinOutput.h`
 - `engine-sim-bridge/include/twin/VirtualIceTwin.h`
 - `engine-sim-bridge/include/twin/AutomaticGearbox.h`
-- `engine-sim-bridge/include/physics/SpeedTrackingForce.h` (Approach A+)
-- `engine-sim-bridge/include/physics/FixedLoadConstraint.h` (Approach B)
-- `engine-sim-bridge/src/twin/IceVehicleProfile.cpp`
+- `engine-sim-bridge/include/twin/ThrottleSmoother.h`
+- `engine-sim-bridge/include/input/VirtualIceInputProvider.h`
+- `engine-sim-bridge/include/input/DemoVehiclePhysicsProvider.h` (Phase 2)
 - `engine-sim-bridge/src/twin/VirtualIceTwin.cpp`
 - `engine-sim-bridge/src/twin/AutomaticGearbox.cpp`
+- `engine-sim-bridge/src/twin/ThrottleSmoother.cpp`
 - `engine-sim-bridge/src/input/VirtualIceInputProvider.cpp`
-- `engine-sim-bridge/src/physics/SpeedTrackingForce.cpp`
-- `engine-sim-bridge/src/physics/FixedLoadConstraint.cpp`
-- `engine-sim-bridge/test/twin/AutomaticGearboxTest.cpp`
-- `engine-sim-bridge/test/twin/VirtualIceTwinTest.cpp`
-- `engine-sim-bridge/test/twin/IceVehicleProfileTest.cpp`
-- `engine-sim-bridge/test/integration/TwinPhysicsIntegrationTest.cpp`
+- `engine-sim-bridge/src/input/DemoVehiclePhysicsProvider.cpp` (Phase 2)
+- `engine-sim-bridge/src/simulation/SimulationLoop.cpp` (Phase 2: wire gearAbsolute/clutchPressure)
+- `engine-sim-bridge/include/physics/SpeedTrackingForce.h` (Approach A+)
+- `engine-sim-bridge/include/physics/FixedLoadConstraint.h` (Approach B)
+
+### New (CLI layer)
+- `src/input/KeyboardThrottleInput.h` (Phase 2: 1-0 keys, snap to 0)
+- `src/input/KeyboardThrottleInput.cpp` (Phase 2)
+- `src/input/VehicleSignalAdapter.h` (Phase 3: VehicleSignal → UpstreamSignal)
+- `src/input/VehicleSignalAdapter.cpp` (Phase 3)
+- `src/config/CLIMain.cpp` (Phase 2: `--connect-demo`, Phase 3: `--connect`)
+- `src/config/CLIconfig.cpp` (Phase 2: new CLI flags)
 
 ### Existing docs to extend (not create orphans)
 - `docs/BRIDGE_INTEGRATION_ARCHITECTURE.md` — update Phase 3 TODO with this plan's detail

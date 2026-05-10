@@ -572,6 +572,7 @@ if(BUILD_PHASE0_SPIKES)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
     )
     add_test(NAME audio_sweep_spike COMMAND audio_sweep_spike)
+    set_tests_properties(audio_sweep_spike PROPERTIES LABELS "spike")
 
     # ---- Clutch Parameter Sweep Spike ----
     add_executable(clutch_sweep_spike
@@ -593,6 +594,7 @@ if(BUILD_PHASE0_SPIKES)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
     )
     add_test(NAME clutch_sweep_spike COMMAND clutch_sweep_spike)
+    set_tests_properties(clutch_sweep_spike PROPERTIES LABELS "spike")
 
     # ---- Telemetry Jitter Spike ----
     add_executable(jitter_test_spike
@@ -613,6 +615,7 @@ if(BUILD_PHASE0_SPIKES)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
     )
     add_test(NAME jitter_test_spike COMMAND jitter_test_spike)
+    set_tests_properties(jitter_test_spike PROPERTIES LABELS "spike")
 
     # ---- Dyno Tracking Spike ----
     add_executable(dyno_tracking_spike
@@ -631,6 +634,7 @@ if(BUILD_PHASE0_SPIKES)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
     )
     add_test(NAME dyno_tracking_spike COMMAND dyno_tracking_spike)
+    set_tests_properties(dyno_tracking_spike PROPERTIES LABELS "spike")
 
     # ---- Dyno Launch Control Spike ----
     add_executable(dyno_launch_control_spike
@@ -649,6 +653,7 @@ if(BUILD_PHASE0_SPIKES)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
     )
     add_test(NAME dyno_launch_control_spike COMMAND dyno_launch_control_spike)
+    set_tests_properties(dyno_launch_control_spike PROPERTIES LABELS "spike")
 
     # ---- Real Engine Audio Spike (Subaru EJ25) ----
     add_executable(real_engine_audio_spike
@@ -670,5 +675,6 @@ if(BUILD_PHASE0_SPIKES)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
     )
     add_test(NAME real_engine_audio_spike COMMAND real_engine_audio_spike)
+    set_tests_properties(real_engine_audio_spike PROPERTIES LABELS "spike")
 endif()
 
