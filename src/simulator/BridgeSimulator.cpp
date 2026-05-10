@@ -5,6 +5,8 @@
 
 #include "simulator/BridgeSimulator.h"
 
+#include <vector>
+
 BridgeSimulator::BridgeSimulator(std::unique_ptr<Simulator> simulator)
     : m_simulator(std::move(simulator))
 {
