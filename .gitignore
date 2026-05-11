@@ -35,3 +35,4 @@ Thumbs.db
 *.tmp
 /**/Temporary/
 build-test/
+.claude/scheduled_tasks.lock

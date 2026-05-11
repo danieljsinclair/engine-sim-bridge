@@ -332,8 +332,23 @@ int runUnifiedAudioLoop(
                 applyDynoControl(rawSim, engineInput, lastDynoTorqueScale);
             }
 
-            // Apply gear changes ([/] keys in keyboard provider)
-            applyGearChange(rawSim, engineInput.gearDelta, logger);
+            // Apply gear changes: twin gearAbsolute takes priority over keyboard gearDelta
+            if (engineInput.gearAbsolute >= 0) {
+                simulator.setGear(engineInput.gearAbsolute);
+            } else {
+                applyGearChange(rawSim, engineInput.gearDelta, logger);
+            }
+
+            // Twin clutch control (direct pressure, overrides applyGearChange's hardwired clutch)
+            if (engineInput.clutchPressure >= 0.0) {
+                simulator.setClutchPressure(engineInput.clutchPressure);
+            }
+
+            // Twin starter motor control — only when twin explicitly sets it
+            // Default EngineInput.starterMotor is false; don't override warmup starter logic
+            if (engineInput.gearAbsolute >= 0) {
+                simulator.setStarterMotor(engineInput.starterMotor);
+            }
         } else {
             if (currentTime >= config.duration) {
                 break;
