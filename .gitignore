@@ -43,3 +43,5 @@ Thumbs.db
 
 # Generated JSON presets (rebuilt by 'make presets')
 /preset/
+build-test/
+.claude/scheduled_tasks.lock

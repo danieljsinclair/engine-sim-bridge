@@ -464,6 +464,20 @@ int runUnifiedAudioLoop(
             : CrankingController::State{input.throttle, false, EnginePhase::Running};
 
         applyVehicleControls(simulator, combustion, bridgeSim, input, crankingState, lastDynoTorqueScale, logger);
+
+        // Twin feedback controls — applied after standard vehicle controls
+        // gearAbsolute takes priority over keyboard gearDelta (applied via applyGearChange above)
+        if (input.gearAbsolute >= 0) {
+            simulator.setGear(input.gearAbsolute);
+        }
+        if (input.clutchPressure >= 0.0) {
+            simulator.setClutchPressure(input.clutchPressure);
+        }
+        // Twin starter motor — only when twin explicitly sets it (gearAbsolute >= 0)
+        if (input.gearAbsolute >= 0) {
+            simulator.setStarterMotor(input.starterMotor);
+        }
+
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * SECONDS_TO_MILLISECONDS);
 
         EngineSimStats stats = simulator.getStats();
