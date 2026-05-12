@@ -7,6 +7,7 @@
 #define ENGINE_SIM_BRIDGE_SINE_SIMULATOR_H
 
 #include "simulator.h"
+#include "types.h"
 
 class SineSimulator : public Simulator {
 public:
@@ -25,11 +26,11 @@ protected:
     void writeToSynthesizer() override;
 
 private:
-    double m_phase = 0.0;
-    double m_sineValue = 0.0;
-    double* m_exhaustFlowStagingBuffer = nullptr;
+    real_t m_phase = 0.0f;
+    real_t m_sineValue = 0.0f;
+    real_t* m_exhaustFlowStagingBuffer = nullptr;
 
-    static constexpr double TWO_PI = 2.0 * M_PI;
+    static constexpr real_t TWO_PI = real_t(2.0) * constants::pi;
 };
 
 #endif // ENGINE_SIM_BRIDGE_SINE_SIMULATOR_H

@@ -6,10 +6,12 @@
 #ifndef ENGINE_SIM_BRIDGE_SIMULATOR_INIT_HELPERS_H
 #define ENGINE_SIM_BRIDGE_SIMULATOR_INIT_HELPERS_H
 
+#include "types.h"
+#include "engine.h"
+#include "vehicle.h"
+#include "transmission.h"
+
 // Forward declarations (avoid pulling full engine-sim headers here)
-class Engine;
-class Transmission;
-class Vehicle;
 class Dynamometer;
 class StarterMotor;
 
@@ -41,7 +43,7 @@ void wirePhysics(
     atg_scs::RigidBodySystem* system,
     Dynamometer& dyno,
     StarterMotor& starterMotor,
-    double*& outStagingBuffer,
+    real_t*& outStagingBuffer,
     int stagingCount);
 
 /// Shared cleanup: system reset/delete, staging buffer delete.
@@ -52,7 +54,7 @@ void wirePhysics(
 /// @param stagingBuffer    Ref to staging buffer pointer (will be deleted and nulled)
 void cleanupPhysics(
     atg_scs::RigidBodySystem*& system,
-    double*& stagingBuffer);
+    real_t*& stagingBuffer);
 
 } // namespace SimulatorInitHelpers
 

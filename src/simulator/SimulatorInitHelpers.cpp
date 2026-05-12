@@ -19,7 +19,7 @@ void wirePhysics(
     atg_scs::RigidBodySystem* system,
     Dynamometer& dyno,
     StarterMotor& starterMotor,
-    double*& outStagingBuffer,
+    real_t*& outStagingBuffer,
     int stagingCount)
 {
     // reset() clears position/velocity but also zeros mass and inertia (m=0, I=0).
@@ -27,8 +27,8 @@ void wirePhysics(
     // Values are arbitrary for sine (no real physics) but must be nonzero.
     // 1.0 matches PistonEngine and is the simplest valid value.
     vehicleMass.reset();
-    vehicleMass.m = 1.0;
-    vehicleMass.I = 1.0;
+    vehicleMass.m = real_t(1.0);
+    vehicleMass.I = real_t(1.0);
     system->addRigidBody(&vehicleMass);
 
     // Wire transmission and vehicle into physics system
@@ -46,12 +46,12 @@ void wirePhysics(
     system->addConstraint(&starterMotor);
 
     // Exhaust flow staging buffer — mirrors PistonEngineSimulator::placeAndInitialize()
-    outStagingBuffer = new double[stagingCount];
+    outStagingBuffer = new real_t[stagingCount];
 }
 
 void cleanupPhysics(
     atg_scs::RigidBodySystem*& system,
-    double*& stagingBuffer)
+    real_t*& stagingBuffer)
 {
     if (system != nullptr) {
         system->reset();

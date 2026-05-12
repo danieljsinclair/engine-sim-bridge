@@ -72,16 +72,16 @@ void SineSimulator::destroy() {
 }
 
 void SineSimulator::simulateStep_() {
-    const double rpm = m_engine ? m_engine->getRpm() : 800.0;
-    const double frequency = rpm / 6.0;
-    const double phaseIncrement = TWO_PI / (synthesizer().getInputSampleRate() / frequency);
+    const real_t rpm = m_engine ? m_engine->getRpm() : real_t(800.0);
+    const real_t frequency = rpm / real_t(6.0);
+    const real_t phaseIncrement = TWO_PI / (synthesizer().getInputSampleRate() / frequency);
 
     m_phase += phaseIncrement;
     if (m_phase >= TWO_PI) {
         m_phase -= TWO_PI;
     }
 
-    m_sineValue = std::sin(m_phase) * 28000.0;
+    m_sineValue = std::sin(m_phase) * real_t(28000.0);
 }
 
 void SineSimulator::writeToSynthesizer() {

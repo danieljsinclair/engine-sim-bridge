@@ -6,6 +6,7 @@
 #include "engine.h"
 #include "throttle.h"
 #include "units.h"
+#include "types.h"
 
 /// @brief A minimal Engine implementation for sine wave mode, where throttle directly controls RPM with no lag.
 /// Essentially a dummy engine that does nothing but allows the plumbing to function
@@ -26,20 +27,20 @@ public:
         Crankshaft::Parameters cp = {};
         cp.mass              = units::mass(10, units::kg);
         cp.flywheelMass      = units::mass(5, units::kg);
-        cp.momentOfInertia   = 0.1;
+        cp.momentOfInertia   = 0.1f;
         cp.crankThrow        = units::distance(50, units::mm);
         cp.rodJournals       = 0;
         getCrankshaft(0)->initialize(cp);
     }
 
-    double getRpm() const override {
+    real_t getRpm() const override {
         // Engine::getSpeedControl() is non-const in the base API despite being a pure read.
-        return 800.0 + const_cast<SineEngine*>(this)->getSpeedControl() * 5200.0;
+        return real_t(800.0) + const_cast<SineEngine*>(this)->getSpeedControl() * real_t(5200.0);
     }
 
-    double getSpeed() const override {
+    real_t getSpeed() const override {
         // Base contract: return rad/s so units::toRpm() in the bridge gives correct RPM.
-        return getRpm() * 0.104719755;
+        return getRpm() * units::rpm(1.0);
     }
 };
 
