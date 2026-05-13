@@ -9,6 +9,9 @@
 
 #include "simulator/BridgeSimulator.h"
 #include "simulator/SineSimulator.h"
+#include "simulator/SineEngine.h"
+#include "simulator/SineVehicle.h"
+#include "simulator/SineTransmission.h"
 
 inline double expectedRpmFromSpeed(double speedKmh, double g, double d, double tireRadiusM){
     double v=speedKmh*(1000.0/3600.0);
@@ -27,7 +30,7 @@ TEST(Phase0Spikes, TelemetryJitter){
     sineSim->setSimulationFrequency(EngineSimDefaults::SIMULATION_FREQUENCY);
     sineSim->setFluidSimulationSteps(EngineSimDefaults::FLUID_SIMULATION_STEPS);
     sineSim->setTargetSynthesizerLatency(EngineSimDefaults::TARGET_SYNTH_LATENCY);
-    sineSim->loadSimulation(nullptr,nullptr,nullptr);
+    sineSim->loadSimulation(new SineEngine(), new SineVehicle(), new SineTransmission());
 
     auto bridge=std::make_unique<BridgeSimulator>(std::move(sineSim));
     ISimulatorConfig cfg;

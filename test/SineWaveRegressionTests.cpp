@@ -16,6 +16,9 @@
 
 #include "simulator/BridgeSimulator.h"
 #include "simulator/SineSimulator.h"
+#include "simulator/SineEngine.h"
+#include "simulator/SineVehicle.h"
+#include "simulator/SineTransmission.h"
 
 // ============================================================================
 // Helper: Compute smoothness metric for a sequence of float samples.
@@ -82,7 +85,7 @@ protected:
         sineSim->setSimulationFrequency(EngineSimDefaults::SIMULATION_FREQUENCY);
         sineSim->setFluidSimulationSteps(EngineSimDefaults::FLUID_SIMULATION_STEPS);
         sineSim->setTargetSynthesizerLatency(EngineSimDefaults::TARGET_SYNTH_LATENCY);
-        sineSim->loadSimulation(nullptr, nullptr, nullptr);
+        sineSim->loadSimulation(new SineEngine(), new SineVehicle(), new SineTransmission());
         simulator_ = std::make_unique<BridgeSimulator>(std::move(sineSim));
 
         // Use default constructor to get proper defaults from EngineSimDefaults

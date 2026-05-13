@@ -29,6 +29,8 @@ struct EngineState {
     bool starterMotor;
     double exhaustFlow;  // m^3/s
     int gear = 0;
+    int gearSelector = 0;       // GearSelector value
+    bool gearAutoMode = false;  // true=auto(ZF), false=manual
     double dynoTorque = 0.0;      // ft*lbs (0 when dyno disabled)
     double dynoTargetRPM = 0.0;   // 0 when dyno disabled
 
@@ -42,6 +44,11 @@ struct EngineState {
     double generatingRateFps = 0.0;
     double trendPct = 0.0;
     int sampleRate = 0;  // Set by SimulationLoop from upstream provider
+
+    // Vehicle telemetry
+    double vehicleSpeedKmh = 0.0;
+    double engineTorqueNm = 0.0;
+    double drivetrainTorqueNm = 0.0;
 };
 
 // ============================================================================

@@ -4,6 +4,7 @@
 // regardless of which Simulator subclass is injected (OCP).
 
 #include "simulator/BridgeSimulator.h"
+#include "simulator/GearConventions.h"
 
 #include <vector>
 
@@ -110,17 +111,49 @@ void BridgeSimulator::stop() {
 EngineSimStats BridgeSimulator::getStats() const {
     EngineSimStats stats = {};
     if (m_simulator && m_simulator->getEngine()) {
-        stats.currentRPM = m_simulator->getEngine()->getSpeed() * 60.0 / (2.0 * M_PI);
+        stats.currentRPM = m_simulator->getEngine()->getSpeed() * EngineSimDefaults::RAD_PER_SEC_TO_RPM;
         stats.exhaustFlow = m_simulator->getTotalExhaustFlow();
         stats.processingTimeMs = m_simulator->getAverageProcessingTime() * 1000.0;
 
         if (m_simulator->m_dyno.m_enabled) {
             stats.dynoTorque = m_simulator->getFilteredDynoTorque();
-            stats.dynoTargetRPM = std::abs(m_simulator->m_dyno.m_rotationSpeed) * 30.0 / M_PI;
+            stats.dynoTargetRPM = std::abs(m_simulator->m_dyno.m_rotationSpeed) * EngineSimDefaults::RAD_PER_SEC_TO_RPM;
+            // Engine torque from dyno measurement (internal units = Nm)
+            stats.engineTorqueNm = m_simulator->getFilteredDynoTorque();
+        }
+
+        if (m_simulator->getVehicle()) {
+            // Vehicle::getSpeed() returns m/s
+            stats.vehicleSpeedKmh = m_simulator->getVehicle()->getSpeed() * EngineSimDefaults::MS_TO_KMH;
         }
 
         if (m_simulator->getTransmission()) {
-            stats.gear = m_simulator->getTransmission()->getGear();
+            // Translate engine-sim convention (EngineSimGear) to bridge convention (BridgeGear)
+            int rawGear = m_simulator->getTransmission()->getGear();
+            stats.gear = static_cast<int>(bridge::toBridge(rawGear));
+
+            // Real torque from clutch constraint (populated by solver after each step)
+            if (!m_simulator->m_dyno.m_enabled) {
+                const auto& clutch = m_simulator->getTransmission()->getClutchConstraint();
+                // ClutchConstraint J = [-1, +1] on angular velocity of body 0 (crankshaft),
+                // body 1 (drivetrain virtual mass). The solver stores F_t[i][k] = J * lambda/dt.
+                // Engine crankshaft spins CW (v_theta < 0). During acceleration, lambda < 0
+                // so F_t[0][0] > 0 (clutch reaction opposing engine) and F_t[0][1] < 0
+                // (clutch driving the drivetrain in its negative/CW direction).
+                // For user display: engine producing power = positive, engine braking = negative.
+                stats.engineTorqueNm = clutch.F_t[0][0];
+                stats.drivetrainTorqueNm = -clutch.F_t[0][1];
+
+                // Wheel-side torque: clutch torque * gear_ratio * diff_ratio.
+                // A friction clutch transmits equal-and-opposite torque (Newton's 3rd law),
+                // so both sides show the same magnitude. Gear multiplication gives different
+                // values -- engine side = raw clutch torque, wheel side = multiplied torque.
+                const double gearRatio = m_simulator->getTransmission()->getGearRatio();
+                if (m_simulator->getVehicle() && gearRatio > 0.0) {
+                    const double diffRatio = m_simulator->getVehicle()->getDiffRatio();
+                    stats.drivetrainTorqueNm = -clutch.F_t[0][1] * gearRatio * diffRatio;
+                }
+            }
         }
     }
     return stats;
@@ -150,7 +183,9 @@ void BridgeSimulator::setStarterMotor(bool on) {
 void BridgeSimulator::setGear(int gear) {
     if (!m_created || !m_simulator) return;
     if (m_simulator->getTransmission()) {
-        m_simulator->getTransmission()->changeGear(gear);
+        // Translate bridge convention (BridgeGear) to engine-sim convention (EngineSimGear)
+        int engineSimGear = (gear <= 0) ? -1 : gear - 1;
+        m_simulator->getTransmission()->changeGear(engineSimGear);
     }
 }
 
@@ -164,7 +199,7 @@ void BridgeSimulator::setClutchPressure(double pressure) {
 double BridgeSimulator::getEngineRpm() const {
     if (!m_created || !m_simulator) return 0.0;
     if (m_simulator->getEngine()) {
-        return m_simulator->getEngine()->getSpeed() * 60.0 / (2.0 * M_PI);
+        return m_simulator->getEngine()->getSpeed() * EngineSimDefaults::RAD_PER_SEC_TO_RPM;
     }
     return 0.0;
 }

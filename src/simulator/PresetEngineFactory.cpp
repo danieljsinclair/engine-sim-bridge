@@ -51,9 +51,6 @@ static Function* createDefaultPortFlow() {
     const double intakeBase[] = {
         0, 25, 75, 100, 130, 180, 190, 220, 240, 250, 260, 260, 260, 255, 250
     };
-    const double exhaustBase[] = {
-        0, 25, 50, 75, 100, 125, 160, 175, 180, 190, 200, 205, 210, 210, 210
-    };
     const double attenuation = 2.0;
     const int count = 15;
 
@@ -582,36 +579,36 @@ PresetLoadResult PresetEngineFactory::loadFromJson(const char* jsonContent, size
 }
 
 // Static configure methods delegate to the inline code in loadFromString
-void PresetEngineFactory::configureCrankshafts(json::JsonValue& crankshaftsJson, Engine* engine) {
+void PresetEngineFactory::configureCrankshafts(json::JsonValue& /* crankshaftsJson */, Engine* /* engine */) {
     // Handled inline in loadFromString
 }
 
-void PresetEngineFactory::configureCylinderBanks(json::JsonValue& banksJson, Engine* engine) {
+void PresetEngineFactory::configureCylinderBanks(json::JsonValue& /* banksJson */, Engine* /* engine */) {
     // Handled inline in loadFromString
 }
 
-void PresetEngineFactory::configureExhaustSystems(json::JsonValue& exhaustsJson, Engine* engine) {
+void PresetEngineFactory::configureExhaustSystems(json::JsonValue& /* exhaustsJson */, Engine* /* engine */) {
     // Handled inline in loadFromString
 }
 
-void PresetEngineFactory::configureIntakes(json::JsonValue& intakesJson, Engine* engine) {
+void PresetEngineFactory::configureIntakes(json::JsonValue& /* intakesJson */, Engine* /* engine */) {
     // Handled inline in loadFromString
 }
 
-void PresetEngineFactory::configureFuel(json::JsonValue& fuelJson, Engine* engine) {
+void PresetEngineFactory::configureFuel(json::JsonValue& /* fuelJson */, Engine* /* engine */) {
     // Handled inline in loadFromString
 }
 
-void PresetEngineFactory::configureIgnition(json::JsonValue& engineJson, Engine* engine) {
+void PresetEngineFactory::configureIgnition(json::JsonValue& /* engineJson */, Engine* /* engine */) {
     // Handled inline in loadFromString
 }
 
-Vehicle* PresetEngineFactory::constructVehicle(json::JsonValue& vehicleJson) {
+Vehicle* PresetEngineFactory::constructVehicle(json::JsonValue& /* vehicleJson */) {
     // Handled inline in loadFromString
     return nullptr;
 }
 
-Transmission* PresetEngineFactory::constructTransmission(json::JsonValue& transJson) {
+Transmission* PresetEngineFactory::constructTransmission(json::JsonValue& /* transJson */) {
     // Handled inline in loadFromString
     return nullptr;
 }

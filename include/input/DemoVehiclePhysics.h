@@ -1,6 +1,8 @@
 #ifndef DEMO_VEHICLE_PHYSICS_H
 #define DEMO_VEHICLE_PHYSICS_H
 
+#include <simulator/EngineSimTypes.h>
+
 namespace input {
 
 struct DemoVehiclePhysicsConfig {
@@ -19,7 +21,7 @@ public:
     double update(double dt, double throttle, double brake = 0.0) {
         double engineForce = throttle * config_.maxEngineForceN;
         double dragForce = config_.dragCoeffA * speedMs_ * speedMs_;
-        double rollingForce = (speedMs_ > 0.001) ? config_.rollingResistanceN : 0.0;
+        double rollingForce = (speedMs_ > EngineSimDefaults::STANDSTILL_SPEED_MS) ? config_.rollingResistanceN : 0.0;
         double brakeForce = brake * config_.brakingDecelerationMs2 * config_.vehicleMassKg;
 
         double netForce = engineForce - dragForce - rollingForce - brakeForce;
@@ -34,7 +36,7 @@ public:
         return speedMs_;
     }
 
-    double getSpeedKmh() const { return speedMs_ * 3.6; }
+    double getSpeedKmh() const { return speedMs_ * EngineSimDefaults::MS_TO_KMH; }
     double getAccelerationG() const { return accelerationMs2_ / 9.81; }
 
     void reset() {

@@ -138,6 +138,8 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.starterMotor = false;
     state.exhaustFlow = stats.exhaustFlow;
     state.gear = stats.gear;
+    state.gearSelector = stats.gearSelector;
+    state.gearAutoMode = stats.gearAutoMode;
     state.dynoTorque = stats.dynoTorque;
     state.dynoTargetRPM = stats.dynoTargetRPM;
     state.renderMs = timing.renderMs;
@@ -149,6 +151,9 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.generatingRateFps = timing.generatingRateFps;
     state.trendPct = timing.trendPct;
     state.sampleRate = config.sampleRate();
+    state.vehicleSpeedKmh = stats.vehicleSpeedKmh;
+    state.engineTorqueNm = stats.engineTorqueNm;
+    state.drivetrainTorqueNm = stats.drivetrainTorqueNm;
 
     presentation->ShowEngineState(state);
 }
@@ -206,8 +211,6 @@ void runWarmupPhase(ISimulator& simulator,
     double currentTime = 0.0;
 
     for (int i = 0; i < AudioLoopConfig::WARMUP_ITERATIONS; i++) {
-        EngineSimStats stats = simulator.getStats();
-
         simulator.setThrottle(smoothedThrottle);
         simulator.update(config.updateInterval());
 
@@ -264,10 +267,9 @@ void applyGearChange(Simulator* rawSim, int gearDelta, ILogging* logger) {
     if (newGear >= 0) {
         rawSim->getTransmission()->changeGear(newGear);
         // Lock clutch when gear engaged (connects engine to vehicle inertia)
-        // Disengage in neutral (engine free-spins)
-        rawSim->getTransmission()->setClutchPressure(newGear > 0 ? 1.0 : 0.0);
-        logger->info(LogMask::BRIDGE, "Gear: %d -> %d (clutch %s)", currentGear, newGear,
-                     newGear > 0 ? "LOCKED" : "FREE");
+        // engine-sim convention: -1=neutral, 0+=gears — newGear>=0 means a gear is engaged
+        rawSim->getTransmission()->setClutchPressure(1.0);
+        logger->info(LogMask::BRIDGE, "Gear: %d -> %d (clutch LOCKED)", currentGear, newGear);
     }
 }
 
@@ -292,10 +294,13 @@ int runUnifiedAudioLoop(
 
     const double minSustainedRPM = 550.0;
 
-    double throttle = 0.1;
+    double throttle{};
     bool ignition = true;
     double lastDynoTorqueScale = -1.0;
     bool engineCaught = false;
+    EngineSimStats previousStats = {};
+    int inputGearSelector = 0;
+    bool inputGearAutoMode = false;
 
     // Get internal simulator for dyno control (if dyno is active)
     Simulator* rawSim = nullptr;
@@ -320,12 +325,15 @@ int runUnifiedAudioLoop(
 
         // Poll input: interactive mode uses OnUpdateSimulation, timed mode uses duration check
         if (inputProvider) {
+            inputProvider->provideFeedback(previousStats);
             input::EngineInput engineInput = inputProvider->OnUpdateSimulation(config.updateInterval());
             if (!engineInput.shouldContinue) {
                 break;  // Input provider signalled termination
             }
             throttle = engineInput.throttle;
             ignition = engineInput.ignition;
+            inputGearSelector = engineInput.gearSelector;
+            inputGearAutoMode = engineInput.gearAutoMode;
 
             // Apply dyno torque scaling only after engine catches (starter can't overcome dyno resistance)
             if (engineCaught) {
@@ -365,6 +373,11 @@ int runUnifiedAudioLoop(
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * 1000.0);
 
         EngineSimStats stats = simulator.getStats();
+        previousStats = stats;
+
+        // Overlay input-provider gear state onto stats for display
+        stats.gearSelector = inputGearSelector;
+        stats.gearAutoMode = inputGearAutoMode;
 
         // Generate audio: strategy decides whether to fill buffer (Threaded fills, SyncPull no-ops)
         audioBuffer.fillBufferFromEngine(&simulator, config.framesPerUpdate());

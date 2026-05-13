@@ -889,7 +889,6 @@ public:
 
         // ---- Cylinder Banks (V8: 2 banks of 4 cylinders each) ----
         double deckHeight = stroke / 2.0 + rodLength + compressionHeight;
-        const double spacing = units::distance(2.0, units::inch);
 
         // Bank 0: angle = -vAngle/2
         CylinderBank::Parameters bp0 = {};

@@ -74,6 +74,17 @@ EngineInput DemoInputProvider::OnUpdateSimulation(double dt) {
 
     twinProvider_.setUpstreamSignal(signal);
 
+    // Forward gear selector and ignition from keyboard to twin
+    auto* kbSource = dynamic_cast<KeyboardDemoThrottleSource*>(throttleSource_.get());
+    if (kbSource) {
+        int currentSelector = kbSource->getGearSelector();
+        if (currentSelector != lastForwardedSelector_) {
+            twinProvider_.setGearSelector(currentSelector);
+            lastForwardedSelector_ = currentSelector;
+        }
+        twinProvider_.setIgnition(kbSource->getIgnition());
+    }
+
     EngineInput input = twinProvider_.OnUpdateSimulation(dt);
     currentGear_ = input.gearAbsolute;
 
@@ -98,6 +109,10 @@ double DemoInputProvider::getDemoRoadSpeedKmh() const {
 
 int DemoInputProvider::getDemoGear() const {
     return currentGear_;
+}
+
+void DemoInputProvider::provideFeedback(const EngineSimStats& stats) {
+    twinProvider_.provideFeedback(stats);
 }
 
 }

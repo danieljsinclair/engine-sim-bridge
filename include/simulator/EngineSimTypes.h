@@ -56,6 +56,22 @@ namespace EngineSimDefaults {
     constexpr float   DEFAULT_HARDWARE_VOLUME    = 1.0f; // Default hardware output volume (0.0 to 1.0)
     constexpr int32_t DEFAULT_PREFILL_MS         = 50;   // Default pre-fill buffer duration in ms for sync-pull mode
     constexpr double  DYNO_MAX_TORQUE_FT_LBS     = 500.0; // Base dyno brake torque — ~1.5x typical V8 peak, gives usable range
+
+    // Display conversion constants
+    constexpr double  KMH_TO_MPH                 = 0.621371; // km/h to mph conversion factor
+
+    // Physics conversion constants
+    constexpr double  MS_TO_KMH                  = 3.6;       // m/s to km/h (3600s/h / 1000m/km)
+    constexpr double  RAD_PER_SEC_TO_RPM         = 60.0 / (2.0 * 3.14159265358979323846); // rad/s to RPM
+    constexpr double  MS_TO_SECONDS              = 1.0 / 1000.0; // milliseconds to seconds
+
+    // Twin state machine thresholds
+    constexpr double  TELEMETRY_TIMEOUT_S         = 5.0;   // Seconds without valid telemetry before OFF transition
+    constexpr double  CRANKING_THROTTLE           = 0.6;   // Throttle fraction during cranking
+    constexpr double  STANDSTILL_SPEED_MS         = 0.001; // Below this speed (m/s), vehicle is considered stopped
+
+    // Display thresholds
+    constexpr int     RPM_DISPLAY_FLOOR          = 10;    // RPM below this is displayed as 0 (suppresses transient noise)
 }
 
 // ISimulatorConfig — Configuration for ISimulator implementations
@@ -95,6 +111,15 @@ struct EngineSimStats {
     double dynoTargetRPM = 0.0;      // Dyno target RPM (0 = disabled)
     double dynoTorqueScale = 1.0;    // Current torque scale (0-1)
     int gear = 0;                    // Current gear (0 = neutral)
+
+    // Vehicle telemetry
+    double vehicleSpeedKmh = 0.0;
+    double engineTorqueNm = 0.0;
+    double drivetrainTorqueNm = 0.0;
+
+    // Gear selector state
+    int gearSelector = 0;            // GearSelector value
+    bool gearAutoMode = false;       // true=auto(ZF), false=manual
 };
 
 namespace EngineSimAudio {

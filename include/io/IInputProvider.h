@@ -9,6 +9,8 @@
 
 #include <string>
 
+struct EngineSimStats;
+
 namespace input {
 
 // ============================================================================
@@ -17,7 +19,7 @@ namespace input {
 // ============================================================================
 
 struct EngineInput {
-    double throttle = 0.1;       // 0.0 - 1.0 (from keyboard/upstream)
+    double throttle = 0.0;       // 0.0 - 1.0 (from keyboard/upstream)
     bool ignition = true;        // true = on (from keyboard/upstream)
     bool starterMotor = false;   // true = engaged (from keyboard/upstream)
     bool shouldContinue = true;  // false = signal loop termination
@@ -32,6 +34,8 @@ struct EngineInput {
     int gearAbsolute = -1;          // -1 = use gearDelta logic, 0+ = set this gear directly
     double clutchPressure = -1.0;   // -1 = unchanged, 0.0-1.0 = set clutch pressure
     double vehicleSpeedTargetKmh = -1.0; // -1 = unchanged, for future SpeedTrackingForce
+    int gearSelector = 0;           // GearSelector value for display
+    bool gearAutoMode = false;      // true=auto(ZF), false=manual
 
     // Simulator auto-disengages starter when RPM > threshold
 };
@@ -62,6 +66,12 @@ public:
      * Sets shouldContinue=false to signal loop termination.
      */
     virtual EngineInput OnUpdateSimulation(double dt) = 0;
+
+    /**
+     * Provide simulator feedback from the previous frame.
+     * Providers that need RPM feedback (e.g. twin-based providers) override this.
+     */
+    virtual void provideFeedback(const EngineSimStats& /* stats */) {}
 
     virtual std::string GetProviderName() const = 0;
     virtual std::string GetLastError() const = 0;

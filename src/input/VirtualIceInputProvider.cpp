@@ -53,6 +53,8 @@ EngineInput VirtualIceInputProvider::OnUpdateSimulation(double dt) {
     input.clutchPressure = output.clutchPressure;
     input.ignition = output.ignition;
     input.starterMotor = output.starterMotor;
+    input.gearSelector = static_cast<int>(output.gearSelector);
+    input.gearAutoMode = true; // VirtualIceTwin uses automatic gearbox
 
     return input;
 }
@@ -67,6 +69,25 @@ std::string VirtualIceInputProvider::GetLastError() const {
 
 void VirtualIceInputProvider::setUpstreamSignal(const UpstreamSignal& signal) {
     currentSignal_ = signal;
+}
+
+void VirtualIceInputProvider::setGearSelector(int selector) {
+    if (twin_) {
+        twin_->setGearSelector(static_cast<bridge::GearSelector>(selector));
+    }
+}
+
+void VirtualIceInputProvider::setIgnition(bool on) {
+    if (twin_) {
+        twin_->setIgnition(on);
+    }
+}
+
+void VirtualIceInputProvider::provideFeedback(const EngineSimStats& stats) {
+    if (twin_) {
+        twin_->setEngineRpmFeedback(stats.currentRPM);
+        twin_->setVehicleSpeedFeedback(stats.vehicleSpeedKmh);
+    }
 }
 
 }

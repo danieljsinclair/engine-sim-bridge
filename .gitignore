@@ -33,6 +33,7 @@ Thumbs.db
 *.log
 *.dat
 *.tmp
+.cache/
 /**/Temporary/
 build-test/
 .claude/scheduled_tasks.lock

@@ -5,6 +5,9 @@
 #include "simulator/SimulatorFactory.h"
 #include "simulator/BridgeSimulator.h"
 #include "simulator/SineSimulator.h"
+#include "simulator/SineEngine.h"
+#include "simulator/SineVehicle.h"
+#include "simulator/SineTransmission.h"
 #include "simulator/ScriptLoadHelpers.h"
 #include "simulator/EngineSimTypes.h"
 #include "common/ILogging.h"
@@ -44,13 +47,23 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
     ILogging* logger,
     telemetry::ITelemetryWriter* telemetryWriter)
 {
+    // Reserved for future factory-level telemetry wiring.
+    (void)telemetryWriter;
+
     std::unique_ptr<Simulator> sim;
 
     switch (type) {
         case SimulatorType::SineWave: {
             auto sineSim = std::make_unique<SineSimulator>();
             initSimulator(sineSim.get(), config);
-            sineSim->loadSimulation(nullptr, nullptr, nullptr);
+
+            // Keep SineWave creation symmetric with PistonEngine: the factory composes
+            // mode-specific parts and injects them via loadSimulation().
+            Engine* sineEngine = new SineEngine();
+            Vehicle* sineVehicle = new SineVehicle();
+            Transmission* sineTranny = new SineTransmission();
+            sineSim->loadSimulation(sineEngine, sineVehicle, sineTranny);
+
             sim = std::move(sineSim);
             break;
         }
@@ -70,6 +83,7 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
                 compiler->initialize();
 
                 if (!compiler->compile(normalizedPath.c_str())) {
+                    compiler->destroy();
                     throw std::runtime_error("Failed to compile script: " + normalizedPath);
                 }
 
@@ -79,6 +93,7 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
                 Transmission* transmission = output.transmission ? output.transmission : ScriptLoadHelpers::createDefaultTransmission();
 
                 if (!engine) {
+                    compiler->destroy();
                     throw std::runtime_error("Script did not create an engine: " + normalizedPath);
                 }
 
@@ -86,6 +101,7 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
 
                 // Load impulse responses
                 if (!ScriptLoadHelpers::loadImpulseResponses(pistonSim.get(), engine, resolvedAssetPath, logger)) {
+                    compiler->destroy();
                     throw std::runtime_error("Failed to load impulse responses (asset base: " + resolvedAssetPath + ")");
                 }
 

@@ -2,10 +2,12 @@
 
 # Default to parallel build using available CPU cores
 MAKEFLAGS += -j$(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
+BUILD_PHASE0_SPIKES ?= OFF
 
 # Default target - build everything
 all:
-	@if [ ! -d build ]; then mkdir build && cd build && cmake ..; fi
+	@mkdir -p build
+	@cd build && cmake -DBUILD_PHASE0_SPIKES=$(BUILD_PHASE0_SPIKES) ..
 	$(MAKE) -C build
 
 # Remove orphaned binaries and symlinks
@@ -26,6 +28,8 @@ scrub: clean
 
 # Run tests (build first if needed, log output)
 test:
+	@mkdir -p build
+	@cd build && cmake -DBUILD_PHASE0_SPIKES=$(BUILD_PHASE0_SPIKES) ..
 	$(MAKE) -C build bridge_unit_tests
 	@cd build && ctest -R bridge_unit_tests -V --output-on-failure
 
