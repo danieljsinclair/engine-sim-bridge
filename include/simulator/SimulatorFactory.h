@@ -48,7 +48,7 @@ public:
      * @param assetBasePath Base path for resolving asset files (impulse responses)
      * @param config ISimulator configuration (used for both Simulator subclass init and BridgeSimulator)
      * @param logger Optional logging interface (can be nullptr)
-     * @param telemetryWriter Optional telemetry writer (can be nullptr)
+     * @param telemetryWriter Optional telemetry writer reserved for future factory-level telemetry wiring
      * @return Unique pointer to ready-to-use ISimulator
      */
     static std::unique_ptr<ISimulator> create(

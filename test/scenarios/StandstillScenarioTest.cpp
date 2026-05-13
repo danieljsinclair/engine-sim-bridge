@@ -13,6 +13,7 @@ protected:
     void SetUp() override {
         profile_ = IceVehicleProfile::zf8hp45();
         twin_ = std::make_unique<VirtualIceTwin>(profile_);
+        twin_->setGearSelector(bridge::GearSelector::DRIVE);
         dt_ = 1.0 / 60.0;
     }
 
@@ -72,7 +73,6 @@ TEST_F(StandstillScenarioTest, LowThrottle_NoAcceleration_AC05_4) {
 
     auto lowThrottleSignals = TelemetrySequenceBuilder::buildCruiseTelemetry(0.0, 0.04, 3.0, dt_);
 
-    double initialSpeed = 0.0;
     double maxSpeed = 0.0;
 
     for (const auto& sig : lowThrottleSignals) {

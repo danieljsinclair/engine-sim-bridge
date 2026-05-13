@@ -23,6 +23,7 @@ struct IceVehicleProfile {
     double redlineRpm = 6500.0;
     double idleRpm = 750.0;
     double throttleIdleThreshold = 0.05;     // IDLE → RUNNING transition (5%)
+    double idleThrottle = 0.0;               // No throttle injection — engine idles on physics alone
     double standstillThresholdKmh = 1.0;     // Below this speed = standstill
 
     IceVehicleProfile() = default;

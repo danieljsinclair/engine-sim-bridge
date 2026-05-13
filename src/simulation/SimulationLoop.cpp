@@ -180,6 +180,8 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.enginePhase = phase;
     state.exhaustFlow = stats.exhaustFlow;
     state.gear = stats.gear;
+    state.gearSelector = stats.gearSelector;
+    state.gearAutoMode = stats.gearAutoMode;
     state.dynoTorque = stats.dynoTorque;
     state.dynoTargetRPM = stats.dynoTargetRPM;
     state.renderMs = timing.renderMs;
@@ -193,6 +195,9 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.sampleRate = config.sampleRate();
     state.simulationFrequency = actualSimFrequency;
     state.presetShortName = presetShortName;
+    state.vehicleSpeedKmh = stats.vehicleSpeedKmh;
+    state.engineTorqueNm = stats.engineTorqueNm;
+    state.drivetrainTorqueNm = stats.drivetrainTorqueNm;
 
     presentation->ShowEngineState(state);
 }
@@ -437,6 +442,11 @@ int runUnifiedAudioLoop(
     double currentTime = 0.0;
     LoopTimer timer(config.updateInterval());
 
+    EngineSimStats previousStats = {};
+    int inputGearSelector = 0;
+    bool inputGearAutoMode = false;
+
+
     logger->info(LogMask::BRIDGE, "runUnifiedAudioLoop starting simulation loop with %s", config.simulatorLabel.c_str());
 
     // Track first tick to trigger auto-start in non-interactive mode
@@ -481,6 +491,13 @@ int runUnifiedAudioLoop(
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * SECONDS_TO_MILLISECONDS);
 
         EngineSimStats stats = simulator.getStats();
+        previousStats = stats;
+
+        // Overlay input-provider gear state onto stats for display
+        stats.gearSelector = inputGearSelector;
+        stats.gearAutoMode = inputGearAutoMode;
+
+
         audioBuffer.fillBufferFromEngine(&simulator, config.framesPerUpdate());
 
         writeTelemetry(telemetryWriter, currentTime, crankingState.startingThrottle, input.ignition, crankingState.starterEngaged);
@@ -489,8 +506,18 @@ int runUnifiedAudioLoop(
         updatePresentation(presentation, config, currentTime, stats, crankingState.startingThrottle, input.ignition, crankingState.starterEngaged, crankingState.phase, readUnderrunCount(telemetryReader), audioBuffer, telemetryReader, presetShortName, simulator.getSimulationFrequency());
 
         timer.waitUntilNextTick();
+
+        // Provide feedback to input provider before polling (twin feedback loop)
+        if (inputProvider) {
+            inputProvider->provideFeedback(previousStats);
+        }
+
         input = pollInput(inputProvider, currentTime, config.updateInterval(), isFirstTick);
         isFirstTick = false;
+
+        // Capture input-provider gear state for next iteration's display overlay
+        inputGearSelector = input.gearSelector;
+        inputGearAutoMode = input.gearAutoMode;
 
         if (input.presetCycle) {
             return EXIT_BUT_CONTINUE_NEXT;

@@ -14,6 +14,7 @@ protected:
     void SetUp() override {
         profile_ = IceVehicleProfile::zf8hp45();
         twin_ = std::make_unique<VirtualIceTwin>(profile_);
+        twin_->setGearSelector(bridge::GearSelector::DRIVE);
         dt_ = 1.0 / 60.0;
     }
 

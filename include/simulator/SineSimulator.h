@@ -16,8 +16,8 @@ public:
     void destroy() override;
 
     /** Overrides Simulator::loadSimulation() — mirrors PistonEngineSimulator lifecycle.
-     *  Factory calls this after initSimulator(). Creates sine-specific engine/vehicle/transmission,
-     *  wires physics, configures synthesizer for pure sine output. */
+     *  Factory calls this after initSimulator() and injects sine-specific engine/vehicle/transmission.
+     *  Wires physics and configures synthesizer for pure sine output. */
     void loadSimulation(Engine* engine, Vehicle* vehicle, Transmission* transmission) override;
 
 protected:

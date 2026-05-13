@@ -1,6 +1,8 @@
 #ifndef TWIN_OUTPUT_H
 #define TWIN_OUTPUT_H
 
+#include <simulator/GearConventions.h>
+
 namespace twin {
 
 struct TwinOutput {
@@ -9,6 +11,7 @@ struct TwinOutput {
     double clutchPressure = 1.0;
     bool starterMotor = false;
     bool ignition = false;
+    bridge::GearSelector gearSelector = bridge::GearSelector::NEUTRAL;
 };
 
 }

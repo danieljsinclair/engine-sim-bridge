@@ -84,3 +84,4 @@ PresetLoadResult PresetEngineFactory::loadFromJson(const char* jsonContent, size
     std::string content(jsonContent, jsonSize);
     return loadFromString(content, "<json>");
 }
+

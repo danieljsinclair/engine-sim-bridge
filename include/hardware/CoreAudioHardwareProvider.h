@@ -67,7 +67,7 @@ private:
     // ================================================================
 
     AudioUnit audioUnit;              // CoreAudio AudioUnit instance
-    AudioDeviceID deviceID;          // Default output device ID
+    [[maybe_unused]] AudioDeviceID deviceID;          // Default output device ID
     bool isPlaying;                  // Playback state
     double currentVolume;              // Current volume level (0.0 to 1.0)
     int underrunCount;               // Buffer underrun counter

@@ -108,5 +108,5 @@ TEST_F(VirtualIceInputProviderTest, CrankingStateActivatesStarterAndIgnition) {
     EngineInput input = provider_->OnUpdateSimulation(0.016);
     EXPECT_TRUE(input.ignition);
     EXPECT_TRUE(input.starterMotor);
-    EXPECT_EQ(1, input.gearAbsolute);
+    EXPECT_EQ(0, input.gearAbsolute);  // Neutral during cranking
 }

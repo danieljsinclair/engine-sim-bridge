@@ -66,7 +66,7 @@ size_t CircularBuffer::write(const float* samples, size_t frameCount) {
     int writePtr = writePointer_.load();
 
     // Handle wrap-around
-    if (writePtr + toWrite <= static_cast<int>(bufferCapacity_)) {
+    if (writePtr + static_cast<int>(toWrite) <= static_cast<int>(bufferCapacity_)) {
         // Simple case: no wrap-around
         for (size_t i = 0; i < toWrite; i++) {
             buffer_[(writePtr + i) * 2] = samples[i * 2];
@@ -112,7 +112,7 @@ size_t CircularBuffer::read(float* output, size_t frameCount) {
     int readPtr = readPointer_.load();
 
     // Handle wrap-around
-    if (readPtr + toRead <= static_cast<int>(bufferCapacity_)) {
+    if (readPtr + static_cast<int>(toRead) <= static_cast<int>(bufferCapacity_)) {
         // Simple case: no wrap-around
         for (size_t i = 0; i < toRead; i++) {
             output[i * 2] = buffer_[(readPtr + i) * 2];

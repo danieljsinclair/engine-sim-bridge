@@ -38,6 +38,7 @@ Thumbs.db
 *.log
 *.dat
 *.tmp
+.cache/
 /**/Temporary/
 .cache/
 

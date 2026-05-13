@@ -13,6 +13,7 @@ protected:
     void SetUp() override {
         profile_ = IceVehicleProfile::zf8hp45();
         twin_ = std::make_unique<VirtualIceTwin>(profile_);
+        twin_->setGearSelector(bridge::GearSelector::DRIVE);
         dt_ = 1.0 / 60.0;
     }
 
@@ -43,7 +44,6 @@ protected:
 TEST_F(KickdownScenarioTest, DownshiftWithin500ms_AC04_1) {
     warmupToCruise(60.0, 0.2);
 
-    int gearBeforeKickdown = twin_->getCurrentGear();
     double kickdownTime = -1.0;
     double time = 0.0;
 

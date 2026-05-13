@@ -184,6 +184,9 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
     ILogging* logger,
     telemetry::ITelemetryWriter* telemetryWriter)
 {
+    // Reserved for future factory-level telemetry wiring.
+    (void)telemetryWriter;
+
     SimulatorInit simInit;
     switch (type) {
         case SimulatorType::SineWave:

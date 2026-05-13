@@ -2,6 +2,7 @@
 #define VIRTUAL_ICE_INPUT_PROVIDER_H
 
 #include "io/IInputProvider.h"
+#include "simulator/EngineSimTypes.h"
 #include "io/UpstreamSignal.h"
 #include "twin/IceVehicleProfile.h"
 #include "twin/VirtualIceTwin.h"
@@ -28,6 +29,15 @@ public:
 
     // Set the upstream signal source (for testing or manual injection)
     void setUpstreamSignal(const UpstreamSignal& signal);
+
+    // Forward gear selector changes to the twin
+    void setGearSelector(int selector);
+
+    // Forward ignition state to the twin
+    void setIgnition(bool on);
+
+    // Forward simulator RPM feedback to the twin for cranking transition
+    void provideFeedback(const EngineSimStats& stats) override;
 
 private:
     const twin::IceVehicleProfile& profile_;
