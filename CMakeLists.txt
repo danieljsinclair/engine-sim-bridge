@@ -216,6 +216,24 @@ if(NOT IOS AND TARGET engine-sim-script-interpreter)
             engine-sim-script-interpreter
     )
     target_compile_definitions(engine-sim-preset-compiler PRIVATE ATG_ENGINE_SIM_PIRANHA_ENABLED)
+
+    # Preset Code Generator (macOS build-time tool)
+    # Compiles .mr scripts to C++ source code for baked presets
+    add_executable(engine-sim-preset-codegen tools/preset_codegen.cpp)
+    target_include_directories(engine-sim-preset-codegen
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${ENGINE_SIM_PATH}/dependencies/dr_libs
+            ${ENGINE_SIM_PATH}/include
+            ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(engine-sim-preset-codegen
+        PRIVATE
+            engine-sim
+            engine-sim-script-interpreter
+    )
+    target_compile_definitions(engine-sim-preset-codegen PRIVATE ATG_ENGINE_SIM_PIRANHA_ENABLED)
 endif()
 
 # -----------------------------------------------------------------------------
@@ -272,6 +290,7 @@ if(BUILD_BRIDGE_TESTS)
         )
         target_compile_definitions(preset_engine_tests PRIVATE
             TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
+            TEST_ENGINE_SIM_ASSETS="${ENGINE_SIM_PATH}/assets"
         )
         target_link_libraries(preset_engine_tests
             PRIVATE

@@ -13,6 +13,8 @@
 #include "engine_sim.h"
 #include "compiler.h"
 
+#include <unistd.h>
+
 #include "engine.h"
 #include "vehicle.h"
 #include "transmission.h"
@@ -184,6 +186,23 @@ private:
 };
 
 // ============================================================================
+// Function serialization helper - extracts raw [x, y] sample pairs
+// ============================================================================
+
+static void serializeFunction(JsonWriter& j, const char* key, Function* func) {
+    if (!func) return;
+    j.key(key);
+    j.beginArray();
+    for (int i = 0; i < func->getSampleCount(); i++) {
+        j.beginArray();
+        j.value(func->getX(i));
+        j.value(func->getY(i));
+        j.endArray();
+    }
+    j.endArray();
+}
+
+// ============================================================================
 // Engine Graph Walker
 // ============================================================================
 
@@ -225,7 +244,7 @@ static void serializeExhaustSystem(JsonWriter& j, ExhaustSystem* es) {
     j.beginObject();
     j.kv("length", es->getLength());
     j.kv("collectorCrossSectionArea", es->getCollectorCrossSectionArea());
-    j.kv("outletFlowRate", 0.0); // Not directly exposed as getter
+    j.kv("outletFlowRate", es->getOutletFlowRate());
     j.kv("primaryTubeLength", es->getPrimaryTubeLength());
     j.kv("primaryFlowRate", es->getPrimaryFlowRate());
     j.kv("velocityDecay", es->getVelocityDecay());
@@ -247,6 +266,9 @@ static void serializeIntake(JsonWriter& j, Intake* intake) {
     j.kv("runnerLength", intake->getRunnerLength());
     j.kv("plenumCrossSectionArea", intake->getPlenumCrossSectionArea());
     j.kv("velocityDecay", intake->getVelocityDecay());
+    j.kv("inputFlowK", intake->getInputFlowK());
+    j.kv("plenumVolume", intake->getVolume());
+    j.kv("idleFlowK", intake->getIdleFlowK());
     j.endObject();
 }
 
@@ -301,6 +323,10 @@ static void serializeCylinderHead(JsonWriter& j, CylinderHead* head, int cylinde
         j.key("exhaustCamshaft");
         serializeCamshaft(j, exhaustCam, cylinderCount);
     }
+
+    // Port flow functions
+    serializeFunction(j, "intakePortFlow", head->getIntakePortFlow());
+    serializeFunction(j, "exhaustPortFlow", head->getExhaustPortFlow());
 
     j.endObject();
 }
@@ -418,6 +444,24 @@ static void serializeEngine(JsonWriter& j, Engine* engine) {
         j.kv("maxTurbulenceEffect", fuel->getMaxTurbulenceEffect());
         j.kv("maxDilutionEffect", fuel->getMaxDilutionEffect());
         j.kv("molecularAfr", fuel->getMolecularAfr());
+        serializeFunction(j, "turbulenceToFlameSpeedRatio", fuel->getTurbulenceToFlameSpeedRatio());
+        j.endObject();
+    }
+
+    // Ignition module
+    IgnitionModule* ignition = engine->getIgnitionModule();
+    if (ignition) {
+        j.key("ignitionModule");
+        j.beginObject();
+        j.kv("revLimit", ignition->getRevLimit());
+        j.kv("limiterDuration", ignition->getLimiterDuration());
+        serializeFunction(j, "timingCurve", ignition->getTimingCurve());
+        j.key("firingOrder");
+        j.beginArray();
+        for (int i = 0; i < ignition->getCylinderCount(); i++) {
+            j.value(ignition->getFiringOrder(i));
+        }
+        j.endArray();
         j.endObject();
     }
 
@@ -465,11 +509,6 @@ int main(int argc, char* argv[]) {
     const char* outputPath = argv[2];
     const char* engineSimDir = (argc >= 4) ? argv[3] : nullptr;
 
-    if (!std::filesystem::exists(scriptPath)) {
-        fprintf(stderr, "Error: Script not found: %s\n", scriptPath);
-        return 1;
-    }
-
     // Resolve engine-sim directory
     // If not provided, try to infer from the script path (look for es/ sibling)
     std::filesystem::path simDir;
@@ -500,15 +539,25 @@ int main(int argc, char* argv[]) {
 
     // Compute the relative import path from the assets/ directory to the engine script
     // Scripts are typically at assets/engines/... relative to the engine-sim root
-    std::filesystem::path absScriptPath = std::filesystem::absolute(scriptPath);
     std::filesystem::path assetsDir = simDir / "assets";
 
     std::string relativeImport;
+    std::filesystem::path resolvedScript;
     if (engineSimDir) {
-        // When engine_sim_dir is provided explicitly, scriptPath is relative to assets/
+        // When engine_sim_dir is provided, scriptPath is relative to assets/
         relativeImport = scriptPath;
+        resolvedScript = assetsDir / scriptPath;
+        if (!std::filesystem::exists(resolvedScript)) {
+            fprintf(stderr, "Error: Script not found: %s (resolved to %s)\n", scriptPath, resolvedScript.c_str());
+            return 1;
+        }
     } else {
-        // Compute relative path from assets/ to the script
+        // Script path is on disk — verify existence and compute relative path from assets/
+        if (!std::filesystem::exists(scriptPath)) {
+            fprintf(stderr, "Error: Script not found: %s\n", scriptPath);
+            return 1;
+        }
+        std::filesystem::path absScriptPath = std::filesystem::absolute(scriptPath);
         relativeImport = std::filesystem::relative(absScriptPath, assetsDir).string();
     }
 
@@ -519,7 +568,9 @@ int main(int argc, char* argv[]) {
     // Piranha resolves imports relative to the importing script's parent directory.
     // By placing the wrapper next to engine scripts, `import "engines/..."` resolves
     // correctly via the assets/ directory.
-    std::filesystem::path wrapperPath = assetsDir / "_escli_preset_wrapper.mr";
+    // Use a unique name per invocation to allow parallel compilation.
+    std::string wrapperName = "_escli_preset_wrapper_" + std::to_string(getpid()) + ".mr";
+    std::filesystem::path wrapperPath = assetsDir / wrapperName;
     {
         std::ofstream wrapper(wrapperPath);
         if (!wrapper.is_open()) {
@@ -548,6 +599,7 @@ int main(int argc, char* argv[]) {
     if (!compiler.compile(wrapperPath.string())) {
         // Restore CWD before printing error
         std::filesystem::current_path(originalCwd);
+        std::filesystem::remove(wrapperPath);
         fprintf(stderr, "Error: Failed to compile script: %s\n", scriptPath);
         return 1;
     }
@@ -556,6 +608,7 @@ int main(int argc, char* argv[]) {
 
     // Restore working directory
     std::filesystem::current_path(originalCwd);
+    std::filesystem::remove(wrapperPath);
 
     if (!output.engine) {
         fprintf(stderr, "Error: Script did not produce an engine: %s\n", scriptPath);

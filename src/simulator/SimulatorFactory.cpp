@@ -6,6 +6,8 @@
 #include "simulator/BridgeSimulator.h"
 #include "simulator/SineSimulator.h"
 #include "simulator/ScriptLoadHelpers.h"
+#include "simulator/PresetEngineFactory.h"
+#include "simulator/SimulatorInitHelpers.h"
 #include "simulator/EngineSimTypes.h"
 #include "common/ILogging.h"
 #include "telemetry/ITelemetryProvider.h"
@@ -13,6 +15,7 @@
 
 #include <memory>
 #include <stdexcept>
+#include <algorithm>
 
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
 #include "../scripting/include/compiler.h"
@@ -30,6 +33,12 @@ static void initSimulator(Simulator* sim, const ISimulatorConfig& config) {
     sim->setSimulationFrequency(config.simulationFrequency);
     sim->setFluidSimulationSteps(config.fluidSimulationSteps);
     sim->setTargetSynthesizerLatency(config.targetSynthesizerLatency);
+}
+
+static bool endsWith(const std::string& str, const std::string& suffix) {
+    if (suffix.size() > str.size()) return false;
+    return std::equal(suffix.rbegin(), suffix.rend(), str.rbegin(),
+        [](char a, char b) { return tolower(a) == tolower(b); });
 }
 
 // ============================================================================
@@ -56,46 +65,76 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
         }
 
         case SimulatorType::PistonEngine: {
-            auto pistonSim = std::make_unique<PistonEngineSimulator>();
-            initSimulator(pistonSim.get(), config);
-
-            // Compile and load script if path provided
             if (!scriptPath.empty()) {
-                std::string normalizedPath = ScriptLoadHelpers::normalizeScriptPath(scriptPath);
-                std::string resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath, assetBasePath);
+                // Route by file extension: .json → preset loader, .mr → Piranha compiler
+                if (endsWith(scriptPath, ".json")) {
+                    // JSON preset — no Piranha dependency
+                    PresetLoadResult result = PresetEngineFactory::loadFromFile(scriptPath);
+                    if (!result.success()) {
+                        throw std::runtime_error("Failed to load preset: " + scriptPath + " — " + result.error);
+                    }
+
+                    auto pistonSim = std::make_unique<PistonEngineSimulator>();
+                    initSimulator(pistonSim.get(), config);
+                    pistonSim->loadSimulation(result.engine, result.vehicle, result.transmission);
+
+                    // Load impulse responses from WAV files referenced in the JSON
+                    ScriptLoadHelpers::loadImpulseResponses(
+                        pistonSim.get(), result.engine,
+                        ScriptLoadHelpers::resolveAssetBasePath(
+                            ScriptLoadHelpers::normalizeScriptPath(scriptPath), assetBasePath),
+                        logger);
+
+                    sim = std::move(pistonSim);
+                } else {
+                    // .mr script — Piranha compilation (desktop only)
+                    std::string normalizedPath = ScriptLoadHelpers::normalizeScriptPath(scriptPath);
+                    std::string resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath, assetBasePath);
 
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
-                // Lazily create compiler
-                auto compiler = std::make_unique<es_script::Compiler>();
-                compiler->initialize();
+                    auto compiler = std::make_unique<es_script::Compiler>();
+                    compiler->initialize();
 
-                if (!compiler->compile(normalizedPath.c_str())) {
-                    throw std::runtime_error("Failed to compile script: " + normalizedPath);
-                }
+                    auto cleanup = [&compiler]() { compiler->destroy(); };
 
-                es_script::Compiler::Output output = compiler->execute();
-                Engine* engine = output.engine;
-                Vehicle* vehicle = output.vehicle ? output.vehicle : ScriptLoadHelpers::createDefaultVehicle();
-                Transmission* transmission = output.transmission ? output.transmission : ScriptLoadHelpers::createDefaultTransmission();
+                    try {
+                        if (!compiler->compile(normalizedPath.c_str())) {
+                            throw std::runtime_error("Failed to compile script: " + normalizedPath);
+                        }
 
-                if (!engine) {
-                    throw std::runtime_error("Script did not create an engine: " + normalizedPath);
-                }
+                        es_script::Compiler::Output output = compiler->execute();
+                        Engine* engine = output.engine;
+                        Vehicle* vehicle = output.vehicle ? output.vehicle : ScriptLoadHelpers::createDefaultVehicle();
+                        Transmission* transmission = output.transmission ? output.transmission : ScriptLoadHelpers::createDefaultTransmission();
 
-                pistonSim->loadSimulation(engine, vehicle, transmission);
+                        if (!engine) {
+                            throw std::runtime_error("Script did not create an engine: " + normalizedPath);
+                        }
 
-                // Load impulse responses
-                if (!ScriptLoadHelpers::loadImpulseResponses(pistonSim.get(), engine, resolvedAssetPath, logger)) {
-                    throw std::runtime_error("Failed to load impulse responses (asset base: " + resolvedAssetPath + ")");
-                }
+                        auto pistonSim = std::make_unique<PistonEngineSimulator>();
+                        initSimulator(pistonSim.get(), config);
+                        pistonSim->loadSimulation(engine, vehicle, transmission);
 
-                compiler->destroy();
+                        if (!ScriptLoadHelpers::loadImpulseResponses(pistonSim.get(), engine, resolvedAssetPath, logger)) {
+                            pistonSim->destroy();
+                            throw std::runtime_error("Failed to load impulse responses (asset base: " + resolvedAssetPath + ")");
+                        }
+
+                        sim = std::move(pistonSim);
+                    } catch (...) {
+                        cleanup();
+                        throw;
+                    }
+                    cleanup();
 #else
-                throw std::runtime_error("Script loading not available (Piranha support disabled)");
+                    throw std::runtime_error("Script loading not available (Piranha support disabled)");
 #endif
+                }
+            } else {
+                auto pistonSim = std::make_unique<PistonEngineSimulator>();
+                initSimulator(pistonSim.get(), config);
+                sim = std::move(pistonSim);
             }
-
-            sim = std::move(pistonSim);
             break;
         }
 
@@ -105,7 +144,6 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
 
     auto bridgeSim = std::make_unique<BridgeSimulator>(std::move(sim));
 
-    // Set display name from script path for PistonEngine mode
     if (type == SimulatorType::PistonEngine && !scriptPath.empty()) {
         bridgeSim->setNameFromScript(scriptPath);
     }
