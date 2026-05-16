@@ -76,6 +76,21 @@ set(BRIDGE_SOURCES
     src/common/JsonParser.cpp
     # Preset engine factory (JSON-based, for preset compiler output)
     src/simulator/PresetEngineFactory.cpp
+    # Preset deserializers (pure JSON -> engine object graph)
+    src/preset/PresetDeserializer.cpp
+    src/preset/FunctionDeserializer.cpp
+    src/preset/EngineDeserializer.cpp
+    src/preset/CrankshaftDeserializer.cpp
+    src/preset/ConnectingRodDeserializer.cpp
+    src/preset/CamshaftDeserializer.cpp
+    src/preset/CylinderBankDeserializer.cpp
+    src/preset/CylinderHeadDeserializer.cpp
+    src/preset/ExhaustSystemDeserializer.cpp
+    src/preset/IntakeDeserializer.cpp
+    src/preset/FuelDeserializer.cpp
+    src/preset/IgnitionModuleDeserializer.cpp
+    src/preset/VehicleDeserializer.cpp
+    src/preset/TransmissionDeserializer.cpp
     # Hardcoded C++ engine preset factories (works on iOS without Piranha)
     src/simulator/EnginePresets.cpp
 )
@@ -297,11 +312,35 @@ if(BUILD_BRIDGE_TESTS)
                 GTest::gtest_main
                 engine-sim-bridge
         )
-        if(ENGINE_SIM_PIRANHA_ENABLED)
+        if(TARGET engine-sim-script-interpreter)
             target_compile_definitions(preset_engine_tests PRIVATE ENGINE_SIM_PIRANHA_ENABLED)
         endif()
         if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
             add_test(NAME preset_engine_tests COMMAND preset_engine_tests --gtest_color=yes)
+        endif()
+
+        # Isomorphism tests - proves .mr and JSON paths produce identical engines
+        add_executable(preset_isomorphism_tests
+            test/PresetIsomorphismTests.cpp
+        )
+        target_include_directories(preset_isomorphism_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${ENGINE_SIM_PATH}/include
+        )
+        target_compile_definitions(preset_isomorphism_tests PRIVATE
+            TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
+            TEST_ENGINE_SIM_ASSETS="${ENGINE_SIM_PATH}/assets"
+        )
+        if(TARGET engine-sim-script-interpreter)
+            target_compile_definitions(preset_isomorphism_tests PRIVATE ENGINE_SIM_PIRANHA_ENABLED)
+        endif()
+        target_link_libraries(preset_isomorphism_tests
+            PRIVATE
+                GTest::gtest_main
+                engine-sim-bridge
+        )
+        if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+            add_test(NAME preset_isomorphism_tests COMMAND preset_isomorphism_tests --gtest_color=yes)
         endif()
     endif()
 

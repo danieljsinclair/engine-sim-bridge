@@ -1,0 +1,10 @@
+{
+  "engine": {
+    "name": "Broken",
+    "cylinderBankCount": 0,
+    "cylinderCount": 0,
+    "crankshaftCount": 0,
+    "exhaustSystemCount": 1,
+    "intakeCount": 1
+  }
+}

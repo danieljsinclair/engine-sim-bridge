@@ -1,0 +1,235 @@
+{
+  "presetName": "test",
+  "engine": {
+    "name": "Test",
+    "cylinderBankCount": 1,
+    "cylinderCount": 1,
+    "crankshaftCount": 1,
+    "exhaustSystemCount": 1,
+    "intakeCount": 1,
+    "simulationFrequency": 10000,
+    "initialHighFrequencyGain": 0.01,
+    "initialNoise": 1.0,
+    "initialJitter": 0.5,
+    "crankshafts": [
+      {
+        "mass": 1,
+        "flywheelMass": 1,
+        "momentOfInertia": 0.01,
+        "crankThrow": 0.03,
+        "posX": 0,
+        "posY": 0,
+        "tdc": 1.57,
+        "frictionTorque": 1,
+        "rodJournals": [
+          {
+            "angle": 0
+          }
+        ]
+      }
+    ],
+    "cylinderBanks": [
+      {
+        "angle": 0,
+        "bore": 0.09,
+        "deckHeight": 0.2,
+        "displayDepth": 0.5,
+        "index": 0,
+        "positionX": 0,
+        "positionY": 0,
+        "cylinderCount": 1,
+        "cylinders": [
+          {
+            "pistonMass": 0.1,
+            "compressionHeight": 0.025,
+            "wristPinPosition": 0,
+            "displacement": 0,
+            "blowbyK": 0,
+            "connectingRod": {
+              "mass": 0.1,
+              "momentOfInertia": 0.001,
+              "centerOfMass": 0,
+              "length": 0.15,
+              "journal": 0,
+              "slaveThrow": 0
+            },
+            "rodJournalIndex": 0
+          }
+        ],
+        "cylinderHead": {
+          "combustionChamberVolume": 6e-05,
+          "intakeRunnerVolume": 0.0001,
+          "intakeRunnerCrossSectionArea": 0.0009,
+          "exhaustRunnerVolume": 0.0001,
+          "exhaustRunnerCrossSectionArea": 0.0009,
+          "flipDisplay": false,
+          "intakePortFlow": {
+            "filterRadius": 50,
+            "inputScale": 1,
+            "outputScale": 1,
+            "samples": [
+              [
+                0,
+                0
+              ],
+              [
+                50,
+                25
+              ],
+              [
+                100,
+                75
+              ],
+              [
+                150,
+                100
+              ],
+              [
+                200,
+                130
+              ]
+            ]
+          },
+          "exhaustPortFlow": {
+            "filterRadius": 50,
+            "inputScale": 1,
+            "outputScale": 1,
+            "samples": [
+              [
+                0,
+                0
+              ],
+              [
+                50,
+                25
+              ],
+              [
+                100,
+                50
+              ],
+              [
+                150,
+                75
+              ],
+              [
+                200,
+                100
+              ]
+            ]
+          },
+          "cylinders": [
+            {
+              "soundAttenuation": 1,
+              "headerPrimaryLength": 0
+            }
+          ],
+          "intakeCamshaft": {
+            "advance": 0,
+            "baseRadius": 0.0127,
+            "lobeProfile": {
+              "filterRadius": 0.5,
+              "inputScale": 1,
+              "outputScale": 1,
+              "samples": [
+                [
+                  -1.0,
+                  0
+                ],
+                [
+                  0,
+                  0.005
+                ],
+                [
+                  1.0,
+                  0
+                ]
+              ]
+            },
+            "lobeCenterlines": [
+              4.0
+            ]
+          },
+          "exhaustCamshaft": {
+            "advance": 0,
+            "baseRadius": 0.0127,
+            "lobeProfile": {
+              "filterRadius": 0.5,
+              "inputScale": 1,
+              "outputScale": 1,
+              "samples": [
+                [
+                  -1.0,
+                  0
+                ],
+                [
+                  0,
+                  0.005
+                ],
+                [
+                  1.0,
+                  0
+                ]
+              ]
+            },
+            "lobeCenterlines": [
+              2.0
+            ]
+          }
+        }
+      }
+    ],
+    "exhaustSystems": [
+      {
+        "length": 1.0,
+        "collectorCrossSectionArea": 0.008,
+        "outletFlowRate": 0.1,
+        "primaryTubeLength": 0.5,
+        "primaryFlowRate": 0.01,
+        "velocityDecay": 0.5,
+        "audioVolume": 1
+      }
+    ],
+    "intakes": [
+      {
+        "runnerFlowRate": 0.01,
+        "runnerLength": 0.1,
+        "plenumCrossSectionArea": 0.001,
+        "velocityDecay": 0.5,
+        "inputFlowK": 0.1,
+        "plenumVolume": 0.001,
+        "idleFlowK": 0,
+        "idleThrottlePlatePosition": 0.1
+      }
+    ],
+    "fuel": {
+      "maxBurningEfficiency": 1,
+      "burningEfficiencyRandomness": 0.5,
+      "lowEfficiencyAttenuation": 0.6,
+      "maxTurbulenceEffect": 2,
+      "maxDilutionEffect": 10,
+      "molecularAfr": 12.5,
+      "turbulenceToFlameSpeedRatio": {
+        "filterRadius": 1,
+        "inputScale": 1,
+        "outputScale": 1,
+        "samples": [
+          [
+            0,
+            0
+          ],
+          [
+            1,
+            0.5
+          ],
+          [
+            2,
+            1.0
+          ]
+        ]
+      },
+      "molecularMass": 0.1,
+      "energyDensity": 48100000.0,
+      "density": 755.0
+    }
+  }
+}

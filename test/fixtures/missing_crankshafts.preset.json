@@ -1,0 +1,14 @@
+{
+  "engine": {
+    "name": "NoCrank",
+    "cylinderBankCount": 1,
+    "cylinderCount": 1,
+    "crankshaftCount": 1,
+    "exhaustSystemCount": 1,
+    "intakeCount": 1,
+    "simulationFrequency": 10000,
+    "initialHighFrequencyGain": 0.01,
+    "initialNoise": 1.0,
+    "initialJitter": 0.5
+  }
+}

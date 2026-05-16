@@ -135,26 +135,26 @@ public:
     void kv(const char* k, const char* v) { key(k); value(v); }
     void kvBool(const char* k, bool v) { key(k); valueBool(v); }
 
-    // Write a Function as an array of [x, y] samples
-    void writeFunctionSamples(const char* k, Function* fn, int maxSamples = 64) {
+    // Serialize Function with complete metadata including filterRadius
+    void serializeFunction(const char* k, Function* fn) {
         if (!fn) return;
         key(k);
+        beginObject();
+        kv("filterRadius", fn->getFilterRadius());
+        kv("inputScale", fn->getInputScale());
+        kv("outputScale", fn->getOutputScale());
+
+        key("samples");
         beginArray();
-        double x0, x1;
-        fn->getDomain(&x0, &x1);
-        if (x1 > x0) {
-            int n = maxSamples;
-            double step = (x1 - x0) / (n - 1);
-            for (int i = 0; i < n; i++) {
-                double x = x0 + i * step;
-                double y = fn->sampleTriangle(x);
-                beginArray();
-                value(x);
-                value(y);
-                endArray();
-            }
+        for (int i = 0; i < fn->getSampleCount(); i++) {
+            beginArray();
+            value(fn->getX(i));
+            value(fn->getY(i));
+            endArray();
         }
         endArray();
+
+        endObject();
     }
 
     std::string str() const { return buf_; }
@@ -185,22 +185,6 @@ private:
     bool needsComma_;
 };
 
-// ============================================================================
-// Function serialization helper - extracts raw [x, y] sample pairs
-// ============================================================================
-
-static void serializeFunction(JsonWriter& j, const char* key, Function* func) {
-    if (!func) return;
-    j.key(key);
-    j.beginArray();
-    for (int i = 0; i < func->getSampleCount(); i++) {
-        j.beginArray();
-        j.value(func->getX(i));
-        j.value(func->getY(i));
-        j.endArray();
-    }
-    j.endArray();
-}
 
 // ============================================================================
 // Engine Graph Walker
@@ -269,6 +253,7 @@ static void serializeIntake(JsonWriter& j, Intake* intake) {
     j.kv("inputFlowK", intake->getInputFlowK());
     j.kv("plenumVolume", intake->getVolume());
     j.kv("idleFlowK", intake->getIdleFlowK());
+    j.kv("idleThrottlePlatePosition", intake->getIdleThrottlePlatePosition());
     j.endObject();
 }
 
@@ -276,15 +261,17 @@ static void serializeCamshaft(JsonWriter& j, Camshaft* cam, int cylinderCount) {
     j.beginObject();
     j.kv("advance", cam->getAdvance());
     j.kv("baseRadius", cam->getBaseRadius());
+    j.kv("lobeCount", cam->getLobeCount());
 
     // Serialize lobe profile (the Function that defines valve lift)
-    j.writeFunctionSamples("lobeProfileSamples", cam->getLobeProfile(), 256);
+    j.serializeFunction("lobeProfile", cam->getLobeProfile());
 
     // Serialize lobe centerlines (one per cylinder on this bank)
+    // Convert from cam angles to crankshaft angles (×2) to match .mr convention
     j.key("lobeCenterlines");
     j.beginArray();
     for (int i = 0; i < cylinderCount; i++) {
-        j.value(cam->getLobeCenterline(i));
+        j.value(cam->getLobeCenterline(i) * 2);
     }
     j.endArray();
 
@@ -325,8 +312,8 @@ static void serializeCylinderHead(JsonWriter& j, CylinderHead* head, int cylinde
     }
 
     // Port flow functions
-    serializeFunction(j, "intakePortFlow", head->getIntakePortFlow());
-    serializeFunction(j, "exhaustPortFlow", head->getExhaustPortFlow());
+    j.serializeFunction("intakePortFlow", head->getIntakePortFlow());
+    j.serializeFunction("exhaustPortFlow", head->getExhaustPortFlow());
 
     j.endObject();
 }
@@ -356,6 +343,7 @@ static void serializeCylinderBank(JsonWriter& j, CylinderBank* bank, Engine* eng
             j.kv("wristPinPosition", piston->getWristPinLocation());
             j.kv("displacement", piston->getDisplacement());
             j.kv("blowbyK", piston->getBlowbyK());
+            j.kv("cylinderIndex", piston->getCylinderIndex());
         }
 
         ConnectingRod* rod = engine->getConnectingRod(bank->getIndex() * cylCount + i);
@@ -363,6 +351,7 @@ static void serializeCylinderBank(JsonWriter& j, CylinderBank* bank, Engine* eng
             j.key("connectingRod");
             serializeConnectingRod(j, rod);
             j.kv("rodJournalIndex", rod->getJournal());
+            j.kv("rodJournalCount", rod->getRodJournalCount());
         }
 
         j.endObject();
@@ -444,7 +433,10 @@ static void serializeEngine(JsonWriter& j, Engine* engine) {
         j.kv("maxTurbulenceEffect", fuel->getMaxTurbulenceEffect());
         j.kv("maxDilutionEffect", fuel->getMaxDilutionEffect());
         j.kv("molecularAfr", fuel->getMolecularAfr());
-        serializeFunction(j, "turbulenceToFlameSpeedRatio", fuel->getTurbulenceToFlameSpeedRatio());
+        j.kv("molecularMass", fuel->getMolecularMass());
+        j.kv("energyDensity", fuel->getEnergyDensity());
+        j.kv("density", fuel->getDensity());
+        j.serializeFunction("turbulenceToFlameSpeedRatio", fuel->getTurbulenceToFlameSpeedRatio());
         j.endObject();
     }
 
@@ -455,7 +447,7 @@ static void serializeEngine(JsonWriter& j, Engine* engine) {
         j.beginObject();
         j.kv("revLimit", ignition->getRevLimit());
         j.kv("limiterDuration", ignition->getLimiterDuration());
-        serializeFunction(j, "timingCurve", ignition->getTimingCurve());
+        j.serializeFunction("timingCurve", ignition->getTimingCurve());
         j.key("firingOrder");
         j.beginArray();
         for (int i = 0; i < ignition->getCylinderCount(); i++) {
@@ -476,14 +468,24 @@ static void serializeVehicle(JsonWriter& j, Vehicle* vehicle) {
     j.kv("diffRatio", vehicle->getDiffRatio());
     j.kv("tireRadius", vehicle->getTireRadius());
     j.kv("rollingResistance", vehicle->getRollingResistance());
+    j.kv("travelledDistance", vehicle->getTravelledDistance());
     j.endObject();
 }
 
 static void serializeTransmission(JsonWriter& j, Transmission* trans) {
-    // Transmission doesn't expose gear count or ratios via public getters.
-    // The preset factory will use sensible defaults from the script.
     j.beginObject();
-    j.kv("note", "Transmission serialization requires adding getters to Transmission class");
+    j.kv("gearCount", trans->getGearCount());
+    j.kv("currentGear", trans->getGear());
+    j.kv("maxClutchTorque", trans->getMaxClutchTorque());
+    j.kv("clutchPressure", trans->getClutchPressure());
+
+    j.key("gearRatios");
+    j.beginArray();
+    for (int i = 0; i < trans->getGearCount(); i++) {
+        j.value(trans->getGearRatio(i));
+    }
+    j.endArray();
+
     j.endObject();
 }
 
