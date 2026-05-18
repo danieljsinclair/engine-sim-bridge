@@ -43,8 +43,8 @@ scrub: clean
 
 # Run tests (build first if needed, log output)
 test:
-	$(MAKE) -C build bridge_unit_tests
-	@cd build && ctest -R bridge_unit_tests -V --output-on-failure
+	$(MAKE) -C build bridge_unit_tests preset_engine_tests
+	@cd build && ctest -V --output-on-failure
 
 # ============================================================================
 # Preset compilation: es/*.mr wrappers → preset/*.json
