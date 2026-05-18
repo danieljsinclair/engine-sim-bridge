@@ -107,13 +107,17 @@ These three fields are available even at the low-fidelity tier (REST/Streaming A
 | 7th | 0.839 | 1.19:1 |
 | 8th | 0.667 | 1.26:1 |
 
-### Shift map thresholds (illustrative, km/h)
+### Shift map thresholds (calibrated for realistic RPM, km/h)
 
 | Throttle | 1→2 | 2→3 | 3→4 | 4→5 | 5→6 | 6→7 | 7→8 |
 |----------|-----|-----|-----|-----|-----|-----|-----|
-| 10% | 12 | 22 | 32 | 42 | 52 | 62 | 72 |
-| 50% | 25 | 40 | 55 | 72 | 88 | 105 | 125 |
-| 100% | 45 | 70 | 95 | 120 | 148 | 178 | 210 |
+| 10% | 20 | 35 | 50 | 65 | 80 | 95 | 110 |
+| 25% | 30 | 50 | 70 | 90 | 110 | 130 | 155 |
+| 50% | 40 | 65 | 90 | 115 | 140 | 170 | 200 |
+| 75% | 55 | 85 | 115 | 145 | 180 | 215 | 255 |
+| 100% | 70 | 105 | 140 | 180 | 220 | 265 | 315 |
+
+**Footnote — Original illustrative values:** The earlier table (12/22/32 km/h at 10% throttle, 25/40/55 km/h at 50%, 45/70/95 km/h at 100%) was illustrative only and produced unrealistically low RPM. Research confirmed ZF 8HP45 typically shifts at ~1500-2000 RPM under light load, ~2500-3000 RPM under medium load, and ~4000-6500 RPM under heavy load. The calibrated table above produces these realistic RPM bands.
 
 Shift time: ~0.2 seconds (ZF 8HP family). Hysteresis: downshift thresholds ~85% of upshift thresholds (15% speed gap prevents hunting).
 
@@ -269,17 +273,34 @@ struct TwinOutput {
 
 ### Automatic Gearbox Algorithm
 
-Shift curves parameterized by throttle:
+Two distinct concerns: **shift scheduling** (when to shift) and **shift execution** (how the shift happens).
+
+#### Shift scheduling
+
+Road-speed-based shift curves, parameterized by throttle. Uses real EV road speed as the primary input (not engine RPM — RPM is a physics output, using it as gearbox input creates circular dependency):
 
 ```
-upshiftRPM(throttle)   = idleRpm + (redlineRpm - idleRpm) * (0.45 + 0.55 * throttle)
-downshiftRPM(throttle) = idleRpm + (redlineRpm - idleRpm) * (0.25 + 0.20 * throttle)
+upshiftSpeed(gear, throttle)  = ZF shift table lookup: speed threshold for gear → gear+1
+downshiftSpeed(gear, throttle) = upshiftSpeed × 0.85  (15% hysteresis gap prevents hunting)
 ```
 
-- Light throttle (0.1): upshift ~2500, downshift ~1500
-- Full throttle (1.0): upshift ~6700, downshift ~3000
-- Hysteresis gap prevents gear hunting
-- Kickdown: throttle delta > 0.4 triggers immediate downshift
+- Road speed is an input from vehicle-sim, not a physics output — breaks the circular dependency
+- Shift table directly validated against published ZF 8HP45 data (km/h per throttle per gear)
+- Kickdown: throttle delta > 0.4 within 100ms triggers immediate downshift (both thresholds are configurable)
+- Coast-down downshift: throttle = 0 and speed drops below downshift threshold for current gear
+
+**Deferred to Phase 2+**: Torque-aware shifting (engine torque vs gearbox torque). Real ZF TCU considers torque on both sides of the torque converter to modulate shift points under load. Phase 1 uses speed + throttle only, which covers steady-state acceleration, cruise, and basic kickdown.
+
+#### Shift execution
+
+engine-sim's `changeGear()` is instantaneous (ratio swap with energy conservation, no shift duration). The bridge simulates shift process via clutch manipulation:
+
+1. Reduce clutch pressure to 0 (disengage drivetrain)
+2. Pause ~200ms (ZF 8HP shift time)
+3. Call `changeGear(newGear)`
+4. Ramp clutch pressure back to 1.0 (re-engage)
+
+During step 2-4, engine RPM flares naturally (unloaded) then settles as clutch re-engages — producing authentic shift sound without modifying engine-sim.
 
 ### RPM Computation (diagnostic/gear-selection only)
 
@@ -301,10 +322,11 @@ TAU = 50ms. Prevents the ICE sound from feeling unnaturally sharp.
 
 ```
 OFF → (first telemetry) → CRANKING → (RPM > 550) → IDLE
-IDLE ↔ RUNNING (throttle > 5%)
-RUNNING ↔ SHIFTING (gear change triggered)
-RUNNING → IDLE (speed → 0, throttle → 0)
-Any → OFF (no telemetry for N seconds)
+IDLE → RUNNING (throttle > 5%)
+RUNNING → SHIFTING (gear change triggered)
+SHIFTING → RUNNING (shift complete)
+RUNNING → IDLE (speed → 0 AND throttle → 0)
+Any → OFF (no telemetry for 5 seconds)
 ```
 
 | State | Throttle | Clutch | RPM |
@@ -347,22 +369,41 @@ vehicle-sim's PRODUCT_VISION prohibits build dependency on engine-sim. Both comp
 **Goal**: Prove the physics-driven approach produces authentic sound from EV telemetry.
 
 Components to build:
-1. `UpstreamSignal` struct (`bridge/include/io/UpstreamSignal.h`)
-2. `IceVehicleProfile` struct (`bridge/include/twin/IceVehicleProfile.h`)
-3. `AutomaticGearbox` class (`bridge/src/twin/AutomaticGearbox.cpp`)
-4. `VirtualIceTwin` class — state machine + throttle smoothing (`bridge/src/twin/VirtualIceTwin.cpp`)
-5. `VirtualIceInputProvider` — `IInputProvider` impl (`bridge/src/input/VirtualIceInputProvider.cpp`)
-6. ISimulator extension — `setGear()`, `setClutchPressure()`, `getEngineRpm()` (`bridge/include/simulator/ISimulator.h`)
-7. Engine-sim accessor additions (~15 lines in `simulator.h`)
+- [ ] `UpstreamSignal` struct (`bridge/include/io/UpstreamSignal.h`)
+- [ ] `IceVehicleProfile` struct (`bridge/include/twin/IceVehicleProfile.h`) — all tunable constants centralized here, no magic numbers
+- [ ] `AutomaticGearbox` class (`bridge/src/twin/AutomaticGearbox.cpp`) — road-speed-based shift scheduling, 85% hysteresis, kickdown
+- [ ] `VirtualIceTwin` class — state machine + throttle smoothing (`bridge/src/twin/VirtualIceTwin.cpp`)
+- [ ] `VirtualIceInputProvider` — `IInputProvider` impl (`bridge/src/input/VirtualIceInputProvider.cpp`)
+- [ ] ISimulator extension — `setGear()`, `setClutchPressure()`, `getEngineRpm()` (`bridge/include/simulator/ISimulator.h`)
+- [ ] Engine-sim accessor additions (~15 lines in `simulator.h`)
+- [ ] `AutomaticGearboxTest` — TDD: shift decisions, hysteresis, kickdown, edge cases
+- [ ] `VirtualIceTwinTest` — TDD: state machine transitions
+- [ ] `ThrottleSmootherTest` — TDD: exponential response, no overshoot
+- [ ] `IceVehicleProfileTest` — TDD: profile loading, parameter validation
+- [ ] `TwinPhysicsIntegrationTest` — TDD: synthetic telemetry → twin → engine-sim → RPM within tolerance
+- [ ] `AccelerationScenarioTest` — TDD: 0-100 km/h gear sequence, RPM bands, shift timing
+- [ ] `DecelerationScenarioTest` — TDD: coast-down downshifts, hysteresis, no below-1st
+- [ ] `KickdownScenarioTest` — TDD: throttle step → downshift within 500ms, safe gear
+- [ ] `CruiseScenarioTest` — TDD: stable gear, no hunting at constant speed
+- [ ] `StandstillScenarioTest` — TDD: idle behavior, no shifts at rest
+- [ ] `LaunchScenarioTest` — TDD: 1st gear from rest, upshift at calibrated speed
+- [ ] Shift execution via clutch manipulation (disengage → pause → changeGear → ramp)
 
 **Acceptance criteria:**
-- Given a recorded EV telemetry file (throttle ramp 0→100, speed ramp 0→100km/h), the twin selects gears correctly (1→2→3→4→5→6)
-- Engine RPM tracks road speed within 10% (physics-driven, not dyno)
-- Audio output sounds like an ICE vehicle accelerating through gears
+- Comprehensive testable criteria defined in `docs/architecture/phase1-acceptance-criteria.md` (38 criteria total)
+- Key headline criteria:
+  - Steady-state acceleration produces correct gear sequence with calibrated shift speeds
+  - Highway cruise stabilizes on appropriate gear with no hunting
+  - Deceleration/coast-down triggers sequential downshifts with hysteresis
+  - Kickdown forces downshift within 500ms of throttle step
+  - Physics pipeline uses real EV speed for gear selection, not computed RPM
+  - Shift execution completes within 250-350ms with characteristic RPM flare
+  - Throttle smoothing provides realistic exponential response
+- Manual QA gate: Audio output must sound authentic (realistic RPM changes, shift sounds, no artifacts)
 - All new code has TDD test coverage (see Testing section)
 - SOLID/DRY critic sign-off before commit
 
-**MVP scope excludes**: torque converter slip, cranking sequence, kickdown, acceleration-informed throttle, dyno fallback.
+**MVP scope excludes**: torque converter slip, cranking sound modeling, driver modes (Sport/Eco), torque-aware shifting, brake-dependent coast-down, grade detection.
 
 ### Phase 2: Polish + iOS Integration
 
@@ -461,6 +502,7 @@ Before any code is committed, a dedicated **architecture critic agent** must rev
 - **DIP**: Twin depends on `UpstreamSignal` (abstraction), not `VehicleSignal` (vehicle-sim concrete type). Bridge depends on `IInputProvider`, not concrete providers.
 - **DRY**: Gear ratios live in `IceVehicleProfile` only. Speed-to-RPM formula is in one place. No copy-paste between test and production code.
 - **No over-engineering**: No `TorqueConverter` until Phase 3. No shift mode enums until needed. No factory patterns for single implementations.
+- **No magic numbers**: All numeric constants (shift thresholds, timing values, filter parameters, RPM limits) are defined in `IceVehicleProfile` or a dedicated configuration struct. No unexplained literals in logic code. Each value is named, documented with its source (ZF spec, research finding, tuning default), and grouped to indicate how it would translate to .mr script configuration in Phase 2+.
 
 The critic MUST explicitly sign off in the commit workflow. If the critic rejects, the issue must be fixed before proceeding.
 
@@ -498,10 +540,16 @@ The critic MUST explicitly sign off in the commit workflow. If the critic reject
 
 ### Research artifacts (in docs/architecture/)
 - `docs/architecture/physics-specialist-analysis.md` — ForceGenerator integration point, constraint solver analysis, Approach A+/B design
-- `docs/architecture/solution-architecture-proposal.md` — Full component interfaces, file organization, implementation order, SOLID compliance
-- `docs/architecture/web-research-report.md` — EV telemetry availability, ZF transmission shift data, AVAS regulations, sound synthesis approaches
 - `docs/architecture/architecture-decisions.md` — Key architectural decisions, Phase 0 spike results, CLI control mappings
-- `docs/architecture/project-briefing.md` — Comprehensive project briefing for specialist team
+- `docs/architecture/zf-shift-scheduling-research.md` — ZF 8HP shift scheduling validation, calibrated shift thresholds, TCU behavior
+- `docs/architecture/shift-execution-research.md` — Shift execution modeling, clutch pressure vs torque converter options, timing parameters
+- `docs/architecture/phase1-acceptance-criteria.md` — Comprehensive testable acceptance criteria for Phase 1
+
+### Archived (superseded by plan and newer research)
+- `docs/archive/solution-architecture-proposal.md` — Earlier proposal; superseded by this plan
+- `docs/archive/web-research-report.md` — EV telemetry data now in plan; ZF shift data superseded by `zf-shift-scheduling-research.md`
+- `docs/archive/project-briefing.md` — Phase 0 specialist team briefing; no longer needed
+- `docs/archive/critic-review-phase1-planning.md` — One-time planning review; findings incorporated
 
 ---
 
@@ -515,7 +563,7 @@ The critic MUST explicitly sign off in the commit workflow. If the critic reject
 
 4. **Vehicle profile source**: MVP hardcodes 2-3 profiles (GM LS, Ferrari F136, Honda TRX520) as C++ constants. .mr script parsing for profile extraction is Phase 2+.
 
-5. **RESOLVED — Telemetry source**: vehicle-sim submodule (not Tesla API). Road speed, motor torque, throttle position etc. come from vehicle-sim at adequate rate. Out of scope for this repo to solve — vehicle-sim is the data provider.
+5. **RESOLVED — Telemetry source**: vehicle-sim (github.com/danielsinclair/vehicle-sim, submodule of the CLI, not Tesla API) is the intended data provider. Road speed, motor torque, throttle position etc. come from vehicle-sim at adequate rate. Out of scope for this repo to produce telemetry — vehicle-sim is the data provider. Phase 1 uses mocked/synthetic telemetry files (CSV) to validate the twin independently. Phase 2 connects the live vehicle-sim data stream.
 
 6. **RESOLVED — SpeedTrackingForce tuning**: Out of scope for this repo. vehicle-sim provides real road speed and motor torque which the twin consumes. Speed drift correction (if needed) happens when we have real data flowing.
 
@@ -541,13 +589,13 @@ main()
 
 **General approach for new .mr files**: Any downloadable engine definition needs two changes: (1) ensure a `main` node exists that calls `set_engine`/`set_vehicle`/`set_transmission` instead of `run()`, (2) add `main()` call at the end.
 
-### Q2: Automatic gearbox shift curve validation
+### Q2: RESOLVED — Automatic gearbox shift curve validation
 
-**Problem**: The plan specifies shift curves parameterized by throttle, but the thresholds (upshiftBaseFraction, upshiftThrottleCoeff) haven't been validated against real ZF behavior.
+**Problem**: The plan specified shift curves parameterized by throttle, but the thresholds hadn't been validated against real ZF behavior.
 
 **Impact**: Wrong shift points produce unrealistic sound — shifting too early sounds sluggish, too late sounds aggressive.
 
-**What's needed to answer**: Compare the algorithm's shift decisions against published ZF shift maps at various throttle/speed combinations. Can be done with unit tests comparing against the web research data (ZF 8HP45 shift table in km/h per throttle position).
+**Resolution**: Research validated that ZF 8HP transmissions use throttle position and vehicle speed as primary inputs for shift scheduling. The speed-based shift curve model is fundamentally correct. The original illustrative shift table was calibrated upward to produce realistic RPM bands (light throttle ~1500-2000 RPM, medium ~2500-3000 RPM, heavy ~4000-6500 RPM). Hysteresis of 15% (downshift at 85% of upshift speed) prevents gear hunting. Full research documented in `docs/architecture/zf-shift-scheduling-research.md` and `docs/architecture/shift-execution-research.md`.
 
 ### Q3: SpeedTrackingForce — is it needed at all?
 
@@ -563,8 +611,20 @@ main()
 
 **Problem**: IceVehicleProfile needs gear ratios, diff ratio, tire radius, mass, idle/redline RPM. These are currently hardcoded as C++ constants. Can they be auto-extracted from .mr scripts?
 
-**Context**: The proposed engine-sim accessors (`getGearRatios()`, `getGearCount()`, `getMaxClutchTorque()` on Transmission) would let the bridge read back what gear ratios a .mr script configured at runtime. However, for Phase 1 these accessors are **not required**. The bridge's `IceVehicleProfile` struct already carries gear ratios, diff ratio, tire radius etc. — populated from the same parameters that configure the Transmission during .mr script execution. They're in sync by definition because both come from the same source. The accessors would only matter in Phase 2+ for auto-discovering parameters from arbitrary scripts without a matching hardcoded profile.
+**Context**: The proposed engine-sim accessors (`getGearRatios()`, `getGearCount()`, `getMaxClutchTorque()` on Transmission) would let the bridge read back what gear ratios a .mr script configured at runtime. However, for Phase 1 these accessors are **not required**.
 
-**Phase 1 approach**: Hardcode 2-3 profiles (GM LS, Ferrari F136, Honda TRX520) as C++ constants in `IceVehicleProfile`. The profile is selected at startup alongside the .mr script.
+**Phase 1 approach (PoC)**: Hardcode 2-3 profiles (GM LS, Ferrari F136, Honda TRX520) as C++ constants in `IceVehicleProfile`. This is a temporary measure to prove the twin model. The hardcoded profile must be manually validated against its corresponding .mr script to ensure gear ratios, diff ratio, tire radius, and mass match — these are two independent data sources and will not automatically stay in sync. The profile is selected at startup alongside the .mr script.
 
 **Phase 2 approach**: Extract parameters from Piranha compiler output. Requires ~10 lines of read-only accessors on engine-sim's Transmission class (our fork, no upstream PR). Not blocking for Phase 1.
+
+---
+
+## Research Artifacts
+
+The following research documents contain detailed findings that informed this architecture plan:
+
+- `docs/architecture/zf-shift-scheduling-research.md` — ZF 8HP transmission shift scheduling validation, including TCU input signals, shift map structure, hysteresis mechanism, kickdown behavior, and calibrated shift thresholds
+- `docs/architecture/shift-execution-research.md` — Shift execution modeling, recommending clutch pressure manipulation (Option A) over full torque converter modeling (deferred to Phase 3+), with detailed timing parameters and fidelity analysis
+- `docs/architecture/phase1-acceptance-criteria.md` — Comprehensive Phase 1 acceptance criteria from product owner, including 38 testable criteria covering functional, integration, and edge case requirements
+
+These documents should be consulted for detailed implementation guidance and rationale behind the decisions summarized in this architecture plan.

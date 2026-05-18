@@ -1,5 +1,5 @@
-# To activate these colours in the terminal, do either "cd ." to trigger a refresh.
-# To change the vscode colours to match, edit .vscode/settings.json:
+# To activate these colours in the terminal, do either "cd ." to trigger a refresh
+# To change the vscode colours to match edit .vscode/settings.json to match
 #        "activityBar.background": "#123456",
 #        "statusBar.background":   "#123456",
 #        "activityBar.foreground": "#ABCDEF",
@@ -62,4 +62,5 @@ function not_shell_code() {
     bg.preset-engine-config!engine-sim-bridge=#668866
     fg.preset-engine-config!engine-sim-bridge=#dddddd
 
+    bg.virtual-ice-twin=#225566
 }
