@@ -42,4 +42,4 @@ Thumbs.db
 .cache/
 
 # Generated JSON presets (rebuilt by 'make presets')
-preset/
+/preset/
