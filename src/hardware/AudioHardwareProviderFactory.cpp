@@ -7,6 +7,7 @@
 #include "common/ILogging.h"
 
 #include <memory>
+#include <TargetConditionals.h>
 
 // Platform-specific includes
 #if defined(__APPLE__) && defined(__MACH__)

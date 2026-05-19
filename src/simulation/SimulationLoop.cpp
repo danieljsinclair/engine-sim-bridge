@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <thread>
 #include <chrono>
+#include <vector>
 
 // SimulationConfig — value type, compiler-generated special members
 
