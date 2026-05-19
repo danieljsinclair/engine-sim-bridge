@@ -7,8 +7,8 @@ MAKEFLAGS += -j$(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 PRESET_DIR := preset
 ENGINE_SIM_ROOT := engine-sim
 PRESET_COMPILER := $(shell \
-	test -x build/engine-sim-preset-compiler && echo build/engine-sim-preset-compiler || \
-	test -x ../build/engine-sim-bridge/engine-sim-preset-compiler && echo ../build/engine-sim-bridge/engine-sim-preset-compiler || \
+	ls build/engine-sim-preset-compiler 2>/dev/null || \
+	ls ../build/engine-sim-bridge/engine-sim-preset-compiler 2>/dev/null || \
 	echo "")
 
 # Default target - build everything (includes presets)

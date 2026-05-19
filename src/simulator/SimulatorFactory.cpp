@@ -79,11 +79,14 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
                     pistonSim->loadSimulation(result.engine, result.vehicle, result.transmission);
 
                     // Load impulse responses from WAV files referenced in the JSON
-                    ScriptLoadHelpers::loadImpulseResponses(
-                        pistonSim.get(), result.engine,
-                        ScriptLoadHelpers::resolveAssetBasePath(
-                            ScriptLoadHelpers::normalizeScriptPath(scriptPath), assetBasePath),
-                        logger);
+                    if (!ScriptLoadHelpers::loadImpulseResponses(
+                            pistonSim.get(), result.engine,
+                            ScriptLoadHelpers::resolveAssetBasePath(
+                                ScriptLoadHelpers::normalizeScriptPath(scriptPath), assetBasePath),
+                            logger)) {
+                        pistonSim->destroy();
+                        throw std::runtime_error("Failed to load impulse responses for preset: " + scriptPath);
+                    }
 
                     sim = std::move(pistonSim);
                 } else {
