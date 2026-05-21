@@ -258,23 +258,29 @@ int runUnifiedAudioLoop(
     LoopTimer timer(config.updateInterval());
 
     const double minSustainedRPM = 550.0;
+    const double engineCaughtRPM = 800.0;
 
-    double throttle = 0.1;
+    double throttle = 1.0;
     bool ignition = true;
+    bool startupPhase = true;
 
     logger->info(LogMask::BRIDGE, "runUnifiedAudioLoop starting simulation loop with %s", config.simulatorLabel.c_str());
 
     while (true) {
-        checkStarterMotorRPM(simulator, minSustainedRPM);
-
         // Poll input: interactive mode uses OnUpdateSimulation, timed mode uses duration check
         if (inputProvider) {
             input::EngineInput engineInput = inputProvider->OnUpdateSimulation(config.updateInterval());
             if (!engineInput.shouldContinue) {
                 break;  // Input provider signalled termination
             }
-            throttle = engineInput.throttle;
-            ignition = engineInput.ignition;
+
+            if (startupPhase) {
+                // Override throttle during startup - let engine catch at full throttle
+                throttle = 1.0;
+            } else {
+                throttle = engineInput.throttle;
+                ignition = engineInput.ignition;
+            }
         } else {
             if (currentTime >= config.duration) {
                 break;
@@ -286,6 +292,19 @@ int runUnifiedAudioLoop(
 
         simulator.setThrottle(throttle);
         simulator.setIgnition(ignition);
+
+        // Startup phase: keep starter engaged until engine catches
+        if (startupPhase) {
+            EngineSimStats preStats = simulator.getStats();
+            if (preStats.currentRPM > engineCaughtRPM) {
+                startupPhase = false;
+                throttle = 0.0;
+                simulator.setStarterMotor(false);
+                logger->info(LogMask::BRIDGE, "Engine caught at %.0f RPM, dropping to idle", preStats.currentRPM);
+            }
+        } else {
+            checkStarterMotorRPM(simulator, minSustainedRPM);
+        }
 
         // Update simulation via strategy (threaded mode updates here; sync-pull is no-op)
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * 1000.0);
