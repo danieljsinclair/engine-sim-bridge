@@ -261,13 +261,13 @@ void applyGearChange(Simulator* rawSim, int gearDelta, ILogging* logger) {
 
     int currentGear = rawSim->getTransmission()->getGear();
     int newGear = currentGear + gearDelta;
-    if (newGear >= 0) {
+    int gearCount = rawSim->getTransmission()->getGearCount();
+    if (newGear >= -1 && newGear <= gearCount) {
         rawSim->getTransmission()->changeGear(newGear);
-        // Lock clutch when gear engaged (connects engine to vehicle inertia)
-        // Disengage in neutral (engine free-spins)
         rawSim->getTransmission()->setClutchPressure(newGear > 0 ? 1.0 : 0.0);
-        logger->info(LogMask::BRIDGE, "Gear: %d -> %d (clutch %s)", currentGear, newGear,
-                     newGear > 0 ? "LOCKED" : "FREE");
+        const char* label = newGear == -1 ? "PARK" : (newGear == 0 ? "NEUTRAL" : "GEAR");
+        logger->info(LogMask::BRIDGE, "Gear: %d -> %d (%s, clutch %s)", currentGear, newGear,
+                     label, newGear > 0 ? "LOCKED" : "FREE");
     }
 }
 

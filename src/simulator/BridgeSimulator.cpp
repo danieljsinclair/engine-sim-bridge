@@ -122,6 +122,10 @@ EngineSimStats BridgeSimulator::getStats() const {
         if (m_simulator->getTransmission()) {
             stats.gear = m_simulator->getTransmission()->getGear();
         }
+
+        if (m_simulator->getVehicle()) {
+            stats.speedMph = m_simulator->getVehicle()->getSpeed();
+        }
     }
     return stats;
 }
@@ -181,6 +185,8 @@ void BridgeSimulator::pushTelemetry(const EngineSimStats& stats) {
     engine.exhaustFlow = stats.exhaustFlow;
     engine.manifoldPressure = stats.manifoldPressure;
     engine.activeChannels = stats.activeChannels;
+    engine.gear = stats.gear;
+    engine.speedMph = stats.speedMph;
     telemetryWriter_->writeEngineState(engine);
 
     telemetry::FramePerformanceTelemetry perf;

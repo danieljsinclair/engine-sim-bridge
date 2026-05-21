@@ -44,8 +44,20 @@ PresetLoadResult PresetDeserializer::deserialize(const json::JsonValue& root,
     // Transmission (optional)
     if (root.has("transmission") && root["transmission"].isObject()) {
         try {
+            const json::JsonValue& transJson = root["transmission"];
             result.transmission = TransmissionDeserializer::deserialize(
-                root["transmission"], "transmission");
+                transJson, "transmission");
+
+            // Read runtime state that must be applied after physics wiring
+            // (changeGear requires m_vehicle, which is null at this point).
+            // clutchPressure can be set immediately in the deserializer, but we
+            // also carry it here so SimulatorFactory can re-apply if needed.
+            if (transJson.has("currentGear")) {
+                result.initialGear = transJson["currentGear"].asInt();
+            }
+            if (transJson.has("clutchPressure")) {
+                result.initialClutchPressure = transJson["clutchPressure"].asNumber();
+            }
         } catch (const std::exception& e) {
             result.error = std::string("Transmission deserialization failed: ") + e.what();
             return result;

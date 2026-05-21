@@ -202,7 +202,7 @@ Engine* EngineDeserializer::deserialize(const JsonValue& json, const std::string
 
     auto throttle = std::make_unique<DirectThrottleLinkage>();
     DirectThrottleLinkage::Parameters throttleParams;
-    throttleParams.gamma = 1.0;
+    throttleParams.gamma = json["throttleGamma"].numberOr(1.0);
     throttle->initialize(throttleParams);
 
     Engine::Parameters params = readParams(json, ctx);

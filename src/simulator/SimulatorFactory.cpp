@@ -78,6 +78,14 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
                     initSimulator(pistonSim.get(), config);
                     pistonSim->loadSimulation(result.engine, result.vehicle, result.transmission);
 
+                    // Apply transmission state from preset JSON.
+                    // Must happen after loadSimulation() because changeGear()
+                    // accesses m_vehicle->getMass(), which is set by addToSystem()
+                    // inside loadSimulation().
+                    if (result.transmission && result.initialGear >= 0) {
+                        result.transmission->changeGear(result.initialGear);
+                    }
+
                     // Load impulse responses from WAV files referenced in the JSON
                     if (!ScriptLoadHelpers::loadImpulseResponses(
                             pistonSim.get(), result.engine,

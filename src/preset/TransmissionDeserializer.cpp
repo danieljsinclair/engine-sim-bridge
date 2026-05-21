@@ -46,5 +46,17 @@ Transmission* TransmissionDeserializer::deserialize(const JsonValue& json, const
 
     Transmission* trans = new Transmission();
     trans->initialize(params);
+
+    // clutchPressure is safe to set here -- it's a simple scalar with no dependencies.
+    if (json.has("clutchPressure")) {
+        trans->setClutchPressure(json["clutchPressure"].asNumber());
+    }
+
+    // NOTE: currentGear is also in the JSON but cannot be applied here.
+    // changeGear() accesses m_vehicle->getMass() which is null at this point.
+    // PresetDeserializer reads it into PresetLoadResult::initialGear, and
+    // SimulatorFactory applies it after PistonEngineSimulator::loadSimulation()
+    // wires the vehicle via addToSystem().
+
     return trans;
 }

@@ -48,34 +48,6 @@ add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_
 set(CMAKE_CXX_FLAGS ${SAVED_CXX_FLAGS})
 set(CMAKE_C_FLAGS ${SAVED_C_FLAGS})
 
-# =========================================================
-# Compiler flag compatibility (Clang version differences)
-# =========================================================
-
-# -Wno-unused-but-set-variable was renamed to -Wno-unused-const-variable in newer Clang
-include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag(-Wno-unused-but-set-variable HAVE_UNUSED_BUT_SET)
-check_cxx_compiler_flag(-Wno-unused-const-variable HAVE_UNUSED_CONST_VAR)
-
-if(HAVE_UNUSED_BUT_SET)
-    set(UNUSED_VAR_SUPPRESS "-Wno-unused-but-set-variable")
-elseif(HAVE_UNUSED_CONST_VAR)
-    set(UNUSED_VAR_SUPPRESS "-Wno-unused-const-variable")
-else()
-    set(UNUSED_VAR_SUPPRESS "")
-endif()
-
-if(CMAKE_CXX_COMPILER_ID MATCHES "AppleClang|Clang|GNU")
-    add_compile_options(-Wall -Wextra)
-    if(APPLE)
-        add_compile_options(-Wno-unused-command-line-argument)
-    endif()
-    add_compile_options(-Wno-register)
-    if(UNUSED_VAR_SUPPRESS)
-        add_compile_options(${UNUSED_VAR_SUPPRESS})
-    endif()
-endif()
-
 # Real bridge library (uses actual engine-sim with polymorphic simulator selection)
 # Phase F: Audio infrastructure moved from CLI into bridge
 
@@ -334,6 +306,7 @@ if(BUILD_BRIDGE_TESTS)
         target_compile_definitions(preset_engine_tests PRIVATE
             TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
             TEST_ENGINE_SIM_ASSETS="${ENGINE_SIM_PATH}/assets"
+            TEST_ES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/es"
         )
         target_link_libraries(preset_engine_tests
             PRIVATE

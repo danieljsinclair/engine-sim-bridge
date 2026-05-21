@@ -28,10 +28,12 @@ void ExhaustSystemDeserializer::deserialize(const JsonValue& json, ExhaustSystem
     if (json.has("impulseResponseFilename") && json["impulseResponseFilename"].isString()) {
         std::string irFilename = json["impulseResponseFilename"].asString();
 
-        // Normalize paths like "../../es/sound-library/..." to "sound-library/..."
-        size_t esPos = irFilename.find("es/");
-        if (esPos != std::string::npos) {
-            irFilename = irFilename.substr(esPos + 3);
+        // Normalize paths like "../../es/sound-library/..." to "es/sound-library/..."
+        // The preset_compiler stores Piranha-resolved paths relative to the .mr script
+        // location. These contain "../" prefixes. Strip leading "../" segments so
+        // the path starts at "es/", which resolves against the engine-sim root.
+        while (irFilename.size() >= 3 && irFilename.substr(0, 3) == "../") {
+            irFilename = irFilename.substr(3);
         }
 
         if (!json.has("impulseResponseVolume")) {

@@ -20,7 +20,13 @@ struct PresetLoadResult {
     std::string presetName;
     std::string error;
 
-    PresetLoadResult() : engine(nullptr), vehicle(nullptr), transmission(nullptr) {}
+    // Transmission state from JSON -- applied after wiring (vehicle must be set first)
+    int initialGear;          // -1 = neutral (default if absent)
+    double initialClutchPressure;  // 0.0 = disengaged (default if absent)
+
+    PresetLoadResult()
+        : engine(nullptr), vehicle(nullptr), transmission(nullptr),
+          initialGear(-1), initialClutchPressure(0.0) {}
     bool success() const { return engine != nullptr && error.empty(); }
 };
 

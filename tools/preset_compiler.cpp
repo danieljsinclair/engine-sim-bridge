@@ -33,6 +33,7 @@
 #include "function.h"
 #include "units.h"
 #include "throttle.h"
+#include "direct_throttle_linkage.h"
 
 #include <cstdio>
 #include <cmath>
@@ -390,6 +391,12 @@ static void serializeEngine(JsonWriter& j, Engine* engine) {
     j.kv("initialNoise", engine->getInitialNoise());
     j.kv("initialJitter", engine->getInitialJitter());
 
+    // Throttle gamma (power curve for throttle input)
+    DirectThrottleLinkage *dtl = dynamic_cast<DirectThrottleLinkage *>(engine->getThrottleLinkage());
+    if (dtl) {
+        j.kv("throttleGamma", dtl->getGamma());
+    }
+
     // Crankshafts
     j.key("crankshafts");
     j.beginArray();
@@ -543,37 +550,54 @@ int main(int argc, char* argv[]) {
     // Scripts are typically at assets/engines/... relative to the engine-sim root
     std::filesystem::path assetsDir = simDir / "assets";
 
+    // Resolve the script as a filesystem path and compute relative import from assets/
+    if (!std::filesystem::exists(scriptPath)) {
+        fprintf(stderr, "Error: Script not found: %s\n", scriptPath);
+        return 1;
+    }
+    std::filesystem::path absScriptPath = std::filesystem::absolute(scriptPath);
+
     std::string relativeImport;
-    std::filesystem::path resolvedScript;
-    if (engineSimDir) {
-        // When engine_sim_dir is provided, scriptPath is relative to assets/
-        relativeImport = scriptPath;
-        resolvedScript = assetsDir / scriptPath;
-        if (!std::filesystem::exists(resolvedScript)) {
-            fprintf(stderr, "Error: Script not found: %s (resolved to %s)\n", scriptPath, resolvedScript.c_str());
-            return 1;
-        }
+
+    // Check if the script is inside assets/
+    // std::filesystem::relative may return the absolute path unchanged if it can't
+    // compute a relative path (symlink resolution, different volumes).
+    // A script is "inside assets/" only if the relative path doesn't start
+    // with '/' or '..' (i.e., it's genuinely within the directory tree).
+    std::filesystem::path relFromAssets = std::filesystem::relative(absScriptPath, assetsDir);
+    std::string relStr = relFromAssets.string();
+    bool insideAssets = (!relStr.empty() && relStr[0] != '.' && relStr[0] != '/');
+    std::filesystem::path tempScriptPath;  // non-empty if we copied a script into assets/
+
+    if (insideAssets) {
+        // Script is inside assets/ — use the relative path directly
+        relativeImport = relFromAssets.string();
     } else {
-        // Script path is on disk — verify existence and compute relative path from assets/
-        if (!std::filesystem::exists(scriptPath)) {
-            fprintf(stderr, "Error: Script not found: %s\n", scriptPath);
-            return 1;
-        }
-        std::filesystem::path absScriptPath = std::filesystem::absolute(scriptPath);
-        relativeImport = std::filesystem::relative(absScriptPath, assetsDir).string();
+        // Script is outside assets/ — copy it into assets/ so Piranha can resolve imports
+        std::string tmpName = "_escli_tmp_" + absScriptPath.stem().string() + "_" + std::to_string(getpid()) + ".mr";
+        tempScriptPath = assetsDir / tmpName;
+        std::filesystem::copy_file(absScriptPath, tempScriptPath,
+                                   std::filesystem::copy_options::overwrite_existing);
+        relativeImport = tmpName;
     }
 
     printf("Engine-sim dir: %s\n", simDir.c_str());
     printf("Script import:  %s (relative to assets/)\n", relativeImport.c_str());
 
-    // Generate a temporary wrapper script in the assets/ directory
-    // Piranha resolves imports relative to the importing script's parent directory.
-    // By placing the wrapper next to engine scripts, `import "engines/..."` resolves
-    // correctly via the assets/ directory.
-    // Use a unique name per invocation to allow parallel compilation.
-    std::string wrapperName = "_escli_preset_wrapper_" + std::to_string(getpid()) + ".mr";
-    std::filesystem::path wrapperPath = assetsDir / wrapperName;
-    {
+    // Determine what to compile:
+    // - Script inside assets/: use a wrapper to import it (original approach)
+    // - Script outside assets/: already copied into assets/ as tempScriptPath,
+    //   compile it directly since it's self-contained (has its own imports + main())
+    std::filesystem::path compileTarget;
+    std::filesystem::path wrapperPath;
+
+    if (!tempScriptPath.empty()) {
+        // Script was copied into assets/ — compile directly
+        compileTarget = tempScriptPath;
+    } else {
+        // Script is inside assets/ — use wrapper approach
+        std::string wrapperName = "_escli_preset_wrapper_" + std::to_string(getpid()) + ".mr";
+        wrapperPath = assetsDir / wrapperName;
         std::ofstream wrapper(wrapperPath);
         if (!wrapper.is_open()) {
             fprintf(stderr, "Error: Cannot create wrapper script: %s\n", wrapperPath.c_str());
@@ -583,6 +607,7 @@ int main(int argc, char* argv[]) {
         wrapper << "import \"" << relativeImport << "\"\n";
         wrapper << "main()\n";
         wrapper.close();
+        compileTarget = wrapperPath;
     }
 
     printf("Compiling: %s\n", scriptPath);
@@ -598,19 +623,21 @@ int main(int argc, char* argv[]) {
     es_script::Compiler compiler;
     compiler.initialize();
 
-    if (!compiler.compile(wrapperPath.string())) {
+    if (!compiler.compile(compileTarget.string())) {
         // Restore CWD before printing error
         std::filesystem::current_path(originalCwd);
-        std::filesystem::remove(wrapperPath);
+        if (!wrapperPath.empty()) std::filesystem::remove(wrapperPath);
+        if (!tempScriptPath.empty()) std::filesystem::remove(tempScriptPath);
         fprintf(stderr, "Error: Failed to compile script: %s\n", scriptPath);
         return 1;
     }
 
     es_script::Compiler::Output output = compiler.execute();
 
-    // Restore working directory
+    // Restore working directory and clean up temp files
     std::filesystem::current_path(originalCwd);
-    std::filesystem::remove(wrapperPath);
+    if (!wrapperPath.empty()) std::filesystem::remove(wrapperPath);
+    if (!tempScriptPath.empty()) std::filesystem::remove(tempScriptPath);
 
     if (!output.engine) {
         fprintf(stderr, "Error: Script did not produce an engine: %s\n", scriptPath);

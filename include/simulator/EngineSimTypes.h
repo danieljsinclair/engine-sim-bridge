@@ -94,7 +94,8 @@ struct EngineSimStats {
     double dynoTorque = 0.0;         // Current dyno applied torque (ft*lbs)
     double dynoTargetRPM = 0.0;      // Dyno target RPM (0 = disabled)
     double dynoTorqueScale = 1.0;    // Current torque scale (0-1)
-    int gear = 0;                    // Current gear (0 = neutral)
+    int gear = 0;                    // -1 = Park, 0 = Neutral, 1+ = Forward
+    double speedMph = 0.0;           // Vehicle speed in MPH
 };
 
 namespace EngineSimAudio {

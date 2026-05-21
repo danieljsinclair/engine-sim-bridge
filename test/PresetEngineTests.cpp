@@ -813,14 +813,6 @@ TEST_F(PresetInfrastructureTest, DestroyWhileAudioThreadRunning) {
 }
 
 // ============================================================================
-// DIAGNOSTIC: Compare hardcoded preset vs JSON preset RPM output
-// DISABLED - Leaks 3 Simulator objects and has zero assertions
-// ============================================================================
-TEST_F(PresetInfrastructureTest, DISABLED_DiagnosticCompareHardcodedVsJson) {
-    GTEST_SKIP() << "Disabled: Leaks Simulator objects and has no assertions";
-}
-
-// ============================================================================
 // GROUP 9: Phase 4 -- SimulatorFactory JSON preset integration
 //
 // Tests the SimulatorFactory::create() with SimulatorType::PresetEngine.
@@ -846,7 +838,7 @@ TEST_P(FactoryPresetTest, ValidPresetIdReturnsNonNull) {
     auto isim = SimulatorFactory::create(
         SimulatorType::PistonEngine,
         GetParam(),  // JSON file path
-        "",
+        TEST_ES_DIR,
         config_);
 
     ASSERT_NE(isim, nullptr) << "Factory should return non-null for preset '" << GetParam() << "'";
@@ -870,7 +862,7 @@ TEST_P(FactoryPresetTest, FactorySetsDisplayNameFromPresetId) {
     auto isim = SimulatorFactory::create(
         SimulatorType::PistonEngine,
         GetParam(),
-        "",
+        TEST_ES_DIR,
         config_);
 
     ASSERT_NE(isim, nullptr);
@@ -888,7 +880,7 @@ TEST_P(FactoryPresetTest, CreatedSimulatorHasSimulationFrequencySet) {
     auto isim = SimulatorFactory::create(
         SimulatorType::PistonEngine,
         GetParam(),
-        "",
+        TEST_ES_DIR,
         config_);
 
     ASSERT_NE(isim, nullptr);
@@ -911,7 +903,7 @@ TEST_P(FactoryPresetTest, FactoryPresetCanBeSteppedViaUpdate) {
     auto isim = SimulatorFactory::create(
         SimulatorType::PistonEngine,
         GetParam(),
-        "",
+        TEST_ES_DIR,
         config_);
 
     ASSERT_NE(isim, nullptr);

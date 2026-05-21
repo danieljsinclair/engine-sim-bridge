@@ -473,12 +473,7 @@ public node C63_vehicle {
 private node C63_transmission {
     alias output __out:
         transmission(
-            max_clutch_torque: 1250 * units.Nm,
-            max_clutch_flex: 10 * units.deg,
-            limit_clutch_flex: true,
-            clutch_stiffness: 50 * units.Nm / units.deg,
-            clutch_damping: 1.0,
-            simulate_flex: true
+            max_clutch_torque: 1250 * units.Nm
         )
         .add_gear(4.34)
         .add_gear(2.89)
@@ -489,7 +484,7 @@ private node C63_transmission {
         .add_gear(0.73);
 }
 
-public node main {
+public node main{
     set_engine(M156())
     set_vehicle(C63_vehicle())
     set_transmission(C63_transmission())
