@@ -15,6 +15,7 @@
 #include <cmath>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 
 // Engine-sim headers
 #include "engine.h"
@@ -33,6 +34,7 @@
 // Bridge headers
 #include "simulator/PresetEngineFactory.h"
 #include "common/JsonParser.h"
+#include "TestPathHelpers.h"
 
 #if !TARGET_OS_IPHONE && defined(ENGINE_SIM_PIRANHA_ENABLED)
 #include "simulator/SimulatorFactory.h"
@@ -742,35 +744,50 @@ namespace {
 
     // Load an engine via Piranha (.mr script)
     // Returns raw Engine* (caller does NOT own -- owned by ISimulator)
-    // Returns nullptr if script can't be loaded (relative include path issues, etc.)
     Engine* loadEngineFromScript(const std::string& scriptPath, const std::string& assetBase,
                                   std::unique_ptr<ISimulator>& outISim) {
+        const std::string absoluteScriptPath = test_path_helpers::makeAbsolutePath(scriptPath);
+        const std::string absoluteAssetBase = test_path_helpers::makeAbsolutePath(assetBase);
+
         ISimulatorConfig config;
         config.sampleRate = ISO_SAMPLE_RATE;
         config.simulationFrequency = 10000;
 
         try {
+            test_path_helpers::ScopedWorkingDirectory scopedWorkingDirectory(
+                test_path_helpers::engineSimRootForAssets(absoluteAssetBase));
             outISim = SimulatorFactory::create(
                 SimulatorType::PistonEngine,
-                scriptPath,
-                assetBase,
+                absoluteScriptPath,
+                absoluteAssetBase,
                 config);
-        } catch (const std::exception&) {
-            return nullptr;
+        } catch (const std::exception& e) {
+            throw std::runtime_error("Failed to load Piranha script '" + absoluteScriptPath + "': " + e.what());
         }
 
-        if (!outISim) return nullptr;
+        if (!outISim) {
+            throw std::runtime_error("Failed to create simulator for script '" + absoluteScriptPath + "'");
+        }
 
         auto* bridge = dynamic_cast<BridgeSimulator*>(outISim.get());
-        if (!bridge) return nullptr;
+        if (!bridge) {
+            throw std::runtime_error("SimulatorFactory returned non-bridge simulator for script '" + absoluteScriptPath + "'");
+        }
 
         Simulator* sim = bridge->getInternalSimulator();
-        if (!sim) return nullptr;
+        if (!sim) {
+            throw std::runtime_error("Bridge simulator has no internal simulator for script '" + absoluteScriptPath + "'");
+        }
 
         // Initialize convolution filters (unit impulses)
         SimulatorInitHelpers::initializeConvolutionFilters(sim);
 
-        return sim->getEngine();
+        Engine* engine = sim->getEngine();
+        if (!engine) {
+            throw std::runtime_error("Piranha script did not produce an engine for '" + absoluteScriptPath + "'");
+        }
+
+        return engine;
     }
 
     // Load an engine via JSON preset factory
@@ -825,11 +842,14 @@ protected:
 
     void SetUp() override {
         auto param = GetParam();
+        param.scriptPath = test_path_helpers::makeAbsolutePath(param.scriptPath);
+        param.fixturePath = test_path_helpers::makeAbsolutePath(param.fixturePath);
+        param.assetBase = test_path_helpers::makeAbsolutePath(param.assetBase);
 
-        piranhaEngine_ = loadEngineFromScript(param.scriptPath, param.assetBase, piranhaSim_);
-        if (!piranhaEngine_) {
-            GTEST_SKIP() << "Piranha could not load " << param.scriptPath
-                << " (.mr scripts use relative include paths that may not resolve from build dir)";
+        try {
+            piranhaEngine_ = loadEngineFromScript(param.scriptPath, param.assetBase, piranhaSim_);
+        } catch (const std::exception& e) {
+            FAIL() << e.what();
         }
 
         jsonEngine_ = loadEngineFromJson(param.fixturePath);

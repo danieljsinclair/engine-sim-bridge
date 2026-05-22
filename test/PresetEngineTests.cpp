@@ -43,7 +43,9 @@
 #include "simulator/BridgeSimulator.h"
 #include "simulator/SimulatorInitHelpers.h"
 #include "simulator/EngineSimTypes.h"
+#include "simulator/ScriptLoadHelpers.h"
 #include "common/ILogging.h"
+#include "TestPathHelpers.h"
 
 // ============================================================================
 // Constants
@@ -641,20 +643,25 @@ protected:
         const std::string& assetBase,
         int frames)
     {
+        const std::string absoluteScriptPath = test_path_helpers::makeAbsolutePath(scriptPath);
+        const std::string absoluteAssetBase = test_path_helpers::makeAbsolutePath(assetBase);
+
         ISimulatorConfig config;
         config.sampleRate = TEST_SAMPLE_RATE;
         config.simulationFrequency = 10000;
 
         std::unique_ptr<ISimulator> isim;
         try {
+            test_path_helpers::ScopedWorkingDirectory scopedWorkingDirectory(
+                test_path_helpers::engineSimRootForAssets(absoluteAssetBase));
             isim = SimulatorFactory::create(
                 SimulatorType::PistonEngine,
-                scriptPath,
-                assetBase,
+                absoluteScriptPath,
+                absoluteAssetBase,
                 config);
         } catch (const std::exception& e) {
             printf("  [GOLDEN-SCRIPT] Failed to load script '%s': %s\n",
-                scriptPath.c_str(), e.what());
+                absoluteScriptPath.c_str(), e.what());
             return {};
         }
 
@@ -746,7 +753,7 @@ protected:
 };
 
 TEST_P(PresetGoldenFileTest, PresetAudioMatchesPiranhaScript) {
-    std::string fixturePath = GetParam();
+    const std::string fixturePath = test_path_helpers::makeAbsolutePath(GetParam());
 
     // Map fixture path to script path (absolute paths via CMake define)
     std::string scriptPath, assetBase;
@@ -756,22 +763,21 @@ TEST_P(PresetGoldenFileTest, PresetAudioMatchesPiranhaScript) {
     } else if (fixturePath.find("subaru_ej25") != std::string::npos) {
         scriptPath = TEST_ENGINE_SIM_ASSETS "/engines/atg-video-2/01_subaru_ej25_eh.mr";
     } else {
-        GTEST_SKIP() << "No script mapping for " << fixturePath;
+        FAIL() << "No script mapping for " << fixturePath;
     }
+
+    scriptPath = test_path_helpers::makeAbsolutePath(scriptPath);
+    assetBase = test_path_helpers::makeAbsolutePath(assetBase);
 
     // Act: Capture audio from both sources
     constexpr int captureFrames = 4800;  // 100ms at 48kHz
     auto scriptAudio = captureFromScript(scriptPath, assetBase, captureFrames);
     auto presetAudio = captureFromPreset(fixturePath, captureFrames);
 
-    if (scriptAudio.empty()) {
-        GTEST_SKIP() << "Piranha script produced no audio (script: " << scriptPath
-            << "). Engine-sim .mr scripts use relative include paths "
-            << "that may not resolve from the build directory.";
-    }
-    if (presetAudio.empty()) {
-        GTEST_SKIP() << "Preset factory produced no audio for " << fixturePath;
-    }
+    ASSERT_FALSE(scriptAudio.empty())
+        << "Piranha script produced no audio for " << scriptPath;
+    ASSERT_FALSE(presetAudio.empty())
+        << "Preset factory produced no audio for " << fixturePath;
     ASSERT_EQ(scriptAudio.size(), presetAudio.size());
 
     // Assert: Audio outputs must match within RMS tolerance
@@ -923,3 +929,135 @@ INSTANTIATE_TEST_SUITE_P(
         TEST_FIXTURE_DIR "/gm_ls.preset.json"
     )
 );
+
+// ============================================================================
+// GROUP 10: iOS flat bundle path resolution
+//
+// Simulates the iOS app bundle layout where WAV files are at
+// sound-library/new/foo.wav (no es/ directory). The JSON preset stores
+// ../../es/sound-library/new/foo.wav, which the deserializer normalizes
+// to es/sound-library/new/foo.wav after stripping ../.
+//
+// The path must resolve deterministically without fallbacks or retries.
+// ============================================================================
+
+class IOSFlatBundleTest : public ::testing::Test {
+protected:
+    std::string tmpDir_;
+
+    void SetUp() override {
+        // Create temp directory mimicking iOS app bundle layout:
+        //   tmpdir/
+        //     preset.json          (copy of real Honda fixture)
+        //     sound-library/
+        //       new/
+        //         mild_exhaust_reverb.wav  (copy of real WAV)
+        char tmpl[] = "/tmp/ios_flat_bundle_test_XXXXXX";
+        tmpDir_ = mkdtemp(tmpl);
+
+        // Create sound-library/new/ directory
+        std::string soundDir = tmpDir_ + "/sound-library/new";
+        std::filesystem::create_directories(soundDir);
+
+        // Copy a real WAV file from the test assets
+        std::string srcWav = std::string(TEST_ES_DIR) + "/sound-library/new/mild_exhaust_reverb.wav";
+        std::string dstWav = soundDir + "/mild_exhaust_reverb.wav";
+        ASSERT_TRUE(std::filesystem::copy_file(srcWav, dstWav))
+            << "Failed to copy WAV fixture to temp bundle";
+
+        // Copy the real Honda fixture as the preset
+        std::string srcJson = std::string(FIXTURE_HONDA);
+        std::string dstJson = tmpDir_ + "/preset.json";
+        ASSERT_TRUE(std::filesystem::copy_file(srcJson, dstJson))
+            << "Failed to copy Honda preset to temp bundle";
+    }
+
+    void TearDown() override {
+        if (!tmpDir_.empty()) {
+            std::filesystem::remove_all(tmpDir_);
+        }
+    }
+};
+
+// Test: The full deterministic path (resolveAssetBasePath result + normalized
+// impulse response filename) must point to the actual WAV file on both
+// macOS dev layout and iOS flat bundle layout. No fallbacks, no retries.
+//
+// The JSON stores "../../es/sound-library/new/foo.wav".
+// After deserializer normalization, the filename should be "sound-library/new/foo.wav"
+// (stripping both "../" prefixes and the "es/" platform-specific prefix).
+// resolveAssetBasePath should return the directory that directly contains "sound-library/".
+//
+// macOS dev: base = <engine-sim-root>/es/, full = <root>/es/sound-library/new/foo.wav
+// iOS bundle: base = <bundle>/, full = <bundle>/sound-library/new/foo.wav
+TEST_F(IOSFlatBundleTest, ResolvePathFindsWavInFlatBundle) {
+    std::string presetPath = tmpDir_ + "/preset.json";
+
+    // Load the preset to get the deserialized exhaust system
+    PresetLoadResult result = PresetEngineFactory::loadFromFile(presetPath);
+    ASSERT_TRUE(result.success()) << "Failed to load preset: " << result.error;
+    ASSERT_NE(result.engine, nullptr);
+    ASSERT_GT(result.engine->getExhaustSystemCount(), 0);
+
+    // Get the normalized impulse response filename from the deserialized engine.
+    // The JSON stores "../../es/sound-library/new/mild_exhaust_reverb.wav".
+    // After the fix, the deserializer should strip ../ AND es/ to produce
+    // "sound-library/new/mild_exhaust_reverb.wav".
+    ExhaustSystem* exhaust = result.engine->getExhaustSystem(0);
+    ASSERT_NE(exhaust, nullptr);
+    ImpulseResponse* ir = exhaust->getImpulseResponse();
+    ASSERT_NE(ir, nullptr);
+    std::string irFilename = ir->getFilename();
+
+    // Resolve the asset base path (simulating iOS flat bundle)
+    std::string normalizedPath = ScriptLoadHelpers::normalizeScriptPath(presetPath);
+    std::string basePath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath, "");
+
+    // The combined path must resolve to an existing WAV file
+    // On iOS flat bundle: base = <bundle>/, filename = sound-library/new/foo.wav
+    // On macOS dev: base = <root>/es/, filename = sound-library/new/foo.wav
+    std::string fullPath = basePath + "/" + irFilename;
+    bool exists = std::filesystem::exists(fullPath);
+
+    EXPECT_TRUE(exists)
+        << "Flat bundle path resolution failed.\n"
+        << "  basePath: " << basePath << "\n"
+        << "  irFilename: " << irFilename << "\n"
+        << "  fullPath: " << fullPath << "\n"
+        << "  Expected WAV at: " << tmpDir_ << "/sound-library/new/mild_exhaust_reverb.wav\n"
+        << "  (iOS flat bundle has no es/ directory)";
+}
+
+// Test: loadImpulseResponses works deterministically with the flat bundle
+// No fallbacks or retries -- the path must resolve on the first attempt.
+TEST_F(IOSFlatBundleTest, LoadImpulseResponsesWorksWithFlatBundle) {
+    std::string presetPath = tmpDir_ + "/preset.json";
+
+    // Load preset from the flat bundle (uses real Honda fixture JSON)
+    PresetLoadResult result = PresetEngineFactory::loadFromFile(presetPath);
+    ASSERT_TRUE(result.success()) << "Failed to load preset: " << result.error;
+    ASSERT_NE(result.engine, nullptr);
+
+    // Create simulator and load engine
+    auto* pistonSim = new PistonEngineSimulator();
+    Simulator::Parameters params;
+    params.systemType = Simulator::SystemType::NsvOptimized;
+    pistonSim->initialize(params);
+    pistonSim->loadSimulation(result.engine, result.vehicle, result.transmission);
+
+    // Resolve the asset base path from the preset location (simulating iOS)
+    std::string normalizedPath = ScriptLoadHelpers::normalizeScriptPath(presetPath);
+    std::string basePath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath, "");
+
+    // Load impulse responses -- must succeed on first attempt, no fallbacks
+    bool loaded = ScriptLoadHelpers::loadImpulseResponses(
+        pistonSim, result.engine, basePath, nullptr);
+
+    EXPECT_TRUE(loaded)
+        << "loadImpulseResponses failed on iOS flat bundle layout.\n"
+        << "  basePath: " << basePath << "\n"
+        << "  The path must resolve deterministically without fallbacks.";
+
+    pistonSim->destroy();
+    delete pistonSim;
+}

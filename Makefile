@@ -1,4 +1,13 @@
-.PHONY: all build-all clean scrub help remove-orphans check presets clean-presets
+.PHONY: all build-all clean scrub help remove-orphans check test presets clean-presets
+
+BUILD_DIR ?= build
+BUILD_TYPE ?= Release
+BRIDGE_TEST_CMAKE_FLAGS := \
+	-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
+	-DBUILD_PRESET_ENGINE_TESTS=ON \
+	-DBUILD_IOS_ADAPTER_TESTS=ON \
+	-DBUILD_PHASE0_SPIKES=OFF
+BRIDGE_TEST_EXCLUDE := (_NOT_BUILT|_spike$$)
 
 # Default to parallel build using available CPU cores
 MAKEFLAGS += -j$(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
@@ -12,8 +21,9 @@ PRESET_COMPILER := ../build/engine-sim-bridge/engine-sim-preset-compiler
 all: build-all presets
 
 build-all:
-	@if [ ! -d build ]; then mkdir build && cd build && cmake ..; fi
-	$(MAKE) -C build
+	@mkdir -p $(BUILD_DIR)
+	@cd $(BUILD_DIR) && cmake -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) ..
+	$(MAKE) -C $(BUILD_DIR)
 
 # Remove orphaned binaries, symlinks, and stray cmake junk from source dirs
 remove-orphans:
@@ -29,19 +39,23 @@ remove-orphans:
 
 # Clean build artifacts but keep CMake config (cascades to engine-sim)
 clean: remove-orphans clean-presets
-	@if [ -d build ]; then $(MAKE) -C build clean 2>/dev/null || true; fi
-	@if [ -d build/engine-sim ]; then $(MAKE) -C build/engine-sim clean 2>/dev/null || true; fi
+	@if [ -d $(BUILD_DIR) ]; then $(MAKE) -C $(BUILD_DIR) clean 2>/dev/null || true; fi
+	@if [ -d $(BUILD_DIR)/engine-sim ]; then $(MAKE) -C $(BUILD_DIR)/engine-sim clean 2>/dev/null || true; fi
 
 # Full clean - remove entire build directory (superset of clean)
 scrub: clean
 	@echo "Scrubbing bridge build..."
-	@rm -rf build preset
+	@rm -rf $(BUILD_DIR) preset
 	@$(MAKE) remove-orphans
 
-# Run bridge unit tests (build first if needed)
-check:
-	$(MAKE) -C build bridge_unit_tests
-	cd build && ./bridge_unit_tests --gtest_color=yes
+# Run all bridge tests (build first if needed)
+test:
+	@mkdir -p $(BUILD_DIR)
+	@cd $(BUILD_DIR) && cmake $(BRIDGE_TEST_CMAKE_FLAGS) ..
+	@$(MAKE) -C $(BUILD_DIR)
+	@cd $(BUILD_DIR) && ctest -V --output-on-failure -E '$(BRIDGE_TEST_EXCLUDE)'
+
+check: test
 
 # ============================================================================
 # Preset compilation: es/*.mr scripts → preset/*.json
@@ -80,7 +94,7 @@ help:
 	@echo "Targets:"
 	@echo "  make          - Build everything (creates build dir if needed)"
 	@echo "  make presets  - Compile .mr wrappers to JSON presets"
-	@echo "  make test     - Build and run tests (verbose output)"
+	@echo "  make test     - Build and run all bridge tests"
 	@echo "  make clean    - Clean build artifacts (fast rebuild)"
 	@echo "  make scrub    - Remove entire build directory (full clean)"
 	@echo "  make help     - Show this help"

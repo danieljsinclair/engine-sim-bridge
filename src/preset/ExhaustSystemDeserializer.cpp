@@ -28,11 +28,17 @@ void ExhaustSystemDeserializer::deserialize(const JsonValue& json, ExhaustSystem
     if (json.has("impulseResponseFilename") && json["impulseResponseFilename"].isString()) {
         std::string irFilename = json["impulseResponseFilename"].asString();
 
-        // Normalize paths like "../../es/sound-library/..." to "es/sound-library/..."
+        // Normalize paths like "../../es/sound-library/..." to "sound-library/..."
         // The preset_compiler stores Piranha-resolved paths relative to the .mr script
-        // location. These contain "../" prefixes. Strip leading "../" segments so
-        // the path starts at "es/", which resolves against the engine-sim root.
+        // location. These contain "../" prefixes and the "es/" platform-specific prefix.
+        // Strip both so the path is platform-independent: "sound-library/...".
+        // resolveAssetBasePath returns the directory containing "sound-library/" on
+        // both macOS (<root>/es/) and iOS (<bundle>/).
         while (irFilename.size() >= 3 && irFilename.substr(0, 3) == "../") {
+            irFilename = irFilename.substr(3);
+        }
+        // Strip the "es/" platform-specific prefix left after removing ../
+        if (irFilename.size() > 3 && irFilename.substr(0, 3) == "es/") {
             irFilename = irFilename.substr(3);
         }
 
