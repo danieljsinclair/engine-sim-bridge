@@ -12,8 +12,8 @@
 
 #include "engine_sim.h"
 #include "compiler.h"
-
-#include <unistd.h>
+#include "simulator/ScriptCompileHelpers.h"
+#include "simulator/ScriptExecutionHelpers.h"
 
 #include "engine.h"
 #include "vehicle.h"
@@ -496,167 +496,56 @@ static void serializeTransmission(JsonWriter& j, Transmission* trans) {
     j.endObject();
 }
 
-// ============================================================================
-// Main
-// ============================================================================
+namespace {
 
-int main(int argc, char* argv[]) {
-    if (argc < 3) {
-        fprintf(stderr, "Usage: %s <script.mr> <output.json> [engine_sim_dir]\n", argv[0]);
-        fprintf(stderr, "\n");
-        fprintf(stderr, "  script.mr        - Engine script to compile (e.g., engines/atg-video-1/01_honda_trx520.mr)\n");
-        fprintf(stderr, "  output.json      - Output JSON preset file\n");
-        fprintf(stderr, "  engine_sim_dir   - Path to engine-sim root (must contain es/ and assets/ dirs)\n");
-        fprintf(stderr, "\n");
-        fprintf(stderr, "The compiler generates a wrapper script that imports the engine script\n");
-        fprintf(stderr, "and calls main(), then runs Piranha from the engine-sim directory so\n");
-        fprintf(stderr, "that import search paths resolve correctly (../es/ -> es/).\n");
-        return 1;
-    }
-
-    const char* scriptPath = argv[1];
-    const char* outputPath = argv[2];
-    const char* engineSimDir = (argc >= 4) ? argv[3] : nullptr;
-
-    // Resolve engine-sim directory
-    // If not provided, try to infer from the script path (look for es/ sibling)
+struct PresetCompilerArgs {
+    std::filesystem::path scriptPath;
+    std::filesystem::path outputPath;
     std::filesystem::path simDir;
-    if (engineSimDir) {
-        simDir = std::filesystem::absolute(engineSimDir);
-    } else {
-        // Walk up from script looking for es/ directory
-        std::filesystem::path search = std::filesystem::absolute(scriptPath).parent_path();
-        bool found = false;
-        for (int i = 0; i < 10 && !found; i++) {
-            if (std::filesystem::exists(search / "es" / "engine_sim.mr")) {
-                simDir = search;
-                found = true;
-            }
-            search = search.parent_path();
-        }
-        if (!found) {
-            fprintf(stderr, "Error: Cannot find engine-sim root (looking for es/engine_sim.mr)\n");
-            fprintf(stderr, "Provide the engine_sim_dir argument explicitly.\n");
-            return 1;
-        }
+};
+
+void printUsage(const char* programName) {
+    fprintf(stderr, "Usage: %s <script.mr> <output.json> [engine_sim_dir]\n", programName);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "  script.mr        - Engine script to compile (e.g., engines/atg-video-1/01_honda_trx520.mr)\n");
+    fprintf(stderr, "  output.json      - Output JSON preset file\n");
+    fprintf(stderr, "  engine_sim_dir   - Path to engine-sim root (must contain es/ and assets/ dirs)\n");
+    fprintf(stderr, "\n");
+    fprintf(stderr, "The compiler generates a wrapper script that imports the engine script\n");
+    fprintf(stderr, "and calls main(), then runs Piranha from the engine-sim directory so\n");
+    fprintf(stderr, "that import search paths resolve correctly (../es/ -> es/).\n");
+}
+
+PresetCompilerArgs parseArgs(int argc, char* argv[]) {
+    if (argc < 3) {
+        printUsage(argv[0]);
+        throw std::runtime_error("missing required arguments");
     }
 
-    if (!std::filesystem::exists(simDir / "es" / "engine_sim.mr")) {
-        fprintf(stderr, "Error: es/engine_sim.mr not found in %s\n", simDir.c_str());
-        return 1;
-    }
+    PresetCompilerArgs args;
+    args.scriptPath = argv[1];
+    args.outputPath = argv[2];
+    args.simDir = (argc >= 4)
+        ? std::filesystem::absolute(argv[3])
+        : script_compile_helpers::findEngineSimRoot(args.scriptPath);
+    return args;
+}
 
-    // Compute the relative import path from the assets/ directory to the engine script
-    // Scripts are typically at assets/engines/... relative to the engine-sim root
-    std::filesystem::path assetsDir = simDir / "assets";
+void logCompileContext(const PresetCompilerArgs& args) {
+    const auto compileTarget = script_compile_helpers::prepareScriptCompileTarget(args.scriptPath, args.simDir);
+    printf("Engine-sim dir: %s\n", args.simDir.c_str());
+    printf("Script import:  %s (relative to assets/)\n", compileTarget.relativeImport.c_str());
+    printf("Compiling: %s\n", args.scriptPath.c_str());
+    script_compile_helpers::cleanupScriptCompileTarget(compileTarget);
+}
 
-    // Resolve the script as a filesystem path and compute relative import from assets/
-    if (!std::filesystem::exists(scriptPath)) {
-        fprintf(stderr, "Error: Script not found: %s\n", scriptPath);
-        return 1;
-    }
-    std::filesystem::path absScriptPath = std::filesystem::absolute(scriptPath);
-
-    std::string relativeImport;
-
-    // Check if the script is inside assets/
-    // std::filesystem::relative may return the absolute path unchanged if it can't
-    // compute a relative path (symlink resolution, different volumes).
-    // A script is "inside assets/" only if the relative path doesn't start
-    // with '/' or '..' (i.e., it's genuinely within the directory tree).
-    std::filesystem::path relFromAssets = std::filesystem::relative(absScriptPath, assetsDir);
-    std::string relStr = relFromAssets.string();
-    bool insideAssets = (!relStr.empty() && relStr[0] != '.' && relStr[0] != '/');
-    std::filesystem::path tempScriptPath;  // non-empty if we copied a script into assets/
-
-    if (insideAssets) {
-        // Script is inside assets/ — use the relative path directly
-        relativeImport = relFromAssets.string();
-    } else {
-        // Script is outside assets/ — copy it into assets/ so Piranha can resolve imports
-        std::string tmpName = "_escli_tmp_" + absScriptPath.stem().string() + "_" + std::to_string(getpid()) + ".mr";
-        tempScriptPath = assetsDir / tmpName;
-        std::filesystem::copy_file(absScriptPath, tempScriptPath,
-                                   std::filesystem::copy_options::overwrite_existing);
-        relativeImport = tmpName;
-    }
-
-    printf("Engine-sim dir: %s\n", simDir.c_str());
-    printf("Script import:  %s (relative to assets/)\n", relativeImport.c_str());
-
-    // Determine what to compile:
-    // - Script inside assets/: use a wrapper to import it (original approach)
-    // - Script outside assets/: already copied into assets/ as tempScriptPath,
-    //   compile it directly since it's self-contained (has its own imports + main())
-    std::filesystem::path compileTarget;
-    std::filesystem::path wrapperPath;
-
-    if (!tempScriptPath.empty()) {
-        // Script was copied into assets/ — compile directly
-        compileTarget = tempScriptPath;
-    } else {
-        // Script is inside assets/ — use wrapper approach
-        std::string wrapperName = "_escli_preset_wrapper_" + std::to_string(getpid()) + ".mr";
-        wrapperPath = assetsDir / wrapperName;
-        std::ofstream wrapper(wrapperPath);
-        if (!wrapper.is_open()) {
-            fprintf(stderr, "Error: Cannot create wrapper script: %s\n", wrapperPath.c_str());
-            return 1;
-        }
-        wrapper << "import \"engine_sim.mr\"\n";
-        wrapper << "import \"" << relativeImport << "\"\n";
-        wrapper << "main()\n";
-        wrapper.close();
-        compileTarget = wrapperPath;
-    }
-
-    printf("Compiling: %s\n", scriptPath);
-
-    // Save current working directory and change to the engine-sim root
-    // Piranha search paths are: ../../es/, ../es/, es/
-    // From engine-sim/, es/ resolves to engine-sim/es/
-    // The wrapper is in assets/ so imports resolve relative to assets/ (where engines/ lives)
-    std::filesystem::path originalCwd = std::filesystem::current_path();
-    std::filesystem::current_path(simDir);
-
-    // Initialize and run Piranha compiler
-    es_script::Compiler compiler;
-    compiler.initialize();
-
-    if (!compiler.compile(compileTarget.string())) {
-        // Restore CWD before printing error
-        std::filesystem::current_path(originalCwd);
-        if (!wrapperPath.empty()) std::filesystem::remove(wrapperPath);
-        if (!tempScriptPath.empty()) std::filesystem::remove(tempScriptPath);
-        fprintf(stderr, "Error: Failed to compile script: %s\n", scriptPath);
-        return 1;
-    }
-
-    es_script::Compiler::Output output = compiler.execute();
-
-    // Restore working directory and clean up temp files
-    std::filesystem::current_path(originalCwd);
-    if (!wrapperPath.empty()) std::filesystem::remove(wrapperPath);
-    if (!tempScriptPath.empty()) std::filesystem::remove(tempScriptPath);
-
-    if (!output.engine) {
-        fprintf(stderr, "Error: Script did not produce an engine: %s\n", scriptPath);
-        return 1;
-    }
-
-    printf("Engine: %s (%d cylinders, %d banks)\n",
-           output.engine->getName().c_str(),
-           output.engine->getCylinderCount(),
-           output.engine->getCylinderBankCount());
-
-    // Serialize to JSON
+std::string buildPresetJson(const std::filesystem::path& scriptPath, const es_script::Compiler::Output& output) {
     JsonWriter j;
     j.beginObject();
 
-    // Derive preset name from script filename
-    std::string presetName = std::filesystem::path(scriptPath).stem().string();
+    const std::string presetName = scriptPath.stem().string();
     j.kv("presetName", presetName.c_str());
-    j.kv("sourceScript", scriptPath);
+    j.kv("sourceScript", scriptPath.string().c_str());
 
     j.key("engine");
     serializeEngine(j, output.engine);
@@ -672,19 +561,49 @@ int main(int argc, char* argv[]) {
     }
 
     j.endObject();
+    return j.str();
+}
 
-    // Write output
+void writeOutputFile(const std::filesystem::path& outputPath, const std::string& json) {
     std::ofstream outFile(outputPath);
     if (!outFile.is_open()) {
-        fprintf(stderr, "Error: Cannot open output file: %s\n", outputPath);
-        return 1;
+        throw std::runtime_error("Cannot open output file: " + outputPath.string());
     }
 
-    outFile << j.str() << std::endl;
-    outFile.close();
+    outFile << json << std::endl;
+}
 
-    printf("Output: %s (%zu bytes)\n", outputPath, j.str().size());
+int runPresetCompiler(int argc, char* argv[]) {
+    const PresetCompilerArgs args = parseArgs(argc, argv);
+    logCompileContext(args);
 
-    compiler.destroy();
+    const es_script::Compiler::Output output = script_execution_helpers::compileScript(args.scriptPath, args.simDir);
+    if (!output.engine) {
+        throw std::runtime_error("Script did not produce an engine: " + args.scriptPath.string());
+    }
+
+    printf("Engine: %s (%d cylinders, %d banks)\n",
+           output.engine->getName().c_str(),
+           output.engine->getCylinderCount(),
+           output.engine->getCylinderBankCount());
+
+    const std::string json = buildPresetJson(args.scriptPath, output);
+    writeOutputFile(args.outputPath, json);
+    printf("Output: %s (%zu bytes)\n", args.outputPath.c_str(), json.size());
     return 0;
+}
+
+}  // namespace
+
+// ============================================================================
+// Main
+// ============================================================================
+
+int main(int argc, char* argv[]) {
+    try {
+        return runPresetCompiler(argc, argv);
+    } catch (const std::exception& e) {
+        fprintf(stderr, "Error: %s\n", e.what());
+        return 1;
+    }
 }

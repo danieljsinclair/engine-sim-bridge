@@ -13,6 +13,8 @@
 
 #include "engine_sim.h"
 #include "compiler.h"
+#include "simulator/ScriptCompileHelpers.h"
+#include "simulator/ScriptExecutionHelpers.h"
 
 #include "engine.h"
 #include "vehicle.h"
@@ -375,116 +377,63 @@ static void emitTransmission(CppEmitter& e, Transmission* transmission) {
     e.line("");
 }
 
-// ============================================================================
-// Main
-// ============================================================================
+namespace {
 
-int main(int argc, char* argv[]) {
-    std::string scriptPath, outputPath, className;
+struct CodegenArgs {
+    std::filesystem::path scriptPath;
+    std::filesystem::path outputPath;
+    std::string className;
+};
+
+void printUsage(const char* programName) {
+    printf("Usage: %s --script <path.mr> --output <path.cpp> --classname <name>\n", programName);
+}
+
+CodegenArgs parseArgs(int argc, char* argv[]) {
+    CodegenArgs args;
 
     for (int i = 1; i < argc; i++) {
-        std::string arg = argv[i];
+        const std::string arg = argv[i];
         if (arg == "--script" && i + 1 < argc) {
-            scriptPath = argv[++i];
+            args.scriptPath = argv[++i];
         } else if (arg == "--output" && i + 1 < argc) {
-            outputPath = argv[++i];
+            args.outputPath = argv[++i];
         } else if (arg == "--classname" && i + 1 < argc) {
-            className = argv[++i];
+            args.className = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
-            printf("Usage: %s --script <path.mr> --output <path.cpp> --classname <name>\n", argv[0]);
-            return 0;
+            printUsage(argv[0]);
+            throw std::runtime_error("");
         }
     }
 
-    if (scriptPath.empty() || outputPath.empty() || className.empty()) {
-        fprintf(stderr, "Error: --script, --output, and --classname are required\n");
-        fprintf(stderr, "Usage: %s --script <path.mr> --output <path.cpp> --classname <name>\n", argv[0]);
-        return 1;
+    if (args.scriptPath.empty() || args.outputPath.empty() || args.className.empty()) {
+        printUsage(argv[0]);
+        throw std::runtime_error("--script, --output, and --classname are required");
     }
 
-    if (!std::filesystem::exists(scriptPath)) {
-        fprintf(stderr, "Error: Script not found: %s\n", scriptPath.c_str());
-        return 1;
+    if (!std::filesystem::exists(args.scriptPath)) {
+        throw std::runtime_error("Script not found: " + args.scriptPath.string());
     }
 
-    // Find engine-sim root (look for es/engine_sim.mr)
-    std::filesystem::path absScript = std::filesystem::absolute(scriptPath);
-    std::filesystem::path search = absScript.parent_path();
-    std::filesystem::path simDir;
-    bool found = false;
-    for (int i = 0; i < 10 && !found; i++) {
-        if (std::filesystem::exists(search / "es" / "engine_sim.mr")) {
-            simDir = search;
-            found = true;
-        }
-        search = search.parent_path();
-    }
-    if (!found) {
-        fprintf(stderr, "Error: Cannot find engine-sim root (looking for es/engine_sim.mr)\n");
-        return 1;
-    }
+    args.scriptPath = std::filesystem::absolute(args.scriptPath);
+    return args;
+}
 
-    std::filesystem::path assetsDir = simDir / "assets";
-    std::string relativeImport = std::filesystem::relative(absScript, assetsDir).string();
-
+void logCompileContext(const CodegenArgs& args, const std::filesystem::path& simDir) {
     printf("Engine-sim dir: %s\n", simDir.c_str());
-    printf("Script:        %s\n", scriptPath.c_str());
-    printf("Class name:    %s\n", className.c_str());
+    printf("Script:        %s\n", args.scriptPath.c_str());
+    printf("Class name:    %s\n", args.className.c_str());
+}
 
-    // Generate wrapper script for Piranha
-    std::filesystem::path wrapperPath = assetsDir / "_escli_codegen_wrapper.mr";
-    {
-        std::ofstream wrapper(wrapperPath);
-        if (!wrapper.is_open()) {
-            fprintf(stderr, "Error: Cannot create wrapper: %s\n", wrapperPath.c_str());
-            return 1;
-        }
-        wrapper << "import \"engine_sim.mr\"\n";
-        wrapper << "import \"" << relativeImport << "\"\n";
-        wrapper << "main()\n";
-    }
-
-    // Change to engine-sim root for Piranha include resolution
-    std::filesystem::path originalCwd = std::filesystem::current_path();
-    std::filesystem::current_path(simDir);
-
-    es_script::Compiler compiler;
-    compiler.initialize();
-
-    printf("Compiling...\n");
-    if (!compiler.compile(wrapperPath.string())) {
-        std::filesystem::current_path(originalCwd);
-        fprintf(stderr, "Error: Failed to compile: %s\n", scriptPath.c_str());
-        return 1;
-    }
-
-    es_script::Compiler::Output output = compiler.execute();
-    std::filesystem::current_path(originalCwd);
-
-    // Clean up wrapper
-    std::filesystem::remove(wrapperPath);
-
-    if (!output.engine) {
-        fprintf(stderr, "Error: Script did not produce an engine\n");
-        compiler.destroy();
-        return 1;
-    }
-
+std::string emitGeneratedSource(const CodegenArgs& args, const es_script::Compiler::Output& output) {
     Engine* engine = output.engine;
     Vehicle* vehicle = output.vehicle;
     Transmission* transmission = output.transmission;
-    printf("Engine: %s (%d cyl, %d banks)\n",
-        engine->getName().c_str(), engine->getCylinderCount(), engine->getCylinderBankCount());
-    if (vehicle) printf("Vehicle: mass=%.1f kg\n", vehicle->getMass());
-    if (transmission) printf("Transmission: %d gears\n", transmission->getGearCount());
 
-    // ========================================================================
-    // Emit C++ source
-    // ========================================================================
     CppEmitter e;
 
     e.line("// Auto-generated by engine-sim-preset-codegen from:");
-    e.line("//   %s", scriptPath.c_str());
+    e.line("//   %s", args.scriptPath.c_str());
     e.line("// DO NOT EDIT — regenerate with preset_codegen");
     e.line("");
     e.line("#include \"engine.h\"");
@@ -512,12 +461,11 @@ int main(int argc, char* argv[]) {
     e.line("#define M_PI 3.14159265358979323846");
     e.line("#endif");
     e.line("");
-    e.line("class %s {", className.c_str());
+    e.line("class %s {", args.className.c_str());
     e.line("public:");
     e.line("    static Simulator* create() {");
     e.indent_++;
 
-    // Engine parameters
     e.line("Engine::Parameters params = {};");
     e.line("params.name = \"%s\";", engine->getName().c_str());
     e.line("params.cylinderBanks = %d;", engine->getCylinderBankCount());
@@ -535,8 +483,6 @@ int main(int argc, char* argv[]) {
     e.line("params.initialHighFrequencyGain = %s;", fmtDouble(engine->getInitialHighFrequencyGain()).c_str());
     e.line("params.initialNoise = %s;", fmtDouble(engine->getInitialNoise()).c_str());
     e.line("params.initialJitter = %s;", fmtDouble(engine->getInitialJitter()).c_str());
-
-    // DirectThrottleLinkage
     e.line("DirectThrottleLinkage* throttle = new DirectThrottleLinkage();");
     e.line("DirectThrottleLinkage::Parameters throttleParams;");
     e.line("throttleParams.gamma = 1.0;");
@@ -544,35 +490,29 @@ int main(int argc, char* argv[]) {
     e.line("params.throttle = throttle;");
     e.line("");
 
-    // Create engine
     e.line("Engine* engine = new Engine();");
     e.line("engine->initialize(params);");
     e.line("");
 
-    // Crankshafts
     for (int i = 0; i < engine->getCrankshaftCount(); i++) {
         emitCrankshaft(e, engine, i);
     }
     e.line("Crankshaft* mainCrank = engine->getCrankshaft(0);");
 
-    // Exhaust systems
     for (int i = 0; i < engine->getExhaustSystemCount(); i++) {
         emitExhaustSystem(e, engine, i);
     }
 
-    // Intakes
     for (int i = 0; i < engine->getIntakeCount(); i++) {
         emitIntake(e, engine, i);
     }
 
-    // Cylinder banks
     int globalCylIdx = 0;
     for (int bi = 0; bi < engine->getCylinderBankCount(); bi++) {
         emitCylinderBank(e, engine, bi, globalCylIdx);
         globalCylIdx += engine->getCylinderBank(bi)->getCylinderCount();
     }
 
-    // Fuel
     Fuel* fuel = engine->getFuel();
     if (fuel) {
         e.line("Function* turbulenceFn = EnginePresetsHelper::createDefaultTurbulenceToFlameSpeedRatio();");
@@ -588,7 +528,6 @@ int main(int argc, char* argv[]) {
         e.line("");
     }
 
-    // Ignition — read actual values from the Piranha-compiled engine
     IgnitionModule* srcIgnition = engine->getIgnitionModule();
     e.line("IgnitionModule* ignition = engine->getIgnitionModule();");
     e.line("IgnitionModule::Parameters igParams = {};");
@@ -596,7 +535,6 @@ int main(int argc, char* argv[]) {
     e.line("igParams.crankshaft = mainCrank;");
     e.line("");
 
-    // Timing curve from actual engine
     Function* srcTimingCurve = srcIgnition->getTimingCurve();
     if (srcTimingCurve) {
         emitFunction(e, "timingCurve", srcTimingCurve);
@@ -611,14 +549,12 @@ int main(int argc, char* argv[]) {
     e.line("ignition->initialize(igParams);");
     e.line("");
 
-    // Firing order — read actual angles from compiled engine
     e.line("const double fourPi = 4.0 * M_PI;");
     for (int i = 0; i < engine->getCylinderCount(); i++) {
         e.line("ignition->setFiringOrder(%d, %s);", i, fmtDouble(srcIgnition->getFiringOrder(i)).c_str());
     }
     e.line("");
 
-    // Combustion chambers
     e.line("Function* turbFn = EnginePresetsHelper::createMeanPistonSpeedToTurbulence();");
     e.line("CombustionChamber::Parameters ccParams = {};");
     e.line("ccParams.CrankcasePressure = units::pressure(1.0, units::atm);");
@@ -635,7 +571,6 @@ int main(int argc, char* argv[]) {
     e.line("");
     e.line("engine->calculateDisplacement();");
 
-    // Vehicle
     if (vehicle) {
         emitVehicle(e, vehicle);
     } else {
@@ -644,7 +579,6 @@ int main(int argc, char* argv[]) {
         e.line("");
     }
 
-    // Transmission
     if (transmission) {
         emitTransmission(e, transmission);
     } else {
@@ -653,7 +587,6 @@ int main(int argc, char* argv[]) {
         e.line("");
     }
 
-    // Create simulator
     e.line("auto* sim = new PistonEngineSimulator();");
     e.line("Simulator::Parameters simParams;");
     e.line("simParams.systemType = Simulator::SystemType::NsvOptimized;");
@@ -668,20 +601,53 @@ int main(int argc, char* argv[]) {
     e.line("}");
     e.line("};");
     e.line("");
+    return e.buf_;
+}
 
-    // Write output
+void writeOutputFile(const std::filesystem::path& outputPath, const std::string& source) {
     std::ofstream outFile(outputPath);
     if (!outFile.is_open()) {
-        fprintf(stderr, "Error: Cannot open output: %s\n", outputPath.c_str());
-        compiler.destroy();
-        return 1;
+        throw std::runtime_error("Cannot open output: " + outputPath.string());
+    }
+    outFile << source;
+}
+
+int runPresetCodegen(int argc, char* argv[]) {
+    const CodegenArgs args = parseArgs(argc, argv);
+    const std::filesystem::path simDir = script_compile_helpers::findEngineSimRoot(args.scriptPath);
+    logCompileContext(args, simDir);
+
+    printf("Compiling...\n");
+    const es_script::Compiler::Output output = script_execution_helpers::compileScript(args.scriptPath, simDir);
+    if (!output.engine) {
+        throw std::runtime_error("Script did not produce an engine");
     }
 
-    outFile << e.buf_;
-    outFile.close();
+    printf("Engine: %s (%d cyl, %d banks)\n",
+        output.engine->getName().c_str(), output.engine->getCylinderCount(), output.engine->getCylinderBankCount());
+    if (output.vehicle) printf("Vehicle: mass=%.1f kg\n", output.vehicle->getMass());
+    if (output.transmission) printf("Transmission: %d gears\n", output.transmission->getGearCount());
 
-    printf("Output: %s (%zu bytes)\n", outputPath.c_str(), e.buf_.size());
-
-    compiler.destroy();
+    const std::string generatedSource = emitGeneratedSource(args, output);
+    writeOutputFile(args.outputPath, generatedSource);
+    printf("Output: %s (%zu bytes)\n", args.outputPath.c_str(), generatedSource.size());
     return 0;
+}
+
+}  // namespace
+
+// ============================================================================
+// Main
+// ============================================================================
+
+int main(int argc, char* argv[]) {
+    try {
+        return runPresetCodegen(argc, argv);
+    } catch (const std::runtime_error& e) {
+        if (std::string(e.what()).empty()) {
+            return 0;
+        }
+        fprintf(stderr, "Error: %s\n", e.what());
+        return 1;
+    }
 }

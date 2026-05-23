@@ -11,11 +11,16 @@
 // Run:   preset_engine_tests --gtest_filter=*Isomorphism*
 
 #include <gtest/gtest.h>
+#include <filesystem>
 #include <memory>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <chrono>
+#include <string>
+#include <unordered_map>
 
 // Engine-sim headers
 #include "engine.h"
@@ -34,7 +39,6 @@
 // Bridge headers
 #include "simulator/PresetEngineFactory.h"
 #include "common/JsonParser.h"
-#include "TestPathHelpers.h"
 
 #if !TARGET_OS_IPHONE && defined(ENGINE_SIM_PIRANHA_ENABLED)
 #include "simulator/SimulatorFactory.h"
@@ -744,50 +748,35 @@ namespace {
 
     // Load an engine via Piranha (.mr script)
     // Returns raw Engine* (caller does NOT own -- owned by ISimulator)
+    // Returns nullptr if script can't be loaded (relative include path issues, etc.)
     Engine* loadEngineFromScript(const std::string& scriptPath, const std::string& assetBase,
                                   std::unique_ptr<ISimulator>& outISim) {
-        const std::string absoluteScriptPath = test_path_helpers::makeAbsolutePath(scriptPath);
-        const std::string absoluteAssetBase = test_path_helpers::makeAbsolutePath(assetBase);
-
         ISimulatorConfig config;
         config.sampleRate = ISO_SAMPLE_RATE;
         config.simulationFrequency = 10000;
 
         try {
-            test_path_helpers::ScopedWorkingDirectory scopedWorkingDirectory(
-                test_path_helpers::engineSimRootForAssets(absoluteAssetBase));
             outISim = SimulatorFactory::create(
                 SimulatorType::PistonEngine,
-                absoluteScriptPath,
-                absoluteAssetBase,
+                scriptPath,
+                assetBase,
                 config);
-        } catch (const std::exception& e) {
-            throw std::runtime_error("Failed to load Piranha script '" + absoluteScriptPath + "': " + e.what());
+        } catch (const std::exception&) {
+            return nullptr;
         }
 
-        if (!outISim) {
-            throw std::runtime_error("Failed to create simulator for script '" + absoluteScriptPath + "'");
-        }
+        if (!outISim) return nullptr;
 
         auto* bridge = dynamic_cast<BridgeSimulator*>(outISim.get());
-        if (!bridge) {
-            throw std::runtime_error("SimulatorFactory returned non-bridge simulator for script '" + absoluteScriptPath + "'");
-        }
+        if (!bridge) return nullptr;
 
         Simulator* sim = bridge->getInternalSimulator();
-        if (!sim) {
-            throw std::runtime_error("Bridge simulator has no internal simulator for script '" + absoluteScriptPath + "'");
-        }
+        if (!sim) return nullptr;
 
         // Initialize convolution filters (unit impulses)
         SimulatorInitHelpers::initializeConvolutionFilters(sim);
 
-        Engine* engine = sim->getEngine();
-        if (!engine) {
-            throw std::runtime_error("Piranha script did not produce an engine for '" + absoluteScriptPath + "'");
-        }
-
-        return engine;
+        return sim->getEngine();
     }
 
     // Load an engine via JSON preset factory
@@ -830,48 +819,132 @@ namespace {
         std::string scriptPath;
         std::string fixturePath;
         std::string assetBase;
+        bool generatePresetAtRuntime = false;
     };
-}
 
-class ParameterIsomorphismTest : public ::testing::Test,
-                                 public ::testing::WithParamInterface<IsomorphismParam> {
-protected:
-    std::unique_ptr<ISimulator> piranhaSim_;
-    Engine* piranhaEngine_ = nullptr;
-    Engine* jsonEngine_ = nullptr;
+    std::string generatePresetJsonFromScript(const std::string& scriptPath, const std::string& name) {
+        namespace fs = std::filesystem;
 
-    void SetUp() override {
-        auto param = GetParam();
-        param.scriptPath = test_path_helpers::makeAbsolutePath(param.scriptPath);
-        param.fixturePath = test_path_helpers::makeAbsolutePath(param.fixturePath);
-        param.assetBase = test_path_helpers::makeAbsolutePath(param.assetBase);
+        const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+        const fs::path outputPath = fs::temp_directory_path() /
+            ("preset_isomorphism_" + name + "_" + std::to_string(nonce) + ".json");
 
-        try {
-            piranhaEngine_ = loadEngineFromScript(param.scriptPath, param.assetBase, piranhaSim_);
-        } catch (const std::exception& e) {
-            FAIL() << e.what();
+        const std::string command = std::string("\"") + TEST_PRESET_COMPILER_PATH +
+            "\" \"" + scriptPath + "\" \"" + outputPath.string() +
+            "\" \"" + TEST_ENGINE_SIM_ROOT + "\" >/dev/null 2>&1";
+
+        if (std::system(command.c_str()) != 0) {
+            throw std::runtime_error("Failed to generate preset JSON from script: " + scriptPath);
         }
 
-        jsonEngine_ = loadEngineFromJson(param.fixturePath);
-        ASSERT_NE(jsonEngine_, nullptr)
-            << "Failed to load JSON engine from " << param.fixturePath;
+        return outputPath.string();
+    }
+}
+
+// ============================================================================
+// ParameterIsomorphismTest
+// Piranha compilation and JSON loading are expensive (~1 s each). The static
+// fixture cache loads each engine pair exactly once per test suite run, shared
+// across all 8 test methods for the same fixture. TearDownTestSuite() owns
+// the cleanup so per-test TearDown() is trivially cheap.
+// ============================================================================
+class ParameterIsomorphismTest : public ::testing::Test,
+                                 public ::testing::WithParamInterface<IsomorphismParam> {
+private:
+    struct CachedFixture {
+        std::unique_ptr<ISimulator> piranhaSim;
+        Engine* piranhaEngine   = nullptr;  // non-owning (owned by piranhaSim)
+        Engine* jsonEngine      = nullptr;  // owned by this struct
+        std::string jsonFixturePath;
+        bool generatedFixture   = false;
+        bool attempted          = false;    // true after first load attempt
+        bool valid              = false;    // true only when both engines loaded
+    };
+
+    static std::unordered_map<std::string, CachedFixture>& fixtureCache() {
+        static std::unordered_map<std::string, CachedFixture> s_cache;
+        return s_cache;
+    }
+
+public:
+    static void TearDownTestSuite() {
+        for (auto& [name, f] : fixtureCache()) {
+            if (f.piranhaSim) {
+                auto* bridge = dynamic_cast<BridgeSimulator*>(f.piranhaSim.get());
+                if (bridge) {
+                    Simulator* sim = bridge->getInternalSimulator();
+                    if (sim) sim->destroy();
+                }
+                f.piranhaSim.reset();
+            }
+            delete f.jsonEngine;
+            f.jsonEngine = nullptr;
+            if (f.generatedFixture && !f.jsonFixturePath.empty()) {
+                std::filesystem::remove(f.jsonFixturePath);
+            }
+        }
+        fixtureCache().clear();
+    }
+
+protected:
+    // Non-owning; all resources belong to the static cache above.
+    ISimulator* piranhaSimPtr_  = nullptr;
+    Engine*     piranhaEngine_  = nullptr;
+    Engine*     jsonEngine_     = nullptr;
+    std::string jsonFixturePath_;
+
+    void SetUp() override {
+        const auto& param = GetParam();
+        auto& cached = fixtureCache()[param.name];
+
+        if (!cached.attempted) {
+            cached.attempted = true;
+            try {
+                if (param.generatePresetAtRuntime) {
+                    cached.jsonFixturePath =
+                        generatePresetJsonFromScript(param.scriptPath, param.name);
+                    cached.generatedFixture = true;
+                } else {
+                    cached.jsonFixturePath = param.fixturePath;
+                }
+            } catch (const std::exception& e) {
+                FAIL() << "Failed to generate preset JSON for " << param.name
+                       << ": " << e.what();
+                return;
+            }
+
+            cached.piranhaEngine =
+                loadEngineFromScript(param.scriptPath, param.assetBase, cached.piranhaSim);
+            if (!cached.piranhaEngine) {
+                FAIL() << "Piranha could not load " << param.scriptPath;
+                return;
+            }
+
+            cached.jsonEngine = loadEngineFromJson(cached.jsonFixturePath);
+            if (!cached.jsonEngine) {
+                FAIL() << "Failed to load JSON engine from " << cached.jsonFixturePath;
+                return;
+            }
+
+            cached.valid = true;
+        }
+
+        ASSERT_TRUE(cached.valid)
+            << "Fixture '" << param.name << "' failed to load on first attempt — "
+            << "see earlier test failure for details.";
+
+        piranhaSimPtr_ = cached.piranhaSim.get();
+        piranhaEngine_ = cached.piranhaEngine;
+        jsonEngine_    = cached.jsonEngine;
+        jsonFixturePath_ = cached.jsonFixturePath;
     }
 
     void TearDown() override {
-        // jsonEngine_ is owned by us (must delete)
-        delete jsonEngine_;
-        jsonEngine_ = nullptr;
-
-        // piranhaEngine_ is owned by the ISimulator (destroyed via unique_ptr)
-        if (piranhaSim_) {
-            auto* bridge = dynamic_cast<BridgeSimulator*>(piranhaSim_.get());
-            if (bridge) {
-                Simulator* sim = bridge->getInternalSimulator();
-                if (sim) sim->destroy();
-            }
-            piranhaSim_.reset();
-        }
+        // Resources belong to the static cache; just null the non-owning ptrs.
+        piranhaSimPtr_ = nullptr;
         piranhaEngine_ = nullptr;
+        jsonEngine_    = nullptr;
+        jsonFixturePath_.clear();
     }
 };
 
@@ -1007,7 +1080,7 @@ TEST_P(ParameterIsomorphismTest, FuelParametersMatch) {
 TEST_P(ParameterIsomorphismTest, VehicleParametersMatch) {
     // Piranha engines don't always have vehicle; load via PresetLoadResult for JSON
     // For the script path, vehicle comes from the Simulator
-    auto* pBridge = dynamic_cast<BridgeSimulator*>(piranhaSim_.get());
+    auto* pBridge = dynamic_cast<BridgeSimulator*>(piranhaSimPtr_);
     ASSERT_NE(pBridge, nullptr);
     Simulator* pSim = pBridge->getInternalSimulator();
     ASSERT_NE(pSim, nullptr);
@@ -1015,7 +1088,7 @@ TEST_P(ParameterIsomorphismTest, VehicleParametersMatch) {
     ASSERT_NE(pVehicle, nullptr) << "Piranha simulator has no vehicle";
 
     // JSON path: load separately to get vehicle
-    PresetLoadResult jsonResult = PresetEngineFactory::loadFromFile(GetParam().fixturePath);
+    PresetLoadResult jsonResult = PresetEngineFactory::loadFromFile(jsonFixturePath_);
     ASSERT_TRUE(jsonResult.success()) << "Failed to reload JSON for vehicle comparison";
     ASSERT_NE(jsonResult.vehicle, nullptr);
 
@@ -1032,7 +1105,110 @@ TEST_P(ParameterIsomorphismTest, VehicleParametersMatch) {
     delete jsonResult.engine;
 }
 
-// Instantiate for Honda TRX520 and GM LS
+// 5.7: Engine operational and audio-facing parameters match
+TEST_P(ParameterIsomorphismTest, EngineOperationalParametersMatch) {
+    EXPECT_NEAR(jsonEngine_->getStarterTorque(), piranhaEngine_->getStarterTorque(), 1e-6)
+        << "Starter torque mismatch";
+    EXPECT_NEAR(jsonEngine_->getStarterSpeed(), piranhaEngine_->getStarterSpeed(), 1e-6)
+        << "Starter speed mismatch";
+    EXPECT_NEAR(jsonEngine_->getRedline(), piranhaEngine_->getRedline(), 1e-6)
+        << "Redline mismatch";
+    EXPECT_NEAR(jsonEngine_->getDynoMinSpeed(), piranhaEngine_->getDynoMinSpeed(), 1e-6)
+        << "Dyno min speed mismatch";
+    EXPECT_NEAR(jsonEngine_->getDynoMaxSpeed(), piranhaEngine_->getDynoMaxSpeed(), 1e-6)
+        << "Dyno max speed mismatch";
+    EXPECT_NEAR(jsonEngine_->getDynoHoldStep(), piranhaEngine_->getDynoHoldStep(), 1e-6)
+        << "Dyno hold step mismatch";
+
+    EXPECT_NEAR(jsonEngine_->getInitialHighFrequencyGain(), piranhaEngine_->getInitialHighFrequencyGain(), 1e-9)
+        << "Initial high frequency gain mismatch";
+    EXPECT_NEAR(jsonEngine_->getInitialNoise(), piranhaEngine_->getInitialNoise(), 1e-9)
+        << "Initial noise mismatch";
+    EXPECT_NEAR(jsonEngine_->getInitialJitter(), piranhaEngine_->getInitialJitter(), 1e-9)
+        << "Initial jitter mismatch";
+
+    IgnitionModule* pIgnition = piranhaEngine_->getIgnitionModule();
+    IgnitionModule* jIgnition = jsonEngine_->getIgnitionModule();
+    ASSERT_NE(pIgnition, nullptr);
+    ASSERT_NE(jIgnition, nullptr);
+
+    EXPECT_NEAR(jIgnition->getRevLimit(), pIgnition->getRevLimit(), 1e-6)
+        << "Ignition rev limit mismatch";
+    compareFunctions(pIgnition->getTimingCurve(), jIgnition->getTimingCurve(), "Ignition timing curve");
+}
+
+// 5.8: Transmission and exhaust-side audio parameters match
+TEST_P(ParameterIsomorphismTest, TransmissionAndExhaustParametersMatch) {
+    auto* pBridge = dynamic_cast<BridgeSimulator*>(piranhaSimPtr_);
+    ASSERT_NE(pBridge, nullptr);
+    Simulator* pSim = pBridge->getInternalSimulator();
+    ASSERT_NE(pSim, nullptr);
+
+    Transmission* pTransmission = pSim->getTransmission();
+    ASSERT_NE(pTransmission, nullptr);
+
+    PresetLoadResult jsonResult = PresetEngineFactory::loadFromFile(jsonFixturePath_);
+    ASSERT_TRUE(jsonResult.success()) << "Failed to reload JSON for transmission/exhaust comparison";
+    ASSERT_NE(jsonResult.transmission, nullptr);
+
+    EXPECT_EQ(jsonResult.transmission->getGearCount(), pTransmission->getGearCount())
+        << "Transmission gear count mismatch";
+    EXPECT_EQ(jsonResult.transmission->getGear(), pTransmission->getGear())
+        << "Transmission current gear mismatch";
+    EXPECT_NEAR(jsonResult.transmission->getClutchPressure(), pTransmission->getClutchPressure(), 1e-9)
+        << "Transmission clutch pressure mismatch";
+    EXPECT_NEAR(jsonResult.transmission->getMaxClutchTorque(), pTransmission->getMaxClutchTorque(), 1e-6)
+        << "Transmission max clutch torque mismatch";
+
+    for (int gearIndex = 0; gearIndex < pTransmission->getGearCount(); ++gearIndex) {
+        EXPECT_NEAR(jsonResult.transmission->getGearRatio(gearIndex), pTransmission->getGearRatio(gearIndex), 1e-9)
+            << "Transmission gear ratio mismatch at index " << gearIndex;
+    }
+
+    for (int bankIndex = 0; bankIndex < piranhaEngine_->getCylinderBankCount() &&
+                             bankIndex < jsonEngine_->getCylinderBankCount(); ++bankIndex) {
+        CylinderHead* pHead = piranhaEngine_->getHead(bankIndex);
+        CylinderHead* jHead = jsonEngine_->getHead(bankIndex);
+        ASSERT_NE(pHead, nullptr);
+        ASSERT_NE(jHead, nullptr);
+
+        CylinderBank* pBank = pHead->getCylinderBank();
+        CylinderBank* jBank = jHead->getCylinderBank();
+        ASSERT_NE(pBank, nullptr);
+        ASSERT_NE(jBank, nullptr);
+
+        for (int cylinderIndex = 0; cylinderIndex < pBank->getCylinderCount() &&
+                                     cylinderIndex < jBank->getCylinderCount(); ++cylinderIndex) {
+            EXPECT_NEAR(jHead->getSoundAttenuation(cylinderIndex), pHead->getSoundAttenuation(cylinderIndex), 1e-9)
+                << "Sound attenuation mismatch at bank " << bankIndex << ", cylinder " << cylinderIndex;
+            EXPECT_NEAR(jHead->getHeaderPrimaryLength(cylinderIndex), pHead->getHeaderPrimaryLength(cylinderIndex), 1e-9)
+                << "Header primary length mismatch at bank " << bankIndex << ", cylinder " << cylinderIndex;
+
+            ExhaustSystem* pExhaust = pHead->getExhaustSystem(cylinderIndex);
+            ExhaustSystem* jExhaust = jHead->getExhaustSystem(cylinderIndex);
+            ASSERT_NE(pExhaust, nullptr);
+            ASSERT_NE(jExhaust, nullptr);
+
+            EXPECT_NEAR(jExhaust->getAudioVolume(), pExhaust->getAudioVolume(), 1e-9)
+                << "Exhaust audio volume mismatch at bank " << bankIndex << ", cylinder " << cylinderIndex;
+            EXPECT_NEAR(jExhaust->getPrimaryTubeLength(), pExhaust->getPrimaryTubeLength(), 1e-9)
+                << "Exhaust primary tube length mismatch at bank " << bankIndex << ", cylinder " << cylinderIndex;
+            EXPECT_NEAR(jExhaust->getPrimaryFlowRate(), pExhaust->getPrimaryFlowRate(), 1e-9)
+                << "Exhaust primary flow rate mismatch at bank " << bankIndex << ", cylinder " << cylinderIndex;
+            EXPECT_NEAR(jExhaust->getCollectorCrossSectionArea(), pExhaust->getCollectorCrossSectionArea(), 1e-9)
+                << "Exhaust collector area mismatch at bank " << bankIndex << ", cylinder " << cylinderIndex;
+            EXPECT_NEAR(jExhaust->getOutletFlowRate(), pExhaust->getOutletFlowRate(), 1e-9)
+                << "Exhaust outlet flow rate mismatch at bank " << bankIndex << ", cylinder " << cylinderIndex;
+            EXPECT_NEAR(jExhaust->getVelocityDecay(), pExhaust->getVelocityDecay(), 1e-9)
+                << "Exhaust velocity decay mismatch at bank " << bankIndex << ", cylinder " << cylinderIndex;
+        }
+    }
+
+    delete jsonResult.engine;
+}
+
+// Instantiate for Honda, Subaru, and GM LS. These are the MR scripts we
+// currently require to remain isomorphic with their generated presets.
 INSTANTIATE_TEST_SUITE_P(
     IsomorphismPresets,
     ParameterIsomorphismTest,
@@ -1041,15 +1217,27 @@ INSTANTIATE_TEST_SUITE_P(
             "Honda_TRX520",
             TEST_ENGINE_SIM_ASSETS "/engines/atg-video-1/01_honda_trx520.mr",
             TEST_FIXTURE_DIR "/01_honda_trx520.preset.json",
-            TEST_ENGINE_SIM_ASSETS "/"
+            TEST_ENGINE_SIM_ASSETS "/",
+            true
+        },
+        IsomorphismParam{
+            "Subaru_EJ25_EH",
+            TEST_ENGINE_SIM_ASSETS "/engines/atg-video-2/01_subaru_ej25_eh.mr",
+            TEST_FIXTURE_DIR "/01_subaru_ej25_eh.preset.json",
+            TEST_ENGINE_SIM_ASSETS "/",
+            true
         },
         IsomorphismParam{
             "GM_LS",
             TEST_ENGINE_SIM_ASSETS "/engines/atg-video-2/07_gm_ls.mr",
             TEST_FIXTURE_DIR "/gm_ls.preset.json",
-            TEST_ENGINE_SIM_ASSETS "/"
+            TEST_ENGINE_SIM_ASSETS "/",
+            true
         }
-    )
+    ),
+    [](const ::testing::TestParamInfo<IsomorphismParam>& info) {
+        return info.param.name;
+    }
 );
 
 #endif // !TARGET_OS_IPHONE && ENGINE_SIM_PIRANHA_ENABLED
