@@ -1,13 +1,21 @@
-.PHONY: all build-all clean scrub help remove-orphans check test presets clean-presets
+.PHONY: all build-all clean scrub help remove-orphans check test test-fast test-quick testquick presets clean-presets
+.PHONY: all build-all clean scrub help remove-orphans check test test-fast test-quick testquick presets clean-presets clean-test-fixtures
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
+CTEST_VERBOSE ?= 0
+CTEST_QUIET ?= 1
 BRIDGE_TEST_CMAKE_FLAGS := \
 	-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 	-DBUILD_PRESET_ENGINE_TESTS=ON \
 	-DBUILD_IOS_ADAPTER_TESTS=ON \
 	-DBUILD_PHASE0_SPIKES=OFF
 BRIDGE_TEST_EXCLUDE := (_NOT_BUILT|_spike$$)
+# Six expensive groups excluded by test-fast/test-quick only.
+BRIDGE_TEST_SLOW_GROUPS_EXCLUDE := (PresetGoldenFileTest|ParameterIsomorphismTest\.EngineTopologyMatches|ParameterIsomorphismTest\.PortFlowFunctionsMatch|ParameterIsomorphismTest\.CamshaftLobeProfilesMatch|ParameterIsomorphismTest\.FuelParametersMatch|ParameterIsomorphismTest\.VehicleParametersMatch)
+# Full quick-mode exclusion: all parameter isomorphism + golden audio regressions.
+BRIDGE_TEST_QUICK_GROUPS_EXCLUDE := (PresetGoldenFileTest|ParameterIsomorphismTest)
+CTEST_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
 # Default to parallel build using available CPU cores
 MAKEFLAGS += -j$(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
@@ -25,6 +33,10 @@ build-all:
 	@cd $(BUILD_DIR) && cmake -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) ..
 	$(MAKE) -C $(BUILD_DIR)
 
+$(BUILD_DIR)/Makefile:
+	@mkdir -p $(BUILD_DIR)
+	@cd $(BUILD_DIR) && cmake $(BRIDGE_TEST_CMAKE_FLAGS) ..
+
 # Remove orphaned binaries, symlinks, and stray cmake junk from source dirs
 remove-orphans:
 	@rm -f *.dylib libenginesim*.dylib 2>/dev/null || true
@@ -38,22 +50,77 @@ remove-orphans:
 	@find . -path ./build -prune -o -name "_deps" -type d -print -exec rm -rf {} + 2>/dev/null || true
 
 # Clean build artifacts but keep CMake config (cascades to engine-sim)
-clean: remove-orphans clean-presets
+clean: remove-orphans clean-presets clean-test-fixtures
 	@if [ -d $(BUILD_DIR) ]; then $(MAKE) -C $(BUILD_DIR) clean 2>/dev/null || true; fi
 	@if [ -d $(BUILD_DIR)/engine-sim ]; then $(MAKE) -C $(BUILD_DIR)/engine-sim clean 2>/dev/null || true; fi
+	@rm -rf tmp
 
 # Full clean - remove entire build directory (superset of clean)
 scrub: clean
 	@echo "Scrubbing bridge build..."
-	@rm -rf $(BUILD_DIR) preset
+	@rm -rf $(BUILD_DIR) preset tmp
 	@$(MAKE) remove-orphans
 
+# Remove runtime-generated preset fixtures so next test run regenerates them.
+# Needed if .mr source scripts change.
+clean-test-fixtures:
+	@echo "Removing cached preset fixtures from $(BUILD_DIR)/test/runtime-fixtures..."
+	@rm -rf $(BUILD_DIR)/test/runtime-fixtures
+	@echo "Done."
+
 # Run all bridge tests (build first if needed)
-test:
-	@mkdir -p $(BUILD_DIR)
-	@cd $(BUILD_DIR) && cmake $(BRIDGE_TEST_CMAKE_FLAGS) ..
+test: $(BUILD_DIR)/Makefile
 	@$(MAKE) -C $(BUILD_DIR)
-	@cd $(BUILD_DIR) && ctest -V --output-on-failure -E '$(BRIDGE_TEST_EXCLUDE)'
+	@if cd $(BUILD_DIR) && ctest $(if $(filter 1,$(CTEST_VERBOSE)),-V,$(if $(filter 1,$(CTEST_QUIET)),-Q,)) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)'; then \
+		echo "=== [engine-sim-bridge] SUMMARY: PASS (full) ==="; \
+		printf '\033[0;32m=== [engine-sim-bridge] RESULT: PASSED ===\033[0m\n'; \
+	else \
+		echo "=== [engine-sim-bridge] SUMMARY: FAIL (full) ==="; \
+		printf '\033[0;31m=== [engine-sim-bridge] RESULT: FAILED ===\033[0m\n'; \
+		exit 1; \
+	fi
+
+# Fast inner-loop run: excludes six expensive realtime/isomorphism groups.
+test-fast: $(BUILD_DIR)/Makefile
+	@$(MAKE) -C $(BUILD_DIR)
+	@if cd $(BUILD_DIR) && ctest $(if $(filter 1,$(CTEST_VERBOSE)),-V,$(if $(filter 1,$(CTEST_QUIET)),-Q,)) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)|$(BRIDGE_TEST_SLOW_GROUPS_EXCLUDE)'; then \
+		echo "=== [engine-sim-bridge] SUMMARY: PASS (fast) ==="; \
+		printf '\033[0;32m=== [engine-sim-bridge] RESULT: PASSED ===\033[0m\n'; \
+	else \
+		echo "=== [engine-sim-bridge] SUMMARY: FAIL (fast) ==="; \
+		printf '\033[0;31m=== [engine-sim-bridge] RESULT: FAILED ===\033[0m\n'; \
+		exit 1; \
+	fi
+
+# Deep tier: run the long-running preset golden-audio regressions only.
+test-deep: $(BUILD_DIR)/Makefile
+	@$(MAKE) -C $(BUILD_DIR)
+	@if cd $(BUILD_DIR) && ctest $(if $(filter 1,$(CTEST_VERBOSE)),-V,$(if $(filter 1,$(CTEST_QUIET)),-Q,)) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -R 'PresetGoldenFileTest'; then \
+		echo "=== [engine-sim-bridge] SUMMARY: PASS (deep) ==="; \
+		printf '\033[0;32m=== [engine-sim-bridge] RESULT: PASSED ===\033[0m\n'; \
+	else \
+		echo "=== [engine-sim-bridge] SUMMARY: FAIL (deep) ==="; \
+		printf '\033[0;31m=== [engine-sim-bridge] RESULT: FAILED ===\033[0m\n'; \
+		exit 1; \
+	fi
+
+# Quick inner-loop run: skip all parameter isomorphism and golden-audio groups.
+test-quick:
+	@$(MAKE) $(BUILD_DIR)/Makefile
+	@$(MAKE) -C $(BUILD_DIR)
+	@if cd $(BUILD_DIR) && ctest $(if $(filter 1,$(CTEST_VERBOSE)),-V,$(if $(filter 1,$(CTEST_QUIET)),-Q,)) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)|$(BRIDGE_TEST_QUICK_GROUPS_EXCLUDE)'; then \
+		echo "=== [engine-sim-bridge] SUMMARY: PASS (quick) ==="; \
+		printf '\033[0;32m=== [engine-sim-bridge] RESULT: PASSED ===\033[0m\n'; \
+	else \
+		echo "=== [engine-sim-bridge] SUMMARY: FAIL (quick) ==="; \
+		printf '\033[0;31m=== [engine-sim-bridge] RESULT: FAILED ===\033[0m\n'; \
+		exit 1; \
+	fi
+
+testquick: test-quick
+
+# Explicit long-running tier name; same coverage as full test.
+testdeep: test-deep
 
 check: test
 
@@ -94,8 +161,11 @@ help:
 	@echo "Targets:"
 	@echo "  make          - Build everything (creates build dir if needed)"
 	@echo "  make presets  - Compile .mr wrappers to JSON presets"
-	@echo "  make test     - Build and run all bridge tests"
-	@echo "  make clean    - Clean build artifacts (fast rebuild)"
+	@echo "  make test      - Build and run full bridge test suite"
+	@echo "  make test-deep - Run bridge preset golden-audio regressions"
+	@echo "  make test-fast - Run bridge tests excluding 6 heavy groups"
+	@echo "  make test-quick/testquick - Synonyms for test-fast"
+	@echo "  make clean     - Clean build artifacts (fast rebuild)"
 	@echo "  make scrub    - Remove entire build directory (full clean)"
 	@echo "  make help     - Show this help"
 	@echo ""
