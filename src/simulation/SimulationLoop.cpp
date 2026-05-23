@@ -254,20 +254,24 @@ void applyDynoControl(Simulator* rawSim, const input::EngineInput& engineInput, 
     lastScale = engineInput.dynoTorqueScale;
 }
 
-// Apply gear changes from keyboard input ([/] keys). Clamps at gear 0 (neutral).
-void applyGearChange(Simulator* rawSim, int gearDelta, ILogging* logger) {
-    if (!rawSim || gearDelta == 0) return;
-    if (!rawSim->getTransmission()) return;
+// Apply gear changes from input provider gearDelta.
+void applyGearChange(BridgeSimulator* bridgeSim, int gearDelta, ILogging* logger) {
+    if (!bridgeSim || gearDelta == 0) return;
+
+    Simulator* rawSim = bridgeSim->getInternalSimulator();
+    if (!rawSim || !rawSim->getTransmission()) {
+        logger->warning(LogMask::BRIDGE, "Gear change requested but transmission unavailable");
+        return;
+    }
 
     int currentGear = rawSim->getTransmission()->getGear();
-    int newGear = currentGear + gearDelta;
-    int gearCount = rawSim->getTransmission()->getGearCount();
-    if (newGear >= -1 && newGear <= gearCount) {
-        rawSim->getTransmission()->changeGear(newGear);
-        rawSim->getTransmission()->setClutchPressure(newGear > 0 ? 1.0 : 0.0);
+    if (bridgeSim->changeGear(gearDelta)) {
+        int newGear = rawSim->getTransmission()->getGear();
         const char* label = newGear == -1 ? "PARK" : (newGear == 0 ? "NEUTRAL" : "GEAR");
         logger->info(LogMask::BRIDGE, "Gear: %d -> %d (%s, clutch %s)", currentGear, newGear,
                      label, newGear > 0 ? "LOCKED" : "FREE");
+    } else {
+        logger->warning(LogMask::BRIDGE, "Gear change rejected: %d %+d", currentGear, gearDelta);
     }
 }
 
@@ -332,8 +336,8 @@ int runUnifiedAudioLoop(
                 applyDynoControl(rawSim, engineInput, lastDynoTorqueScale);
             }
 
-            // Apply gear changes ([/] keys in keyboard provider)
-            applyGearChange(rawSim, engineInput.gearDelta, logger);
+            // Apply gear changes from input provider
+            applyGearChange(bridgeSim, engineInput.gearDelta, logger);
         } else {
             if (currentTime >= config.duration) {
                 break;

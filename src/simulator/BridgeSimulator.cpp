@@ -151,6 +151,23 @@ void BridgeSimulator::setStarterMotor(bool on) {
     m_simulator->m_starterMotor.m_enabled = on;
 }
 
+bool BridgeSimulator::changeGear(int gearDelta) {
+    if (!m_simulator || gearDelta == 0) return false;
+
+    auto* trans = m_simulator->getTransmission();
+    if (!trans) return false;
+
+    int currentGear = trans->getGear();
+    int newGear = currentGear + gearDelta;
+    int gearCount = trans->getGearCount();
+
+    if (newGear < -1 || newGear >= gearCount) return false;
+
+    trans->changeGear(newGear);
+    trans->setClutchPressure(newGear > 0 ? 1.0 : 0.0);
+    return true;
+}
+
 // ============================================================================
 // Private Helpers
 // ============================================================================

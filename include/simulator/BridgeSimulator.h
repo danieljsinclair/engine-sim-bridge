@@ -45,6 +45,9 @@ public:
     void setIgnition(bool on) override;
     void setStarterMotor(bool on) override;
 
+    // Gear control — delegates to internal Simulator's Transmission
+    bool changeGear(int gearDelta);
+
     // Set display name from script path (called by factory for PistonEngine mode)
     void setNameFromScript(const std::string& scriptPath);
 
