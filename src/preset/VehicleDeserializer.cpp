@@ -10,12 +10,36 @@ Vehicle* VehicleDeserializer::deserialize(const JsonValue& json, const std::stri
     const std::string ctx = context.empty() ? "vehicle" : context;
 
     Vehicle::Parameters params;
-    params.mass = json["mass"].numberOr(0);
-    params.dragCoefficient = json["dragCoefficient"].numberOr(0);
-    params.crossSectionArea = json["crossSectionArea"].numberOr(0);
-    params.diffRatio = json["diffRatio"].numberOr(0);
-    params.tireRadius = json["tireRadius"].numberOr(0);
-    params.rollingResistance = json["rollingResistance"].numberOr(0);
+
+    if (!json.has("mass")) {
+        throw std::runtime_error("Missing required field 'mass' in " + ctx);
+    }
+    params.mass = json["mass"].asNumber();
+
+    if (!json.has("dragCoefficient")) {
+        throw std::runtime_error("Missing required field 'dragCoefficient' in " + ctx);
+    }
+    params.dragCoefficient = json["dragCoefficient"].asNumber();
+
+    if (!json.has("crossSectionArea")) {
+        throw std::runtime_error("Missing required field 'crossSectionArea' in " + ctx);
+    }
+    params.crossSectionArea = json["crossSectionArea"].asNumber();
+
+    if (!json.has("diffRatio")) {
+        throw std::runtime_error("Missing required field 'diffRatio' in " + ctx);
+    }
+    params.diffRatio = json["diffRatio"].asNumber();
+
+    if (!json.has("tireRadius")) {
+        throw std::runtime_error("Missing required field 'tireRadius' in " + ctx);
+    }
+    params.tireRadius = json["tireRadius"].asNumber();
+
+    if (!json.has("rollingResistance")) {
+        throw std::runtime_error("Missing required field 'rollingResistance' in " + ctx);
+    }
+    params.rollingResistance = json["rollingResistance"].asNumber();
 
     Vehicle* vehicle = new Vehicle();
     vehicle->initialize(params);

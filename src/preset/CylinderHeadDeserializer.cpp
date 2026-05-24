@@ -81,12 +81,33 @@ void CylinderHeadDeserializer::deserialize(const JsonValue& json, CylinderHead* 
 
     CylinderHead::Parameters hParams;
     hParams.Bank = bank;
-    hParams.CombustionChamberVolume = json["combustionChamberVolume"].numberOr(0);
-    hParams.IntakeRunnerVolume = json["intakeRunnerVolume"].numberOr(0);
-    hParams.IntakeRunnerCrossSectionArea = json["intakeRunnerCrossSectionArea"].numberOr(0);
-    hParams.ExhaustRunnerVolume = json["exhaustRunnerVolume"].numberOr(0);
-    hParams.ExhaustRunnerCrossSectionArea = json["exhaustRunnerCrossSectionArea"].numberOr(0);
-    hParams.FlipDisplay = json["flipDisplay"].boolOr(false);
+
+    if (!json.has("combustionChamberVolume")) {
+        throw std::runtime_error("Missing required field 'combustionChamberVolume' in " + ctx);
+    }
+    hParams.CombustionChamberVolume = json["combustionChamberVolume"].asNumber();
+
+    if (!json.has("intakeRunnerVolume")) {
+        throw std::runtime_error("Missing required field 'intakeRunnerVolume' in " + ctx);
+    }
+    hParams.IntakeRunnerVolume = json["intakeRunnerVolume"].asNumber();
+
+    if (!json.has("intakeRunnerCrossSectionArea")) {
+        throw std::runtime_error("Missing required field 'intakeRunnerCrossSectionArea' in " + ctx);
+    }
+    hParams.IntakeRunnerCrossSectionArea = json["intakeRunnerCrossSectionArea"].asNumber();
+
+    if (!json.has("exhaustRunnerVolume")) {
+        throw std::runtime_error("Missing required field 'exhaustRunnerVolume' in " + ctx);
+    }
+    hParams.ExhaustRunnerVolume = json["exhaustRunnerVolume"].asNumber();
+
+    if (!json.has("exhaustRunnerCrossSectionArea")) {
+        throw std::runtime_error("Missing required field 'exhaustRunnerCrossSectionArea' in " + ctx);
+    }
+    hParams.ExhaustRunnerCrossSectionArea = json["exhaustRunnerCrossSectionArea"].asNumber();
+
+    hParams.FlipDisplay = json.has("flipDisplay") ? json["flipDisplay"].asBool() : false;
     hParams.IntakePortFlow = intakePortFlow;
     hParams.ExhaustPortFlow = exhaustPortFlow;
     hParams.Valvetrain = valvetrain;
@@ -112,10 +133,16 @@ void CylinderHeadDeserializer::deserialize(const JsonValue& json, CylinderHead* 
     if (headCyls.isArray()) {
         for (size_t ci = 0; ci < headCyls.size(); ci++) {
             const JsonValue& hc = headCyls[ci];
+            if (!hc.has("soundAttenuation")) {
+                throw std::runtime_error("Missing required field 'soundAttenuation' in " + ctx + ".cylinders[" + std::to_string(ci) + "]");
+            }
             head->setSoundAttenuation(static_cast<int>(ci),
-                hc["soundAttenuation"].numberOr(1.0));
+                hc["soundAttenuation"].asNumber());
+            if (!hc.has("headerPrimaryLength")) {
+                throw std::runtime_error("Missing required field 'headerPrimaryLength' in " + ctx + ".cylinders[" + std::to_string(ci) + "]");
+            }
             head->setHeaderPrimaryLength(static_cast<int>(ci),
-                hc["headerPrimaryLength"].numberOr(0));
+                hc["headerPrimaryLength"].asNumber());
         }
     }
 }

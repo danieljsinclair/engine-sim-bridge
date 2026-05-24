@@ -21,13 +21,34 @@ void CrankshaftDeserializer::deserialize(const JsonValue& json, Crankshaft* cs, 
 
     Crankshaft::Parameters params;
     params.mass = json["mass"].asNumber();
-    params.flywheelMass = json["flywheelMass"].numberOr(0);
+
+    if (!json.has("flywheelMass")) {
+        throw std::runtime_error("Missing required field 'flywheelMass' in " + ctx);
+    }
+    params.flywheelMass = json["flywheelMass"].asNumber();
+
     params.momentOfInertia = json["momentOfInertia"].asNumber();
     params.crankThrow = json["crankThrow"].asNumber();
-    params.pos_x = json["posX"].numberOr(0);
-    params.pos_y = json["posY"].numberOr(0);
-    params.tdc = json["tdc"].numberOr(0);
-    params.frictionTorque = json["frictionTorque"].numberOr(0);
+
+    if (!json.has("posX")) {
+        throw std::runtime_error("Missing required field 'posX' in " + ctx);
+    }
+    params.pos_x = json["posX"].asNumber();
+
+    if (!json.has("posY")) {
+        throw std::runtime_error("Missing required field 'posY' in " + ctx);
+    }
+    params.pos_y = json["posY"].asNumber();
+
+    if (!json.has("tdc")) {
+        throw std::runtime_error("Missing required field 'tdc' in " + ctx);
+    }
+    params.tdc = json["tdc"].asNumber();
+
+    if (!json.has("frictionTorque")) {
+        throw std::runtime_error("Missing required field 'frictionTorque' in " + ctx);
+    }
+    params.frictionTorque = json["frictionTorque"].asNumber();
 
     const JsonValue& journals = json["rodJournals"];
     params.rodJournals = journals.isArray() ? static_cast<int>(journals.size()) : 0;

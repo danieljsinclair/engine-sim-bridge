@@ -17,6 +17,8 @@
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
+#include <filesystem>
+#include <unistd.h>
 #include <stdexcept>
 #include <chrono>
 #include <string>
@@ -1238,6 +1240,295 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<IsomorphismParam>& info) {
         return info.param.name;
     }
+);
+
+#endif // !TARGET_OS_IPHONE && ENGINE_SIM_PIRANHA_ENABLED
+
+// ============================================================================
+// Category 6: Round-Trip Serialization Isomorphism
+//
+// macOS + Piranha only. Loads an engine via both .mr and JSON paths,
+// serializes both to JSON via PresetSerializer, then compares the outputs.
+// This catches ANY serialization gap - if a field differs between .mr-loaded
+// and JSON-loaded engines, the serialized outputs will differ.
+// ============================================================================
+
+#if !TARGET_OS_IPHONE && defined(ENGINE_SIM_PIRANHA_ENABLED)
+
+#include "common/PresetSerializer.h"
+#include "common/JsonParser.h"
+
+namespace {
+    // Test parameter: maps engine name to script path and preset JSON path
+    struct RoundTripParam {
+        std::string name;
+        std::string scriptPath;       // Relative to engine-sim assets/
+        std::string presetJsonPath;   // Relative to preset/ directory
+    };
+
+    // Recursive JSON comparison with tolerance for numbers
+    struct JsonComparisonResult {
+        bool matched;
+        std::string path;
+        std::string message;
+    };
+
+    // Compare two JSON values with tolerance for numbers
+    JsonComparisonResult compareJsonValues(
+        const json::JsonValue& a,
+        const json::JsonValue& b,
+        const std::string& path,
+        double relTolerance = 1e-6
+    ) {
+        // Skip metadata fields that are expected to differ
+        if (path == "/presetName" || path == "/sourceScript") {
+            return {true, "", ""};
+        }
+
+        // Handle null values
+        if (a.isNull() && b.isNull()) return {true, "", ""};
+        if (a.isNull() || b.isNull()) {
+            return {false, path, "One value is null, the other is not"};
+        }
+
+        // Handle types
+        if (a.isNumber() && b.isNumber()) {
+            double av = a.asNumber();
+            double bv = b.asNumber();
+            // Use relative tolerance for numbers
+            double diff = std::abs(av - bv);
+            double maxVal = std::max(std::abs(av), std::abs(bv));
+            double tolerance = relTolerance * std::max(maxVal, 1.0);
+            if (diff > tolerance) {
+                return {false, path,
+                    "Number mismatch: " + std::to_string(av) + " vs " + std::to_string(bv)};
+            }
+            return {true, "", ""};
+        }
+        if (a.isString() && b.isString()) {
+            if (a.asString() != b.asString()) {
+                return {false, path,
+                    "String mismatch: '" + a.asString() + "' vs '" + b.asString() + "'"};
+            }
+            return {true, "", ""};
+        }
+        if (a.isBool() && b.isBool()) {
+            if (a.asBool() != b.asBool()) {
+                return {false, path,
+                    std::string("Bool mismatch: ") + (a.asBool() ? "true" : "false") +
+                    " vs " + (b.asBool() ? "true" : "false")};
+            }
+            return {true, "", ""};
+        }
+        if (a.isArray() && b.isArray()) {
+            size_t aSize = a.size();
+            size_t bSize = b.size();
+            if (aSize != bSize) {
+                return {false, path,
+                    "Array size mismatch: " + std::to_string(aSize) +
+                    " vs " + std::to_string(bSize)};
+            }
+            for (size_t i = 0; i < aSize; i++) {
+                std::string elemPath = path + "[" + std::to_string(i) + "]";
+                auto result = compareJsonValues(a[i], b[i], elemPath, relTolerance);
+                if (!result.matched) return result;
+            }
+            return {true, "", ""};
+        }
+        if (a.isObject() && b.isObject()) {
+            // Collect all keys from both objects
+            std::vector<std::string> aKeys, bKeys;
+            const auto& aObj = a.asObject();
+            const auto& bObj = b.asObject();
+            for (const auto& kv : aObj) {
+                aKeys.push_back(kv.first);
+            }
+            for (const auto& kv : bObj) {
+                bKeys.push_back(kv.first);
+            }
+            // Sort for comparison
+            std::sort(aKeys.begin(), aKeys.end());
+            std::sort(bKeys.begin(), bKeys.end());
+            // Check key count
+            if (aKeys.size() != bKeys.size()) {
+                return {false, path,
+                    "Object key count mismatch: " + std::to_string(aKeys.size()) +
+                    " vs " + std::to_string(bKeys.size())};
+            }
+            // Compare keys and values
+            for (size_t i = 0; i < aKeys.size(); i++) {
+                if (aKeys[i] != bKeys[i]) {
+                    return {false, path,
+                        "Key mismatch at position " + std::to_string(i) + ": '" +
+                        aKeys[i] + "' vs '" + bKeys[i] + "'"};
+                }
+                std::string keyPath = path + "/" + aKeys[i];
+                auto result = compareJsonValues(aObj.at(aKeys[i]), bObj.at(bKeys[i]), keyPath, relTolerance);
+                if (!result.matched) return result;
+            }
+            return {true, "", ""};
+        }
+        return {false, path, "Type mismatch"};
+    }
+
+    // Compare two JSON strings
+    JsonComparisonResult compareJsonStrings(
+        const std::string& jsonA,
+        const std::string& jsonB,
+        double relTolerance = 1e-6
+    ) {
+        auto rootA = json::parse(jsonA);
+        auto rootB = json::parse(jsonB);
+
+        auto result = compareJsonValues(rootA, rootB, "/", relTolerance);
+
+        // Skip derived/metadata fields that differ between .mr and JSON paths
+        static const std::vector<std::string> skipSuffixes = {
+            "/presetName",       // metadata
+            "/sourceScript",     // metadata
+        };
+
+        if (!result.matched) {
+            for (const auto& suffix : skipSuffixes) {
+                if (result.path.size() >= suffix.size() &&
+                    result.path.compare(result.path.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                    return {true, "", ""};
+                }
+            }
+        }
+        return result;
+    }
+}
+
+class RoundTripIsomorphismTest : public ::testing::Test,
+                                  public ::testing::WithParamInterface<RoundTripParam> {
+protected:
+    std::unique_ptr<ISimulator> piranhaSim_;
+    Engine* piranhaEngine_ = nullptr;
+    Vehicle* piranhaVehicle_ = nullptr;
+    Transmission* piranhaTrans_ = nullptr;
+    Engine* jsonEngine_ = nullptr;
+    Vehicle* jsonVehicle_ = nullptr;
+    Transmission* jsonTrans_ = nullptr;
+
+    void SetUp() override {
+        auto param = GetParam();
+
+        // Load .mr via Piranha
+        ISimulatorConfig config;
+        config.sampleRate = ISO_SAMPLE_RATE;
+        config.simulationFrequency = 10000;
+
+        // Piranha resolves imports (es/engine_sim.mr) relative to CWD.
+        // The engine-sim root is the parent of assets/ — save/restore CWD.
+        std::filesystem::path savedCwd = std::filesystem::current_path();
+        std::filesystem::path engineSimRoot = std::filesystem::path(TEST_ENGINE_SIM_ASSETS).parent_path();
+
+        try {
+            std::filesystem::current_path(engineSimRoot);
+
+            // Piranha scripts define main() but don't call it.
+            // Create a wrapper that imports and calls main(), like preset_compiler does.
+            std::filesystem::path assetsDir = engineSimRoot / "assets";
+            std::string wrapperName = "_iso_test_wrapper_" + std::to_string(getpid()) + ".mr";
+            std::filesystem::path wrapperPath = assetsDir / wrapperName;
+            {
+                std::ofstream wrapper(wrapperPath);
+                wrapper << "import \"engine_sim.mr\"\n";
+                wrapper << "import \"" << param.scriptPath << "\"\n";
+                wrapper << "main()\n";
+            }
+
+            piranhaSim_ = SimulatorFactory::create(
+                SimulatorType::PistonEngine,
+                wrapperPath.string(),
+                TEST_ENGINE_SIM_ASSETS "/",
+                config);
+
+            std::filesystem::remove(wrapperPath);
+            std::filesystem::current_path(savedCwd);
+        } catch (const std::exception& e) {
+            std::filesystem::current_path(savedCwd);
+            GTEST_SKIP() << "Piranha could not load " << param.scriptPath << ": " << e.what();
+        }
+
+        if (!piranhaSim_) {
+            GTEST_SKIP() << "SimulatorFactory::create returned null for " << param.scriptPath
+                << " (CWD=" << std::filesystem::current_path() << ")";
+        }
+
+        auto* bridge = dynamic_cast<BridgeSimulator*>(piranhaSim_.get());
+        if (!bridge) {
+            GTEST_SKIP() << "Could not get bridge simulator";
+        }
+
+        Simulator* sim = bridge->getInternalSimulator();
+        if (!sim) {
+            GTEST_SKIP() << "Could not get internal simulator";
+        }
+
+        SimulatorInitHelpers::initializeConvolutionFilters(sim);
+        piranhaEngine_ = sim->getEngine();
+        piranhaVehicle_ = sim->getVehicle();
+        piranhaTrans_ = sim->getTransmission();
+
+        // Load JSON via PresetEngineFactory
+        std::string presetPath = TEST_PRESET_DIR "/" + param.presetJsonPath;
+        PresetLoadResult jsonResult = PresetEngineFactory::loadFromFile(presetPath);
+        if (!jsonResult.success()) {
+            GTEST_SKIP() << "Could not load JSON preset: " << jsonResult.error;
+        }
+        jsonEngine_ = jsonResult.engine;
+        jsonVehicle_ = jsonResult.vehicle;
+        jsonTrans_ = jsonResult.transmission;
+    }
+
+    void TearDown() override {
+        delete jsonEngine_;
+        jsonEngine_ = nullptr;
+
+        if (piranhaSim_) {
+            auto* bridge = dynamic_cast<BridgeSimulator*>(piranhaSim_.get());
+            if (bridge) {
+                Simulator* sim = bridge->getInternalSimulator();
+                if (sim) sim->destroy();
+            }
+            piranhaSim_.reset();
+        }
+        piranhaEngine_ = nullptr;
+    }
+};
+
+// 6.1: Round-trip serialization produces identical JSON for both paths
+TEST_P(RoundTripIsomorphismTest, RoundTripSerializationProducesIdenticalJson) {
+    // Serialize both engines to JSON
+    std::string jsonA = PresetSerializer::serializeEngineToJson(
+        piranhaEngine_, piranhaVehicle_, piranhaTrans_);
+    std::string jsonB = PresetSerializer::serializeEngineToJson(
+        jsonEngine_, jsonVehicle_, jsonTrans_);
+
+    // Compare the JSON strings
+    auto result = compareJsonStrings(jsonA, jsonB);
+    EXPECT_TRUE(result.matched)
+        << "Round-trip serialization mismatch at path '" << result.path << "'\n"
+        << "Message: " << result.message << "\n"
+        << "Engine: " << GetParam().name;
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AllEngines,
+    RoundTripIsomorphismTest,
+    ::testing::Values(
+        RoundTripParam{"GM_LS", "engines/atg-video-2/07_gm_ls.mr", "v8_gm_ls.json"},
+        RoundTripParam{"Ferrari_F136", "engines/atg-video-2/08_ferrari_f136_v8.mr", "ferrari_f136.json"},
+        RoundTripParam{"Ferrari_412_T2", "engines/atg-video-2/12_ferrari_412_t2.mr", "ferrari_412_t2.json"},
+        RoundTripParam{"2JZ", "engines/atg-video-2/03_2jz.mr", "2jz.json"},
+        RoundTripParam{"LFA_V10", "engines/atg-video-2/10_lfa_v10.mr", "lfa_v10.json"},
+        RoundTripParam{"Radial_9", "engines/atg-video-2/09_radial_9.mr", "radial_9.json"},
+        RoundTripParam{"V6_60", "engines/atg-video-2/04_60_degree_v6.mr", "v6_60_degree.json"},
+        RoundTripParam{"V6_Even", "engines/atg-video-2/06_even_fire_v6.mr", "v6_even_fire.json"},
+        RoundTripParam{"V6_Odd", "engines/atg-video-2/05_odd_fire_v6.mr", "v6_odd_fire.json"}
+    )
 );
 
 #endif // !TARGET_OS_IPHONE && ENGINE_SIM_PIRANHA_ENABLED

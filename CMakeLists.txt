@@ -74,6 +74,7 @@ set(BRIDGE_SOURCES
     src/common/ConsoleLogger.cpp
     src/common/CircularBuffer.cpp
     src/common/JsonParser.cpp
+    src/common/PresetSerializer.cpp
     # Preset engine factory (JSON-based, for preset compiler output)
     src/simulator/PresetEngineFactory.cpp
     # Preset deserializers (pure JSON -> engine object graph)
@@ -216,7 +217,10 @@ endif()
 # Piranha/Boost required -- not available on iOS
 # -----------------------------------------------------------------------------
 if(NOT IOS AND TARGET engine-sim-script-interpreter)
-    add_executable(engine-sim-preset-compiler tools/preset_compiler.cpp)
+    add_executable(engine-sim-preset-compiler
+        tools/preset_compiler.cpp
+        src/common/PresetSerializer.cpp
+    )
     target_include_directories(engine-sim-preset-compiler
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -341,7 +345,7 @@ if(BUILD_BRIDGE_TESTS)
         target_compile_definitions(preset_isomorphism_tests PRIVATE
             TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
             TEST_ENGINE_SIM_ASSETS="${ENGINE_SIM_PATH}/assets"
-            TEST_ENGINE_SIM_ROOT="${ENGINE_SIM_PATH}"
+            TEST_PRESET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/preset"
         )
         if(TARGET engine-sim-script-interpreter)
             target_compile_definitions(preset_isomorphism_tests PRIVATE

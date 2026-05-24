@@ -6,8 +6,6 @@
 #include "piston.h"
 #include "connecting_rod.h"
 #include "combustion_chamber.h"
-#include "fuel.h"
-#include "units.h"
 #include "direct_throttle_linkage.h"
 
 #include "preset/CrankshaftDeserializer.h"
@@ -18,7 +16,7 @@
 #include "preset/IgnitionModuleDeserializer.h"
 #include "preset/CylinderHeadDeserializer.h"
 #include "preset/ConnectingRodDeserializer.h"
-#include "simulator/EnginePresetsHelper.h"
+#include "preset/FunctionDeserializer.h"
 
 #include <stdexcept>
 #include <memory>
@@ -27,24 +25,55 @@ using json::JsonValue;
 
 Engine::Parameters EngineDeserializer::readParams(const JsonValue& json, const std::string& ctx) {
     Engine::Parameters params;
-    params.name = json["name"].stringOr("Unnamed Preset");
-    params.cylinderBanks = json["cylinderBankCount"].intOr(0);
-    params.cylinderCount = json["cylinderCount"].intOr(0);
-    params.crankshaftCount = json["crankshaftCount"].intOr(0);
-    params.exhaustSystemCount = json["exhaustSystemCount"].intOr(0);
-    params.intakeCount = json["intakeCount"].intOr(0);
-    params.starterTorque = json["starterTorque"].numberOr(0);
-    params.starterSpeed = json["starterSpeed"].numberOr(0);
-    params.redline = json["redline"].numberOr(0);
-    params.dynoMinSpeed = json["dynoMinSpeed"].numberOr(0);
-    params.dynoMaxSpeed = json["dynoMaxSpeed"].numberOr(0);
-    params.dynoHoldStep = json["dynoHoldStep"].numberOr(0);
+
+    if (!json.has("name")) {
+        throw std::runtime_error("Missing required field 'name' in " + ctx);
+    }
+    params.name = json["name"].asString();
+
+    if (!json.has("cylinderBankCount")) {
+        throw std::runtime_error("Missing required field 'cylinderBankCount' in " + ctx);
+    }
+    params.cylinderBanks = json["cylinderBankCount"].asInt();
+
+    if (!json.has("cylinderCount")) {
+        throw std::runtime_error("Missing required field 'cylinderCount' in " + ctx);
+    }
+    params.cylinderCount = json["cylinderCount"].asInt();
+
+    if (!json.has("crankshaftCount")) {
+        throw std::runtime_error("Missing required field 'crankshaftCount' in " + ctx);
+    }
+    params.crankshaftCount = json["crankshaftCount"].asInt();
+
+    if (!json.has("exhaustSystemCount")) {
+        throw std::runtime_error("Missing required field 'exhaustSystemCount' in " + ctx);
+    }
+    params.exhaustSystemCount = json["exhaustSystemCount"].asInt();
+
+    if (!json.has("intakeCount")) {
+        throw std::runtime_error("Missing required field 'intakeCount' in " + ctx);
+    }
+    params.intakeCount = json["intakeCount"].asInt();
 
     auto requireField = [&](const char* field) {
         if (!json.has(field)) {
             throw std::runtime_error(std::string("Missing required field '") + field + "' in " + ctx);
         }
     };
+
+    requireField("starterTorque");
+    params.starterTorque = json["starterTorque"].asNumber();
+    requireField("starterSpeed");
+    params.starterSpeed = json["starterSpeed"].asNumber();
+    requireField("redline");
+    params.redline = json["redline"].asNumber();
+    requireField("dynoMinSpeed");
+    params.dynoMinSpeed = json["dynoMinSpeed"].asNumber();
+    requireField("dynoMaxSpeed");
+    params.dynoMaxSpeed = json["dynoMaxSpeed"].asNumber();
+    requireField("dynoHoldStep");
+    params.dynoHoldStep = json["dynoHoldStep"].asNumber();
     requireField("simulationFrequency");
     params.initialSimulationFrequency = json["simulationFrequency"].asNumber();
     requireField("initialHighFrequencyGain");
@@ -138,11 +167,35 @@ void EngineDeserializer::deserializeCylinders(const JsonValue& bankJson, Cylinde
         pParams.Bank = bank;
         pParams.Rod = rod;
         pParams.CylinderIndex = static_cast<int>(ci);
-        pParams.BlowbyFlowCoefficient = cylJson["blowbyK"].numberOr(0);
-        pParams.CompressionHeight = cylJson["compressionHeight"].numberOr(0);
-        pParams.WristPinPosition = cylJson["wristPinPosition"].numberOr(0);
-        pParams.Displacement = cylJson["displacement"].numberOr(0);
-        pParams.mass = cylJson["pistonMass"].numberOr(0);
+
+        const std::string cylCtx = ctx + ".cylinderBanks[" + std::to_string(bankIndex) +
+                                   "].cylinders[" + std::to_string(ci) + "]";
+
+        if (!cylJson.has("blowbyK")) {
+            throw std::runtime_error("Missing required field 'blowbyK' in " + cylCtx);
+        }
+        pParams.BlowbyFlowCoefficient = cylJson["blowbyK"].asNumber();
+
+        if (!cylJson.has("compressionHeight")) {
+            throw std::runtime_error("Missing required field 'compressionHeight' in " + cylCtx);
+        }
+        pParams.CompressionHeight = cylJson["compressionHeight"].asNumber();
+
+        if (!cylJson.has("wristPinPosition")) {
+            throw std::runtime_error("Missing required field 'wristPinPosition' in " + cylCtx);
+        }
+        pParams.WristPinPosition = cylJson["wristPinPosition"].asNumber();
+
+        if (!cylJson.has("displacement")) {
+            throw std::runtime_error("Missing required field 'displacement' in " + cylCtx);
+        }
+        pParams.Displacement = cylJson["displacement"].asNumber();
+
+        if (!cylJson.has("pistonMass")) {
+            throw std::runtime_error("Missing required field 'pistonMass' in " + cylCtx);
+        }
+        pParams.mass = cylJson["pistonMass"].asNumber();
+
         piston->initialize(pParams);
     }
 }
@@ -176,22 +229,69 @@ void EngineDeserializer::deserializeCylinderBanks(const JsonValue& json, Engine*
     }
 }
 
-void EngineDeserializer::initializeCombustionChambers(Engine* engine) {
-    Function* turbFn = EnginePresetsHelper::createMeanPistonSpeedToTurbulence();
+void EngineDeserializer::initializeCombustionChambers(const JsonValue& json, Engine* engine, const std::string& ctx) {
+    if (!json.has("combustionChambers") || !json["combustionChambers"].isArray()) {
+        throw std::runtime_error("Missing required field 'combustionChambers' in " + ctx);
+    }
+    const JsonValue& chambersArr = json["combustionChambers"];
 
-    CombustionChamber::Parameters ccParams;
-    ccParams.CrankcasePressure = units::pressure(1.0, units::atm);
-    ccParams.Fuel = engine->getFuel();
-    ccParams.StartingPressure = units::pressure(1.0, units::atm);
-    ccParams.StartingTemperature = units::celcius(25.0);
-    ccParams.MeanPistonSpeedToTurbulence = turbFn;
+    for (int i = 0; i < engine->getCylinderCount() &&
+         i < static_cast<int>(chambersArr.size()); i++) {
+        const JsonValue& ccJson = chambersArr[static_cast<size_t>(i)];
+        const std::string ccCtx = ctx + ".combustionChambers[" + std::to_string(i) + "]";
 
-    for (int i = 0; i < engine->getCylinderCount(); i++) {
+        // Deserialize turbulence function
+        if (!ccJson.has("meanPistonSpeedToTurbulence")) {
+            throw std::runtime_error("Missing required field 'meanPistonSpeedToTurbulence' in " + ccCtx);
+        }
+        Function* turbFn = FunctionDeserializer::deserialize(
+            ccJson["meanPistonSpeedToTurbulence"], ccCtx + ".meanPistonSpeedToTurbulence");
+
+        CombustionChamber::Parameters ccParams;
+        ccParams.Fuel = engine->getFuel();
         ccParams.Piston = engine->getPiston(i);
         ccParams.Head = engine->getHead(
             ccParams.Piston->getCylinderBank()->getIndex());
+        ccParams.MeanPistonSpeedToTurbulence = turbFn;
+
+        if (!ccJson.has("crankcasePressure")) {
+            throw std::runtime_error("Missing required field 'crankcasePressure' in " + ccCtx);
+        }
+        ccParams.CrankcasePressure = ccJson["crankcasePressure"].asNumber();
+
+        if (!ccJson.has("startingPressure")) {
+            throw std::runtime_error("Missing required field 'startingPressure' in " + ccCtx);
+        }
+        ccParams.StartingPressure = ccJson["startingPressure"].asNumber();
+
+        if (!ccJson.has("startingTemperature")) {
+            throw std::runtime_error("Missing required field 'startingTemperature' in " + ccCtx);
+        }
+        ccParams.StartingTemperature = ccJson["startingTemperature"].asNumber();
+
         engine->getChamber(i)->initialize(ccParams);
         engine->getChamber(i)->setEngine(engine);
+
+        // Friction model (flat fields in the chamber object, applied after init)
+        if (!ccJson.has("frictionCoeff")) {
+            throw std::runtime_error("Missing required field 'frictionCoeff' in " + ccCtx);
+        }
+        engine->getChamber(i)->m_frictionModel.frictionCoeff = ccJson["frictionCoeff"].asNumber();
+
+        if (!ccJson.has("breakawayFriction")) {
+            throw std::runtime_error("Missing required field 'breakawayFriction' in " + ccCtx);
+        }
+        engine->getChamber(i)->m_frictionModel.breakawayFriction = ccJson["breakawayFriction"].asNumber();
+
+        if (!ccJson.has("breakawayFrictionVelocity")) {
+            throw std::runtime_error("Missing required field 'breakawayFrictionVelocity' in " + ccCtx);
+        }
+        engine->getChamber(i)->m_frictionModel.breakawayFrictionVelocity = ccJson["breakawayFrictionVelocity"].asNumber();
+
+        if (!ccJson.has("viscousFrictionCoefficient")) {
+            throw std::runtime_error("Missing required field 'viscousFrictionCoefficient' in " + ccCtx);
+        }
+        engine->getChamber(i)->m_frictionModel.viscousFrictionCoefficient = ccJson["viscousFrictionCoefficient"].asNumber();
     }
 
     engine->calculateDisplacement();
@@ -202,6 +302,9 @@ Engine* EngineDeserializer::deserialize(const JsonValue& json, const std::string
 
     auto throttle = std::make_unique<DirectThrottleLinkage>();
     DirectThrottleLinkage::Parameters throttleParams;
+    if (!json.has("throttleGamma")) {
+        throw std::runtime_error("Missing required field 'throttleGamma' in " + ctx);
+    }
     throttleParams.gamma = json["throttleGamma"].numberOr(1.0);
     throttle->initialize(throttleParams);
 
@@ -229,7 +332,7 @@ Engine* EngineDeserializer::deserialize(const JsonValue& json, const std::string
                 engine->getCrankshaft(0), engine->getCylinderCount(), ctx + ".ignitionModule");
         }
 
-        initializeCombustionChambers(engine);
+        initializeCombustionChambers(json, engine, ctx);
     } catch (...) {
         delete engine;
         throw;
