@@ -100,6 +100,30 @@ namespace {
         }
 
     private:
+        bool fixtureHasCurrentSchema(const std::filesystem::path& fixturePath) const {
+            std::ifstream fixtureStream(fixturePath);
+            if (!fixtureStream.is_open()) {
+                return false;
+            }
+
+            const std::string contents(
+                (std::istreambuf_iterator<char>(fixtureStream)),
+                std::istreambuf_iterator<char>());
+
+            // Runtime fixtures are cached across runs. Regenerate stale files when
+            // newer required preset fields were added after the cache was written.
+            const std::string intakesMarker = "\"intakes\": [{";
+            const auto intakesPos = contents.find(intakesMarker);
+            if (intakesPos == std::string::npos) {
+                return false;
+            }
+
+            const auto fuelPos = contents.find("\"fuel\"", intakesPos);
+            const auto intakeAfrPos = contents.find("\"molecularAfr\"", intakesPos);
+            return intakeAfrPos != std::string::npos
+                && (fuelPos == std::string::npos || intakeAfrPos < fuelPos);
+        }
+
         // Writes to a stable, deterministic path so parallel CTest workers
         // can reuse each other's output rather than each regenerating the fixture.
         // Uses stage-then-rename to avoid partial writes from concurrent processes.
@@ -117,7 +141,15 @@ namespace {
                 (presetCase.name + "_preset.json");
 
             if (fs::exists(stablePath)) {
-                return stablePath.string();
+                if (fixtureHasCurrentSchema(stablePath)) {
+                    return stablePath.string();
+                }
+
+                std::error_code removeEc;
+                fs::remove(stablePath, removeEc);
+                if (removeEc && fs::exists(stablePath)) {
+                    throw std::runtime_error("Failed to replace stale preset fixture: " + stablePath.string());
+                }
             }
 
             // Write to a staging file; another process may race us to the same stable path

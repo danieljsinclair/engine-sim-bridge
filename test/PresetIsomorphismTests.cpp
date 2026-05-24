@@ -824,6 +824,10 @@ namespace {
         bool generatePresetAtRuntime = false;
     };
 
+    void PrintTo(const IsomorphismParam& param, std::ostream* os) {
+        *os << param.name;
+    }
+
     std::string generatePresetJsonFromScript(const std::string& scriptPath, const std::string& name) {
         namespace fs = std::filesystem;
 
@@ -1258,6 +1262,10 @@ INSTANTIATE_TEST_SUITE_P(
 #include "common/PresetSerializer.h"
 #include "common/JsonParser.h"
 
+#ifndef TEST_PRESET_DIR
+#define TEST_PRESET_DIR ""
+#endif
+
 namespace {
     // Test parameter: maps engine name to script path and preset JSON path
     struct RoundTripParam {
@@ -1265,6 +1273,10 @@ namespace {
         std::string scriptPath;       // Relative to engine-sim assets/
         std::string presetJsonPath;   // Relative to preset/ directory
     };
+
+    void PrintTo(const RoundTripParam& param, std::ostream* os) {
+        *os << param.name;
+    }
 
     // Recursive JSON comparison with tolerance for numbers
     struct JsonComparisonResult {

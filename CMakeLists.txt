@@ -325,6 +325,7 @@ if(BUILD_BRIDGE_TESTS)
                 ENGINE_SIM_PIRANHA_ENABLED
                 TEST_PRESET_COMPILER_PATH="$<TARGET_FILE:engine-sim-preset-compiler>"
             )
+            add_dependencies(preset_engine_tests engine-sim-preset-compiler)
         endif()
         if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
             gtest_discover_tests(
@@ -353,6 +354,7 @@ if(BUILD_BRIDGE_TESTS)
                 ENGINE_SIM_PIRANHA_ENABLED
                 TEST_PRESET_COMPILER_PATH="$<TARGET_FILE:engine-sim-preset-compiler>"
             )
+            add_dependencies(preset_isomorphism_tests engine-sim-preset-compiler)
         endif()
         target_link_libraries(preset_isomorphism_tests
             PRIVATE

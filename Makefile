@@ -4,7 +4,8 @@
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
 CTEST_VERBOSE ?= 0
-CTEST_QUIET ?= 1
+CTEST_QUIET ?= 0
+CTEST_UI_FLAGS := $(if $(filter 1,$(CTEST_VERBOSE)),-V,$(if $(filter 1,$(CTEST_QUIET)),-Q,--progress))
 BRIDGE_TEST_CMAKE_FLAGS := \
 	-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 	-DBUILD_PRESET_ENGINE_TESTS=ON \
@@ -16,14 +17,17 @@ BRIDGE_TEST_SLOW_GROUPS_EXCLUDE := (PresetGoldenFileTest|ParameterIsomorphismTes
 # Full quick-mode exclusion: all parameter isomorphism + golden audio regressions.
 BRIDGE_TEST_QUICK_GROUPS_EXCLUDE := (PresetGoldenFileTest|ParameterIsomorphismTest)
 CTEST_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
+BUILD_PARALLEL_LEVEL ?=
+CMAKE_BUILD_PARALLEL_FLAG := $(if $(strip $(BUILD_PARALLEL_LEVEL)),--parallel $(BUILD_PARALLEL_LEVEL),)
 
-# Default to parallel build using available CPU cores
-MAKEFLAGS += -j$(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
+define build_bridge_targets
+	cmake --build $(BUILD_DIR) $(CMAKE_BUILD_PARALLEL_FLAG)
+endef
 
 # Preset compilation
 PRESET_DIR := preset
 ENGINE_SIM_ROOT := engine-sim
-PRESET_COMPILER := ../build/engine-sim-bridge/engine-sim-preset-compiler
+PRESET_COMPILER := $(BUILD_DIR)/engine-sim-preset-compiler
 
 # Default target - build everything (includes presets)
 all: build-all presets
@@ -31,9 +35,9 @@ all: build-all presets
 build-all:
 	@mkdir -p $(BUILD_DIR)
 	@cd $(BUILD_DIR) && cmake -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) ..
-	$(MAKE) -C $(BUILD_DIR)
+	+$(call build_bridge_targets)
 
-$(BUILD_DIR)/Makefile:
+$(BUILD_DIR)/CMakeCache.txt:
 	@mkdir -p $(BUILD_DIR)
 	@cd $(BUILD_DIR) && cmake $(BRIDGE_TEST_CMAKE_FLAGS) ..
 
@@ -51,7 +55,7 @@ remove-orphans:
 
 # Clean build artifacts but keep CMake config (cascades to engine-sim)
 clean: remove-orphans clean-presets clean-test-fixtures
-	@if [ -d $(BUILD_DIR) ]; then $(MAKE) -C $(BUILD_DIR) clean 2>/dev/null || true; fi
+	@if [ -d $(BUILD_DIR) ]; then cmake --build $(BUILD_DIR) --target clean >/dev/null 2>&1 || true; fi
 	@if [ -d $(BUILD_DIR)/engine-sim ]; then $(MAKE) -C $(BUILD_DIR)/engine-sim clean 2>/dev/null || true; fi
 	@rm -rf tmp
 
@@ -69,9 +73,9 @@ clean-test-fixtures:
 	@echo "Done."
 
 # Run all bridge tests (build first if needed)
-test: $(BUILD_DIR)/Makefile
-	@$(MAKE) -C $(BUILD_DIR)
-	@if cd $(BUILD_DIR) && ctest $(if $(filter 1,$(CTEST_VERBOSE)),-V,$(if $(filter 1,$(CTEST_QUIET)),-Q,)) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)'; then \
+test: $(BUILD_DIR)/CMakeCache.txt presets
+	+@$(call build_bridge_targets)
+	@if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)'; then \
 		echo "=== [engine-sim-bridge] SUMMARY: PASS (full) ==="; \
 		printf '\033[0;32m=== [engine-sim-bridge] RESULT: PASSED ===\033[0m\n'; \
 	else \
@@ -81,9 +85,9 @@ test: $(BUILD_DIR)/Makefile
 	fi
 
 # Fast inner-loop run: excludes six expensive realtime/isomorphism groups.
-test-fast: $(BUILD_DIR)/Makefile
-	@$(MAKE) -C $(BUILD_DIR)
-	@if cd $(BUILD_DIR) && ctest $(if $(filter 1,$(CTEST_VERBOSE)),-V,$(if $(filter 1,$(CTEST_QUIET)),-Q,)) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)|$(BRIDGE_TEST_SLOW_GROUPS_EXCLUDE)'; then \
+test-fast: $(BUILD_DIR)/CMakeCache.txt presets
+	+@$(call build_bridge_targets)
+	@if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)|$(BRIDGE_TEST_SLOW_GROUPS_EXCLUDE)'; then \
 		echo "=== [engine-sim-bridge] SUMMARY: PASS (fast) ==="; \
 		printf '\033[0;32m=== [engine-sim-bridge] RESULT: PASSED ===\033[0m\n'; \
 	else \
@@ -93,9 +97,9 @@ test-fast: $(BUILD_DIR)/Makefile
 	fi
 
 # Deep tier: run the long-running preset golden-audio regressions only.
-test-deep: $(BUILD_DIR)/Makefile
-	@$(MAKE) -C $(BUILD_DIR)
-	@if cd $(BUILD_DIR) && ctest $(if $(filter 1,$(CTEST_VERBOSE)),-V,$(if $(filter 1,$(CTEST_QUIET)),-Q,)) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -R 'PresetGoldenFileTest'; then \
+test-deep: $(BUILD_DIR)/CMakeCache.txt
+	+@$(call build_bridge_targets)
+	@if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -R 'PresetGoldenFileTest'; then \
 		echo "=== [engine-sim-bridge] SUMMARY: PASS (deep) ==="; \
 		printf '\033[0;32m=== [engine-sim-bridge] RESULT: PASSED ===\033[0m\n'; \
 	else \
@@ -105,10 +109,10 @@ test-deep: $(BUILD_DIR)/Makefile
 	fi
 
 # Quick inner-loop run: skip all parameter isomorphism and golden-audio groups.
-test-quick:
-	@$(MAKE) $(BUILD_DIR)/Makefile
-	@$(MAKE) -C $(BUILD_DIR)
-	@if cd $(BUILD_DIR) && ctest $(if $(filter 1,$(CTEST_VERBOSE)),-V,$(if $(filter 1,$(CTEST_QUIET)),-Q,)) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)|$(BRIDGE_TEST_QUICK_GROUPS_EXCLUDE)'; then \
+test-quick: presets
+	+@$(MAKE) $(BUILD_DIR)/CMakeCache.txt
+	+@$(call build_bridge_targets)
+	@if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)|$(BRIDGE_TEST_QUICK_GROUPS_EXCLUDE)'; then \
 		echo "=== [engine-sim-bridge] SUMMARY: PASS (quick) ==="; \
 		printf '\033[0;32m=== [engine-sim-bridge] RESULT: PASSED ===\033[0m\n'; \
 	else \
@@ -136,7 +140,7 @@ check: test
 # ============================================================================
 
 # Add/remove engines here — this is the ONLY list to maintain
-CANDIDATE_ENGINES := ferrari_f136 C63_M156_V2 subaru_ej25 lfa_v10 v8_gm_ls 11_merlin_v12
+CANDIDATE_ENGINES := ferrari_f136 ferrari_412_t2 2jz C63_M156_V2 subaru_ej25 lfa_v10 radial_9 v6_60_degree v6_even_fire v6_odd_fire v8_gm_ls 11_merlin_v12
 
 # Auto-generate compilation rules: each preset/$(engine).json depends on es/$(engine).mr
 # The preset_compiler takes: <script_path> <output_json> <engine_sim_root>
