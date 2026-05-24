@@ -345,6 +345,7 @@ if(BUILD_BRIDGE_TESTS)
         target_compile_definitions(preset_isomorphism_tests PRIVATE
             TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
             TEST_ENGINE_SIM_ASSETS="${ENGINE_SIM_PATH}/assets"
+            TEST_ENGINE_SIM_ROOT="${ENGINE_SIM_PATH}"
             TEST_PRESET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/preset"
         )
         if(TARGET engine-sim-script-interpreter)

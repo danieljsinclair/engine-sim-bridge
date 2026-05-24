@@ -151,60 +151,6 @@ void BridgeSimulator::setStarterMotor(bool on) {
     m_simulator->m_starterMotor.m_enabled = on;
 }
 
-bool BridgeSimulator::changeGear(int gearDelta) {
-    if (!m_simulator || gearDelta == 0) return false;
-
-    auto* trans = m_simulator->getTransmission();
-    if (!trans) return false;
-
-    int currentGear = trans->getGear();
-    int newGear = currentGear + gearDelta;
-    int gearCount = trans->getGearCount();
-
-    if (newGear < -1 || newGear >= gearCount) return false;
-
-    trans->changeGear(newGear);
-    trans->setClutchPressure(newGear > 0 ? 1.0 : 0.0);
-    return true;
-}
-
-BridgeSimulator::DrivetrainSnapshot BridgeSimulator::captureDrivetrainState() const {
-    DrivetrainSnapshot snapshot;
-    if (!m_simulator) return snapshot;
-
-    auto* body = m_simulator->getVehicleMassBody();
-    if (body) {
-        snapshot.vehicleMassVtheta = body->v_theta;
-        snapshot.vehicleMassI = body->I;
-        snapshot.vehicleMassM = body->m;
-    }
-
-    auto* trans = m_simulator->getTransmission();
-    if (trans) {
-        snapshot.gear = trans->getGear();
-    }
-
-    return snapshot;
-}
-
-void BridgeSimulator::restoreDrivetrainState(const DrivetrainSnapshot& snapshot) {
-    if (!m_simulator) return;
-
-    auto* body = m_simulator->getVehicleMassBody();
-    if (body) {
-        body->v_theta = snapshot.vehicleMassVtheta;
-        body->I = snapshot.vehicleMassI;
-        body->m = snapshot.vehicleMassM;
-    }
-
-    // Restore gear and engage clutch so drivetrain spins the new engine
-    auto* trans = m_simulator->getTransmission();
-    if (trans && snapshot.gear >= 0) {
-        trans->changeGear(snapshot.gear);
-        trans->setClutchPressure(snapshot.gear > 0 ? 1.0 : 0.0);
-    }
-}
-
 // ============================================================================
 // Private Helpers
 // ============================================================================

@@ -2,6 +2,10 @@
 
 #include "common/PresetSerializer.h"
 #include "common/JsonWriter.h"
+#include "common/PathNormalizer.h"
+
+#include <filesystem>
+#include <algorithm>
 
 #include "engine.h"
 #include "vehicle.h"
@@ -19,6 +23,12 @@
 #include "camshaft.h"
 #include "throttle.h"
 #include "direct_throttle_linkage.h"
+
+namespace {
+
+using PathNormalizer::normalizeImpulseResponsePath;
+
+}  // anonymous namespace
 
 namespace PresetSerializer {
 
@@ -66,10 +76,12 @@ void serializeExhaustSystem(JsonWriter& j, ExhaustSystem* es) {
     j.kv("velocityDecay", es->getVelocityDecay());
     j.kv("audioVolume", es->getAudioVolume());
 
-    // Impulse response reference (filename for WAV lookup)
+    // Impulse response reference (filename for WAV lookup).
+    // Normalize the path to portable relative form before serializing.
     auto* ir = es->getImpulseResponse();
     if (ir) {
-        j.kv("impulseResponseFilename", ir->getFilename().c_str());
+        std::string normalizedPath = normalizeImpulseResponsePath(ir->getFilename());
+        j.kv("impulseResponseFilename", normalizedPath.c_str());
         j.kv("impulseResponseVolume", ir->getVolume());
     }
 
@@ -233,7 +245,11 @@ void serializeEngine(JsonWriter& j, Engine* engine) {
     j.kv("dynoMinSpeed", engine->getDynoMinSpeed());
     j.kv("dynoMaxSpeed", engine->getDynoMaxSpeed());
     j.kv("dynoHoldStep", engine->getDynoHoldStep());
-    j.kv("displacement", engine->getDisplacement());
+    // displacement is NOT serialized: it's a derived value recalculated by
+    // Engine::calculateDisplacement() from bore/stroke/rod geometry.
+    // Serializing it would create a false mismatch for radial engines whose
+    // master/slave rod topology produces different numerical results than the
+    // independent rod parameters stored in JSON.
     j.kv("simulationFrequency", engine->getSimulationFrequency());
     j.kv("initialHighFrequencyGain", engine->getInitialHighFrequencyGain());
     j.kv("initialNoise", engine->getInitialNoise());

@@ -2,6 +2,7 @@
 
 #include "exhaust_system.h"
 #include "impulse_response.h"
+#include "common/PathNormalizer.h"
 
 #include <stdexcept>
 
@@ -51,21 +52,8 @@ void ExhaustSystemDeserializer::deserialize(const JsonValue& json, ExhaustSystem
     params.impulseResponse = nullptr;
 
     if (json.has("impulseResponseFilename") && json["impulseResponseFilename"].isString()) {
-        std::string irFilename = json["impulseResponseFilename"].asString();
-
-        // Normalize paths like "../../es/sound-library/..." to "sound-library/..."
-        // The preset_compiler stores Piranha-resolved paths relative to the .mr script
-        // location. These contain "../" prefixes and the "es/" platform-specific prefix.
-        // Strip both so the path is platform-independent: "sound-library/...".
-        // resolveAssetBasePath returns the directory containing "sound-library/" on
-        // both macOS (<root>/es/) and iOS (<bundle>/).
-        while (irFilename.size() >= 3 && irFilename.substr(0, 3) == "../") {
-            irFilename = irFilename.substr(3);
-        }
-        // Strip the "es/" platform-specific prefix left after removing ../
-        if (irFilename.size() > 3 && irFilename.substr(0, 3) == "es/") {
-            irFilename = irFilename.substr(3);
-        }
+        std::string irFilename = PathNormalizer::normalizeImpulseResponsePath(
+            json["impulseResponseFilename"].asString());
 
         if (!json.has("impulseResponseVolume")) {
             throw std::runtime_error("Missing required field 'impulseResponseVolume' when 'impulseResponseFilename' present in " + ctx);

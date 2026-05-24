@@ -33,8 +33,16 @@ struct PresetLoadResult {
 // PresetEngineFactory - Reads JSON presets and constructs engine object graphs
 class PresetEngineFactory {
 public:
-    static PresetLoadResult loadFromFile(const std::string& jsonPath);
-    static PresetLoadResult loadFromString(const std::string& jsonContent, const std::string& sourceName = "<string>");
+    // Load preset from a JSON file.
+    // assetBasePath: optional engine-sim root directory used to resolve relative
+    // impulse response filenames to absolute paths. When provided, any relative
+    // impulse response path in the engine's exhaust systems is resolved against
+    // this base. When empty, filenames are stored as-is from JSON.
+    static PresetLoadResult loadFromFile(const std::string& jsonPath,
+                                         const std::string& assetBasePath = "");
+    static PresetLoadResult loadFromString(const std::string& jsonContent,
+                                           const std::string& sourceName = "<string>",
+                                           const std::string& assetBasePath = "");
     static PresetLoadResult loadFromJson(const char* jsonContent, size_t jsonSize);
 };
 

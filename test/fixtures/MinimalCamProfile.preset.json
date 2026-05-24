@@ -11,6 +11,13 @@
     "initialHighFrequencyGain": 0.01,
     "initialNoise": 1.0,
     "initialJitter": 0.5,
+    "throttleGamma": 1.0,
+    "starterTorque": 100.0,
+    "starterSpeed": 100.0,
+    "redline": 700.0,
+    "dynoMinSpeed": 50.0,
+    "dynoMaxSpeed": 700.0,
+    "dynoHoldStep": 50.0,
     "crankshafts": [
       {
         "mass": 1,
@@ -198,7 +205,8 @@
         "inputFlowK": 0.1,
         "plenumVolume": 0.001,
         "idleFlowK": 0,
-        "idleThrottlePlatePosition": 0.1
+        "idleThrottlePlatePosition": 0.1,
+        "molecularAfr": 12.5
       }
     ],
     "fuel": {
@@ -230,6 +238,27 @@
       "molecularMass": 0.1,
       "energyDensity": 48100000.0,
       "density": 755.0
-    }
+    },
+    "combustionChambers": [
+      {
+        "meanPistonSpeedToTurbulence": {
+          "filterRadius": 1,
+          "inputScale": 1,
+          "outputScale": 1,
+          "samples": [
+            [0, 0],
+            [10, 0.5],
+            [20, 1.0]
+          ]
+        },
+        "crankcasePressure": 101325.0,
+        "startingPressure": 101325.0,
+        "startingTemperature": 298.15,
+        "frictionCoeff": 0.0,
+        "breakawayFriction": 0.0,
+        "breakawayFrictionVelocity": 0.0,
+        "viscousFrictionCoefficient": 0.0
+      }
+    ]
   }
 }

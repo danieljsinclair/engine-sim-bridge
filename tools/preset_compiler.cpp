@@ -48,6 +48,54 @@
 
 namespace {
 
+// Normalize Piranha's CWD-relative impulse response paths to portable
+// relative paths suitable for committed JSON. Piranha stores paths like
+// "../../es/sound-library/smooth/smooth_39.wav" (relative to its CWD,
+// which is the engine-sim root). We resolve these against simDir to get
+// "es/sound-library/...", then strip the "es/" prefix to produce the
+// portable form: "sound-library/smooth/smooth_39.wav".
+void resolveImpulseResponsePaths(Engine* engine, const std::filesystem::path& simDir) {
+    if (!engine) return;
+
+    for (int i = 0; i < engine->getExhaustSystemCount(); i++) {
+        ExhaustSystem* es = engine->getExhaustSystem(i);
+        if (!es) continue;
+
+        ImpulseResponse* ir = es->getImpulseResponse();
+        if (!ir) continue;
+
+        const std::string& filename = ir->getFilename();
+        if (filename.empty()) continue;
+
+        std::filesystem::path p(filename);
+        if (!p.is_absolute()) {
+            // Resolve the CWD-relative path against simDir to get a clean
+            // relative path. For "../../es/sound-library/X.wav" relative to
+            // simDir (engine-sim root), weakly_canonical produces
+            // "/abs/path/es/sound-library/X.wav". We then compute the
+            // relative path from simDir to get "es/sound-library/X.wav".
+            std::filesystem::path resolved =
+                std::filesystem::weakly_canonical(simDir / p);
+            std::filesystem::path relative =
+                std::filesystem::relative(resolved, simDir);
+
+            std::string result = relative.string();
+
+            // Strip "es/" prefix — all engine-sim assets live under es/
+            // and the portable path is relative to the es/ directory.
+            if (result.size() > 3 && result.substr(0, 3) == "es/") {
+                result = result.substr(3);
+            }
+
+            ir->initialize(result, ir->getVolume());
+        }
+    }
+}
+
+}  // anonymous namespace
+
+namespace {
+
 struct PresetCompilerArgs {
     std::filesystem::path scriptPath;
     std::filesystem::path outputPath;
@@ -136,6 +184,10 @@ int runPresetCompiler(int argc, char* argv[]) {
            output.engine->getName().c_str(),
            output.engine->getCylinderCount(),
            output.engine->getCylinderBankCount());
+
+    // Resolve relative impulse response paths to absolute before serializing.
+    // Piranha stores CWD-relative paths; canonicalize using the engine-sim root.
+    resolveImpulseResponsePaths(output.engine, args.simDir);
 
     const std::string json = buildPresetJson(args.scriptPath, output);
     writeOutputFile(args.outputPath, json);

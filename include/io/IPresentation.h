@@ -26,7 +26,7 @@ struct EngineState {
     int underrunCount;
     std::string audioMode;
     bool ignition;
-    bool starterMotorEngaged;
+    bool starterMotor;
     double exhaustFlow;  // m^3/s
     int gear = 0;
     double dynoTorque = 0.0;      // ft*lbs (0 when dyno disabled)

@@ -107,7 +107,10 @@ void CylinderHeadDeserializer::deserialize(const JsonValue& json, CylinderHead* 
     }
     hParams.ExhaustRunnerCrossSectionArea = json["exhaustRunnerCrossSectionArea"].asNumber();
 
-    hParams.FlipDisplay = json.has("flipDisplay") ? json["flipDisplay"].asBool() : false;
+    if (!json.has("flipDisplay")) {
+        throw std::runtime_error("Missing required field 'flipDisplay' in " + ctx);
+    }
+    hParams.FlipDisplay = json["flipDisplay"].asBool();
     hParams.IntakePortFlow = intakePortFlow;
     hParams.ExhaustPortFlow = exhaustPortFlow;
     hParams.Valvetrain = valvetrain;

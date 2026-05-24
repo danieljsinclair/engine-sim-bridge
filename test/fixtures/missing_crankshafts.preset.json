@@ -9,6 +9,13 @@
     "simulationFrequency": 10000,
     "initialHighFrequencyGain": 0.01,
     "initialNoise": 1.0,
-    "initialJitter": 0.5
+    "initialJitter": 0.5,
+    "throttleGamma": 1.0,
+    "starterTorque": 100.0,
+    "starterSpeed": 100.0,
+    "redline": 700.0,
+    "dynoMinSpeed": 50.0,
+    "dynoMaxSpeed": 700.0,
+    "dynoHoldStep": 50.0
   }
 }

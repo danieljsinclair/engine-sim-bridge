@@ -135,7 +135,7 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.underrunCount = underrunCount;
     state.audioMode = audioBuffer.getModeString();
     state.ignition = ignition;
-    state.starterMotorEngaged = false;
+    state.starterMotor = false;
     state.exhaustFlow = stats.exhaustFlow;
     state.gear = stats.gear;
     state.dynoTorque = stats.dynoTorque;
@@ -156,15 +156,14 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
 void writeTelemetry(telemetry::ITelemetryWriter* telemetryWriter,
                     double currentTime,
                     double throttle,
-                    bool ignition,
-                    bool starterMotorEngaged) {
+                    bool ignition) {
     if (!telemetryWriter) return;
 
-    // Push vehicle inputs (loop owns throttle/ignition/starter, simulator doesn't)
+    // Push vehicle inputs (loop owns throttle/ignition, simulator doesn't)
     telemetry::VehicleInputsTelemetry inputs;
     inputs.throttlePosition = throttle;
     inputs.ignitionOn = ignition;
-    inputs.starterMotorEngaged = starterMotorEngaged;
+    inputs.starterMotorEngaged = false;
     telemetryWriter->writeVehicleInputs(inputs);
 
     // Push simulator metrics
@@ -255,24 +254,20 @@ void applyDynoControl(Simulator* rawSim, const input::EngineInput& engineInput, 
     lastScale = engineInput.dynoTorqueScale;
 }
 
-// Apply gear changes from input provider gearDelta.
-void applyGearChange(BridgeSimulator* bridgeSim, int gearDelta, ILogging* logger) {
-    if (!bridgeSim || gearDelta == 0) return;
-
-    Simulator* rawSim = bridgeSim->getInternalSimulator();
-    if (!rawSim || !rawSim->getTransmission()) {
-        logger->warning(LogMask::BRIDGE, "Gear change requested but transmission unavailable");
-        return;
-    }
+// Apply gear changes from keyboard input ([/] keys). Clamps at gear 0 (neutral).
+void applyGearChange(Simulator* rawSim, int gearDelta, ILogging* logger) {
+    if (!rawSim || gearDelta == 0) return;
+    if (!rawSim->getTransmission()) return;
 
     int currentGear = rawSim->getTransmission()->getGear();
-    if (bridgeSim->changeGear(gearDelta)) {
-        int newGear = rawSim->getTransmission()->getGear();
+    int newGear = currentGear + gearDelta;
+    int gearCount = rawSim->getTransmission()->getGearCount();
+    if (newGear >= -1 && newGear <= gearCount) {
+        rawSim->getTransmission()->changeGear(newGear);
+        rawSim->getTransmission()->setClutchPressure(newGear > 0 ? 1.0 : 0.0);
         const char* label = newGear == -1 ? "PARK" : (newGear == 0 ? "NEUTRAL" : "GEAR");
         logger->info(LogMask::BRIDGE, "Gear: %d -> %d (%s, clutch %s)", currentGear, newGear,
                      label, newGear > 0 ? "LOCKED" : "FREE");
-    } else {
-        logger->warning(LogMask::BRIDGE, "Gear change rejected: %d %+d", currentGear, gearDelta);
     }
 }
 
@@ -297,9 +292,8 @@ int runUnifiedAudioLoop(
 
     const double minSustainedRPM = 550.0;
 
-    double throttle = 0.0;
+    double throttle = 0.1;
     bool ignition = true;
-    bool starterMotorEngaged = false;
     double lastDynoTorqueScale = -1.0;
     bool engineCaught = false;
 
@@ -332,15 +326,14 @@ int runUnifiedAudioLoop(
             }
             throttle = engineInput.throttle;
             ignition = engineInput.ignition;
-            starterMotorEngaged = engineInput.starterSwitch;
 
             // Apply dyno torque scaling only after engine catches (starter can't overcome dyno resistance)
             if (engineCaught) {
                 applyDynoControl(rawSim, engineInput, lastDynoTorqueScale);
             }
 
-            // Apply gear changes from input provider
-            applyGearChange(bridgeSim, engineInput.gearDelta, logger);
+            // Apply gear changes ([/] keys in keyboard provider)
+            applyGearChange(rawSim, engineInput.gearDelta, logger);
         } else {
             if (currentTime >= config.duration) {
                 break;
@@ -348,12 +341,10 @@ int runUnifiedAudioLoop(
             auto timedInput = getTimedInput(currentTime);
             throttle = timedInput.throttle;
             ignition = timedInput.ignition;
-            starterMotorEngaged = timedInput.starterSwitch;
         }
 
         simulator.setThrottle(throttle);
         simulator.setIgnition(ignition);
-        simulator.setStarterMotor(starterMotorEngaged);
 
         // Update simulation via strategy (threaded mode updates here; sync-pull is no-op)
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * 1000.0);
@@ -363,7 +354,7 @@ int runUnifiedAudioLoop(
         // Generate audio: strategy decides whether to fill buffer (Threaded fills, SyncPull no-ops)
         audioBuffer.fillBufferFromEngine(&simulator, config.framesPerUpdate());
 
-        writeTelemetry(telemetryWriter, currentTime, throttle, ignition, starterMotorEngaged);
+        writeTelemetry(telemetryWriter, currentTime, throttle, ignition);
 
         // Read underrun count from telemetry (pushed by ThreadedStrategy)
         int underrunCount = 0;
@@ -432,6 +423,8 @@ int runSimulation(
 
     // Set volume
     hardwareProvider->setVolume(config.volume);
+
+    enableStarterMotor(simulator);
 
     bool drainDuringWarmup = config.playAudio && audioBuffer->shouldDrainDuringWarmup();
     runWarmupPhase(simulator, config, drainDuringWarmup);

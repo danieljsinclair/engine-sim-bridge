@@ -19,7 +19,7 @@ namespace input {
 struct EngineInput {
     double throttle = 0.1;       // 0.0 - 1.0 (from keyboard/upstream)
     bool ignition = true;        // true = on (from keyboard/upstream)
-    bool starterSwitch = false;   // true = engaged (from keyboard/upstream)
+    bool starterMotor = false;   // true = engaged (from keyboard/upstream)
     bool shouldContinue = true;  // false = signal loop termination
 
     // Gear control

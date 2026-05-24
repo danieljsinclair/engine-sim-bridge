@@ -45,19 +45,6 @@ public:
     void setIgnition(bool on) override;
     void setStarterMotor(bool on) override;
 
-    // Gear control — delegates to internal Simulator's Transmission
-    bool changeGear(int gearDelta);
-
-    // Drivetrain state transfer for engine hot-swap (preserves road speed)
-    struct DrivetrainSnapshot {
-        double vehicleMassVtheta = 0.0;
-        double vehicleMassI = 0.0;
-        double vehicleMassM = 0.0;
-        int gear = 0;
-    };
-    DrivetrainSnapshot captureDrivetrainState() const;
-    void restoreDrivetrainState(const DrivetrainSnapshot& snapshot);
-
     // Set display name from script path (called by factory for PistonEngine mode)
     void setNameFromScript(const std::string& scriptPath);
 

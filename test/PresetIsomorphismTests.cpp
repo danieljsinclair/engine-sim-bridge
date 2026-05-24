@@ -11,13 +11,13 @@
 // Run:   preset_engine_tests --gtest_filter=*Isomorphism*
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
-#include <filesystem>
 #include <unistd.h>
 #include <stdexcept>
 #include <chrono>
@@ -1280,11 +1280,6 @@ namespace {
         const std::string& path,
         double relTolerance = 1e-6
     ) {
-        // Skip metadata fields that are expected to differ
-        if (path == "/presetName" || path == "/sourceScript") {
-            return {true, "", ""};
-        }
-
         // Handle null values
         if (a.isNull() && b.isNull()) return {true, "", ""};
         if (a.isNull() || b.isNull()) {
@@ -1371,8 +1366,11 @@ namespace {
         return {false, path, "Type mismatch"};
     }
 
-    // Compare two JSON strings
-    JsonComparisonResult compareJsonStrings(
+    // Compare two serialized JSON strings, scoped to the "engine" subtree only.
+    // The top-level JSON wrapper includes metadata (presetName, sourceScript)
+    // that differs between Piranha and JSON paths by design. Only the engine
+    // object graph must be isomorphic.
+    JsonComparisonResult compareEngineSubtrees(
         const std::string& jsonA,
         const std::string& jsonB,
         double relTolerance = 1e-6
@@ -1380,23 +1378,14 @@ namespace {
         auto rootA = json::parse(jsonA);
         auto rootB = json::parse(jsonB);
 
-        auto result = compareJsonValues(rootA, rootB, "/", relTolerance);
-
-        // Skip derived/metadata fields that differ between .mr and JSON paths
-        static const std::vector<std::string> skipSuffixes = {
-            "/presetName",       // metadata
-            "/sourceScript",     // metadata
-        };
-
-        if (!result.matched) {
-            for (const auto& suffix : skipSuffixes) {
-                if (result.path.size() >= suffix.size() &&
-                    result.path.compare(result.path.size() - suffix.size(), suffix.size(), suffix) == 0) {
-                    return {true, "", ""};
-                }
-            }
+        if (!rootA.has("engine") || !rootA["engine"].isObject()) {
+            return {false, "/engine", "jsonA missing 'engine' object"};
         }
-        return result;
+        if (!rootB.has("engine") || !rootB["engine"].isObject()) {
+            return {false, "/engine", "jsonB missing 'engine' object"};
+        }
+
+        return compareJsonValues(rootA["engine"], rootB["engine"], "/engine", relTolerance);
     }
 }
 
@@ -1449,38 +1438,33 @@ protected:
             std::filesystem::current_path(savedCwd);
         } catch (const std::exception& e) {
             std::filesystem::current_path(savedCwd);
-            GTEST_SKIP() << "Piranha could not load " << param.scriptPath << ": " << e.what();
+            FAIL() << "Piranha could not load " << param.scriptPath << ": " << e.what();
         }
 
-        if (!piranhaSim_) {
-            GTEST_SKIP() << "SimulatorFactory::create returned null for " << param.scriptPath
-                << " (CWD=" << std::filesystem::current_path() << ")";
-        }
+        ASSERT_NE(piranhaSim_, nullptr)
+            << "SimulatorFactory::create returned null for " << param.scriptPath
+            << " (CWD=" << std::filesystem::current_path() << ")";
 
         auto* bridge = dynamic_cast<BridgeSimulator*>(piranhaSim_.get());
-        if (!bridge) {
-            GTEST_SKIP() << "Could not get bridge simulator";
-        }
+        ASSERT_NE(bridge, nullptr) << "Could not get bridge simulator";
 
         Simulator* sim = bridge->getInternalSimulator();
-        if (!sim) {
-            GTEST_SKIP() << "Could not get internal simulator";
-        }
+        ASSERT_NE(sim, nullptr) << "Could not get internal simulator";
 
         SimulatorInitHelpers::initializeConvolutionFilters(sim);
         piranhaEngine_ = sim->getEngine();
         piranhaVehicle_ = sim->getVehicle();
         piranhaTrans_ = sim->getTransmission();
+        piranhaEngine_->calculateDisplacement();
 
         // Load JSON via PresetEngineFactory
         std::string presetPath = TEST_PRESET_DIR "/" + param.presetJsonPath;
         PresetLoadResult jsonResult = PresetEngineFactory::loadFromFile(presetPath);
-        if (!jsonResult.success()) {
-            GTEST_SKIP() << "Could not load JSON preset: " << jsonResult.error;
-        }
+        ASSERT_TRUE(jsonResult.success()) << "Could not load JSON preset: " << jsonResult.error;
         jsonEngine_ = jsonResult.engine;
         jsonVehicle_ = jsonResult.vehicle;
         jsonTrans_ = jsonResult.transmission;
+        jsonEngine_->calculateDisplacement();
     }
 
     void TearDown() override {
@@ -1507,8 +1491,8 @@ TEST_P(RoundTripIsomorphismTest, RoundTripSerializationProducesIdenticalJson) {
     std::string jsonB = PresetSerializer::serializeEngineToJson(
         jsonEngine_, jsonVehicle_, jsonTrans_);
 
-    // Compare the JSON strings
-    auto result = compareJsonStrings(jsonA, jsonB);
+    // Compare the engine subtrees from both serialized outputs
+    auto result = compareEngineSubtrees(jsonA, jsonB);
     EXPECT_TRUE(result.matched)
         << "Round-trip serialization mismatch at path '" << result.path << "'\n"
         << "Message: " << result.message << "\n"

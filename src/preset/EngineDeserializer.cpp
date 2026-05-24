@@ -305,7 +305,7 @@ Engine* EngineDeserializer::deserialize(const JsonValue& json, const std::string
     if (!json.has("throttleGamma")) {
         throw std::runtime_error("Missing required field 'throttleGamma' in " + ctx);
     }
-    throttleParams.gamma = json["throttleGamma"].numberOr(1.0);
+    throttleParams.gamma = json["throttleGamma"].asNumber();
     throttle->initialize(throttleParams);
 
     Engine::Parameters params = readParams(json, ctx);

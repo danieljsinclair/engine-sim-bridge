@@ -22,32 +22,22 @@ void CrankshaftDeserializer::deserialize(const JsonValue& json, Crankshaft* cs, 
     Crankshaft::Parameters params;
     params.mass = json["mass"].asNumber();
 
-    if (!json.has("flywheelMass")) {
-        throw std::runtime_error("Missing required field 'flywheelMass' in " + ctx);
-    }
+    require("flywheelMass");
     params.flywheelMass = json["flywheelMass"].asNumber();
 
     params.momentOfInertia = json["momentOfInertia"].asNumber();
     params.crankThrow = json["crankThrow"].asNumber();
 
-    if (!json.has("posX")) {
-        throw std::runtime_error("Missing required field 'posX' in " + ctx);
-    }
+    require("posX");
     params.pos_x = json["posX"].asNumber();
 
-    if (!json.has("posY")) {
-        throw std::runtime_error("Missing required field 'posY' in " + ctx);
-    }
+    require("posY");
     params.pos_y = json["posY"].asNumber();
 
-    if (!json.has("tdc")) {
-        throw std::runtime_error("Missing required field 'tdc' in " + ctx);
-    }
+    require("tdc");
     params.tdc = json["tdc"].asNumber();
 
-    if (!json.has("frictionTorque")) {
-        throw std::runtime_error("Missing required field 'frictionTorque' in " + ctx);
-    }
+    require("frictionTorque");
     params.frictionTorque = json["frictionTorque"].asNumber();
 
     const JsonValue& journals = json["rodJournals"];
