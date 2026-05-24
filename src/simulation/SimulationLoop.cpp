@@ -135,7 +135,7 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.underrunCount = underrunCount;
     state.audioMode = audioBuffer.getModeString();
     state.ignition = ignition;
-    state.starterMotor = false;
+    state.starterMotorEngaged = false;
     state.exhaustFlow = stats.exhaustFlow;
     state.gear = stats.gear;
     state.dynoTorque = stats.dynoTorque;
@@ -156,14 +156,15 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
 void writeTelemetry(telemetry::ITelemetryWriter* telemetryWriter,
                     double currentTime,
                     double throttle,
-                    bool ignition) {
+                    bool ignition,
+                    bool starterMotorEngaged) {
     if (!telemetryWriter) return;
 
-    // Push vehicle inputs (loop owns throttle/ignition, simulator doesn't)
+    // Push vehicle inputs (loop owns throttle/ignition/starter, simulator doesn't)
     telemetry::VehicleInputsTelemetry inputs;
     inputs.throttlePosition = throttle;
     inputs.ignitionOn = ignition;
-    inputs.starterMotorEngaged = false;
+    inputs.starterMotorEngaged = starterMotorEngaged;
     telemetryWriter->writeVehicleInputs(inputs);
 
     // Push simulator metrics
@@ -298,6 +299,7 @@ int runUnifiedAudioLoop(
 
     double throttle = 0.0;
     bool ignition = true;
+    bool starterMotorEngaged = false;
     double lastDynoTorqueScale = -1.0;
     bool engineCaught = false;
 
@@ -330,6 +332,7 @@ int runUnifiedAudioLoop(
             }
             throttle = engineInput.throttle;
             ignition = engineInput.ignition;
+            starterMotorEngaged = engineInput.starterSwitch;
 
             // Apply dyno torque scaling only after engine catches (starter can't overcome dyno resistance)
             if (engineCaught) {
@@ -345,10 +348,12 @@ int runUnifiedAudioLoop(
             auto timedInput = getTimedInput(currentTime);
             throttle = timedInput.throttle;
             ignition = timedInput.ignition;
+            starterMotorEngaged = timedInput.starterSwitch;
         }
 
         simulator.setThrottle(throttle);
         simulator.setIgnition(ignition);
+        simulator.setStarterMotor(starterMotorEngaged);
 
         // Update simulation via strategy (threaded mode updates here; sync-pull is no-op)
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * 1000.0);
@@ -358,7 +363,7 @@ int runUnifiedAudioLoop(
         // Generate audio: strategy decides whether to fill buffer (Threaded fills, SyncPull no-ops)
         audioBuffer.fillBufferFromEngine(&simulator, config.framesPerUpdate());
 
-        writeTelemetry(telemetryWriter, currentTime, throttle, ignition);
+        writeTelemetry(telemetryWriter, currentTime, throttle, ignition, starterMotorEngaged);
 
         // Read underrun count from telemetry (pushed by ThreadedStrategy)
         int underrunCount = 0;
@@ -427,8 +432,6 @@ int runSimulation(
 
     // Set volume
     hardwareProvider->setVolume(config.volume);
-
-    enableStarterMotor(simulator);
 
     bool drainDuringWarmup = config.playAudio && audioBuffer->shouldDrainDuringWarmup();
     runWarmupPhase(simulator, config, drainDuringWarmup);
