@@ -19,6 +19,7 @@
     "initialHighFrequencyGain": 0.00121, 
     "initialNoise": 0.229, 
     "initialJitter": 0.42, 
+    "throttleGamma": 1, 
     "crankshafts": [{
         "mass": 2.26796185, 
         "flywheelMass": 2.26796185, 
@@ -567,7 +568,8 @@
         "inputFlowK": 0.00318506314254852, 
         "plenumVolume": 0.0015, 
         "idleFlowK": 0, 
-        "idleThrottlePlatePosition": 0.993
+        "idleThrottlePlatePosition": 0.993, 
+        "molecularAfr": 12.5
       }
     ], 
     "fuel": {
@@ -598,6 +600,53 @@
         ]
       }
     }, 
+    "combustionChambers": [{
+        "crankcasePressure": 101325, 
+        "startingPressure": 101325, 
+        "startingTemperature": 298.15, 
+        "meanPistonSpeedToTurbulence": {
+          "filterRadius": 1, 
+          "inputScale": 1, 
+          "outputScale": 1, 
+          "samples": [[0, 0
+            ], [1, 0.5
+            ], [2, 1
+            ], [3, 1.5
+            ], [4, 2
+            ], [5, 2.5
+            ], [6, 3
+            ], [7, 3.5
+            ], [8, 4
+            ], [9, 4.5
+            ], [10, 5
+            ], [11, 5.5
+            ], [12, 6
+            ], [13, 6.5
+            ], [14, 7
+            ], [15, 7.5
+            ], [16, 8
+            ], [17, 8.5
+            ], [18, 9
+            ], [19, 9.5
+            ], [20, 10
+            ], [21, 10.5
+            ], [22, 11
+            ], [23, 11.5
+            ], [24, 12
+            ], [25, 12.5
+            ], [26, 13
+            ], [27, 13.5
+            ], [28, 14
+            ], [29, 14.5
+            ]
+          ]
+        }, 
+        "frictionCoeff": 0.06, 
+        "breakawayFriction": 50, 
+        "breakawayFrictionVelocity": 0.1, 
+        "viscousFrictionCoefficient": 20
+      }
+    ], 
     "ignitionModule": {
       "revLimit": 628.31853, 
       "limiterDuration": 0.5, 

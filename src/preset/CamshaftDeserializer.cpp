@@ -25,8 +25,17 @@ Camshaft* CamshaftDeserializer::deserialize(const JsonValue& json, Crankshaft* c
 
     Camshaft::Parameters params;
     params.lobes = lobeCount;
-    params.advance = json["advance"].numberOr(0);
-    params.baseRadius = json["baseRadius"].numberOr(0);
+
+    if (!json.has("advance")) {
+        throw std::runtime_error("Missing required field 'advance' in " + ctx);
+    }
+    params.advance = json["advance"].asNumber();
+
+    if (!json.has("baseRadius")) {
+        throw std::runtime_error("Missing required field 'baseRadius' in " + ctx);
+    }
+    params.baseRadius = json["baseRadius"].asNumber();
+
     params.crankshaft = crankshaft;
     params.lobeProfile = lobeProfile;
 

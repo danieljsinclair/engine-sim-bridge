@@ -16,12 +16,37 @@ void ExhaustSystemDeserializer::deserialize(const JsonValue& json, ExhaustSystem
     }
 
     ExhaustSystem::Parameters params;
-    params.length = json["length"].numberOr(0);
-    params.collectorCrossSectionArea = json["collectorCrossSectionArea"].numberOr(0);
-    params.outletFlowRate = json["outletFlowRate"].numberOr(0);
-    params.primaryTubeLength = json["primaryTubeLength"].numberOr(0);
-    params.primaryFlowRate = json["primaryFlowRate"].numberOr(0);
-    params.velocityDecay = json["velocityDecay"].numberOr(0);
+
+    if (!json.has("length")) {
+        throw std::runtime_error("Missing required field 'length' in " + ctx);
+    }
+    params.length = json["length"].asNumber();
+
+    if (!json.has("collectorCrossSectionArea")) {
+        throw std::runtime_error("Missing required field 'collectorCrossSectionArea' in " + ctx);
+    }
+    params.collectorCrossSectionArea = json["collectorCrossSectionArea"].asNumber();
+
+    if (!json.has("outletFlowRate")) {
+        throw std::runtime_error("Missing required field 'outletFlowRate' in " + ctx);
+    }
+    params.outletFlowRate = json["outletFlowRate"].asNumber();
+
+    if (!json.has("primaryTubeLength")) {
+        throw std::runtime_error("Missing required field 'primaryTubeLength' in " + ctx);
+    }
+    params.primaryTubeLength = json["primaryTubeLength"].asNumber();
+
+    if (!json.has("primaryFlowRate")) {
+        throw std::runtime_error("Missing required field 'primaryFlowRate' in " + ctx);
+    }
+    params.primaryFlowRate = json["primaryFlowRate"].asNumber();
+
+    if (!json.has("velocityDecay")) {
+        throw std::runtime_error("Missing required field 'velocityDecay' in " + ctx);
+    }
+    params.velocityDecay = json["velocityDecay"].asNumber();
+
     params.audioVolume = json["audioVolume"].asNumber();
     params.impulseResponse = nullptr;
 

@@ -13,9 +13,21 @@ void IntakeDeserializer::deserialize(const JsonValue& json, Intake* intake,
     const std::string ctx = context.empty() ? "intake" : context;
 
     Intake::Parameters params;
-    params.CrossSectionArea = json["plenumCrossSectionArea"].numberOr(0);
-    params.RunnerFlowRate = json["runnerFlowRate"].numberOr(0);
-    params.RunnerLength = json["runnerLength"].numberOr(0);
+
+    if (!json.has("plenumCrossSectionArea")) {
+        throw std::runtime_error("Missing required field 'plenumCrossSectionArea' in " + ctx);
+    }
+    params.CrossSectionArea = json["plenumCrossSectionArea"].asNumber();
+
+    if (!json.has("runnerFlowRate")) {
+        throw std::runtime_error("Missing required field 'runnerFlowRate' in " + ctx);
+    }
+    params.RunnerFlowRate = json["runnerFlowRate"].asNumber();
+
+    if (!json.has("runnerLength")) {
+        throw std::runtime_error("Missing required field 'runnerLength' in " + ctx);
+    }
+    params.RunnerLength = json["runnerLength"].asNumber();
     if (!json.has("velocityDecay")) {
         throw std::runtime_error("Missing required field 'velocityDecay' in " + ctx);
     }
@@ -44,11 +56,16 @@ void IntakeDeserializer::deserialize(const JsonValue& json, Intake* intake,
     }
 
     // Plenum volume
-    if (json.has("plenumVolume")) {
-        params.volume = json["plenumVolume"].numberOr(0);
-    } else {
+    if (!json.has("plenumVolume")) {
         throw std::runtime_error("Missing required field 'plenumVolume' in " + ctx);
     }
+    params.volume = json["plenumVolume"].asNumber();
+
+    // molecularAfr: required field
+    if (!json.has("molecularAfr")) {
+        throw std::runtime_error("Missing required field 'molecularAfr' in " + ctx);
+    }
+    params.MolecularAfr = json["molecularAfr"].asNumber();
 
     intake->initialize(params);
 
