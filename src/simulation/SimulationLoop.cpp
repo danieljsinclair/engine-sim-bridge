@@ -296,7 +296,7 @@ int runUnifiedAudioLoop(
 
     const double minSustainedRPM = 550.0;
 
-    double throttle = 0.1;
+    double throttle = 0.0;
     bool ignition = true;
     double lastDynoTorqueScale = -1.0;
     bool engineCaught = false;
