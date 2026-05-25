@@ -58,9 +58,6 @@
 // ============================================================================
 
 namespace {
-#ifndef TEST_RUNTIME_FIXTURE_DIR
-#define TEST_RUNTIME_FIXTURE_DIR TEST_FIXTURE_DIR "/runtime-generated"
-#endif
 
     constexpr int TEST_SAMPLE_RATE = 48000;
     constexpr int STEREO_CHANNELS = 2;
@@ -100,85 +97,27 @@ namespace {
         }
 
     private:
-        bool fixtureHasCurrentSchema(const std::filesystem::path& fixturePath) const {
-            std::ifstream fixtureStream(fixturePath);
-            if (!fixtureStream.is_open()) {
-                return false;
-            }
-
-            const std::string contents(
-                (std::istreambuf_iterator<char>(fixtureStream)),
-                std::istreambuf_iterator<char>());
-
-            // Runtime fixtures are cached across runs. Regenerate stale files when
-            // newer required preset fields were added after the cache was written.
-            const std::string intakesMarker = "\"intakes\": [{";
-            const auto intakesPos = contents.find(intakesMarker);
-            if (intakesPos == std::string::npos) {
-                return false;
-            }
-
-            const auto fuelPos = contents.find("\"fuel\"", intakesPos);
-            const auto intakeAfrPos = contents.find("\"molecularAfr\"", intakesPos);
-            return intakeAfrPos != std::string::npos
-                && (fuelPos == std::string::npos || intakeAfrPos < fuelPos);
-        }
-
-        // Writes to a stable, deterministic path so parallel CTest workers
-        // can reuse each other's output rather than each regenerating the fixture.
-        // Uses stage-then-rename to avoid partial writes from concurrent processes.
+        // Generate a fresh preset JSON to a per-process temp file (~0.4s).
+        // No shared cache, no collision risk across parallel workers.
         std::string generateFixture(const PresetScriptCase& presetCase) const {
             namespace fs = std::filesystem;
 
-            const fs::path runtimeFixtureDir = fs::path(TEST_RUNTIME_FIXTURE_DIR);
-            std::error_code mkdirEc;
-            fs::create_directories(runtimeFixtureDir, mkdirEc);
-            if (mkdirEc) {
-                throw std::runtime_error("Failed to create runtime fixture directory: " + runtimeFixtureDir.string());
-            }
-
-            const fs::path stablePath = runtimeFixtureDir /
-                (presetCase.name + "_preset.json");
-
-            if (fs::exists(stablePath)) {
-                if (fixtureHasCurrentSchema(stablePath)) {
-                    return stablePath.string();
-                }
-
-                std::error_code removeEc;
-                fs::remove(stablePath, removeEc);
-                if (removeEc && fs::exists(stablePath)) {
-                    throw std::runtime_error("Failed to replace stale preset fixture: " + stablePath.string());
-                }
-            }
-
-            // Write to a staging file; another process may race us to the same stable path
-            const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
-            const fs::path stagingPath = runtimeFixtureDir /
-                (presetCase.name + "_preset_staging_" + std::to_string(nonce) + ".json");
+            const fs::path tmpDir = fs::temp_directory_path();
+            const auto pid = getpid();
+            const fs::path outPath = tmpDir /
+                ("preset_test_" + std::to_string(pid) + "_" + presetCase.name + ".json");
 
             const std::string command = std::string("\"") + TEST_PRESET_COMPILER_PATH +
-                "\" \"" + presetCase.scriptPath + "\" \"" + stagingPath.string() +
+                "\" \"" + presetCase.scriptPath + "\" \"" + outPath.string() +
                 "\" \"" + TEST_ENGINE_SIM_ROOT + "\" >/dev/null 2>&1";
 
             if (std::system(command.c_str()) != 0) {
                 std::error_code ec;
-                fs::remove(stagingPath, ec);
+                fs::remove(outPath, ec);
                 throw std::runtime_error("Failed to generate preset fixture for " + presetCase.scriptPath);
             }
 
-            // Atomic rename: if another process already placed the stable file, discard ours
-            std::error_code renameEc;
-            fs::rename(stagingPath, stablePath, renameEc);
-            if (renameEc) {
-                std::error_code ec;
-                fs::remove(stagingPath, ec);
-                if (!fs::exists(stablePath)) {
-                    throw std::runtime_error("Failed to place preset fixture for " + presetCase.scriptPath);
-                }
-            }
-
-            return stablePath.string();
+            return outPath.string();
         }
 
         std::unordered_map<std::string, std::string> generatedFixturePaths_;

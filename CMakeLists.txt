@@ -313,7 +313,6 @@ if(BUILD_BRIDGE_TESTS)
             TEST_ENGINE_SIM_ASSETS="${ENGINE_SIM_PATH}/assets"
             TEST_ES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/es"
             TEST_ENGINE_SIM_ROOT="${ENGINE_SIM_PATH}"
-            TEST_RUNTIME_FIXTURE_DIR="${CMAKE_BINARY_DIR}/test/runtime-fixtures"
         )
         target_link_libraries(preset_engine_tests
             PRIVATE
