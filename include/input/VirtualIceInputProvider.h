@@ -6,6 +6,7 @@
 #include "io/UpstreamSignal.h"
 #include "twin/IceVehicleProfile.h"
 #include "twin/VirtualIceTwin.h"
+#include "twin/IGearboxLogger.h"
 
 #include <memory>
 #include <string>
@@ -39,11 +40,15 @@ public:
     // Forward simulator RPM feedback to the twin for cranking transition
     void provideFeedback(const EngineSimStats& stats) override;
 
+    // Enable gearbox diagnostic logging
+    void setGearboxLogger(twin::IGearboxLogger* logger);
+
 private:
     const twin::IceVehicleProfile& profile_;
     std::unique_ptr<twin::VirtualIceTwin> twin_;
     std::string lastError_;
     bool isInitialized_;
+    twin::IGearboxLogger* pendingLogger_ = nullptr;
 
     UpstreamSignal currentSignal_;
 };

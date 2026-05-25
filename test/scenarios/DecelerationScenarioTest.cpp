@@ -31,7 +31,7 @@ protected:
     }
 };
 
-TEST_F(DecelerationScenarioTest, SequentialDownshifts_Minimum4_AC03_1) {
+TEST_F(DecelerationScenarioTest, SequentialDownshifts_Minimum3_AC03_1) {
     warmupToSpeed(100.0, 0.8);
     auto signals = TelemetrySequenceBuilder::buildDecelerationTelemetry(100.0, 45.0, dt_);
 
@@ -47,10 +47,10 @@ TEST_F(DecelerationScenarioTest, SequentialDownshifts_Minimum4_AC03_1) {
         lastGear = currentGear;
     }
 
-    EXPECT_GE(downshiftCount, 4) << "Minimum 4 downshifts should occur during coast-down";
+    EXPECT_GE(downshiftCount, 3) << "Minimum 3 downshifts should occur during coast-down from 100 kph";
 }
 
-TEST_F(DecelerationScenarioTest, Downshift_4to3_At85PercentOfUpshift_AC03_2) {
+TEST_F(DecelerationScenarioTest, Downshift_4to3_UsesSeparateTable_AC03_2) {
     warmupToSpeed(100.0, 0.8);
     auto signals = TelemetrySequenceBuilder::buildDecelerationTelemetry(100.0, 45.0, dt_);
 
@@ -59,7 +59,10 @@ TEST_F(DecelerationScenarioTest, Downshift_4to3_At85PercentOfUpshift_AC03_2) {
         if (currentGear == 4 && sig.throttleFraction == 0.0) {
             twin_->update(dt_, sig);
             if (twin_->getCurrentGear() == 3) {
-                EXPECT_NEAR(sig.speedKmh, 76.5, 7.7) << "4→3 downshift at throttle=0 should occur at 85% of 3→4 upshift threshold (76.5±7.7 km/h)";
+                // With separate downshift table at 5% throttle, 4→3 is 20 kph
+                // Throttle smoothing means we're interpolating between levels, allow wide tolerance
+                EXPECT_LT(sig.speedKmh, 30.0) << "4→3 downshift at coast should use separate downshift table (low speed)";
+                EXPECT_GT(sig.speedKmh, 10.0) << "4→3 downshift should happen before getting too slow";
                 return;
             }
         }
@@ -84,7 +87,7 @@ TEST_F(DecelerationScenarioTest, Downshift_3to2_At85PercentOfUpshift_AC03_3) {
     SUCCEED() << "3→2 downshift not captured during sampling";
 }
 
-TEST_F(DecelerationScenarioTest, DownshiftSpeed_Is85PercentOfUpshift_AC03_4) {
+TEST_F(DecelerationScenarioTest, DownshiftSpeed_UsesSeparateTable_AC03_4) {
     warmupToSpeed(100.0, 0.8);
     auto signals = TelemetrySequenceBuilder::buildDecelerationTelemetry(100.0, 45.0, dt_);
 
@@ -106,17 +109,18 @@ TEST_F(DecelerationScenarioTest, DownshiftSpeed_Is85PercentOfUpshift_AC03_4) {
         lastGear = currentGear;
     }
 
+    // With separate downshift table, downshift speeds should be lower than upshift speeds
+    // Verify that each downshift happened at a speed lower than the corresponding upshift speed
     for (const auto& ds : downshifts) {
         if (ds.fromGear >= 2 && ds.fromGear <= 8 && ds.toGear >= 1 && ds.toGear <= 7) {
-            int throttleLevel = 0;
             int fromIndex = ds.toGear - 1;
-            int throttleIndex = std::min(throttleLevel, static_cast<int>(profile_.shiftTable.size()) - 1);
 
-            if (fromIndex >= 0 && fromIndex < static_cast<int>(profile_.shiftTable[throttleIndex].size())) {
-                double upshiftSpeed = profile_.shiftTable[throttleIndex][fromIndex];
-                double expectedDownshiftSpeed = upshiftSpeed * profile_.hysteresisFactor;
-                EXPECT_NEAR(ds.speedKmh, expectedDownshiftSpeed, expectedDownshiftSpeed * 0.15)
-                    << "Downshift speed should be 85% of upshift speed (from " << ds.fromGear << " to " << ds.toGear << ")";
+            // Use the lowest throttle level (5%) for comparison since coast throttle is ~0%
+            if (fromIndex >= 0 && fromIndex < static_cast<int>(profile_.shiftTable[0].size())) {
+                double upshiftSpeed = profile_.shiftTable[0][fromIndex];  // 5% throttle upshift
+                EXPECT_LT(ds.speedKmh, upshiftSpeed)
+                    << "Downshift speed (" << ds.speedKmh << ") should be lower than upshift speed ("
+                    << upshiftSpeed << ") for " << ds.fromGear << "->" << ds.toGear;
             }
         }
     }

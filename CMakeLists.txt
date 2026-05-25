@@ -122,13 +122,16 @@ set(BRIDGE_SOURCES
     src/simulator/EnginePresets.cpp
     # Twin components
     src/twin/AutomaticGearbox.cpp
+    src/twin/GearboxCsvLogger.cpp
     src/twin/ThrottleSmoother.cpp
     src/twin/VirtualIceTwin.cpp
     src/twin/ManualTwin.cpp
     # Input providers
     src/input/VirtualIceInputProvider.cpp
     src/input/ManualTwinProvider.cpp
-    src/input/KeyboardDemoThrottleSource.cpp
+    src/input/DemoThrottleSource.cpp
+    src/input/GearSelectorInput.cpp
+    src/input/IgnitionInput.cpp
     src/input/DemoInputProvider.cpp
 )
 
@@ -472,10 +475,12 @@ if(BUILD_BRIDGE_TESTS)
         add_test(NAME manual_twin_provider_tests COMMAND manual_twin_provider_tests --gtest_color=yes)
     endif()
 
-    # Demo input tests - tests for KeyboardDemoThrottleSource and DemoInputProvider
+    # Demo input tests - tests for DemoThrottleSource and DemoInputProvider
     add_executable(demo_input_tests
-        test/input/KeyboardDemoThrottleSourceTest.cpp
+        test/input/DemoThrottleSourceTest.cpp
         test/input/DemoInputProviderTest.cpp
+        test/input/GearSelectorInputTest.cpp
+        test/input/IgnitionInputTest.cpp
     )
     target_include_directories(demo_input_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -670,5 +675,24 @@ if(BUILD_PHASE0_SPIKES)
     )
     add_test(NAME real_engine_audio_spike COMMAND real_engine_audio_spike)
     set_tests_properties(real_engine_audio_spike PROPERTIES LABELS "spike")
+
+    # ---- Gearbox Diagnostic Spike ----
+    add_executable(gearbox_diagnostic_spike
+        test/spikes/GearboxDiagnosticSpike.cpp
+    )
+    target_include_directories(gearbox_diagnostic_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+    )
+    target_link_libraries(gearbox_diagnostic_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    set_target_properties(gearbox_diagnostic_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME gearbox_diagnostic_spike COMMAND gearbox_diagnostic_spike)
+    set_tests_properties(gearbox_diagnostic_spike PROPERTIES LABELS "spike")
 endif()
 
