@@ -5,6 +5,7 @@
 #include <twin/IceVehicleProfile.h>
 #include <twin/AutomaticGearbox.h>
 #include <twin/ThrottleSmoother.h>
+#include <twin/IGearboxLogger.h>
 #include <io/UpstreamSignal.h>
 #include <simulator/GearConventions.h>
 
@@ -20,6 +21,7 @@ public:
 
     void setEngineRpmFeedback(double rpm) { engineRpmFeedback_ = rpm; }
     void setVehicleSpeedFeedback(double kmh) { vehicleSpeedFeedbackKmh_ = kmh; }
+    void setGearboxLogger(IGearboxLogger* logger);
 
     void setGearSelector(bridge::GearSelector s) { selector_ = s; }
     bridge::GearSelector getGearSelector() const { return selector_; }

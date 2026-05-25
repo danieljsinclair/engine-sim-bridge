@@ -4,7 +4,7 @@
 namespace config {
 
 struct CLIConfig {
-    bool connectDemo = false;
+    bool modelDemo = false;
     bool playAudio = false;
     bool interactive = false;
 };

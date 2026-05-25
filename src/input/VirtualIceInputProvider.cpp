@@ -18,6 +18,9 @@ bool VirtualIceInputProvider::Initialize() {
 
     try {
         twin_ = std::make_unique<twin::VirtualIceTwin>(profile_);
+        if (pendingLogger_) {
+            twin_->setGearboxLogger(pendingLogger_);
+        }
         isInitialized_ = true;
         return true;
     } catch (const std::exception& e) {
@@ -80,6 +83,13 @@ void VirtualIceInputProvider::setGearSelector(int selector) {
 void VirtualIceInputProvider::setIgnition(bool on) {
     if (twin_) {
         twin_->setIgnition(on);
+    }
+}
+
+void VirtualIceInputProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
+    pendingLogger_ = logger;
+    if (twin_) {
+        twin_->setGearboxLogger(logger);
     }
 }
 

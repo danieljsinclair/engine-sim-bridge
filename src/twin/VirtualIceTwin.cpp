@@ -10,6 +10,10 @@ VirtualIceTwin::VirtualIceTwin(const IceVehicleProfile& profile)
       throttleSmoother_(profile.throttleSmoothingTauMs),
       state_(TwinState::OFF) {}
 
+void VirtualIceTwin::setGearboxLogger(IGearboxLogger* logger) {
+    gearbox_.setLogger(logger);
+}
+
 TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal) {
     TwinOutput output;
 
@@ -86,7 +90,8 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             break;
 
         case TwinState::RUNNING: {
-            double gearboxSpeedKmh = vehicleSpeedFeedbackKmh_ > 0.0 ? vehicleSpeedFeedbackKmh_ : signal.speedKmh;
+            double gearboxSpeedKmh = signal.speedKmh;
+            gearbox_.setTwinContext(static_cast<int>(state_), clutchPressure_, vehicleSpeedFeedbackKmh_, engineRpmFeedback_);
             gearbox_.update(dt, gearboxSpeedKmh, signal.throttleFraction);
             output.ignition = true;
 
@@ -94,7 +99,8 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             if (selector_ == bridge::GearSelector::NEUTRAL ||
                 selector_ == bridge::GearSelector::PARK) {
                 state_ = TwinState::IDLE;
-            } else if (signal.speedKmh == 0.0 && signal.throttleFraction == 0.0) {
+            } else if (signal.speedKmh < profile_.standstillThresholdKmh &&
+                       signal.throttleFraction < profile_.throttleIdleThreshold) {
                 state_ = TwinState::IDLE;
             } else if (gearbox_.requestsShift()) {
                 state_ = TwinState::SHIFTING;
@@ -107,6 +113,7 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
         }
 
         case TwinState::SHIFTING:
+            gearbox_.setTwinContext(static_cast<int>(state_), clutchPressure_, vehicleSpeedFeedbackKmh_, engineRpmFeedback_);
             updateShiftExecution(dt);
             output.ignition = true;
             output.gear = gearbox_.getCurrentGear();
@@ -121,9 +128,21 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
 void VirtualIceTwin::updateShiftExecution(double dt) {
     shiftTimerS_ += dt;
 
-    double disengageDuration = profile_.shiftDisengageMs * EngineSimDefaults::MS_TO_SECONDS;
-    double pauseDuration = profile_.shiftPauseMs * EngineSimDefaults::MS_TO_SECONDS;
-    double reengageDuration = profile_.shiftReengageMs * EngineSimDefaults::MS_TO_SECONDS;
+    // Determine shift timing based on throttle and shift direction
+    double disengageDuration;
+    double pauseDuration;
+    double reengageDuration;
+
+    double currentThrottle = throttleSmoother_.getCurrentValue();
+    int shiftDirection = gearbox_.getLastShiftDirection();
+    (void)currentThrottle;
+    (void)shiftDirection;
+
+    // TODO: Re-enable shift timing vectors once implemented
+    // For now, use fixed timing
+    disengageDuration = profile_.shiftDisengageMs * EngineSimDefaults::MS_TO_SECONDS;
+    pauseDuration = profile_.shiftPauseMs * EngineSimDefaults::MS_TO_SECONDS;
+    reengageDuration = profile_.shiftReengageMs * EngineSimDefaults::MS_TO_SECONDS;
 
     if (shiftTimerS_ <= disengageDuration) {
         clutchPressure_ = 1.0 - (shiftTimerS_ / disengageDuration);

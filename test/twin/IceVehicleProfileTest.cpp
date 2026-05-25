@@ -38,6 +38,23 @@ TEST(IceVehicleProfile, Zf8hp45FactoryDefaults)
     // Minimum shift interval
     EXPECT_DOUBLE_EQ(profile.minShiftIntervalS, 3.0);
 
+    // Asymmetric shift intervals (ZF 8HP45)
+    EXPECT_DOUBLE_EQ(profile.upshiftMinIntervalS, 2.0);
+    EXPECT_DOUBLE_EQ(profile.downshiftMinIntervalS, 1.5);
+
+    // Engine braking inhibitor
+    EXPECT_TRUE(profile.engineBrakingInhibitorEnabled);
+    EXPECT_DOUBLE_EQ(profile.engineBrakingMaxThrottle, 0.01);
+    EXPECT_DOUBLE_EQ(profile.engineBrakingMinSpeedKmh, 10.0);
+
+    // Tip-in/tip-out correction
+    EXPECT_TRUE(profile.tipCorrectionEnabled);
+    EXPECT_DOUBLE_EQ(profile.tipInGradientThreshold, 10.0);
+    EXPECT_DOUBLE_EQ(profile.tipOutGradientThreshold, -10.0);
+
+    // Separate downshift table
+    EXPECT_TRUE(profile.separateDownshiftTableEnabled);
+
     // Hysteresis factor
     EXPECT_DOUBLE_EQ(profile.hysteresisFactor, 0.85);
 
@@ -51,92 +68,84 @@ TEST(IceVehicleProfile, ShiftTableCalibration)
 {
     IceVehicleProfile profile = IceVehicleProfile::zf8hp45();
 
-    // Verify shift table structure: 5 throttle levels (10%, 25%, 50%, 75%, 100%)
+    // Verify shift table structure: 10 throttle levels
     // Each with 7 upshift thresholds (1->2, 2->3, ..., 7->8)
-    ASSERT_EQ(profile.shiftTable.size(), 5);
+    ASSERT_EQ(profile.shiftTable.size(), 10u);
+    ASSERT_EQ(profile.shiftTableThrottleLevels.size(), 10u);
 
-    // 10% throttle row
-    const auto& throttle10 = profile.shiftTable[0];
-    ASSERT_EQ(throttle10.size(), 7);
-    EXPECT_DOUBLE_EQ(throttle10[0], 20.0);
-    EXPECT_DOUBLE_EQ(throttle10[1], 35.0);
-    EXPECT_DOUBLE_EQ(throttle10[2], 50.0);
-    EXPECT_DOUBLE_EQ(throttle10[3], 65.0);
-    EXPECT_DOUBLE_EQ(throttle10[4], 80.0);
-    EXPECT_DOUBLE_EQ(throttle10[5], 95.0);
-    EXPECT_DOUBLE_EQ(throttle10[6], 110.0);
+    // Verify throttle level breakpoints
+    EXPECT_DOUBLE_EQ(profile.shiftTableThrottleLevels[0], 0.05);
+    EXPECT_DOUBLE_EQ(profile.shiftTableThrottleLevels[3], 0.40);
+    EXPECT_DOUBLE_EQ(profile.shiftTableThrottleLevels[9], 1.00);
+
+    // 5% throttle row
+    const auto& throttle5 = profile.shiftTable[0];
+    ASSERT_EQ(throttle5.size(), 7u);
+    EXPECT_DOUBLE_EQ(throttle5[0], 11.0);
+    EXPECT_DOUBLE_EQ(throttle5[6], 64.0);
 
     // 25% throttle row
-    const auto& throttle25 = profile.shiftTable[1];
-    ASSERT_EQ(throttle25.size(), 7);
-    EXPECT_DOUBLE_EQ(throttle25[0], 30.0);
-    EXPECT_DOUBLE_EQ(throttle25[1], 50.0);
-    EXPECT_DOUBLE_EQ(throttle25[2], 70.0);
-    EXPECT_DOUBLE_EQ(throttle25[3], 90.0);
-    EXPECT_DOUBLE_EQ(throttle25[4], 110.0);
-    EXPECT_DOUBLE_EQ(throttle25[5], 130.0);
-    EXPECT_DOUBLE_EQ(throttle25[6], 155.0);
+    const auto& throttle25 = profile.shiftTable[2];
+    ASSERT_EQ(throttle25.size(), 7u);
+    EXPECT_DOUBLE_EQ(throttle25[0], 19.0);
+    EXPECT_DOUBLE_EQ(throttle25[6], 105.0);
 
-    // 50% throttle row
-    const auto& throttle50 = profile.shiftTable[2];
-    ASSERT_EQ(throttle50.size(), 7);
-    EXPECT_DOUBLE_EQ(throttle50[0], 40.0);
-    EXPECT_DOUBLE_EQ(throttle50[1], 65.0);
-    EXPECT_DOUBLE_EQ(throttle50[2], 90.0);
-    EXPECT_DOUBLE_EQ(throttle50[3], 115.0);
-    EXPECT_DOUBLE_EQ(throttle50[4], 140.0);
-    EXPECT_DOUBLE_EQ(throttle50[5], 170.0);
-    EXPECT_DOUBLE_EQ(throttle50[6], 200.0);
+    // 50% interpolated between 40% and 55% rows — just verify key rows exist
+    const auto& throttle40 = profile.shiftTable[3];
+    ASSERT_EQ(throttle40.size(), 7u);
+    EXPECT_DOUBLE_EQ(throttle40[0], 24.0);
+    EXPECT_DOUBLE_EQ(throttle40[6], 137.0);
 
-    // 75% throttle row
-    const auto& throttle75 = profile.shiftTable[3];
-    ASSERT_EQ(throttle75.size(), 7);
-    EXPECT_DOUBLE_EQ(throttle75[0], 55.0);
-    EXPECT_DOUBLE_EQ(throttle75[1], 85.0);
-    EXPECT_DOUBLE_EQ(throttle75[2], 115.0);
-    EXPECT_DOUBLE_EQ(throttle75[3], 145.0);
-    EXPECT_DOUBLE_EQ(throttle75[4], 180.0);
-    EXPECT_DOUBLE_EQ(throttle75[5], 215.0);
-    EXPECT_DOUBLE_EQ(throttle75[6], 255.0);
+    const auto& throttle55 = profile.shiftTable[4];
+    ASSERT_EQ(throttle55.size(), 7u);
+    EXPECT_DOUBLE_EQ(throttle55[0], 30.0);
+    EXPECT_DOUBLE_EQ(throttle55[6], 169.0);
 
-    // 100% throttle row
-    const auto& throttle100 = profile.shiftTable[4];
-    ASSERT_EQ(throttle100.size(), 7);
-    EXPECT_DOUBLE_EQ(throttle100[0], 70.0);
-    EXPECT_DOUBLE_EQ(throttle100[1], 105.0);
-    EXPECT_DOUBLE_EQ(throttle100[2], 140.0);
-    EXPECT_DOUBLE_EQ(throttle100[3], 180.0);
-    EXPECT_DOUBLE_EQ(throttle100[4], 220.0);
-    EXPECT_DOUBLE_EQ(throttle100[5], 265.0);
-    EXPECT_DOUBLE_EQ(throttle100[6], 315.0);
+    // 100% throttle row (WOT)
+    const auto& throttle100 = profile.shiftTable[9];
+    ASSERT_EQ(throttle100.size(), 7u);
+    EXPECT_DOUBLE_EQ(throttle100[0], 49.0);
+    EXPECT_DOUBLE_EQ(throttle100[6], 274.0);
+
+    // Verify separate downshift table
+    ASSERT_EQ(profile.downshiftTable.size(), 10u);
+    ASSERT_EQ(profile.downshiftTableThrottleLevels.size(), 10u);
+
+    // 5% downshift row
+    const auto& downshift5 = profile.downshiftTable[0];
+    ASSERT_EQ(downshift5.size(), 7u);
+    EXPECT_DOUBLE_EQ(downshift5[0], 9.0);
+    EXPECT_DOUBLE_EQ(downshift5[6], 50.0);
+
+    // 100% downshift row
+    const auto& downshift100 = profile.downshiftTable[9];
+    ASSERT_EQ(downshift100.size(), 7u);
+    EXPECT_DOUBLE_EQ(downshift100[0], 34.0);
+    EXPECT_DOUBLE_EQ(downshift100[6], 192.0);
 }
 
 TEST(IceVehicleProfile, CustomConstruction)
 {
-    std::vector<double> customGearRatios = {5.0, 3.0, 2.0, 1.5, 1.0};
-    std::vector<std::vector<double>> customShiftTable = {
+    IceVehicleProfile profile;
+    profile.gearRatios = {5.0, 3.0, 2.0, 1.5, 1.0};
+    profile.shiftTable = {
         {30.0, 50.0, 70.0},
         {40.0, 60.0, 80.0}
     };
-
-    IceVehicleProfile profile(
-        customGearRatios,
-        3.5,
-        0.35,
-        2000.0,
-        customShiftTable,
-        0.9,
-        0.90,
-        0.35,
-        0.3,
-        50.0,
-        200.0,
-        100.0,
-        40.0,
-        2.5,
-        7000.0,
-        800.0
-    );
+    profile.diffRatio = 3.5;
+    profile.tireRadiusM = 0.35;
+    profile.vehicleMassKg = 2000.0;
+    profile.hysteresisFactor = 0.9;
+    profile.kickdownThrottleThreshold = 0.90;
+    profile.kickdownDelta = 0.35;
+    profile.kickdownWindowMs = 0.3;
+    profile.shiftDisengageMs = 50.0;
+    profile.shiftPauseMs = 200.0;
+    profile.shiftReengageMs = 100.0;
+    profile.throttleSmoothingTauMs = 40.0;
+    profile.minShiftIntervalS = 2.5;
+    profile.redlineRpm = 7000.0;
+    profile.idleRpm = 800.0;
 
     EXPECT_EQ(profile.gearRatios.size(), 5);
     EXPECT_DOUBLE_EQ(profile.gearRatios[0], 5.0);
