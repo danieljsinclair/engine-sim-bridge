@@ -23,6 +23,8 @@
 #include <chrono>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 // Engine-sim headers
 #include "engine.h"
@@ -1286,11 +1288,70 @@ namespace {
     };
 
     // Compare two JSON values with tolerance for numbers
+    // Paths where arrays represent unordered collections (Piranha may create
+    // components in non-deterministic order due to hash-based node resolution).
+    const std::unordered_set<std::string>& unorderedArrayPaths() {
+        static const std::unordered_set<std::string> paths = {
+            "/engine/exhaustSystems",
+            "/engine/intakes",
+        };
+        return paths;
+    }
+
+    // Forward declaration for multiset matching
     JsonComparisonResult compareJsonValues(
         const json::JsonValue& a,
         const json::JsonValue& b,
         const std::string& path,
         double relTolerance = 1e-6
+    );
+
+    // Greedy multiset matching: for each element in A, find the first
+    // unmatched element in B that matches. O(n^2) but arrays are small.
+    JsonComparisonResult compareArraysAsMultiset(
+        const json::JsonValue& a,
+        const json::JsonValue& b,
+        const std::string& path,
+        double relTolerance
+    ) {
+        size_t aSize = a.size();
+        size_t bSize = b.size();
+        if (aSize != bSize) {
+            return {false, path,
+                "Array size mismatch: " + std::to_string(aSize) +
+                " vs " + std::to_string(bSize)};
+        }
+
+        std::vector<bool> matched(aSize, false);
+        for (size_t i = 0; i < aSize; i++) {
+            bool found = false;
+            for (size_t j = 0; j < bSize; j++) {
+                if (matched[j]) continue;
+                auto result = compareJsonValues(a[i], b[j], path, relTolerance);
+                if (result.matched) {
+                    matched[j] = true;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                for (size_t j = 0; j < bSize; j++) {
+                    if (matched[j]) continue;
+                    return compareJsonValues(a[i], b[j],
+                        path + "[" + std::to_string(i) + "]", relTolerance);
+                }
+                return {false, path + "[" + std::to_string(i) + "]",
+                    "No matching element found in second array"};
+            }
+        }
+        return {true, "", ""};
+    }
+
+    JsonComparisonResult compareJsonValues(
+        const json::JsonValue& a,
+        const json::JsonValue& b,
+        const std::string& path,
+        double relTolerance
     ) {
         // Handle null values
         if (a.isNull() && b.isNull()) return {true, "", ""};
@@ -1328,6 +1389,10 @@ namespace {
             return {true, "", ""};
         }
         if (a.isArray() && b.isArray()) {
+            // For unordered collection paths, use multiset matching
+            if (unorderedArrayPaths().count(path)) {
+                return compareArraysAsMultiset(a, b, path, relTolerance);
+            }
             size_t aSize = a.size();
             size_t bSize = b.size();
             if (aSize != bSize) {
