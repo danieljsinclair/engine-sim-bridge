@@ -172,6 +172,11 @@ bool BridgeSimulator::changeGear(int gearDelta) {
     return true;
 }
 
+void BridgeSimulator::setDynoTorqueScale(double scale) {
+    if (!m_simulator || scale < 0.0 || !m_simulator->m_dyno.m_enabled) return;
+    m_simulator->m_dyno.m_maxTorque = units::torque(EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS, units::ft_lb) * scale;
+}
+
 BridgeSimulator::DrivetrainSnapshot BridgeSimulator::captureDrivetrainState() const {
     DrivetrainSnapshot snapshot;
     if (!m_simulator) return snapshot;

@@ -54,6 +54,7 @@ public:
     DrivetrainSnapshot captureDrivetrainState() const;
     void restoreDrivetrainState(const DrivetrainSnapshot& snapshot);
     bool changeGear(int gearDelta);
+    void setDynoTorqueScale(double scale);
 
     // Set display name from script path (called by factory for PistonEngine mode)
     void setNameFromScript(const std::string& scriptPath);
