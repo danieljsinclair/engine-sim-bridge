@@ -194,6 +194,15 @@ void applyDynoControl(BridgeSimulator* bridgeSim, double scale, double& lastScal
     lastScale = scale;
 }
 
+void applyVehicleControls(BridgeSimulator* bridgeSim, int gearDelta, double dynoTorqueScale,
+                          bool engineRunning, double& lastDynoTorqueScale, ILogging* logger) {
+    if (!bridgeSim) return;
+    applyGearChange(bridgeSim, gearDelta, logger);
+    if (engineRunning) {
+        applyDynoControl(bridgeSim, dynoTorqueScale, lastDynoTorqueScale);
+    }
+}
+
 void updatePresentation(presentation::IPresentation* presentation, const SimulationConfig& config,
                         double currentTime,
                         const EngineSimStats& stats, double throttle, bool ignition, bool starterEngaged,
@@ -328,13 +337,9 @@ int runUnifiedAudioLoop(
         simulator.setThrottle(cranking.effectiveThrottle);
         simulator.setIgnition(input.ignition);
 
-        // Apply gear changes and dyno control through BridgeSimulator interface
-        if (bridgeSim) {
-            applyGearChange(bridgeSim, input.gearDelta, logger);
-            if (crankingState.phase == CrankingState::Running) {
-                applyDynoControl(bridgeSim, input.dynoTorqueScale, lastDynoTorqueScale);
-            }
-        }
+        applyVehicleControls(bridgeSim, input.gearDelta, input.dynoTorqueScale,
+                             crankingState.phase == CrankingState::Running,
+                             lastDynoTorqueScale, logger);
 
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * SECONDS_TO_MILLISECONDS);
 
