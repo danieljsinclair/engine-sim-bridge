@@ -200,8 +200,6 @@ void runWarmupPhase(ISimulator& simulator,
     double currentTime = 0.0;
 
     for (int i = 0; i < AudioLoopConfig::WARMUP_ITERATIONS; i++) {
-        EngineSimStats stats = simulator.getStats();
-
         simulator.setThrottle(smoothedThrottle);
         simulator.update(config.updateInterval());
 
@@ -212,7 +210,7 @@ void runWarmupPhase(ISimulator& simulator,
             int warmupRead = 0;
 
             for (int retry = 0; retry <= 3 && warmupRead < config.framesPerUpdate(); retry++) {
-                int readThisTime = 0;
+                int32_t readThisTime = 0;
                 simulator.renderOnDemand(
                     discardBuffer.data() + warmupRead * EngineSimAudio::STEREO,
                     config.framesPerUpdate() - warmupRead,

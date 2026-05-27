@@ -98,7 +98,7 @@ void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFr
 
     // Read from simulator and write to buffer
     std::vector<float> buffer(framesToWrite * 2);
-    int totalRead = 0;
+    int32_t totalRead = 0;
     simulator->readAudioBuffer(buffer.data(), framesToWrite, &totalRead);
 
     if (totalRead > 0) {
