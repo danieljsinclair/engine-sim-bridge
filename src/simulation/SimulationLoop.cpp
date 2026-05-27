@@ -106,7 +106,7 @@ bool checkStarterMotorRPM(ISimulator& simulator, double minSustainedRPM) {
 
 // Get input for non-interactive (timed) mode: ramp throttle from 0 to 1 over THROTTLE_RAMP_DURATION_SECONDS
 input::EngineInput getTimedInput(double currentTime) {
-    input::EngineInput input;  // Uses struct defaults: ignition=true, starterMotor=false, shouldContinue=true
+    input::EngineInput input;  // Uses struct defaults: ignition=true, starterSwitch=false, shouldContinue=true
     input.throttle = currentTime < THROTTLE_RAMP_DURATION_SECONDS
         ? currentTime / THROTTLE_RAMP_DURATION_SECONDS
         : FULL_THROTTLE;
@@ -116,6 +116,7 @@ input::EngineInput getTimedInput(double currentTime) {
 void updatePresentation(presentation::IPresentation* presentation, const SimulationConfig& config,
                         double currentTime,
                         const EngineSimStats& stats, double throttle, bool ignition,
+                        bool starterMotorEngaged, int simFrequency,
                         int underrunCount, IAudioBuffer& audioBuffer,
                         telemetry::ITelemetryReader* telemetryReader) {
     if (!presentation) return;
@@ -135,7 +136,7 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.underrunCount = underrunCount;
     state.audioMode = audioBuffer.getModeString();
     state.ignition = ignition;
-    state.starterMotor = false;
+    state.starterMotorEngaged = starterMotorEngaged;
     state.exhaustFlow = stats.exhaustFlow;
     state.gear = stats.gear;
     state.dynoTorque = stats.dynoTorque;
@@ -149,6 +150,7 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.generatingRateFps = timing.generatingRateFps;
     state.trendPct = timing.trendPct;
     state.sampleRate = config.sampleRate();
+    state.simulationFrequency = simFrequency;
 
     presentation->ShowEngineState(state);
 }
@@ -156,14 +158,15 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
 void writeTelemetry(telemetry::ITelemetryWriter* telemetryWriter,
                     double currentTime,
                     double throttle,
-                    bool ignition) {
+                    bool ignition,
+                    bool starterMotorEngaged) {
     if (!telemetryWriter) return;
 
-    // Push vehicle inputs (loop owns throttle/ignition, simulator doesn't)
+    // Push vehicle inputs (loop owns throttle/ignition/starter, simulator doesn't)
     telemetry::VehicleInputsTelemetry inputs;
     inputs.throttlePosition = throttle;
     inputs.ignitionOn = ignition;
-    inputs.starterMotorEngaged = false;
+    inputs.starterMotorEngaged = starterMotorEngaged;
     telemetryWriter->writeVehicleInputs(inputs);
 
     // Push simulator metrics
@@ -254,20 +257,24 @@ void applyDynoControl(Simulator* rawSim, const input::EngineInput& engineInput, 
     lastScale = engineInput.dynoTorqueScale;
 }
 
-// Apply gear changes from keyboard input ([/] keys). Clamps at gear 0 (neutral).
-void applyGearChange(Simulator* rawSim, int gearDelta, ILogging* logger) {
-    if (!rawSim || gearDelta == 0) return;
-    if (!rawSim->getTransmission()) return;
+// Apply gear changes from input provider gearDelta.
+void applyGearChange(BridgeSimulator* bridgeSim, int gearDelta, ILogging* logger) {
+    if (!bridgeSim || gearDelta == 0) return;
+
+    Simulator* rawSim = bridgeSim->getInternalSimulator();
+    if (!rawSim || !rawSim->getTransmission()) {
+        logger->warning(LogMask::BRIDGE, "Gear change requested but transmission unavailable");
+        return;
+    }
 
     int currentGear = rawSim->getTransmission()->getGear();
-    int newGear = currentGear + gearDelta;
-    int gearCount = rawSim->getTransmission()->getGearCount();
-    if (newGear >= -1 && newGear <= gearCount) {
-        rawSim->getTransmission()->changeGear(newGear);
-        rawSim->getTransmission()->setClutchPressure(newGear > 0 ? 1.0 : 0.0);
+    if (bridgeSim->changeGear(gearDelta)) {
+        int newGear = rawSim->getTransmission()->getGear();
         const char* label = newGear == -1 ? "PARK" : (newGear == 0 ? "NEUTRAL" : "GEAR");
         logger->info(LogMask::BRIDGE, "Gear: %d -> %d (%s, clutch %s)", currentGear, newGear,
                      label, newGear > 0 ? "LOCKED" : "FREE");
+    } else {
+        logger->warning(LogMask::BRIDGE, "Gear change rejected: %d %+d", currentGear, gearDelta);
     }
 }
 
@@ -294,6 +301,7 @@ int runUnifiedAudioLoop(
 
     double throttle = 0.1;
     bool ignition = true;
+    bool starterMotorEngaged = false;
     double lastDynoTorqueScale = -1.0;
     bool engineCaught = false;
 
@@ -332,8 +340,10 @@ int runUnifiedAudioLoop(
                 applyDynoControl(rawSim, engineInput, lastDynoTorqueScale);
             }
 
-            // Apply gear changes ([/] keys in keyboard provider)
-            applyGearChange(rawSim, engineInput.gearDelta, logger);
+            // Apply gear changes from input provider
+            applyGearChange(bridgeSim, engineInput.gearDelta, logger);
+
+            starterMotorEngaged = engineInput.starterSwitch;
         } else {
             if (currentTime >= config.duration) {
                 break;
@@ -341,10 +351,12 @@ int runUnifiedAudioLoop(
             auto timedInput = getTimedInput(currentTime);
             throttle = timedInput.throttle;
             ignition = timedInput.ignition;
+            starterMotorEngaged = !engineCaught;  // Keep starter on until engine catches
         }
 
         simulator.setThrottle(throttle);
         simulator.setIgnition(ignition);
+        simulator.setStarterMotor(starterMotorEngaged);
 
         // Update simulation via strategy (threaded mode updates here; sync-pull is no-op)
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * 1000.0);
@@ -354,7 +366,7 @@ int runUnifiedAudioLoop(
         // Generate audio: strategy decides whether to fill buffer (Threaded fills, SyncPull no-ops)
         audioBuffer.fillBufferFromEngine(&simulator, config.framesPerUpdate());
 
-        writeTelemetry(telemetryWriter, currentTime, throttle, ignition);
+        writeTelemetry(telemetryWriter, currentTime, throttle, ignition, starterMotorEngaged);
 
         // Read underrun count from telemetry (pushed by ThreadedStrategy)
         int underrunCount = 0;
@@ -366,7 +378,7 @@ int runUnifiedAudioLoop(
         currentTime += config.updateInterval();
 
         // Display via presentation (ConsolePresentation formats the complete output line)
-        updatePresentation(presentation, config, currentTime, stats, throttle, ignition, underrunCount, audioBuffer, telemetryReader);
+        updatePresentation(presentation, config, currentTime, stats, throttle, ignition, starterMotorEngaged, simulator.getSimulationFrequency(), underrunCount, audioBuffer, telemetryReader);
 
         // Pace to 60Hz using sleep_until for accuracy
         timer.waitUntilNextTick();
@@ -399,7 +411,7 @@ int runSimulation(
 
     // Initialize strategy
     AudioBufferConfig strategyConfig;
-    strategyConfig.channels = 2;
+    strategyConfig.channels = EngineSimAudio::STEREO;
     strategyConfig.synthLatency = config.engineConfig.targetSynthesizerLatency;
 
     if (!audioBuffer->initialize(strategyConfig, config.sampleRate())) {

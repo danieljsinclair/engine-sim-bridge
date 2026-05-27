@@ -23,5 +23,6 @@ public:
     virtual bool readAudioBuffer(float* buffer, int32_t frames, int32_t* read) = 0;
     virtual bool start() = 0;
     virtual void stop() = 0;
+    virtual int getSimulationFrequency() const = 0;
     static const char* getVersion();
 };

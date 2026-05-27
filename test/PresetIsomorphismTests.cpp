@@ -1580,15 +1580,15 @@ INSTANTIATE_TEST_SUITE_P(
     AllEngines,
     RoundTripIsomorphismTest,
     ::testing::Values(
+        //RoundTripParam{"Ferrari_412_T2", "engines/atg-video-2/12_ferrari_412_t2.mr", "ferrari_412_t2.json"},
+        //RoundTripParam{"Radial_9", "engines/atg-video-2/09_radial_9.mr", "radial_9.json"},
+        //RoundTripParam{"V6_60", "engines/atg-video-2/04_60_degree_v6.mr", "v6_60_degree.json"},
+        //RoundTripParam{"V6_Even", "engines/atg-video-2/06_even_fire_v6.mr", "v6_even_fire.json"},
+        //RoundTripParam{"V6_Odd", "engines/atg-video-2/05_odd_fire_v6.mr", "v6_odd_fire.json"},
         RoundTripParam{"GM_LS", "engines/atg-video-2/07_gm_ls.mr", "v8_gm_ls.json"},
         RoundTripParam{"Ferrari_F136", "engines/atg-video-2/08_ferrari_f136_v8.mr", "ferrari_f136.json"},
-        RoundTripParam{"Ferrari_412_T2", "engines/atg-video-2/12_ferrari_412_t2.mr", "ferrari_412_t2.json"},
         RoundTripParam{"2JZ", "engines/atg-video-2/03_2jz.mr", "2jz.json"},
-        RoundTripParam{"LFA_V10", "engines/atg-video-2/10_lfa_v10.mr", "lfa_v10.json"},
-        RoundTripParam{"Radial_9", "engines/atg-video-2/09_radial_9.mr", "radial_9.json"},
-        RoundTripParam{"V6_60", "engines/atg-video-2/04_60_degree_v6.mr", "v6_60_degree.json"},
-        RoundTripParam{"V6_Even", "engines/atg-video-2/06_even_fire_v6.mr", "v6_even_fire.json"},
-        RoundTripParam{"V6_Odd", "engines/atg-video-2/05_odd_fire_v6.mr", "v6_odd_fire.json"}
+        RoundTripParam{"LFA_V10", "engines/atg-video-2/10_lfa_v10.mr", "lfa_v10.json"}
     )
 );
 

@@ -26,7 +26,7 @@ struct EngineState {
     int underrunCount;
     std::string audioMode;
     bool ignition;
-    bool starterMotor;
+    bool starterMotorEngaged;
     double exhaustFlow;  // m^3/s
     int gear = 0;
     double dynoTorque = 0.0;      // ft*lbs (0 when dyno disabled)
@@ -42,6 +42,7 @@ struct EngineState {
     double generatingRateFps = 0.0;
     double trendPct = 0.0;
     int sampleRate = 0;  // Set by SimulationLoop from upstream provider
+    int simulationFrequency = 0;  // Actual physics Hz from the loaded engine
 };
 
 // ============================================================================

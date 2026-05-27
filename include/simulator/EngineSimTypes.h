@@ -73,7 +73,7 @@ namespace EngineSimDefaults {
 // Note: volume and convolutionLevel are runtime-tunable defaults, not constants
 struct ISimulatorConfig {
     int32_t sampleRate = EngineSimDefaults::SAMPLE_RATE;
-    int32_t simulationFrequency = EngineSimDefaults::SIMULATION_FREQUENCY;
+    int32_t simulationFrequency = 0;  // 0 = use engine's actual frequency; >0 = explicit override
     int32_t fluidSimulationSteps = EngineSimDefaults::FLUID_SIMULATION_STEPS;
     int32_t maxChunkFrames = EngineSimDefaults::MAX_AUDIO_CHUNK_FRAMES;
     double targetSynthesizerLatency = EngineSimDefaults::TARGET_SYNTH_LATENCY;
@@ -99,7 +99,7 @@ struct EngineSimStats {
 };
 
 namespace EngineSimAudio {
-    constexpr int STEREO = 2;
+    constexpr int STEREO = EngineSimDefaults::AUDIO_CHANNELS_STEREO;
 
 // Converts mono int16 samples to stereo float32 (interleaved) - balanced channels
 inline void convertInt16ToStereoFloat(

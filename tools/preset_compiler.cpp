@@ -48,6 +48,11 @@
 
 namespace {
 
+const char* GREEN = "\033[32m";
+const char* CYAN = "\033[36m";
+const char* RED = "\033[31m";
+const char* NC = "\033[0m";
+
 // Normalize Piranha's CWD-relative impulse response paths to portable
 // relative paths suitable for committed JSON. Piranha stores paths like
 // "../../es/sound-library/smooth/smooth_39.wav" (relative to its CWD,
@@ -131,9 +136,9 @@ PresetCompilerArgs parseArgs(int argc, char* argv[]) {
 
 void logCompileContext(const PresetCompilerArgs& args) {
     const auto compileTarget = script_compile_helpers::prepareScriptCompileTarget(args.scriptPath, args.simDir);
-    printf("Engine-sim dir: %s\n", args.simDir.c_str());
-    printf("Script import:  %s (relative to assets/)\n", compileTarget.relativeImport.c_str());
-    printf("Compiling: %s\n", args.scriptPath.c_str());
+    printf(("Engine-sim dir: "+std::string(CYAN)+"%s"+std::string(NC)+"\n").c_str(), args.simDir.c_str());
+    printf(("Script import: "+std::string(CYAN)+ "%s"+std::string(NC)+" (relative to assets/)\n").c_str(), compileTarget.relativeImport.c_str());
+    printf(("Compiling: "+std::string(CYAN)+"%s"+std::string(NC)+"\n").c_str(), args.scriptPath.c_str());
     script_compile_helpers::cleanupScriptCompileTarget(compileTarget);
 }
 
@@ -165,7 +170,7 @@ std::string buildPresetJson(const std::filesystem::path& scriptPath, const es_sc
 void writeOutputFile(const std::filesystem::path& outputPath, const std::string& json) {
     std::ofstream outFile(outputPath);
     if (!outFile.is_open()) {
-        throw std::runtime_error("Cannot open output file: " + outputPath.string());
+        throw std::runtime_error(std::string(RED) + "Cannot open output file: " + std::string(CYAN) + outputPath.string() + std::string(NC));
     }
 
     outFile << json << std::endl;
@@ -177,10 +182,10 @@ int runPresetCompiler(int argc, char* argv[]) {
 
     const es_script::Compiler::Output output = script_execution_helpers::compileScript(args.scriptPath, args.simDir);
     if (!output.engine) {
-        throw std::runtime_error("Script did not produce an engine: " + args.scriptPath.string());
+        throw std::runtime_error(std::string(RED) + "Script did not produce an engine: " + std::string(CYAN) + args.scriptPath.string() + std::string(NC));
     }
 
-    printf("Engine: %s (%d cylinders, %d banks)\n",
+    printf(("Engine:"+std::string(GREEN)+" %s "+std::string(NC)+"(%d cylinders, %d banks)\n").c_str(),
            output.engine->getName().c_str(),
            output.engine->getCylinderCount(),
            output.engine->getCylinderBankCount());
@@ -191,7 +196,7 @@ int runPresetCompiler(int argc, char* argv[]) {
 
     const std::string json = buildPresetJson(args.scriptPath, output);
     writeOutputFile(args.outputPath, json);
-    printf("Output: %s (%zu bytes)\n", args.outputPath.c_str(), json.size());
+    printf((std::string(GREEN) + "Output: " + std::string(CYAN) + "%s" + std::string(NC) + " (%zu bytes)\n").c_str(), args.outputPath.c_str(), json.size());
     return 0;
 }
 
@@ -205,7 +210,7 @@ int main(int argc, char* argv[]) {
     try {
         return runPresetCompiler(argc, argv);
     } catch (const std::exception& e) {
-        fprintf(stderr, "Error: %s\n", e.what());
+        fprintf(stderr, (std::string(RED) + "Error: %s\n" + std::string(NC)).c_str(), e.what());
         return 1;
     }
 }

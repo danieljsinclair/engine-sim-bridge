@@ -152,6 +152,64 @@ void BridgeSimulator::setStarterMotor(bool on) {
 }
 
 // ============================================================================
+// Drivetrain state transfer for engine hot-swap
+// ============================================================================
+
+bool BridgeSimulator::changeGear(int gearDelta) {
+    if (!m_simulator || gearDelta == 0) return false;
+
+    auto* trans = m_simulator->getTransmission();
+    if (!trans) return false;
+
+    int currentGear = trans->getGear();
+    int newGear = currentGear + gearDelta;
+    int gearCount = trans->getGearCount();
+
+    if (newGear < -1 || newGear >= gearCount) return false;
+
+    trans->changeGear(newGear);
+    trans->setClutchPressure(newGear > 0 ? 1.0 : 0.0);
+    return true;
+}
+
+BridgeSimulator::DrivetrainSnapshot BridgeSimulator::captureDrivetrainState() const {
+    DrivetrainSnapshot snapshot;
+    if (!m_simulator) return snapshot;
+
+    auto* body = m_simulator->getVehicleMassBody();
+    if (body) {
+        snapshot.vehicleMassVtheta = body->v_theta;
+        snapshot.vehicleMassI = body->I;
+        snapshot.vehicleMassM = body->m;
+    }
+
+    auto* trans = m_simulator->getTransmission();
+    if (trans) {
+        snapshot.gear = trans->getGear();
+    }
+
+    return snapshot;
+}
+
+void BridgeSimulator::restoreDrivetrainState(const DrivetrainSnapshot& snapshot) {
+    if (!m_simulator) return;
+
+    auto* body = m_simulator->getVehicleMassBody();
+    if (body) {
+        body->v_theta = snapshot.vehicleMassVtheta;
+        body->I = snapshot.vehicleMassI;
+        body->m = snapshot.vehicleMassM;
+    }
+
+    // Restore gear and engage clutch so drivetrain spins the new engine
+    auto* trans = m_simulator->getTransmission();
+    if (trans && snapshot.gear >= 0) {
+        trans->changeGear(snapshot.gear);
+        trans->setClutchPressure(snapshot.gear > 0 ? 1.0 : 0.0);
+    }
+}
+
+// ============================================================================
 // Private Helpers
 // ============================================================================
 
@@ -173,8 +231,13 @@ void BridgeSimulator::initDependencies(ILogging* logger, telemetry::ITelemetryWr
 
 void BridgeSimulator::initAudioConfig(const ISimulatorConfig& config) {
     engineConfig_ = config;
-    // Pre-allocate conversion buffer for mono int16 samples (stereo float conversion happens elsewhere)
-    // Buffer will be resized on-demand if larger frames are requested
+    if (m_simulator) {
+        if (config.simulationFrequency > 0) {
+            m_simulator->setSimulationFrequency(config.simulationFrequency);
+        } else {
+            engineConfig_.simulationFrequency = m_simulator->getSimulationFrequency();
+        }
+    }
     ensureAudioConversionBufferSize(engineConfig_.maxChunkFrames);
 }
 
