@@ -27,8 +27,9 @@ set(ENGINE_SIM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 # Piranha's CMakeLists unconditionally calls find_package(Boost REQUIRED).
 # We can't cross-compile Boost for iOS, so we must skip the entire piranha subdirectory.
 # The approach: override add_subdirectory to skip piranha when building for iOS.
-if(IOS)
-    set(PIRANHA_ENABLED OFF CACHE BOOL "Disable scripting for iOS" FORCE)
+# ESP32: same issue — Boost unavailable, piranha Bison/Flex toolchain not cross-compilable.
+if(IOS OR ESP_PLATFORM)
+    set(PIRANHA_ENABLED OFF CACHE BOOL "Disable scripting for ${PLATFORM}" FORCE)
 endif()
 
 # Isolate submodule compiler flags: do not inherit our strict warnings/Werror
@@ -104,7 +105,12 @@ set(BRIDGE_SOURCES
 )
 
 # Platform-specific audio hardware and factory
-if(IOS)
+if(ESP_PLATFORM)
+    # ESP32: Use I2S hardware provider
+    list(APPEND BRIDGE_SOURCES
+        src/hardware/ESP32I2SHardwareProvider.cpp
+    )
+elseif(IOS)
     # iOS: Use AVAudioEngine-based hardware provider (ObjC++)
     # Factory must be .mm to include AVAudioEngine headers
     list(APPEND BRIDGE_SOURCES
@@ -124,7 +130,8 @@ endif()
 
 # iOS builds produce a static library for linking into Xcode project
 # macOS builds produce a shared library (.dylib) for the CLI app
-if(IOS)
+# ESP32 builds produce a static library for linking into ESP-IDF component
+if(IOS OR ESP_PLATFORM)
     add_library(engine-sim-bridge STATIC ${BRIDGE_SOURCES})
 else()
     add_library(engine-sim-bridge SHARED ${BRIDGE_SOURCES})
@@ -135,6 +142,8 @@ if(IOS)
     set(AUDIO_LIBRARY "-framework AudioToolbox -framework CoreAudio -framework CoreFoundation -framework AVFoundation")
 elseif(APPLE)
     set(AUDIO_LIBRARY "-framework AudioToolbox -framework CoreAudio -framework CoreFoundation")
+elseif(ESP_PLATFORM)
+    set(AUDIO_LIBRARY "")
 endif()
 
 target_include_directories(engine-sim-bridge
@@ -225,8 +234,8 @@ endif()
 # iOS builds skip tests entirely
 # -----------------------------------------------------------------------------
 option(BUILD_BRIDGE_TESTS "Build engine-sim-bridge unit tests" ON)
-if(IOS)
-    set(BUILD_BRIDGE_TESTS OFF CACHE BOOL "Skip tests for iOS build" FORCE)
+if(IOS OR ESP_PLATFORM)
+    set(BUILD_BRIDGE_TESTS OFF CACHE BOOL "Skip tests for embedded build" FORCE)
 endif()
 if(BUILD_BRIDGE_TESTS)
     # Fetch GoogleTest if not available
