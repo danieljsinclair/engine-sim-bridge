@@ -36,92 +36,116 @@ static constexpr double FULL_THROTTLE = 1.0;                     // Maximum thro
 static constexpr double SECONDS_TO_MICROSECONDS = 1000000.0;
 static constexpr double SECONDS_TO_MILLISECONDS = 1000.0;
 
-struct InputResult {
-    double throttle = 0.1;
-    bool ignition = true;
-    bool shouldContinue = true;
-    int gearDelta = 0;
-    double dynoTorqueScale = -1.0;
-};
-
-InputResult pollInput(input::IInputProvider* inputProvider, double currentTime, double duration, double updateInterval) {
+input::EngineInput pollInput(input::IInputProvider* inputProvider, double currentTime, double duration, double updateInterval) {
     if (inputProvider) {
-        auto engineInput = inputProvider->OnUpdateSimulation(updateInterval);
-        return {engineInput.throttle, engineInput.ignition, engineInput.shouldContinue,
-                engineInput.gearDelta, engineInput.dynoTorqueScale};
+        return inputProvider->OnUpdateSimulation(updateInterval);
     }
     if (currentTime >= duration) {
-        return {0.1, true, false, 0, -1.0};
+        input::EngineInput stop;
+        stop.throttle = 0.1;
+        stop.shouldContinue = false;
+        return stop;
     }
-    auto timed = input::EngineInput{};
+    input::EngineInput timed;
     timed.throttle = currentTime < THROTTLE_RAMP_DURATION_SECONDS
         ? currentTime / THROTTLE_RAMP_DURATION_SECONDS : FULL_THROTTLE;
-    return {timed.throttle, timed.ignition, true, 0, -1.0};
+    return timed;
 }
 
-struct CrankingState {
-    enum Phase { Cranking, Running } phase = Cranking;
-    int ticks = 0;
+class CrankingController {
+public:
+    struct State {
+        double startingThrottle;
+        bool starterEngaged;
+        presentation::EnginePhase phase;
+    };
+
+    void engageStarter(ISimulator& simulator, bool starterButton) {
+        if (starterButton && phase_ != Running) {
+            if (phase_ != Cranking) {
+                // Stopped → start cranking
+                reset();
+                simulator.setStarterMotor(true);
+            }
+            else {
+                // Already cranking, toggle it, so disengage starter
+                simulator.setStarterMotor(false);
+                phase_ = Stopped;
+            }
+        }
+    }
+
+    State step(ISimulator& simulator, double userThrottle, ILogging* logger) {
+        // Stall detection: Running → Stopped when RPM drops below threshold
+        if (phase_ == Running && simulator.getStats().currentRPM < STOPPED_RPM) {
+            phase_ = Stopped;
+        }
+
+        // Stopped and Running: pass through user throttle
+        if (phase_ != Cranking) {
+            return {userThrottle, false};
+        }
+
+        // Cranking: measure baseline, detect catch
+        ticks_++;
+        double startingThrottle = 0.55;
+        EngineSimStats stats = simulator.getStats();
+#ifdef CRANKING_DEBUG
+        if (ticks_ <= BASELINE_TICKS || ticks_ % 20 == 0) {
+            logger->info(LogMask::BRIDGE,
+                         "Crank tick %d: RPM=%.0f exhaust=%.6f baseline=%.6f",
+                         ticks_, stats.currentRPM, stats.exhaustFlow,
+                         exhaustFlowBaseline_);
+        }
+#endif
+        if (ticks_ <= BASELINE_TICKS) {
+            exhaustFlowSum_ += stats.exhaustFlow;
+            if (ticks_ == BASELINE_TICKS) {
+                exhaustFlowBaseline_ = exhaustFlowSum_ / BASELINE_TICKS;
+#ifdef CRANKING_DEBUG
+                logger->info(LogMask::BRIDGE, "Exhaust flow baseline: %.3f at %.0f RPM",
+                             exhaustFlowBaseline_, stats.currentRPM);
+#endif
+            }
+        } else if (engineCaught(stats)) {
+            simulator.setStarterMotor(false);
+            phase_ = Running;
+            startingThrottle = userThrottle;
+#ifdef CRANKING_DEBUG
+            logger->info(LogMask::BRIDGE,
+                         "Engine caught at tick %d - exhaust %.3f (%.1fx baseline), %.0f RPM",
+                         ticks_, stats.exhaustFlow,
+                         stats.exhaustFlow / exhaustFlowBaseline_, stats.currentRPM);
+#else
+            ILogging* _ = logger;
+#endif
+        }
+
+        return {startingThrottle, phase_ == Cranking};
+    }
+
+private:
+    enum Phase { Stopped, Cranking, Running } phase_ = Cranking;
+    int ticks_ = 0;
 
     static constexpr int BASELINE_TICKS = 10;
     static constexpr double CATCH_RATIO = 2.0;
     static constexpr double MIN_CATCH_RPM = 500.0;
+    static constexpr double STOPPED_RPM = 5.0;
 
-    double exhaustFlowSum = 0.0;
-    double exhaustFlowBaseline = 0.0;
+    double exhaustFlowSum_ = 0.0;
+    double exhaustFlowBaseline_ = 0.0;
 
-    struct Result {
-        double effectiveThrottle;
-        bool starterEngaged;
-    };
-
-    bool engineCaught(const EngineSimStats& stats) const {
-        if (exhaustFlowBaseline <= 0.0) return false;
-        return stats.exhaustFlow > exhaustFlowBaseline * CATCH_RATIO
-            && stats.currentRPM > MIN_CATCH_RPM;
+    void reset() {
+        phase_ = Cranking;
+        ticks_ = 0;
+        exhaustFlowSum_ = 0.0;
+        exhaustFlowBaseline_ = 0.0;
     }
 
-    Result step(ISimulator& simulator, double userThrottle, ILogging* logger) {
-        ticks++;
-        double effectiveThrottle = 0.55;
-
-        if (phase == Cranking) {
-            EngineSimStats stats = simulator.getStats();
-#if CRANKING_DEBUG
-            // Periodic debug during cranking
-            if (ticks <= BASELINE_TICKS || ticks % 20 == 0) {
-                logger->info(LogMask::BRIDGE,
-                             "Crank tick %d: RPM=%.0f exhaust=%.3f load=%.3f",
-                             ticks, stats.currentRPM, stats.exhaustFlow, stats.currentLoad);
-            }
-#endif
-            if (ticks <= BASELINE_TICKS) {
-                exhaustFlowSum += stats.exhaustFlow;
-                if (ticks == BASELINE_TICKS) {
-                    exhaustFlowBaseline = exhaustFlowSum / BASELINE_TICKS;
-#if CRANKING_DEBUG
-                    logger->info(LogMask::BRIDGE, "Exhaust flow baseline: %.3f at %.0f RPM",
-                                 exhaustFlowBaseline, stats.currentRPM);
-#endif
-                }
-            } else if (engineCaught(stats)) {
-                simulator.setStarterMotor(false);
-                phase = Running;
-                effectiveThrottle = userThrottle;
-#if CRANKING_DEBUG
-                logger->info(LogMask::BRIDGE,
-                             "Engine caught at tick %d - exhaust %.3f (%.1fx baseline), %.0f RPM",
-                             ticks, stats.exhaustFlow,
-                             stats.exhaustFlow / exhaustFlowBaseline, stats.currentRPM);
-#else
-                ILogging* _ = logger;
-#endif
-            }
-
-            return {effectiveThrottle, phase == Cranking};
-        }
-
-        return {userThrottle, false};
+    bool engineCaught(const EngineSimStats& stats) const {
+        return stats.exhaustFlow > exhaustFlowBaseline_ * CATCH_RATIO
+            && stats.currentRPM > MIN_CATCH_RPM;
     }
 };
 
@@ -194,12 +218,20 @@ void applyDynoControl(BridgeSimulator* bridgeSim, double scale, double& lastScal
     lastScale = scale;
 }
 
-void applyVehicleControls(BridgeSimulator* bridgeSim, int gearDelta, double dynoTorqueScale,
-                          bool engineRunning, double& lastDynoTorqueScale, ILogging* logger) {
-    if (!bridgeSim) return;
-    applyGearChange(bridgeSim, gearDelta, logger);
-    if (engineRunning) {
-        applyDynoControl(bridgeSim, dynoTorqueScale, lastDynoTorqueScale);
+void applyVehicleControls(
+    ISimulator& simulator, BridgeSimulator* bridgeSim,
+    const input::EngineInput& input, const CrankingController::State& crankingState,
+    double& lastDynoTorqueScale, ILogging* logger)
+{
+    simulator.setThrottle(crankingState.startingThrottle);
+    simulator.setIgnition(input.ignition);
+
+    // Vehicle controls (gear, dyno) — dyno only when engine running
+    if (bridgeSim){
+        applyGearChange(bridgeSim, input.gearDelta, logger);
+        if (!crankingState.starterEngaged) {
+            applyDynoControl(bridgeSim, input.dynoTorqueScale, lastDynoTorqueScale);
+        }
     }
 }
 
@@ -323,39 +355,35 @@ int runUnifiedAudioLoop(
 {
     double currentTime = 0.0;
     LoopTimer timer(config.updateInterval());
-    CrankingState crankingState;
+    CrankingController crankingController;
 
     auto* bridgeSim = dynamic_cast<BridgeSimulator*>(&simulator);
     double lastDynoTorqueScale = -1.0;
 
     logger->info(LogMask::BRIDGE, "runUnifiedAudioLoop starting simulation loop with %s", config.simulatorLabel.c_str());
 
-    InputResult input;
+    input::EngineInput input;
     do {
-        auto cranking = crankingState.step(simulator, input.throttle, logger);
+        crankingController.engageStarter(simulator, input.starterButton);
+        auto crankingState = crankingController.step(simulator, input.throttle, logger);
 
-        simulator.setThrottle(cranking.effectiveThrottle);
-        simulator.setIgnition(input.ignition);
-
-        applyVehicleControls(bridgeSim, input.gearDelta, input.dynoTorqueScale,
-                             crankingState.phase == CrankingState::Running,
-                             lastDynoTorqueScale, logger);
-
+        applyVehicleControls(simulator, bridgeSim, input, crankingState, lastDynoTorqueScale, logger);
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * SECONDS_TO_MILLISECONDS);
 
         EngineSimStats stats = simulator.getStats();
         audioBuffer.fillBufferFromEngine(&simulator, config.framesPerUpdate());
 
-        writeTelemetry(telemetryWriter, currentTime, cranking.effectiveThrottle, input.ignition, cranking.starterEngaged);
+        writeTelemetry(telemetryWriter, currentTime, crankingState.startingThrottle, input.ignition, crankingState.starterEngaged);
 
         currentTime += config.updateInterval();
-        updatePresentation(presentation, config, currentTime, stats, cranking.effectiveThrottle,
-                            input.ignition, cranking.starterEngaged, readUnderrunCount(telemetryReader),
+        updatePresentation(presentation, config, currentTime, stats, crankingState.startingThrottle,
+                            input.ignition, crankingState.starterEngaged, readUnderrunCount(telemetryReader),
                             audioBuffer, telemetryReader);
 
         // Loop control
         timer.waitUntilNextTick();
         input = pollInput(inputProvider, currentTime, config.duration, config.updateInterval());
+
     } while (input.shouldContinue);
 
     return 0;
