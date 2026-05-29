@@ -22,6 +22,13 @@
 #include <thread>
 #include <chrono>
 
+#define CRANKING_DEBUG false  // Enable detailed logging for cranking state transitions
+#if CRANKING_DEBUG
+#define IF_CRANKING_DEBUG(x) x
+#else
+#define IF_CRANKING_DEBUG(x)
+#endif
+
 // SimulationConfig — value type, compiler-generated special members
 
 // ============================================================================
@@ -57,75 +64,81 @@ public:
     struct State {
         double startingThrottle;
         bool starterEngaged;
-        presentation::EnginePhase phase;
+        EnginePhase phase;
     };
 
     void engageStarter(ISimulator& simulator, bool starterButton) {
-        if (starterButton && phase_ != Running) {
-            if (phase_ != Cranking) {
-                // Stopped → start cranking
+        if (!starterButton) return;
+
+        switch(phase_) {
+            case EnginePhase::Stopped:
                 reset();
                 simulator.setStarterMotor(true);
-            }
-            else {
-                // Already cranking, toggle it, so disengage starter
+                break;
+            case EnginePhase::Cranking:
                 simulator.setStarterMotor(false);
-                phase_ = Stopped;
-            }
-        }
+                phase_ = EnginePhase::Stopped;
+                break;
+            // Running and Stopping: ignore starter button
+            default:
+                break;
+        }//switch
     }
 
-    State step(ISimulator& simulator, double userThrottle, ILogging* logger) {
-        // Stall detection: Running → Stopped when RPM drops below threshold
-        if (phase_ == Running && simulator.getStats().currentRPM < STOPPED_RPM) {
-            phase_ = Stopped;
-        }
-
-        // Stopped and Running: pass through user throttle
-        if (phase_ != Cranking) {
-            return {userThrottle, false};
-        }
-
-        // Cranking: measure baseline, detect catch
-        ticks_++;
-        double startingThrottle = 0.55;
+    State step(ISimulator& simulator, double userThrottle, bool ignition, ILogging* logger) {
         EngineSimStats stats = simulator.getStats();
-#ifdef CRANKING_DEBUG
-        if (ticks_ <= BASELINE_TICKS || ticks_ % 20 == 0) {
-            logger->info(LogMask::BRIDGE,
-                         "Crank tick %d: RPM=%.0f exhaust=%.6f baseline=%.6f",
-                         ticks_, stats.currentRPM, stats.exhaustFlow,
-                         exhaustFlowBaseline_);
-        }
-#endif
-        if (ticks_ <= BASELINE_TICKS) {
-            exhaustFlowSum_ += stats.exhaustFlow;
-            if (ticks_ == BASELINE_TICKS) {
-                exhaustFlowBaseline_ = exhaustFlowSum_ / BASELINE_TICKS;
-#ifdef CRANKING_DEBUG
-                logger->info(LogMask::BRIDGE, "Exhaust flow baseline: %.3f at %.0f RPM",
-                             exhaustFlowBaseline_, stats.currentRPM);
-#endif
-            }
-        } else if (engineCaught(stats)) {
-            simulator.setStarterMotor(false);
-            phase_ = Running;
-            startingThrottle = userThrottle;
-#ifdef CRANKING_DEBUG
-            logger->info(LogMask::BRIDGE,
-                         "Engine caught at tick %d - exhaust %.3f (%.1fx baseline), %.0f RPM",
-                         ticks_, stats.exhaustFlow,
-                         stats.exhaustFlow / exhaustFlowBaseline_, stats.currentRPM);
-#else
-            ILogging* _ = logger;
-#endif
-        }
+        double effectiveThrottle = userThrottle; // starting throttle
+        constexpr double CRANKING_THROTTLE = 0.55;
+        ILogging* _ = logger;
 
-        return {startingThrottle, phase_ == Cranking};
+        // State transitions
+        switch(phase_) {
+            case EnginePhase::Running:
+                if (!ignition) {
+                    // intentionally stopping the engine by cutting the ignition
+                    phase_ = EnginePhase::Stopping;
+                }
+                else if (stats.currentRPM < STOPPED_RPM) {
+                    // stall detection: ignition was not disabled, but if RPM drops to zero while ignition is on, assume engine stalled and return to stopped state
+                    phase_ = EnginePhase::Stopped;
+                }
+                break;
+
+            case EnginePhase::Stopping:
+                if (stats.currentRPM < STOPPED_RPM) {
+                    phase_ = EnginePhase::Stopped;
+                }
+                break;
+
+            case EnginePhase::Cranking:
+                if (phase_ == EnginePhase::Cranking) {
+                    IF_CRANKING_DEBUG(log_cranking_state(logger, stats));
+
+                    // Cranking: measure baseline, detect catch
+                    if (++ticks_ <= BASELINE_TICKS) {
+                        exhaustFlowSum_ += stats.exhaustFlow;
+                        if (ticks_ == BASELINE_TICKS) {
+                            exhaustFlowBaseline_ = exhaustFlowSum_ / BASELINE_TICKS;
+                            IF_CRANKING_DEBUG(logger->info(LogMask::BRIDGE, "Exhaust flow baseline: %.3f at %.0f RPM", exhaustFlowBaseline_, stats.currentRPM));
+                        }
+                    } else if (engineCaught(stats)) {
+                        simulator.setStarterMotor(false);
+                        phase_ = EnginePhase::Running;
+                        IF_CRANKING_DEBUG(logger->info(LogMask::BRIDGE, "Engine caught at tick %d - exhaust %.3f (%.1fx baseline), %.0f RPM", ticks_, stats.exhaustFlow, stats.exhaustFlow / exhaustFlowBaseline_, stats.currentRPM));
+                    }
+                    effectiveThrottle = CRANKING_THROTTLE;
+                }
+                break;
+
+            case EnginePhase::Stopped:
+            default: // No actions in stopped state, wait for starter engagement
+                break;
+        }//switch
+    
+        return {effectiveThrottle, phase_ == EnginePhase::Cranking, phase_};
     }
-
 private:
-    enum Phase { Stopped, Cranking, Running } phase_ = Cranking;
+    EnginePhase phase_ = EnginePhase::Cranking;
     int ticks_ = 0;
 
     static constexpr int BASELINE_TICKS = 10;
@@ -137,7 +150,7 @@ private:
     double exhaustFlowBaseline_ = 0.0;
 
     void reset() {
-        phase_ = Cranking;
+        phase_ = EnginePhase::Cranking;
         ticks_ = 0;
         exhaustFlowSum_ = 0.0;
         exhaustFlowBaseline_ = 0.0;
@@ -147,6 +160,17 @@ private:
         return stats.exhaustFlow > exhaustFlowBaseline_ * CATCH_RATIO
             && stats.currentRPM > MIN_CATCH_RPM;
     }
+
+#if CRANKING_DEBUG
+    void log_cranking_state(ILogging* logger, const EngineSimStats& stats) {
+        if (ticks_ <= BASELINE_TICKS || ticks_ % 20 == 0) {
+            logger->info(LogMask::BRIDGE,
+                         "Crank tick %d: RPM=%.0f exhaust=%.6f baseline=%.6f",
+                         ticks_, stats.currentRPM, stats.exhaustFlow,
+                         exhaustFlowBaseline_);
+        }
+    }
+#endif
 };
 
 int readUnderrunCount(telemetry::ITelemetryReader* reader) {
@@ -238,6 +262,7 @@ void applyVehicleControls(
 void updatePresentation(presentation::IPresentation* presentation, const SimulationConfig& config,
                         double currentTime,
                         const EngineSimStats& stats, double throttle, bool ignition, bool starterEngaged,
+                        EnginePhase phase,
                         int underrunCount, IAudioBuffer& audioBuffer,
                         telemetry::ITelemetryReader* telemetryReader) {
     if (!presentation) return;
@@ -258,6 +283,7 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.audioMode = audioBuffer.getModeString();
     state.ignition = ignition;
     state.starterMotorEngaged = starterEngaged;
+    state.enginePhase = phase;
     state.exhaustFlow = stats.exhaustFlow;
     state.gear = stats.gear;
     state.dynoTorque = stats.dynoTorque;
@@ -365,7 +391,8 @@ int runUnifiedAudioLoop(
     input::EngineInput input;
     do {
         crankingController.engageStarter(simulator, input.starterButton);
-        auto crankingState = crankingController.step(simulator, input.throttle, logger);
+        auto crankingState = crankingController.step(simulator, input.throttle, input.ignition, logger);
+        bridgeSim->setEnginePhase(crankingState.phase);
 
         applyVehicleControls(simulator, bridgeSim, input, crankingState, lastDynoTorqueScale, logger);
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * SECONDS_TO_MILLISECONDS);
@@ -377,8 +404,8 @@ int runUnifiedAudioLoop(
 
         currentTime += config.updateInterval();
         updatePresentation(presentation, config, currentTime, stats, crankingState.startingThrottle,
-                            input.ignition, crankingState.starterEngaged, readUnderrunCount(telemetryReader),
-                            audioBuffer, telemetryReader);
+                            input.ignition, crankingState.starterEngaged, crankingState.phase,
+                            readUnderrunCount(telemetryReader), audioBuffer, telemetryReader);
 
         // Loop control
         timer.waitUntilNextTick();

@@ -10,19 +10,9 @@
 #include <string>
 #include <memory>
 #include <functional>
+#include "simulation/EnginePhase.h"
 
 namespace presentation {
-
-// ============================================================================
-// EnginePhase - Bridge state machine phase (single source of truth)
-// ============================================================================
-
-enum class EnginePhase {
-    Stopped,    // Engine not running
-    Cranking,   // Starter motor engaged, waiting for catch
-    Running,    // Engine self-sustaining
-    Stopping    // Ignition off, waiting for RPM to drop
-};
 
 // ============================================================================
 // EngineState - Data to display

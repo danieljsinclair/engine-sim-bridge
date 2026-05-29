@@ -8,6 +8,7 @@
 
 #include "simulator/ISimulator.h"
 #include "simulator/EngineSimTypes.h"
+#include "simulation/EnginePhase.h"
 #include "common/ILogging.h"
 #include "telemetry/ITelemetryProvider.h"
 #include "telemetry/NullTelemetryWriter.h"
@@ -43,12 +44,14 @@ public:
     void setThrottle(double position) override;
     void setIgnition(bool on) override;
     void setStarterMotor(bool on) override;
+    void setEnginePhase(EnginePhase phase);
 
     // Drivetrain state transfer for engine hot-swap (preserves road speed)
     struct DrivetrainSnapshot {
         double vehicleMassVtheta = 0.0;
         double vehicleMassI = 0.0;
         double vehicleMassM = 0.0;
+        EnginePhase enginePhase = EnginePhase::Stopped;
         int gear = 0;
     };
     DrivetrainSnapshot captureDrivetrainState() const;
@@ -63,6 +66,8 @@ private:
     void initDependencies(ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter);
     void initAudioConfig(const ISimulatorConfig& config);
     void pushTelemetry(const EngineSimStats& stats);
+
+    EnginePhase enginePhase_ = EnginePhase::Stopped;
 
     static void advanceFixedSteps(Simulator* sim, int simulationFrequency, double dt, bool ceil);
     void drainSynthesizerBuffer(Simulator* sim);

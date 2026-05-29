@@ -151,6 +151,10 @@ void BridgeSimulator::setStarterMotor(bool on) {
     m_simulator->m_starterMotor.m_enabled = on;
 }
 
+void BridgeSimulator::setEnginePhase(EnginePhase phase) {
+    enginePhase_ = phase;
+}
+
 // ============================================================================
 // Drivetrain state transfer for engine hot-swap
 // ============================================================================
@@ -193,6 +197,8 @@ BridgeSimulator::DrivetrainSnapshot BridgeSimulator::captureDrivetrainState() co
         snapshot.gear = trans->getGear();
     }
 
+    snapshot.enginePhase = enginePhase_;
+
     return snapshot;
 }
 
@@ -212,6 +218,9 @@ void BridgeSimulator::restoreDrivetrainState(const DrivetrainSnapshot& snapshot)
         trans->changeGear(snapshot.gear);
         trans->setClutchPressure(snapshot.gear > 0 ? 1.0 : 0.0);
     }
+
+    // Restore engine phase
+    enginePhase_ = snapshot.enginePhase;
 }
 
 // ============================================================================
@@ -255,6 +264,7 @@ void BridgeSimulator::pushTelemetry(const EngineSimStats& stats) {
     engine.activeChannels = stats.activeChannels;
     engine.gear = stats.gear;
     engine.speedMph = stats.speedMph;
+    engine.enginePhase = enginePhase_;
     telemetryWriter_->writeEngineState(engine);
 
     telemetry::FramePerformanceTelemetry perf;
