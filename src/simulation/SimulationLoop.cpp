@@ -56,6 +56,13 @@ input::EngineInput pollInput(input::IInputProvider* inputProvider, double curren
     input::EngineInput timed;
     timed.throttle = currentTime < THROTTLE_RAMP_DURATION_SECONDS
         ? currentTime / THROTTLE_RAMP_DURATION_SECONDS : FULL_THROTTLE;
+
+    // Send starter button on first tick for non-interactive mode to auto-start engine
+    static bool firstTick = true;
+    if (firstTick) {
+        timed.starterButton = true;
+        firstTick = false;
+    }
     return timed;
 }
 
@@ -85,7 +92,7 @@ public:
         }//switch
     }
 
-    State step(ISimulator& simulator, double userThrottle, bool ignition, ILogging* logger) {
+    State step(ISimulator& simulator, double userThrottle, bool inputIgnition, ILogging* logger) {
         EngineSimStats stats = simulator.getStats();
         double effectiveThrottle = userThrottle; // starting throttle
         constexpr double CRANKING_THROTTLE = 0.55;
@@ -94,7 +101,7 @@ public:
         // State transitions
         switch(phase_) {
             case EnginePhase::Running:
-                if (!ignition) {
+                if (!inputIgnition) {
                     // intentionally stopping the engine by cutting the ignition
                     phase_ = EnginePhase::Stopping;
                 }
@@ -107,6 +114,9 @@ public:
             case EnginePhase::Stopping:
                 if (stats.currentRPM < STOPPED_RPM) {
                     phase_ = EnginePhase::Stopped;
+                } else if (engineCaught(stats, inputIgnition)) {
+                    // ignition re-enabled engine has momentum and will keep running
+                    phase_ = EnginePhase::Running;
                 }
                 break;
 
@@ -121,7 +131,7 @@ public:
                             exhaustFlowBaseline_ = exhaustFlowSum_ / BASELINE_TICKS;
                             IF_CRANKING_DEBUG(logger->info(LogMask::BRIDGE, "Exhaust flow baseline: %.3f at %.0f RPM", exhaustFlowBaseline_, stats.currentRPM));
                         }
-                    } else if (engineCaught(stats)) {
+                    } else if (engineCaught(stats, inputIgnition)) {
                         simulator.setStarterMotor(false);
                         phase_ = EnginePhase::Running;
                         IF_CRANKING_DEBUG(logger->info(LogMask::BRIDGE, "Engine caught at tick %d - exhaust %.3f (%.1fx baseline), %.0f RPM", ticks_, stats.exhaustFlow, stats.exhaustFlow / exhaustFlowBaseline_, stats.currentRPM));
@@ -138,7 +148,7 @@ public:
         return {effectiveThrottle, phase_ == EnginePhase::Cranking, phase_};
     }
 private:
-    EnginePhase phase_ = EnginePhase::Cranking;
+    EnginePhase phase_ = EnginePhase::Stopped;
     int ticks_ = 0;
 
     static constexpr int BASELINE_TICKS = 10;
@@ -156,8 +166,9 @@ private:
         exhaustFlowBaseline_ = 0.0;
     }
 
-    bool engineCaught(const EngineSimStats& stats) const {
-        return stats.exhaustFlow > exhaustFlowBaseline_ * CATCH_RATIO
+    bool engineCaught(const EngineSimStats& stats, bool inputIgnition) const {
+        return inputIgnition
+            && stats.exhaustFlow > exhaustFlowBaseline_ * CATCH_RATIO
             && stats.currentRPM > MIN_CATCH_RPM;
     }
 
@@ -454,8 +465,7 @@ int runSimulation(
 
     auto hardwareProvider = createHardwareProvider(config.sampleRate(), callback, logger);
 
-    logger->info(LogMask::AUDIO, "Audio initialized: strategy=%s, sr=%d",
-                         audioBuffer->getName(), config.sampleRate());
+    logger->info(LogMask::AUDIO, "Audio initialized: strategy=%s, sr=%d", audioBuffer->getName(), config.sampleRate());
 
     // Start strategy playback
     if (!audioBuffer->startPlayback(&simulator)) {
@@ -464,8 +474,6 @@ int runSimulation(
 
     // Set volume
     hardwareProvider->setVolume(config.volume);
-
-    simulator.setStarterMotor(true);
 
     // Prepare buffer via strategy (threaded: pre-fills with silence, sync-pull: no-op)
     audioBuffer->prepareBuffer();
