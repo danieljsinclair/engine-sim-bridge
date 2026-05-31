@@ -15,6 +15,8 @@
 #include "telemetry/ITelemetryProvider.h"
 #include "piston_engine_simulator.h"
 
+#include "engine-sim/include/simulator.h"
+
 #include <memory>
 #include <stdexcept>
 #include <algorithm>
@@ -191,4 +193,84 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
 
 SimulatorType SimulatorFactory::getDefaultType() {
     return SimulatorType::PistonEngine;
+}
+
+std::vector<std::string> SimulatorFactory::discoverPresets(const std::string& currentPresetPath) {
+    std::vector<std::string> presets;
+    std::filesystem::path presetDir = std::filesystem::path(currentPresetPath).parent_path();
+
+    if (!std::filesystem::exists(presetDir)) {
+        return presets;
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(presetDir)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".json") {
+            presets.push_back(entry.path().string());
+        }
+    }
+
+    std::sort(presets.begin(), presets.end());
+    return presets;
+}
+
+// ============================================================================
+// configureLoadTorque - Configure dyno in load torque mode
+// hold=false + rotationSpeed=0 = brake-only (velocity-dependent damping).
+// m_maxTorque is the load knob — the engine must work against this torque.
+// Returns true if dyno was configured, false otherwise.
+// ============================================================================
+
+namespace {
+    bool configureLoadTorque(ISimulator* simulator, double loadFraction, ILogging* logger) {
+        if (loadFraction <= 0) return false;  // OK: no load to configure
+
+        auto* bridgeSim = dynamic_cast<BridgeSimulator*>(simulator);
+        const bool configured = bridgeSim->configureDynoLoad(loadFraction);
+
+        if (configured && logger) {
+            logger->info(LogMask::BRIDGE, "Load: %d%% (%d ft*lbs max)",
+                         static_cast<int>(loadFraction * 100),
+                         static_cast<int>(loadFraction * EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS));
+        }
+        return configured;
+    }
+}
+
+// ============================================================================
+// createAndConfigure - Create simulator and optionally configure load torque
+// ============================================================================
+
+std::unique_ptr<ISimulator> SimulatorFactory::createAndConfigure(
+    SimulatorType type,
+    const std::string& scriptPath,
+    const std::string& assetBasePath,
+    const ISimulatorConfig& engineConfig,
+    double targetLoad,
+    ILogging* logger,
+    telemetry::ITelemetryWriter* telemetryWriter)
+{
+    auto sim = create(type, scriptPath, assetBasePath, engineConfig, logger, telemetryWriter);
+    configureLoadTorque(sim.get(), targetLoad, logger);
+    return sim;
+}
+
+// ============================================================================
+// discoverPresetPaths - Discover presets and find current index
+// ============================================================================
+
+SimulatorFactory::PresetDiscoveryResult SimulatorFactory::discoverPresetPaths(const std::string& currentPresetPath) {
+    PresetDiscoveryResult result;
+    result.paths = discoverPresets(currentPresetPath);
+
+    if (result.paths.size() > 1) {
+        // Find current preset index in the sorted list
+        for (size_t i = 0; i < result.paths.size(); ++i) {
+            if (result.paths[i] == currentPresetPath) {
+                result.currentIndex = i;
+                break;
+            }
+        }
+    }
+
+    return result;
 }

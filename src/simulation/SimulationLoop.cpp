@@ -8,6 +8,7 @@
 #include "simulator/ISimulator.h"
 #include "simulator/BridgeSimulator.h"
 #include "simulator/EngineSimTypes.h"
+#include "simulator/SimulatorFactory.h"
 
 #include "hardware/IAudioHardwareProvider.h"
 #include "strategy/IAudioBuffer.h"
@@ -75,7 +76,7 @@ public:
     };
 
     void engageStarter(ISimulator& simulator, bool starterButton) {
-        if (!starterButton) return;
+        if (!starterButton) return; // OK: not a precondition violation, just idle when button not pressed
 
         switch(phase_) {
             case EnginePhase::Stopped:
@@ -185,7 +186,6 @@ private:
 };
 
 int readUnderrunCount(telemetry::ITelemetryReader* reader) {
-    if (!reader) return 0;
     return reader->getAudioDiagnostics().underrunCount;
 }
 
@@ -241,14 +241,15 @@ std::unique_ptr<IAudioHardwareProvider> createHardwareProvider(
 }
 
 void applyGearChange(BridgeSimulator* bridgeSim, int gearDelta, ILogging* logger) {
-    if (!bridgeSim || gearDelta == 0) return;
+    if (gearDelta == 0) return;  // OK: no-op when no change requested
     if (bridgeSim->changeGear(gearDelta)) {
         logger->info(LogMask::BRIDGE, "Gear change: %+d", gearDelta);
     }
 }
 
 void applyDynoControl(BridgeSimulator* bridgeSim, double scale, double& lastScale) {
-    if (!bridgeSim || scale < 0.0 || scale == lastScale) return;
+    if (scale == lastScale) return;  // OK: no-op when unchanged
+    if (scale < 0.0) return;  // OK: negative values are invalid, ignore silently
     bridgeSim->setDynoTorqueScale(scale);
     lastScale = scale;
 }
@@ -275,7 +276,8 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
                         const EngineSimStats& stats, double throttle, bool ignition, bool starterEngaged,
                         EnginePhase phase,
                         int underrunCount, IAudioBuffer& audioBuffer,
-                        telemetry::ITelemetryReader* telemetryReader) {
+                        telemetry::ITelemetryReader* telemetryReader,
+                        const std::string& presetShortName) {
     if (!presentation) return;
 
     // Read audio timing diagnostics from telemetry (strategies push to telemetry after each render)
@@ -309,6 +311,7 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.trendPct = timing.trendPct;
     state.sampleRate = config.sampleRate();
     state.simulationFrequency = config.engineConfig.simulationFrequency;
+    state.presetShortName = presetShortName;
 
     presentation->ShowEngineState(state);
 }
@@ -318,8 +321,6 @@ void writeTelemetry(telemetry::ITelemetryWriter* telemetryWriter,
                     double throttle,
                     bool ignition,
                     bool starterEngaged) {
-    if (!telemetryWriter) return;
-
     // Push vehicle inputs (loop owns throttle/ignition, simulator doesn't)
     telemetry::VehicleInputsTelemetry inputs;
     inputs.throttlePosition = throttle;
@@ -347,10 +348,6 @@ void initializeSimulator(
     telemetry::ITelemetryWriter* telemetryWriter,
     const ISimulatorConfig* engineConfig)
 {
-    if (!engineConfig) {
-        throw std::runtime_error("engineConfig must not be null");
-    }
-
     // Use provided label directly, no internal logic about simulator type
     const std::string& label = config.simulatorLabel;
     logger->info(LogMask::BRIDGE, "Loading simulator: %s", label.c_str());
@@ -399,6 +396,9 @@ int runUnifiedAudioLoop(
 
     logger->info(LogMask::BRIDGE, "runUnifiedAudioLoop starting simulation loop with %s", config.simulatorLabel.c_str());
 
+    // Get preset short name from simulator (already set by setNameFromScript)
+    const std::string presetShortName = bridgeSim->getName();
+
     input::EngineInput input;
     do {
         crankingController.engageStarter(simulator, input.starterButton);
@@ -416,11 +416,17 @@ int runUnifiedAudioLoop(
         currentTime += config.updateInterval();
         updatePresentation(presentation, config, currentTime, stats, crankingState.startingThrottle,
                             input.ignition, crankingState.starterEngaged, crankingState.phase,
-                            readUnderrunCount(telemetryReader), audioBuffer, telemetryReader);
+                            readUnderrunCount(telemetryReader), audioBuffer, telemetryReader,
+                            presetShortName);
 
         // Loop control
         timer.waitUntilNextTick();
         input = pollInput(inputProvider, currentTime, config.duration, config.updateInterval());
+
+        // Check for preset cycling request
+        if (input.presetCycle) {
+            return EXIT_CODE_PRESET_CYCLE;
+        }
 
     } while (input.shouldContinue);
 
@@ -483,6 +489,7 @@ int runSimulation(
         logger->error(LogMask::AUDIO, "Failed to start hardware playback");
     }
 
+    // Run the simulation loop — returns exit code (EXIT_CODE_PRESET_CYCLE if user pressed P)
     int exitCode = runUnifiedAudioLoop(simulator, config, *audioBuffer, inputProvider, presentation, telemetryWriter, telemetryReader, logger);
 
     // Cleanup
@@ -491,5 +498,106 @@ int runSimulation(
 
     warnWavExportNotSupported(config.outputWav, logger);
 
+    return exitCode;
+}
+
+// ============================================================================
+// Hot-swap preset at runtime
+// ============================================================================
+
+int hotSwapPreset(
+    std::unique_ptr<ISimulator>& simulator,
+    IAudioBuffer* audioBuffer,
+    const std::string& newPresetPath,
+    SimulationConfig& config,
+    ILogging* logger,
+    telemetry::ITelemetryWriter* telemetry)
+{
+    audioBuffer->stopPlayback(simulator.get());
+
+    auto snapshot = simulator->saveState();
+    simulator->destroy();
+
+    simulator = SimulatorFactory::createAndConfigure(
+        SimulatorType::PistonEngine, newPresetPath, config.assetBasePath,
+        config.engineConfig, config.targetLoad, logger, telemetry);
+
+    simulator->restoreState(snapshot);
+
+    logger->info(LogMask::BRIDGE, "Hot-swapped to: %s", newPresetPath.c_str());
+    return 0;
+}
+
+// ============================================================================
+// Cycle to next preset
+// ============================================================================
+
+size_t hotSwapSimulation(
+    std::unique_ptr<ISimulator>& simulator,
+    IAudioBuffer* audioBuffer,
+    const std::vector<std::string>& presetPaths,
+    size_t currentIndex,
+    SimulationConfig& config,
+    ILogging* logger,
+    telemetry::ITelemetryWriter* telemetry)
+{
+    if (presetPaths.empty()) throw std::runtime_error("No presets available for cycling");
+
+    size_t nextIndex = (currentIndex + 1) % presetPaths.size();
+    const std::string& nextPreset = presetPaths[nextIndex];
+
+    hotSwapPreset(simulator, audioBuffer, nextPreset, config, logger, telemetry);
+
+    // Update config to reflect the new preset
+    config.configPath = nextPreset;
+
+    return nextIndex;
+}
+
+// ============================================================================
+// Iterator-pattern simulation entry point
+// ============================================================================
+
+int runNextSimulation(
+    SimulationConfig& config,
+    std::unique_ptr<ISimulator>& simulator,
+    IAudioBuffer* audioBuffer,
+    input::IInputProvider* inputProvider,
+    presentation::IPresentation* presentation,
+    telemetry::ITelemetryWriter* telemetryWriter,
+    telemetry::ITelemetryReader* telemetryReader,
+    ILogging* logger)
+{
+    // Discover presets internally — only for .json config paths
+    std::vector<std::string> presetPaths;
+    size_t currentPresetIndex = 0;
+
+    if (!config.configPath.empty() && config.configPath.size() >= 5
+        && config.configPath.substr(config.configPath.size() - 5) == ".json") {
+        auto discovered = SimulatorFactory::discoverPresetPaths(config.configPath);
+        presetPaths = std::move(discovered.paths);
+        currentPresetIndex = discovered.currentIndex;
+
+        if (presetPaths.size() > 1) {
+            logger->info(LogMask::BRIDGE, "Presets: %zu found (P to cycle)", presetPaths.size());
+        }
+    }
+
+    // If 0-1 presets, run once and return (no cycling possible)
+    if (presetPaths.size() <= 1) {
+        return runSimulation(config, *simulator, audioBuffer, inputProvider, presentation,
+                             telemetryWriter, telemetryReader, logger);
+    }
+
+    // Multiple presets: loop with hot-swap on preset cycle request
+    int exitCode;
+    do {
+        exitCode = runSimulation(config, *simulator, audioBuffer, inputProvider, presentation,
+                                 telemetryWriter, telemetryReader, logger);
+        if (exitCode == EXIT_CODE_PRESET_CYCLE) {
+            currentPresetIndex = hotSwapSimulation(simulator, audioBuffer, presetPaths,
+                                  currentPresetIndex, config, logger, telemetryWriter);
+        }
+    } while (exitCode == EXIT_CODE_PRESET_CYCLE);
     return exitCode;
 }

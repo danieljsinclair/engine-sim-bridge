@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <cstdint>
+#include <vector>
 #include "simulator/EngineSimTypes.h"
 
 class ILogging;
@@ -24,5 +25,10 @@ public:
     virtual bool start() = 0;
     virtual void stop() = 0;
     virtual int getSimulationFrequency() const = 0;
+
+    // Drivetrain state capture/restore for hot-swap
+    virtual std::vector<uint8_t> saveState() const { return {}; }
+    virtual void restoreState(const std::vector<uint8_t>&) {}
+
     static const char* getVersion();
 };

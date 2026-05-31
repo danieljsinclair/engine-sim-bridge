@@ -29,6 +29,7 @@ struct EngineState {
     bool ignition;
     bool starterMotorEngaged;
     EnginePhase enginePhase = EnginePhase::Stopped;
+    std::string presetShortName;  // Short name of current preset (for display)
     double exhaustFlow;  // m^3/s
     int gear = 0;
     double dynoTorque = 0.0;      // ft*lbs (0 when dyno disabled)

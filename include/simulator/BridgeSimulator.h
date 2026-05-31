@@ -46,6 +46,10 @@ public:
     void setStarterMotor(bool on) override;
     void setEnginePhase(EnginePhase phase);
 
+    // ISimulator state capture/restore for hot-swap
+    std::vector<uint8_t> saveState() const override;
+    void restoreState(const std::vector<uint8_t>& data) override;
+
     // Drivetrain state transfer for engine hot-swap (preserves road speed)
     struct DrivetrainSnapshot {
         double vehicleMassVtheta = 0.0;
@@ -58,6 +62,11 @@ public:
     void restoreDrivetrainState(const DrivetrainSnapshot& snapshot);
     bool changeGear(int gearDelta);
     void setDynoTorqueScale(double scale);
+
+    // Configure dyno in load torque mode (brake-only).
+    // loadFraction: 0.0-1.0 fraction of DYNO_MAX_TORQUE_FT_LBS.
+    // Returns true if configured, false if loadFraction <= 0.
+    bool configureDynoLoad(double loadFraction);
 
     // Set display name from script path (called by factory for PistonEngine mode)
     void setNameFromScript(const std::string& scriptPath);
@@ -77,7 +86,6 @@ private:
     std::unique_ptr<Simulator> m_simulator;
     std::string m_lastError;
     std::string name_;
-    bool m_created = false;
 
     // Dependencies (never null after create())
     ILogging* logger_ = nullptr;

@@ -6,6 +6,7 @@
 #include "simulator/BridgeSimulator.h"
 
 #include <vector>
+#include <cstring>
 
 BridgeSimulator::BridgeSimulator(std::unique_ptr<Simulator> simulator)
     : m_simulator(std::move(simulator))
@@ -26,7 +27,6 @@ BridgeSimulator::~BridgeSimulator() {
 bool BridgeSimulator::create(const ISimulatorConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) {
     initDependencies(logger, telemetryWriter);
     initAudioConfig(config);
-    m_created = true;
     return true;
 }
 
@@ -36,7 +36,6 @@ void BridgeSimulator::destroy() {
         m_simulator->destroy();
         m_simulator = nullptr;
     }
-    m_created = false;
 }
 
 std::string BridgeSimulator::getLastError() const {
@@ -48,16 +47,13 @@ std::string BridgeSimulator::getLastError() const {
 // ============================================================================
 
 void BridgeSimulator::update(double deltaTime) {
-    if (!m_created || !m_simulator) return;
     advanceFixedSteps(m_simulator.get(), engineConfig_.simulationFrequency, deltaTime, true);
     pushTelemetry(getStats());
 }
 
 bool BridgeSimulator::renderOnDemand(float* buffer, int32_t frames, int32_t* written) {
-    if (!m_created || !m_simulator || !buffer || frames <= 0) {
-        if (written) *written = 0;
-        return false;
-    }
+    if (!buffer) throw std::runtime_error("BridgeSimulator::renderOnDemand() called with null buffer");
+    if (frames <= 0) throw std::runtime_error("BridgeSimulator::renderOnDemand() called with invalid frame count");
 
     const double dt = static_cast<double>(frames) / engineConfig_.sampleRate;
     advanceFixedSteps(m_simulator.get(), engineConfig_.simulationFrequency, dt, false);
@@ -75,10 +71,8 @@ bool BridgeSimulator::renderOnDemand(float* buffer, int32_t frames, int32_t* wri
 }
 
 bool BridgeSimulator::readAudioBuffer(float* buffer, int32_t frames, int32_t* read) {
-    if (!m_created || !m_simulator || !buffer || frames <= 0) {
-        if (read) *read = 0;
-        return false;
-    }
+    if (!buffer) throw std::runtime_error("BridgeSimulator::readAudioBuffer() called with null buffer");
+    if (frames <= 0) throw std::runtime_error("BridgeSimulator::readAudioBuffer() called with invalid frame count");
 
     int16_t* conversionBuffer = ensureAudioConversionBufferSize(frames);
     int samplesRead = m_simulator->readAudioOutput(frames, conversionBuffer);
@@ -92,14 +86,12 @@ bool BridgeSimulator::readAudioBuffer(float* buffer, int32_t frames, int32_t* re
 }
 
 bool BridgeSimulator::start() {
-    if (!m_created || !m_simulator) return false;
     drainSynthesizerBuffer(m_simulator.get());
     m_simulator->startAudioRenderingThread();
     return true;
 }
 
 void BridgeSimulator::stop() {
-    if (!m_created || !m_simulator) return;
     m_simulator->endAudioRenderingThread();
 }
 
@@ -109,29 +101,28 @@ void BridgeSimulator::stop() {
 
 EngineSimStats BridgeSimulator::getStats() const {
     EngineSimStats stats = {};
-    if (m_simulator && m_simulator->getEngine()) {
-        stats.currentRPM = m_simulator->getEngine()->getSpeed() * 60.0 / (2.0 * M_PI);
-        stats.exhaustFlow = m_simulator->getTotalExhaustFlow();
-        stats.processingTimeMs = m_simulator->getAverageProcessingTime() * 1000.0;
 
-        if (m_simulator->m_dyno.m_enabled) {
-            stats.dynoTorque = m_simulator->getFilteredDynoTorque();
-            stats.dynoTargetRPM = std::abs(m_simulator->m_dyno.m_rotationSpeed) * 30.0 / M_PI;
-        }
+    stats.currentRPM = m_simulator->getEngine()->getSpeed() * 60.0 / (2.0 * M_PI);
+    stats.exhaustFlow = m_simulator->getTotalExhaustFlow();
+    stats.processingTimeMs = m_simulator->getAverageProcessingTime() * 1000.0;
 
-        if (m_simulator->getTransmission()) {
-            stats.gear = m_simulator->getTransmission()->getGear();
-        }
-
-        if (m_simulator->getVehicle()) {
-            stats.speedMph = m_simulator->getVehicle()->getSpeed();
-        }
+    if (m_simulator->m_dyno.m_enabled) {
+        stats.dynoTorque = m_simulator->getFilteredDynoTorque();
+        stats.dynoTargetRPM = std::abs(m_simulator->m_dyno.m_rotationSpeed) * 30.0 / M_PI;
     }
+
+    if (m_simulator->getTransmission()) {
+        stats.gear = m_simulator->getTransmission()->getGear();
+    }
+
+    if (m_simulator->getVehicle()) {
+        stats.speedMph = m_simulator->getVehicle()->getSpeed();
+    }
+
     return stats;
 }
 
 void BridgeSimulator::setThrottle(double position) {
-    if (!m_created || !m_simulator) return;
     if (position < 0.0) position = 0.0;
     if (position > 1.0) position = 1.0;
     if (m_simulator->getEngine()) {
@@ -140,14 +131,12 @@ void BridgeSimulator::setThrottle(double position) {
 }
 
 void BridgeSimulator::setIgnition(bool on) {
-    if (!m_created || !m_simulator) return;
     if (m_simulator->getEngine()) {
         m_simulator->getEngine()->getIgnitionModule()->m_enabled = on;
     }
 }
 
 void BridgeSimulator::setStarterMotor(bool on) {
-    if (!m_created || !m_simulator) return;
     m_simulator->m_starterMotor.m_enabled = on;
 }
 
@@ -160,7 +149,7 @@ void BridgeSimulator::setEnginePhase(EnginePhase phase) {
 // ============================================================================
 
 bool BridgeSimulator::changeGear(int gearDelta) {
-    if (!m_simulator || gearDelta == 0) return false;
+    if (gearDelta == 0) return false;  // OK: no change requested
 
     auto* trans = m_simulator->getTransmission();
     if (!trans) return false;
@@ -177,13 +166,24 @@ bool BridgeSimulator::changeGear(int gearDelta) {
 }
 
 void BridgeSimulator::setDynoTorqueScale(double scale) {
-    if (!m_simulator || scale < 0.0 || !m_simulator->m_dyno.m_enabled) return;
+    if (scale < 0.0) throw std::runtime_error("Dyno scale must be non-negative");
+    if (!m_simulator->m_dyno.m_enabled) return;  // OK: no-op when dyno disabled
     m_simulator->m_dyno.m_maxTorque = units::torque(EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS, units::ft_lb) * scale;
+}
+
+bool BridgeSimulator::configureDynoLoad(double loadFraction) {
+    if (loadFraction <= 0) return false;
+
+    m_simulator->m_dyno.m_enabled = true;
+    m_simulator->m_dyno.m_hold = false;       // Brake-only: resists but doesn't drive
+    const double radPerRpm = 3.14159265358979323846 / 30.0;
+    m_simulator->m_dyno.m_rotationSpeed = EngineSimDefaults::DYNO_IDLE_RPM * radPerRpm;
+    m_simulator->m_dyno.m_maxTorque = units::torque(EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS, units::ft_lb) * loadFraction;
+    return true;
 }
 
 BridgeSimulator::DrivetrainSnapshot BridgeSimulator::captureDrivetrainState() const {
     DrivetrainSnapshot snapshot;
-    if (!m_simulator) return snapshot;
 
     auto* body = m_simulator->getVehicleMassBody();
     if (body) {
@@ -203,8 +203,6 @@ BridgeSimulator::DrivetrainSnapshot BridgeSimulator::captureDrivetrainState() co
 }
 
 void BridgeSimulator::restoreDrivetrainState(const DrivetrainSnapshot& snapshot) {
-    if (!m_simulator) return;
-
     auto* body = m_simulator->getVehicleMassBody();
     if (body) {
         body->v_theta = snapshot.vehicleMassVtheta;
@@ -221,6 +219,22 @@ void BridgeSimulator::restoreDrivetrainState(const DrivetrainSnapshot& snapshot)
 
     // Restore engine phase
     enginePhase_ = snapshot.enginePhase;
+}
+
+std::vector<uint8_t> BridgeSimulator::saveState() const {
+    DrivetrainSnapshot snapshot = captureDrivetrainState();
+
+    std::vector<uint8_t> data(sizeof(DrivetrainSnapshot));
+    std::memcpy(data.data(), &snapshot, sizeof(DrivetrainSnapshot));
+    return data;
+}
+
+void BridgeSimulator::restoreState(const std::vector<uint8_t>& data) {
+    if (data.size() < sizeof(DrivetrainSnapshot)) throw std::runtime_error("Invalid snapshot data size");
+
+    DrivetrainSnapshot snapshot;
+    std::memcpy(&snapshot, data.data(), sizeof(DrivetrainSnapshot));
+    restoreDrivetrainState(snapshot);
 }
 
 // ============================================================================

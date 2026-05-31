@@ -27,6 +27,9 @@ struct EngineInput {
 
     // Dyno control
     double dynoTorqueScale = -1.0;  // -1 = unchanged, 0.0-1.0 = fraction of max torque
+
+    // Preset cycling
+    bool presetCycle = false;       // true = cycle to next preset engine configuration
 };
 
 // ============================================================================

@@ -8,6 +8,8 @@
 
 #include "simulator/EngineSimTypes.h"
 #include <string>
+#include <vector>
+#include <memory>
 
 class IAudioBuffer;
 class ISimulator;
@@ -17,6 +19,9 @@ namespace input { class IInputProvider; }
 namespace presentation { class IPresentation; }
 class ILogging;
 namespace telemetry { class ITelemetryWriter; class ITelemetryReader; }
+
+// Exit code returned by runUnifiedAudioLoop when preset cycling is requested
+constexpr int EXIT_CODE_PRESET_CYCLE = 2;
 
 // ============================================================================
 // SimulationConfig - Simulation parameters only (no infrastructure deps)
@@ -74,5 +79,51 @@ int runSimulation(
     telemetry::ITelemetryReader* telemetryReader,
     ILogging* logger
 );
+
+// ============================================================================
+// Hot-swap preset at runtime (bridge-level function)
+// Stops playback, saves state, destroys simulator, creates new one, restores state
+// Returns 0 on success, non-zero on failure
+// ============================================================================
+
+int hotSwapPreset(
+    std::unique_ptr<ISimulator>& simulator,
+    IAudioBuffer* audioBuffer,
+    const std::string& newPresetPath,
+    SimulationConfig& config,
+    ILogging* logger,
+    telemetry::ITelemetryWriter* telemetry);
+
+// ============================================================================
+// Hot-swap to next preset in the presetPaths list
+// Computes next index, calls hotSwapPreset, updates config.configPath.
+// Returns new index for convenience.
+// ============================================================================
+
+size_t hotSwapSimulation(
+    std::unique_ptr<ISimulator>& simulator,
+    IAudioBuffer* audioBuffer,
+    const std::vector<std::string>& presetPaths,
+    size_t currentIndex,
+    SimulationConfig& config,
+    ILogging* logger,
+    telemetry::ITelemetryWriter* telemetry);
+
+// ============================================================================
+// Iterator-pattern simulation entry point
+// Internally loops runSimulation + hotSwapSimulation on preset cycle.
+// Clients call once and get a final exit code. EXIT_CODE_PRESET_CYCLE never
+// escapes this function.
+// ============================================================================
+
+int runNextSimulation(
+    SimulationConfig& config,
+    std::unique_ptr<ISimulator>& simulator,
+    IAudioBuffer* audioBuffer,
+    input::IInputProvider* inputProvider,
+    presentation::IPresentation* presentation,
+    telemetry::ITelemetryWriter* telemetryWriter,
+    telemetry::ITelemetryReader* telemetryReader,
+    ILogging* logger);
 
 #endif // SIMULATION_LOOP_H

@@ -9,6 +9,7 @@
 #include "simulator/EngineSimTypes.h"
 #include <memory>
 #include <string>
+#include <vector>
 
 class ILogging;
 
@@ -57,6 +58,35 @@ public:
         telemetry::ITelemetryWriter* telemetryWriter = nullptr);
 
     static SimulatorType getDefaultType();
+
+    /**
+     * Discover .json preset files in the same directory as the given preset path.
+     * Returns sorted list of full paths to .json files.
+     */
+    static std::vector<std::string> discoverPresets(const std::string& currentPresetPath);
+
+    /**
+     * Create and configure simulator with optional dyno load torque.
+     * Combines create() + configureLoadTorque() for factory convenience.
+     */
+    static std::unique_ptr<ISimulator> createAndConfigure(
+        SimulatorType type,
+        const std::string& scriptPath,
+        const std::string& assetBasePath,
+        const ISimulatorConfig& engineConfig,
+        double targetLoad,
+        ILogging* logger,
+        telemetry::ITelemetryWriter* telemetryWriter);
+
+    /**
+     * Discover preset paths and find current index.
+     * Returns sorted paths and the index of currentPresetPath in the list.
+     */
+    struct PresetDiscoveryResult {
+        std::vector<std::string> paths;
+        size_t currentIndex = 0;
+    };
+    static PresetDiscoveryResult discoverPresetPaths(const std::string& currentPresetPath);
 
 private:
     SimulatorFactory() = delete;
