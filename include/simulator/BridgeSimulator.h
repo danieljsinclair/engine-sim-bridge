@@ -7,6 +7,7 @@
 #define BRIDGE_SIMULATOR_H
 
 #include "simulator/ISimulator.h"
+#include "simulator/ICombustionEngine.h"
 #include "simulator/EngineSimTypes.h"
 #include "simulation/EnginePhase.h"
 #include "common/ILogging.h"
@@ -18,11 +19,11 @@
 #include <string>
 #include <vector>
 
-class BridgeSimulator : public ISimulator {
+class BridgeSimulator : public ICombustionEngine {
 public:
     // Constructor takes an already-initialized Simulator subclass.
     // The factory is responsible for creating and wiring the Simulator.
-    explicit BridgeSimulator(std::unique_ptr<Simulator> simulator);
+    explicit BridgeSimulator(std::unique_ptr<Simulator> simulator, const std::string& name = "Simulator");
     ~BridgeSimulator() override;
 
     // ISimulator lifecycle
@@ -44,7 +45,7 @@ public:
     void setThrottle(double position) override;
     void setIgnition(bool on) override;
     void setStarterMotor(bool on) override;
-    void setEnginePhase(EnginePhase phase);
+    EnginePhase getEnginePhase() const override { return enginePhase_; }
 
     // ISimulator state capture/restore for hot-swap
     std::vector<uint8_t> saveState() const override;
@@ -68,10 +69,13 @@ public:
     // Returns true if configured, false if loadFraction <= 0.
     bool configureDynoLoad(double loadFraction);
 
-    // Set display name from script path (called by factory for PistonEngine mode)
-    void setNameFromScript(const std::string& scriptPath);
+    // Set display name directly
+    void setName(const std::string& name) { name_ = name; }
 
 private:
+    // Internal phase sync — not on any interface. CrankingController owns phase.
+    void setEnginePhase(EnginePhase phase);
+
     void initDependencies(ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter);
     void initAudioConfig(const ISimulatorConfig& config);
     void pushTelemetry(const EngineSimStats& stats);

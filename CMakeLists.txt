@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(engine-sim-bridge VERSION 1.0.0 LANGUAGES C CXX)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -70,6 +72,7 @@ set(BRIDGE_SOURCES
     # Telemetry
     src/telemetry/InMemoryTelemetry.cpp
     # Simulation loop
+    src/simulation/CrankingController.cpp
     src/simulation/SimulationLoop.cpp
     # Common utilities
     src/common/ConsoleLogger.cpp
@@ -294,12 +297,14 @@ if(BUILD_BRIDGE_TESTS)
 
     add_executable(bridge_unit_tests
         test/BridgeUnitTests.cpp
+        test/CrankingControllerTests.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     target_link_libraries(bridge_unit_tests
         PRIVATE
+            engine-sim-bridge
             GTest::gtest_main
     )
 

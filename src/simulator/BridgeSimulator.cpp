@@ -8,13 +8,10 @@
 #include <vector>
 #include <cstring>
 
-BridgeSimulator::BridgeSimulator(std::unique_ptr<Simulator> simulator)
+BridgeSimulator::BridgeSimulator(std::unique_ptr<Simulator> simulator, const std::string& name)
     : m_simulator(std::move(simulator))
-{
-    if (m_simulator) {
-        name_ = "Simulator";
-    }
-}
+    , name_(name)
+{}
 
 BridgeSimulator::~BridgeSimulator() {
     destroy();
@@ -217,7 +214,6 @@ void BridgeSimulator::restoreDrivetrainState(const DrivetrainSnapshot& snapshot)
         trans->setClutchPressure(snapshot.gear > 0 ? 1.0 : 0.0);
     }
 
-    // Restore engine phase
     enginePhase_ = snapshot.enginePhase;
 }
 
@@ -284,21 +280,6 @@ void BridgeSimulator::pushTelemetry(const EngineSimStats& stats) {
     telemetry::FramePerformanceTelemetry perf;
     perf.processingTimeMs = stats.processingTimeMs;
     telemetryWriter_->writeFramePerformance(perf);
-}
-
-void BridgeSimulator::setNameFromScript(const std::string& scriptPath) {
-    if (scriptPath.empty()) {
-        name_ = "Unnamed";
-        return;
-    }
-    auto lastSlash = scriptPath.find_last_of("/\\");
-    std::string filename = (lastSlash != std::string::npos)
-        ? scriptPath.substr(lastSlash + 1)
-        : scriptPath;
-    auto lastDot = filename.find_last_of('.');
-    name_ = (lastDot != std::string::npos)
-        ? filename.substr(0, lastDot)
-        : filename;
 }
 
 void BridgeSimulator::advanceFixedSteps(Simulator* sim, int simulationFrequency, double dt, bool ceil) {

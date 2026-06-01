@@ -8,7 +8,7 @@
 #include "simulation/EnginePhase.h"
 #include "simulator/EngineSimTypes.h"
 
-class ISimulator;
+class ICombustionEngine;
 class ILogging;
 
 class CrankingController {
@@ -19,13 +19,14 @@ public:
         EnginePhase phase;
     };
 
-    void engageStarter(ISimulator& simulator, bool starterButton);
-    State step(ISimulator& simulator, double userThrottle, bool ignition, ILogging* logger);
+    void engageStarter(ICombustionEngine& engine, bool starterButton);
+    State step(ICombustionEngine& engine, double userThrottle, bool ignition, ILogging* logger);
     void setInitialPhase(EnginePhase phase);
+    EnginePhase currentPhase() const { return phase_; }
     void reset();
 
 private:
-    EnginePhase phase_ = EnginePhase::Cranking;
+    EnginePhase phase_ = EnginePhase::Stopped;
     int ticks_ = 0;
 
     static constexpr int BASELINE_TICKS = 10;
@@ -36,7 +37,7 @@ private:
     double exhaustFlowSum_ = 0.0;
     double exhaustFlowBaseline_ = 0.0;
 
-    bool engineCaught(const EngineSimStats& stats) const;
+    bool engineCaught(const EngineSimStats& stats, bool inputIgnition) const;
 };
 
 #endif // CRANKING_CONTROLLER_H

@@ -15,6 +15,8 @@ class ILogging;
 
 namespace telemetry { class ITelemetryWriter; }
 
+struct SimulationConfig;  // forward -- full definition in simulation/SimulationLoop.h
+
 // ============================================================================
 // SimulatorType - Enum for factory creation
 // ============================================================================
@@ -70,20 +72,23 @@ public:
      * Combines create() + configureLoadTorque() for factory convenience.
      */
     static std::unique_ptr<ISimulator> createAndConfigure(
-        SimulatorType type,
+        const SimulationConfig& config,
         const std::string& scriptPath,
         const std::string& assetBasePath,
-        const ISimulatorConfig& engineConfig,
-        double targetLoad,
         ILogging* logger,
         telemetry::ITelemetryWriter* telemetryWriter);
 
     /**
      * Discover preset paths and find current index.
-     * Returns sorted paths and the index of currentPresetPath in the list.
+     * Returns preset info (short name + full path) and the index of currentPresetPath.
      */
+    struct PresetNames {
+        std::string shortName;  // display name (e.g., "V8", "Inline-4")
+        std::string fullPath;   // fully qualified path
+    };
+
     struct PresetDiscoveryResult {
-        std::vector<std::string> paths;
+        std::vector<PresetNames> presets;
         size_t currentIndex = 0;
     };
     static PresetDiscoveryResult discoverPresetPaths(const std::string& currentPresetPath);
