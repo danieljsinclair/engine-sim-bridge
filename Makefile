@@ -27,13 +27,21 @@ endef
 
 bridge_print_result = printf '\033[0;$(1)m=== [engine-sim-bridge] RESULT: $(2) ===\033[0m\n'
 
+define bridge_print_hint
+	if [ -n "$(strip $(SKIP_HINT_MESSAGE))" ]; then printf '%s\n' "$(SKIP_HINT_MESSAGE)"; fi;
+endef
+
 define run_bridge_ctest_suite
-	@if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) $(CTEST_SELECTOR); then \
+	@echo "$(BLOCK_START_MESSAGE)"; \
+	$(call bridge_print_hint) \
+	if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) $(CTEST_SELECTOR); then \
 		echo "$(SUMMARY_PASS_MESSAGE)"; \
 		$(call bridge_print_result,32,PASSED); \
+		$(call bridge_print_hint) \
 	else \
 		echo "$(SUMMARY_FAIL_MESSAGE)"; \
 		$(call bridge_print_result,31,FAILED); \
+		$(call bridge_print_hint) \
 		exit 1; \
 	fi
 endef
@@ -87,18 +95,24 @@ clean-test-fixtures:
 test: build test-core test-deep
 
 test-core: CTEST_SELECTOR := -E '$(BRIDGE_TEST_CORE_EXCLUDE)'
+test-core: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: core bridge suite (factory + preset regression coverage) ===
+test-core: SKIP_HINT_MESSAGE := === [engine-sim-bridge] HINT: this is the always-on core suite in make test; there is no core-only skip target inside the safe path. Use app run-notest or run-quick only when you intentionally want to bypass the full test gate. ===
 test-core: SUMMARY_PASS_MESSAGE := === [engine-sim-bridge] SUMMARY: PASS (core) ===
 test-core: SUMMARY_FAIL_MESSAGE := === [engine-sim-bridge] SUMMARY: FAIL (core) ===
 test-core: build presets
 	$(run_bridge_ctest_suite)
 
 test-isomorphism: CTEST_SELECTOR := -R '$(BRIDGE_TEST_ISOMORPHISM_MATCH)'
+test-isomorphism: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: isomorphism suite (preset parity + round-trip serialization) ===
+test-isomorphism: SKIP_HINT_MESSAGE := === [engine-sim-bridge] HINT: skip this next time by running make test-core instead of make test or make test-deep. ===
 test-isomorphism: SUMMARY_PASS_MESSAGE := === [engine-sim-bridge] SUMMARY: PASS (isomorphism) ===
 test-isomorphism: SUMMARY_FAIL_MESSAGE := === [engine-sim-bridge] SUMMARY: FAIL (isomorphism) ===
 test-isomorphism: $(ISOMORPHISM_STAMP)
 	@:
 
 test-golden: CTEST_SELECTOR := -R '$(BRIDGE_TEST_GOLDEN_MATCH)'
+test-golden: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: golden-audio suite (preset vs Piranha reference) ===
+test-golden: SKIP_HINT_MESSAGE := === [engine-sim-bridge] HINT: skip this next time by running make test-core instead of make test or make test-deep. ===
 test-golden: SUMMARY_PASS_MESSAGE := === [engine-sim-bridge] SUMMARY: PASS (golden) ===
 test-golden: SUMMARY_FAIL_MESSAGE := === [engine-sim-bridge] SUMMARY: FAIL (golden) ===
 test-golden: build presets
@@ -147,13 +161,17 @@ ISOMORPHISM_INPUTS = \
 
 $(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets
 	@mkdir -p $(dir $@)
-	@if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -R '$(BRIDGE_TEST_ISOMORPHISM_MATCH)'; then \
+	@echo "$(BLOCK_START_MESSAGE)"; \
+	$(call bridge_print_hint) \
+	if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -R '$(BRIDGE_TEST_ISOMORPHISM_MATCH)'; then \
 		echo "=== [engine-sim-bridge] SUMMARY: PASS (isomorphism) ==="; \
 		$(call bridge_print_result,32,PASSED); \
+		$(call bridge_print_hint) \
 		touch $(abspath $@); \
 	else \
 		echo "=== [engine-sim-bridge] SUMMARY: FAIL (isomorphism) ==="; \
 		$(call bridge_print_result,31,FAILED); \
+		$(call bridge_print_hint) \
 		exit 1; \
 	fi
 
