@@ -5,25 +5,21 @@
 // DESIGN NOTES
 // ============
 //
-// Problem:
-//   Creating a new session (including new IAudioHardwareProvider) on every preset swap
-//   destroys and recreates audio hardware each time -- causing pops and gaps.
-//
-// Solution:
-//   initSimulation() handles hot-swap internally. When called with an existingSession,
-//   it transfers audio hardware and engine state to the new session. The caller just
-//   calls initSimulation() every time: first run (no session) creates hardware,
-//   subsequent runs (pass old session) reuse it. Single API, no special swap method.
+// Hot-swap:
+//   Preset changes are triggered by passing existingSession to initSimulation().
+//   The session swaps its internal simulator pointer, preserving the CrankingController
+//   state and audio hardware. The old simulator is kept alive (previousSimulator_)
+//   until the next swap to prevent use-after-free in the audio callback.
+//   swapPreset() is the internal mechanism — it is NOT called directly by clients.
 //
 // Lifecycle:
 //   1. Create simulator via SimulatorFactory::createAndConfigure()
-//   2. Create session via initSimulation(config, path, simulator, audioBuffer, existingSession, ...)
-//      - No existingSession → fresh session with new audio hardware
-//      - existingSession → hot-swap: transfers hardware + state, returns new session
+//   2. Call initSimulation(config, path, simulator, audioBuffer, ...) — every time
+//      First run (no existing session): initializes audio buffer and creates hardware provider.
+//      Subsequent runs (pass existingSession): hot-swaps simulator within existing session.
 //   3. Call run() -- blocks until stop(), duration expires, or preset cycle requested
-//   4. For preset cycling: create new simulator, call initSimulation(old session), call run()
-//   5. Call close() to tear down audio hardware and simulator
-//   6. Delete session
+//   4. Call close() to tear down audio hardware and simulator
+//   5. Delete session
 
 #ifndef ISIMULATOR_SESSION_H
 #define ISIMULATOR_SESSION_H
@@ -55,10 +51,6 @@ public:
 
     /// Stop the running simulation loop. Thread-safe.
     virtual void stop() = 0;
-
-    /// Release ownership of audio hardware provider for reuse by a new session.
-    /// Called internally by initSimulation during hot-swap.
-    virtual std::unique_ptr<IAudioHardwareProvider> releaseHardwareProvider() = 0;
 
     /// Tear down audio hardware and simulator. Not restartable after close().
     virtual void close() = 0;

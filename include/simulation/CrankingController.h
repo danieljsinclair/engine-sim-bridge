@@ -21,7 +21,7 @@ public:
 
     void engageStarter(ICombustionEngine& engine, bool starterButton);
     State step(ICombustionEngine& engine, double userThrottle, bool ignition, ILogging* logger);
-    void setInitialPhase(EnginePhase phase);
+    void setInitialPhase(EnginePhase phase, ICombustionEngine* engine = nullptr);
     EnginePhase currentPhase() const { return phase_; }
     void reset();
 

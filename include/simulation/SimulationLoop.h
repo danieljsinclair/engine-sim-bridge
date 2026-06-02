@@ -80,7 +80,7 @@ std::unique_ptr<ISimulatorSession> initSimulation(
     const std::string& scriptPath,
     std::unique_ptr<ISimulator> simulator,
     IAudioBuffer* audioBuffer,
-    ISimulatorSession* existingSession = nullptr,
+    std::unique_ptr<ISimulatorSession> existingSession = nullptr,
     input::IInputProvider* inputProvider = nullptr,
     presentation::IPresentation* presentation = nullptr,
     telemetry::ITelemetryWriter* telemetryWriter = nullptr,

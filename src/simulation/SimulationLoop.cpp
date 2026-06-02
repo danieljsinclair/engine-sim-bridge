@@ -47,7 +47,7 @@ static constexpr double FULL_THROTTLE = 1.0;                     // Maximum thro
 static constexpr double SECONDS_TO_MICROSECONDS = 1000000.0;
 static constexpr double SECONDS_TO_MILLISECONDS = 1000.0;
 
-input::EngineInput pollInput(input::IInputProvider* inputProvider, double currentTime, double duration, double updateInterval) {
+input::EngineInput pollInput(input::IInputProvider* inputProvider, double currentTime, double duration, double updateInterval, bool isFirstTick) {
     if (inputProvider) {
         return inputProvider->OnUpdateSimulation(updateInterval);
     }
@@ -62,10 +62,8 @@ input::EngineInput pollInput(input::IInputProvider* inputProvider, double curren
         ? currentTime / THROTTLE_RAMP_DURATION_SECONDS : FULL_THROTTLE;
 
     // Send starter button on first tick for non-interactive mode to auto-start engine
-    static bool firstTick = true;
-    if (firstTick) {
+    if (isFirstTick) {
         timed.starterButton = true;
-        firstTick = false;
     }
     return timed;
 }
@@ -265,7 +263,7 @@ void warnWavExportNotSupported(bool outputWavRequested, ILogging* logger) {
 // ============================================================================
 // SimulatorSession - Concrete session managing audio hardware + simulator lifecycle
 // Owns audio hardware for session lifetime. Reuses runUnifiedAudioLoop() for the main tick loop.
-// Hot-swap is handled by initSimulation() — this class is just the runtime container.
+// Hot-swap is triggered by initSimulation(existingSession) — the session swaps its internal simulator pointer.
 // ============================================================================
 
 class SimulatorSession : public ISimulatorSession {
@@ -329,8 +327,59 @@ public:
 
     void stop() override {}
 
-    std::unique_ptr<IAudioHardwareProvider> releaseHardwareProvider() override {
-        return std::move(hardwareProvider_);
+    bool swapPreset(const std::string& presetFilePath, std::unique_ptr<ISimulator> newSimulator) {
+        if (closed_) {
+            logger_->error(LogMask::BRIDGE, "swapPreset: session is closed");
+            return false;
+        }
+
+        logger_->info(LogMask::BRIDGE, "swapPreset: loading %s", presetFilePath.c_str());
+
+        try {
+            if (!newSimulator) {
+                logger_->error(LogMask::BRIDGE, "swapPreset: null simulator provided");
+                return false;
+            }
+
+            // Initialize the new simulator (audio config only, not pipeline)
+            initializeSimulator(*newSimulator, config_, logger_, telemetryWriter_, &config_.engineConfig);
+
+            // Transfer drivetrain state from old simulator to new
+            auto* oldBridge = dynamic_cast<BridgeSimulator*>(simulator_.get());
+            auto* newBridge = dynamic_cast<BridgeSimulator*>(newSimulator.get());
+
+            if (oldBridge && newBridge) {
+                auto snapshot = oldBridge->captureDrivetrainState();
+                newBridge->restoreDrivetrainState(snapshot);
+            }
+
+            // Set CrankingController to Cranking and engage the starter motor.
+            // The new engine will:
+            // - If the old engine was Running: auto-transition to Running due to transferred RPM
+            // - If the old engine was Stopped: crank naturally with the engaged starter
+            auto* newCombustion = dynamic_cast<ICombustionEngine*>(newSimulator.get());
+            crankingController_.setInitialPhase(EnginePhase::Cranking, newCombustion);
+
+            // Keep old simulator alive in previousSimulator_ to prevent
+            // use-after-free in the audio callback (SyncPullStrategy holds a raw pointer)
+            previousSimulator_ = std::move(simulator_);
+
+            // Swap to the new simulator
+            simulator_ = std::move(newSimulator);
+
+            // Update the audio buffer's pointer to the new simulator
+            audioBuffer_->swapSimulator(simulator_.get());
+
+            // Update config path
+            config_.configPath = presetFilePath;
+
+            logger_->info(LogMask::BRIDGE, "swapPreset: complete");
+            return true;
+
+        } catch (const std::exception& e) {
+            logger_->error(LogMask::BRIDGE, "swapPreset failed: %s", e.what());
+            return false;
+        }
     }
 
     void close() override {
@@ -346,6 +395,7 @@ public:
 private:
     SimulationConfig config_;
     std::unique_ptr<ISimulator> simulator_;
+    std::unique_ptr<ISimulator> previousSimulator_;
     IAudioBuffer* audioBuffer_;
     std::unique_ptr<IAudioHardwareProvider> hardwareProvider_;
     input::IInputProvider* inputProvider_;
@@ -379,6 +429,8 @@ int runUnifiedAudioLoop(
 
     logger->info(LogMask::BRIDGE, "runUnifiedAudioLoop starting simulation loop with %s", config.simulatorLabel.c_str());
 
+    // Track first tick to trigger auto-start in non-interactive mode
+    bool isFirstTick = true;
     input::EngineInput input;
 
     auto* bridgeSim = dynamic_cast<BridgeSimulator*>(&simulator);
@@ -410,7 +462,8 @@ int runUnifiedAudioLoop(
         updatePresentation(presentation, config, currentTime, stats, crankingState.startingThrottle, input.ignition, crankingState.starterEngaged, crankingState.phase, readUnderrunCount(telemetryReader), audioBuffer, telemetryReader, presetShortName, simulator.getSimulationFrequency());
 
         timer.waitUntilNextTick();
-        input = pollInput(inputProvider, currentTime, config.duration, config.updateInterval());
+        input = pollInput(inputProvider, currentTime, config.duration, config.updateInterval(), isFirstTick);
+        isFirstTick = false;
 
         if (input.presetCycle) {
             return EXIT_BUT_CONTINUE_NEXT;
@@ -429,50 +482,48 @@ std::unique_ptr<ISimulatorSession> initSimulation(
     const std::string& scriptPath,
     std::unique_ptr<ISimulator> simulator,
     IAudioBuffer* audioBuffer,
-    ISimulatorSession* existingSession,
+    std::unique_ptr<ISimulatorSession> existingSession,
     input::IInputProvider* inputProvider,
     presentation::IPresentation* presentation,
     telemetry::ITelemetryWriter* telemetryWriter,
     telemetry::ITelemetryReader* telemetryReader,
     ILogging* logger)
 {
+    // Hot-swap path: caller passed an existing session — swap the simulator within it
+    if (existingSession) {
+        ASSERT(simulator, "simulator must be provided for hot-swap");
+        auto* session = static_cast<SimulatorSession*>(existingSession.get());
+        if (!session || !session->swapPreset(scriptPath, std::move(simulator))) {
+            throw std::runtime_error("Failed to swap preset within existing session: " + scriptPath);
+        }
+        return existingSession;
+    }
+
+    // First-run path: create a new session with audio hardware
     ASSERT(simulator, "simulator must be provided");
     ASSERT(audioBuffer, "audioBuffer must be provided");
     ASSERT(config.engineConfig.sampleRate > 0, "config.sampleRate must be set");
     ASSERT(config.updateInterval() > 0.0, "config.updateInterval must be set");
     ASSERT(config.framesPerUpdate() > 0, "config.framesPerUpdate must be set");
 
-    // Always initialize the new simulator first (safer — if create fails, old session untouched)
+    // Initialize the simulator
     initializeSimulator(*simulator, config, logger, telemetryWriter, &config.engineConfig);
     SimulationConfig sessionConfig = config;
+    sessionConfig.configPath = scriptPath;
 
-    std::unique_ptr<IAudioHardwareProvider> hardwareProvider;
+    // Initialize audio buffer and create hardware provider (first run only)
+    AudioBufferConfig strategyConfig;
+    strategyConfig.channels = EngineSimAudio::STEREO;
+    strategyConfig.synthLatency = config.engineConfig.targetSynthesizerLatency;
+    audioBuffer->initialize(strategyConfig, config.sampleRate());
 
-    if (existingSession) {
-        // Hot-swap: preserve audio hardware, transfer engine state.
-        // Don't close() the old session here — its simulator must stay alive
-        // until the audio callback has switched to the new one (a few frames).
-        // The caller holds the old session in a unique_ptr that gets overwritten
-        // after we return, which naturally defers destruction.
-        auto state = existingSession->getSimulator()->saveState();
-        hardwareProvider = existingSession->releaseHardwareProvider();
-        simulator->restoreState(state);
-        sessionConfig.configPath = scriptPath;
-    } else {
-        // First run: initialize audio buffer and create hardware provider
-        AudioBufferConfig strategyConfig;
-        strategyConfig.channels = EngineSimAudio::STEREO;
-        strategyConfig.synthLatency = config.engineConfig.targetSynthesizerLatency;
-        audioBuffer->initialize(strategyConfig, config.sampleRate());
-
-        auto callback = [audioBuffer](AudioBufferView& buffer) -> int {
-            return audioRenderCallback(audioBuffer, buffer);
-        };
-        hardwareProvider = createHardwareProvider(config.sampleRate(), callback, logger);
-    }
+    auto callback = [audioBuffer](AudioBufferView& buffer) -> int {
+        return audioRenderCallback(audioBuffer, buffer);
+    };
+    auto hardwareProvider = createHardwareProvider(config.sampleRate(), callback, logger);
 
     logger->info(LogMask::AUDIO, "Audio initialized: strategy=%s, sr=%d", audioBuffer->getName(), config.sampleRate());
-    
+
     return std::make_unique<SimulatorSession>(
         sessionConfig,
         std::move(simulator),

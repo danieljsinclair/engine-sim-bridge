@@ -89,8 +89,19 @@ CrankingController::State CrankingController::step(
     return {effectiveThrottle, phase_ == EnginePhase::Cranking, phase_};
 }
 
-void CrankingController::setInitialPhase(EnginePhase phase) {
+void CrankingController::setInitialPhase(EnginePhase phase, ICombustionEngine* engine) {
     phase_ = phase;
+    
+    // Reset internal state when setting to Cranking to ensure clean baseline computation
+    if (phase == EnginePhase::Cranking) {
+        ticks_ = 0;
+        exhaustFlowSum_ = 0.0;
+        exhaustFlowBaseline_ = 0.0;
+        // Engage the starter motor if engine is provided
+        if (engine) {
+            engine->setStarterMotor(true);
+        }
+    }
 }
 
 void CrankingController::reset() {
