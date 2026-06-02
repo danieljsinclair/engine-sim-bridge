@@ -460,7 +460,7 @@ private node random_car {
             mass: car_mass,
             drag_coefficient: 0.3,
             cross_sectional_area: (72 * units.inch) * (56 * units.inch),
-            diff_ratio: 3.9,
+            diff_ratio: 2.3,
             tire_radius: 10 * units.inch,
             rolling_resistance: 10000
         );
@@ -471,11 +471,12 @@ private node random_transmission {
         transmission(
             max_clutch_torque: 2000 * units.lb_ft
         )
-        .add_gear(3.5)
-        .add_gear(2.3)
-        .add_gear(1.6)
-        .add_gear(1.15)
-        .add_gear(0.85);
+        .add_gear(1.3)
+        .add_gear(1.3)
+        .add_gear(1.14)
+        .add_gear(0.98)
+        .add_gear(0.81)
+        .add_gear(0.65);
 }
 
 set_engine(merlin_v12())

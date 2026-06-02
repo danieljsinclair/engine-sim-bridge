@@ -25,8 +25,6 @@
 #include <stdexcept>
 #include <thread>
 #include <chrono>
-#include <atomic>
-#include <mutex>
 
 #define CRANKING_DEBUG false  // Enable detailed logging for cranking state transitions
 #if CRANKING_DEBUG
@@ -184,7 +182,7 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.rpm = stats.currentRPM;
     state.throttle = throttle;
     state.load = stats.currentLoad;
-    state.speed = 0;
+    state.speed = stats.speedMph;
     state.underrunCount = underrunCount;
     state.audioMode = audioBuffer.getModeString();
     state.ignition = ignition;
@@ -266,8 +264,8 @@ void warnWavExportNotSupported(bool outputWavRequested, ILogging* logger) {
 
 // ============================================================================
 // SimulatorSession - Concrete session managing audio hardware + simulator lifecycle
-// Owns audio hardware for session lifetime. Recycles ISimulator on preset swap.
-// Reuses runUnifiedAudioLoop() for the main tick loop (DRY).
+// Owns audio hardware for session lifetime. Reuses runUnifiedAudioLoop() for the main tick loop.
+// Hot-swap is handled by initSimulation() — this class is just the runtime container.
 // ============================================================================
 
 class SimulatorSession : public ISimulatorSession {
@@ -282,8 +280,7 @@ public:
         telemetry::ITelemetryWriter* telemetryWriter,
         telemetry::ITelemetryReader* telemetryReader,
         ILogging* logger)
-        : type_(config.simulatorType)
-        , config_(config)
+        : config_(config)
         , simulator_(std::move(simulator))
         , audioBuffer_(audioBuffer)
         , hardwareProvider_(std::move(hardwareProvider))
@@ -302,17 +299,6 @@ public:
 
     int run() override {
         if (closed_) throw std::runtime_error("Session is closed");
-        stopRequested_ = false;
-
-        // Drain pending swap from swapPreset() call
-        if (hasPendingSwap_.exchange(false)) {
-            std::string path;
-            {
-                std::lock_guard<std::mutex> lock(pendingSwapMutex_);
-                path = std::move(pendingPresetPath_);
-            }
-            doSwapPreset(path);
-        }
 
         // Start audio only if not already playing (hot-swap keeps audio running)
         if (!audioBuffer_->isPlaying()) {
@@ -341,17 +327,7 @@ public:
         return exitCode;
     }
 
-    void stop() override {
-        stopRequested_ = true;
-    }
-
-    void swapPreset(const std::string& presetPath) override {
-        {
-            std::lock_guard<std::mutex> lock(pendingSwapMutex_);
-            pendingPresetPath_ = presetPath;
-        }
-        hasPendingSwap_ = true;
-    }
+    void stop() override {}
 
     std::unique_ptr<IAudioHardwareProvider> releaseHardwareProvider() override {
         return std::move(hardwareProvider_);
@@ -368,49 +344,8 @@ public:
     }
 
 private:
-    void doSwapPreset(const std::string& presetPath) {
-        // Keep old simulator alive — the IOThread may be mid-render with its pointer.
-        // swapSimulator() replaces the pointer atomically, but any in-flight render
-        // still holds a snapshot of the old pointer. previousSimulator_ prevents
-        // use-after-free until the next swap or session close.
-        previousSimulator_ = std::move(simulator_);
-
-        // Fresh engine from the new preset — no state transfer.
-        // The starter will spin up the new engine naturally.
-        simulator_ = SimulatorFactory::createAndConfigure(
-            config_, presetPath, config_.assetBasePath,
-            logger_, telemetryWriter_);
-        simulator_->create(config_.engineConfig, logger_, telemetryWriter_);
-
-        auto* newBridge = dynamic_cast<BridgeSimulator*>(simulator_.get());
-        ASSERT(newBridge, "doSwapPreset: factory returned non-BridgeSimulator");
-
-        if (previousSimulator_ != nullptr) {
-            // Capture phase BEFORE reset so we know whether to auto-crank
-            bool wasActive = crankingController_.currentPhase() != EnginePhase::Stopped;
-
-            // Reset controller for fresh engine — clears stale baseline/ticks
-            crankingController_.reset();
-
-            // Auto-crank new engine if the previous one was active
-            if (wasActive) {
-                auto* newCombustion = dynamic_cast<ICombustionEngine*>(simulator_.get());
-                if (newCombustion) crankingController_.engageStarter(*newCombustion, true);
-            }
-
-            // Swap the simulator pointer in the audio buffer — no stop/start, no silence.
-            // The IOThread picks up the new simulator on its next callback.
-            audioBuffer_->swapSimulator(simulator_.get());
-
-            config_.configPath = presetPath;
-            logger_->info(LogMask::BRIDGE, "Session hot-swapped to: %s", presetPath.c_str());
-        }
-    }
-
-    SimulatorType type_;
     SimulationConfig config_;
     std::unique_ptr<ISimulator> simulator_;
-    std::unique_ptr<ISimulator> previousSimulator_;  // Kept alive until next swap — prevents IOThread use-after-free
     IAudioBuffer* audioBuffer_;
     std::unique_ptr<IAudioHardwareProvider> hardwareProvider_;
     input::IInputProvider* inputProvider_;
@@ -419,11 +354,6 @@ private:
     telemetry::ITelemetryReader* telemetryReader_;
     ILogging* logger_;
     CrankingController crankingController_;
-
-    std::atomic<bool> stopRequested_{false};
-    std::atomic<bool> hasPendingSwap_{false};
-    std::string pendingPresetPath_;
-    std::mutex pendingSwapMutex_;
     bool closed_{false};
 };
 

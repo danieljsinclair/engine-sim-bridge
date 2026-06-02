@@ -7,6 +7,7 @@
 
 #include <vector>
 #include <cstring>
+#include <common/Verification.h>
 
 BridgeSimulator::BridgeSimulator(std::unique_ptr<Simulator> simulator, const std::string& name)
     : m_simulator(std::move(simulator))
@@ -67,19 +68,19 @@ bool BridgeSimulator::renderOnDemand(float* buffer, int32_t frames, int32_t* wri
     return true;
 }
 
-bool BridgeSimulator::readAudioBuffer(float* buffer, int32_t frames, int32_t* read) {
-    if (!buffer) throw std::runtime_error("BridgeSimulator::readAudioBuffer() called with null buffer");
-    if (frames <= 0) throw std::runtime_error("BridgeSimulator::readAudioBuffer() called with invalid frame count");
-
-    int16_t* conversionBuffer = ensureAudioConversionBufferSize(frames);
-    int samplesRead = m_simulator->readAudioOutput(frames, conversionBuffer);
-    EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, samplesRead, buffer, engineConfig_.volume, engineConfig_.convolutionLevel);
-
-    if (samplesRead < frames) {
-        EngineSimAudio::fillSilence(buffer + samplesRead * 2, frames - samplesRead);
+bool BridgeSimulator::readAudioBuffer(float* buffer, int32_t framesToRead, int32_t* read) {
+    ASSERT(buffer, "BridgeSimulator::readAudioBuffer() called with null buffer");
+    ASSERT(read, "BridgeSimulator::readAudioBuffer() called with null *read pointer");
+    *read = 0;
+    if (framesToRead > 0) {
+        int16_t* conversionBuffer = ensureAudioConversionBufferSize(framesToRead);
+        int samplesRead = m_simulator->readAudioOutput(framesToRead, conversionBuffer);
+        EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, samplesRead, buffer, engineConfig_.volume, engineConfig_.convolutionLevel);
+        *read = samplesRead;
+        return true;
     }
-    if (read) *read = samplesRead;
-    return true;
+
+    return false;
 }
 
 bool BridgeSimulator::start() {

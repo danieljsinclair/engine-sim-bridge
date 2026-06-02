@@ -96,14 +96,19 @@ void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFr
     framesToWrite = std::min(framesToWrite, MAX_FRAMES_PER_READ);
     framesToWrite = std::min(framesToWrite, bufferSize);
 
-    // Read from simulator and write to buffer
-    std::vector<float> buffer(framesToWrite * 2);
-    int32_t totalRead = 0;
-    simulator->readAudioBuffer(buffer.data(), framesToWrite, &totalRead);
+    if (framesToWrite > 0) {
+        // Read from simulator and write to buffer
+        std::vector<float> buffer(framesToWrite * 2);
+        int32_t totalRead = 0;
+        simulator->readAudioBuffer(buffer.data(), framesToWrite, &totalRead);
 
-    if (totalRead > 0) {
-        AddFrames(buffer.data(), totalRead);
-        totalFramesWritten_ += totalRead;
+        if (totalRead > 0) {
+            AddFrames(buffer.data(), totalRead);
+            totalFramesWritten_ += totalRead;
+        }
+    }
+    else {
+        logger_->warning(LogMask::AUDIO, "ThreadedStrategy: Skipping buffer fill to prevent overflow (lead=%.0fms > target=%.0fms)", leadFrames * 1000.0 / sampleRate, targetLeadFrames * 1000.0 / sampleRate);
     }
 }
 
