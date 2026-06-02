@@ -143,7 +143,9 @@ struct LoopTimer {
 };
 
 // Named audio render callback -- bridges AudioBufferView to strategy->render()
-int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer) {
+int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer,
+                        bool enableProtection, float drive,
+                        ILogging* logger) {
     if (!strategy->isPlaying()) {
         float* dst = buffer.asFloat();
         if (dst) {
@@ -154,6 +156,27 @@ int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer) {
     }
 
     strategy->render(buffer);
+
+    // Apply speaker protection if enabled
+    if (enableProtection) {
+        float* dst = buffer.asFloat();
+        if (dst) {
+            const size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
+
+            float peakBefore = SpeakerProtection::peakAbs(dst, totalSamples);
+            SpeakerProtection::protectBuffer(dst, buffer.frameCount, buffer.channelCount, drive);
+            float peakAfter = SpeakerProtection::peakAbs(dst, totalSamples);
+
+            // Log periodically (~once per second at 60Hz callback rate)
+            static int callbackCount = 0;
+            callbackCount++;
+            if (callbackCount % 60 == 0) {
+                float reductionDb = (peakAfter > 0.0001f) ? 20.0f * std::log10(peakAfter / std::max(peakBefore, 0.0001f)) : 0.0f;
+                logger->info(LogMask::DIAGNOSTICS, "Speaker protection: peak %.3f -> %.3f (%.1f dB)", peakBefore, peakAfter, reductionDb);
+            }
+        }
+    }
+
     return 0;
 }
 
@@ -356,8 +379,11 @@ int runSimulation(
     }
 
     // Create and initialize audio hardware provider (throws on failure)
-    auto callback = [audioBuffer](AudioBufferView& buffer) -> int {
-        return audioRenderCallback(audioBuffer, buffer);
+    auto callback = [audioBuffer, config, logger](AudioBufferView& buffer) -> int {
+        return audioRenderCallback(audioBuffer, buffer,
+                                   config.engineConfig.speakerProtection,
+                                   config.engineConfig.speakerProtectionDrive,
+                                   logger);
     };
 
     auto hardwareProvider = createHardwareProvider(config.sampleRate(), callback, logger);

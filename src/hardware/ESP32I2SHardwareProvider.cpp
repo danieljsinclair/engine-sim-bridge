@@ -5,6 +5,7 @@
 
 #include "hardware/ESP32I2SHardwareProvider.h"
 #include "hardware/AudioTypes.h"
+#include "simulator/EngineSimTypes.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -199,9 +200,7 @@ void ESP32I2SHardwareProvider::writerTaskFunc(void* arg) {
         // Convert float to int16 with volume scaling
         const float scale = self->volume_ * 32767.0f;
         for (int i = 0; i < static_cast<int>(samplesPerWrite); ++i) {
-            float s = floatBuf[i];
-            if (s > 1.0f) s = 1.0f;
-            if (s < -1.0f) s = -1.0f;
+            float s = SpeakerProtection::softClip(floatBuf[i], 1.0f);
             pcmBuf[i] = static_cast<int16_t>(s * scale);
         }
 
