@@ -25,7 +25,7 @@ public:
     virtual void stop() = 0;
     virtual int getSimulationFrequency() const = 0;
 
-    // Read-only phase — display/telemetry. Writing is internal to CrankingController.
+    // Read-only phase — display/telemetry. Writing via ICombustionEngine::setEnginePhase().
     virtual EnginePhase getEnginePhase() const { return EnginePhase::Stopped; }
 
     // Drivetrain state capture/restore for hot-swap

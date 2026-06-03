@@ -47,15 +47,9 @@ static constexpr double FULL_THROTTLE = 1.0;                     // Maximum thro
 static constexpr double SECONDS_TO_MICROSECONDS = 1000000.0;
 static constexpr double SECONDS_TO_MILLISECONDS = 1000.0;
 
-input::EngineInput pollInput(input::IInputProvider* inputProvider, double currentTime, double duration, double updateInterval, bool isFirstTick) {
+input::EngineInput pollInput(input::IInputProvider* inputProvider, double currentTime, double updateInterval, bool isFirstTick) {
     if (inputProvider) {
         return inputProvider->OnUpdateSimulation(updateInterval);
-    }
-    if (currentTime >= duration) {
-        input::EngineInput stop;
-        stop.throttle = 0.1;
-        stop.shouldContinue = false;
-        return stop;
     }
     input::EngineInput timed;
     timed.throttle = currentTime < THROTTLE_RAMP_DURATION_SECONDS
@@ -67,8 +61,6 @@ input::EngineInput pollInput(input::IInputProvider* inputProvider, double curren
     }
     return timed;
 }
-
-
 
 int readUnderrunCount(telemetry::ITelemetryReader* reader) {
     return reader->getAudioDiagnostics().underrunCount;
@@ -314,6 +306,7 @@ public:
         // Delegate to existing loop — returns EXIT_BUT_CONTINUE_NEXT on 'P' press
         int exitCode = runUnifiedAudioLoop(
             *simulator_, config_, *audioBuffer_, crankingController_,
+            stopped_,
             inputProvider_, presentation_,
             telemetryWriter_, telemetryReader_, logger_);
 
@@ -325,61 +318,73 @@ public:
         return exitCode;
     }
 
-    void stop() override {}
+    void stop() override {
+        stopped_.store(true, std::memory_order_release);
+    }
 
-    bool swapPreset(const std::string& presetFilePath, std::unique_ptr<ISimulator> newSimulator) {
-        if (closed_) {
-            logger_->error(LogMask::BRIDGE, "swapPreset: session is closed");
-            return false;
-        }
+    bool hasDrivetrainMomentum(const BridgeSimulator::DrivetrainSnapshot& snapshot) const {
+        return snapshot.gear >= 0 && std::abs(snapshot.vehicleMassVtheta) > 1.0;
+    }
 
-        logger_->info(LogMask::BRIDGE, "swapPreset: loading %s", presetFilePath.c_str());
+    void transferDrivetrainState(ISimulator& newSimulator, ISimulator& oldSimulator, ILogging* logger) {
+        // Transfer drivetrain state from old simulator to new
+        auto* oldBridge = dynamic_cast<BridgeSimulator*>(&oldSimulator);
+        auto* newBridge = dynamic_cast<BridgeSimulator*>(&newSimulator);
 
-        try {
-            if (!newSimulator) {
-                logger_->error(LogMask::BRIDGE, "swapPreset: null simulator provided");
-                return false;
+        if (oldBridge && newBridge) {
+            auto snapshot = oldBridge->captureDrivetrainState();
+            newBridge->restoreDrivetrainState(snapshot);
+
+            if (snapshot.enginePhase == EnginePhase::Stopped) {
+                logger->info(LogMask::BRIDGE, "Old engine was Stopped — no state to transfer");
+                return;
             }
 
-            // Initialize the new simulator (audio config only, not pipeline)
-            initializeSimulator(*newSimulator, config_, logger_, telemetryWriter_, &config_.engineConfig);
+            crankingController_.reset();
+            auto* combustion = dynamic_cast<ICombustionEngine*>(&newSimulator);
+            if (!combustion) return;
 
-            // Transfer drivetrain state from old simulator to new
-            auto* oldBridge = dynamic_cast<BridgeSimulator*>(simulator_.get());
-            auto* newBridge = dynamic_cast<BridgeSimulator*>(newSimulator.get());
-
-            if (oldBridge && newBridge) {
-                auto snapshot = oldBridge->captureDrivetrainState();
-                newBridge->restoreDrivetrainState(snapshot);
+            if (hasDrivetrainMomentum(snapshot)) {
+                combustion->setEnginePhase(EnginePhase::Rollover);
+                logger->info(LogMask::BRIDGE, "Hot-swap → Rollover (gear=%d, vtheta=%.1f)", snapshot.gear, snapshot.vehicleMassVtheta);
+            } else {
+                crankingController_.engageStarter(*combustion, true);
+                logger->info(LogMask::BRIDGE, "Hot-swap → Cranking (neutral, starter engaged)");
             }
-
-            // Set CrankingController to Cranking and engage the starter motor.
-            // The new engine will:
-            // - If the old engine was Running: auto-transition to Running due to transferred RPM
-            // - If the old engine was Stopped: crank naturally with the engaged starter
-            auto* newCombustion = dynamic_cast<ICombustionEngine*>(newSimulator.get());
-            crankingController_.setInitialPhase(EnginePhase::Cranking, newCombustion);
-
-            // Keep old simulator alive in previousSimulator_ to prevent
-            // use-after-free in the audio callback (SyncPullStrategy holds a raw pointer)
-            previousSimulator_ = std::move(simulator_);
-
-            // Swap to the new simulator
-            simulator_ = std::move(newSimulator);
-
-            // Update the audio buffer's pointer to the new simulator
-            audioBuffer_->swapSimulator(simulator_.get());
-
-            // Update config path
-            config_.configPath = presetFilePath;
-
-            logger_->info(LogMask::BRIDGE, "swapPreset: complete");
-            return true;
-
-        } catch (const std::exception& e) {
-            logger_->error(LogMask::BRIDGE, "swapPreset failed: %s", e.what());
-            return false;
+        } else {
+            logger->error(LogMask::BRIDGE, "Drivetrain transfer skipped — one or both simulators are not BridgeSimulators");
         }
+    }
+
+    bool handoverSession(const std::string& presetFilePath, std::unique_ptr<ISimulator> newSimulator) {
+        ASSERT(!closed_, "handoverSession: session is closed");
+        ASSERT(newSimulator, "handoverSession: null simulator provided");
+        ASSERT(simulator_, "handoverSession: current simulator is null");
+        
+        logger_->info(LogMask::BRIDGE, "handoverSession: loading %s", presetFilePath.c_str());
+
+        // Initialize the new simulator (audio config only, not pipeline)
+        initializeSimulator(*newSimulator, config_, logger_, telemetryWriter_, &config_.engineConfig);
+
+        // pre-init the new simulator with the engine state, road speed, gears etc 
+        //as if we swapped the engine in a running vehicle. no effect on a non combustion sim
+        transferDrivetrainState(*newSimulator, *simulator_, logger_);
+
+        // Keep old simulator alive in previousSimulator_ to prevent
+        // use-after-free in the audio callback (SyncPullStrategy holds a raw pointer)
+        previousSimulator_ = std::move(simulator_);
+
+        // Swap to the new simulator
+        simulator_ = std::move(newSimulator);
+
+        // Update the audio buffer's pointer to the new simulator
+        audioBuffer_->swapSimulator(simulator_.get());
+
+        // Update config path
+        config_.configPath = presetFilePath;
+
+        logger_->info(LogMask::BRIDGE, "handoverSession: complete");
+        return true;
     }
 
     void close() override {
@@ -404,6 +409,7 @@ private:
     telemetry::ITelemetryReader* telemetryReader_;
     ILogging* logger_;
     CrankingController crankingController_;
+    std::atomic<bool> stopped_{false};
     bool closed_{false};
 };
 
@@ -418,6 +424,7 @@ int runUnifiedAudioLoop(
     const SimulationConfig& config,
     IAudioBuffer& audioBuffer,
     CrankingController& crankingController,
+    const std::atomic<bool>& stopRequested,
     input::IInputProvider* inputProvider,
     presentation::IPresentation* presentation,
     telemetry::ITelemetryWriter* telemetryWriter,
@@ -436,15 +443,18 @@ int runUnifiedAudioLoop(
     auto* bridgeSim = dynamic_cast<BridgeSimulator*>(&simulator);
     auto* combustion = dynamic_cast<ICombustionEngine*>(&simulator);
 
-    // If engine was already running (hot-swap from restoreState, or sine mode), skip cranking
-    auto existingEnginePhase = bridgeSim->getEnginePhase();
-    if (existingEnginePhase != EnginePhase::Stopped) {
-        crankingController.setInitialPhase(existingEnginePhase);
-    }
+    // Phase is now on the engine (single source of truth).
+    // transferDrivetrainState() restores enginePhase_ before this loop starts.
+    // CrankingController::step() reads phase from engine.getEnginePhase().
+    // No sync needed here — the old setPhase() call has been removed.
+
     double lastDynoTorqueScale = -1.0;
     const std::string presetShortName = bridgeSim ? bridgeSim->getName() : "";
 
     do {
+        // Non-interactive timeout: stop the loop when duration expires
+        if (config.duration > 0.0 && currentTime >= config.duration) break;
+
         if (combustion) crankingController.engageStarter(*combustion, input.starterButton);
         auto crankingState = combustion
             ? crankingController.step(*combustion, input.throttle, input.ignition, logger)
@@ -462,13 +472,13 @@ int runUnifiedAudioLoop(
         updatePresentation(presentation, config, currentTime, stats, crankingState.startingThrottle, input.ignition, crankingState.starterEngaged, crankingState.phase, readUnderrunCount(telemetryReader), audioBuffer, telemetryReader, presetShortName, simulator.getSimulationFrequency());
 
         timer.waitUntilNextTick();
-        input = pollInput(inputProvider, currentTime, config.duration, config.updateInterval(), isFirstTick);
+        input = pollInput(inputProvider, currentTime, config.updateInterval(), isFirstTick);
         isFirstTick = false;
 
         if (input.presetCycle) {
             return EXIT_BUT_CONTINUE_NEXT;
         }
-    } while (input.shouldContinue);
+    } while (!stopRequested.load(std::memory_order_acquire));
 
     return 0;
 }
@@ -477,7 +487,7 @@ int runUnifiedAudioLoop(
 // Main Simulation Entry Point - Factory that creates a session
 // ============================================================================
 
-std::unique_ptr<ISimulatorSession> initSimulation(
+std::unique_ptr<ISimulatorSession> createSession(
     const SimulationConfig& config,
     const std::string& scriptPath,
     std::unique_ptr<ISimulator> simulator,
@@ -493,7 +503,7 @@ std::unique_ptr<ISimulatorSession> initSimulation(
     if (existingSession) {
         ASSERT(simulator, "simulator must be provided for hot-swap");
         auto* session = static_cast<SimulatorSession*>(existingSession.get());
-        if (!session || !session->swapPreset(scriptPath, std::move(simulator))) {
+        if (!session || !session->handoverSession(scriptPath, std::move(simulator))) {
             throw std::runtime_error("Failed to swap preset within existing session: " + scriptPath);
         }
         return existingSession;

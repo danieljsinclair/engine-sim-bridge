@@ -1,6 +1,6 @@
 // CrankingControllerTests.cpp - TDD tests for cranking state management
-// These tests assert correct behaviour. RED phase: they document the contract,
-// they compile, and they will fail until the implementation is fixed.
+// Phase is stored on ICombustionEngine (single source of truth).
+// These tests assert correct behaviour through the engine's phase.
 
 #include <gtest/gtest.h>
 #include "simulation/CrankingController.h"
@@ -9,13 +9,14 @@
 
 namespace {
 
-// Minimal ICombustionEngine stub that records calls
+// Minimal ICombustionEngine stub that records calls and owns phase
 class StubEngine : public ICombustionEngine {
 public:
     double throttle_ = 0.0;
     bool ignition_ = false;
     bool starterMotor_ = false;
     EngineSimStats stats_{};
+    EnginePhase phase_ = EnginePhase::Stopped;
 
     bool create(const ISimulatorConfig&, ILogging*, telemetry::ITelemetryWriter*) override { return true; }
     void destroy() override {}
@@ -31,13 +32,14 @@ public:
     int getSimulationFrequency() const override { return 10000; }
     void setIgnition(bool on) override { ignition_ = on; }
     void setStarterMotor(bool on) override { starterMotor_ = on; }
-    EnginePhase getEnginePhase() const override { return EnginePhase::Stopped; }
+    EnginePhase getEnginePhase() const override { return phase_; }
+    void setEnginePhase(EnginePhase phase) override { phase_ = phase; }
 };
 
 } // namespace
 
 // ============================================================================
-// Engage starter from Stopped → Cranking
+// Engage starter from Stopped -> Cranking
 // ============================================================================
 
 TEST(CrankingControllerTest, EngageStarterFromStopped_EntersCrankingAndEngagesMotor) {
@@ -46,7 +48,7 @@ TEST(CrankingControllerTest, EngageStarterFromStopped_EntersCrankingAndEngagesMo
 
     controller.engageStarter(engine, true);
 
-    EXPECT_EQ(controller.currentPhase(), EnginePhase::Cranking);
+    EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Cranking);
     EXPECT_TRUE(engine.starterMotor_);
 }
 
@@ -56,7 +58,7 @@ TEST(CrankingControllerTest, EngageStarterFromStopped_IgnoresButtonFalse) {
 
     controller.engageStarter(engine, false);
 
-    EXPECT_EQ(controller.currentPhase(), EnginePhase::Stopped);
+    EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Stopped);
     EXPECT_FALSE(engine.starterMotor_);
 }
 
@@ -69,29 +71,31 @@ TEST(CrankingControllerTest, EngageStarterWhileCranking_StopsStarterAndReturnsTo
     StubEngine engine;
 
     controller.engageStarter(engine, true);
-    ASSERT_EQ(controller.currentPhase(), EnginePhase::Cranking);
+    ASSERT_EQ(engine.getEnginePhase(), EnginePhase::Cranking);
 
     controller.engageStarter(engine, true);
 
-    EXPECT_EQ(controller.currentPhase(), EnginePhase::Stopped);
+    EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Stopped);
     EXPECT_FALSE(engine.starterMotor_);
 }
 
 // ============================================================================
 // Reset: controller must reset when preparing for a new engine
 // Hot-swap creates a fresh engine; the controller must not carry stale state.
+// Reset does NOT change phase — that's the engine's job.
 // ============================================================================
 
-TEST(CrankingControllerTest, Reset_ClearsPhaseToStopped) {
+TEST(CrankingControllerTest, Reset_ClearsInternalCrankingState) {
     CrankingController controller;
     StubEngine engine;
 
     controller.engageStarter(engine, true);
-    ASSERT_EQ(controller.currentPhase(), EnginePhase::Cranking);
+    ASSERT_EQ(engine.getEnginePhase(), EnginePhase::Cranking);
 
     controller.reset();
 
-    EXPECT_EQ(controller.currentPhase(), EnginePhase::Stopped);
+    // Phase stays on the engine — reset only clears ticks/baseline
+    EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Cranking);
 }
 
 TEST(CrankingControllerTest, Reset_ClearsBaseline) {
@@ -160,6 +164,7 @@ TEST(CrankingControllerTest, EngineCatches_TransitionsToRunning) {
 
     auto state = controller.step(engine, 0.5, true, nullptr);
 
+    EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Running);
     EXPECT_EQ(state.phase, EnginePhase::Running);
     EXPECT_FALSE(state.starterEngaged);  // Starter disengages on catch
     EXPECT_FALSE(engine.starterMotor_);
@@ -186,7 +191,7 @@ TEST(CrankingControllerTest, EngineDoesNotCatch_WithoutIgnition) {
 
     auto state = controller.step(engine, 0.5, false, nullptr);
 
-    EXPECT_EQ(state.phase, EnginePhase::Cranking);  // Still cranking
+    EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Cranking);  // Still cranking
 }
 
 // ============================================================================
@@ -200,7 +205,7 @@ TEST(CrankingControllerTest, HotSwapWhileCranking_ReEngagesStarterOnNewEngine) {
 
     // Engine is cranking
     controller.engageStarter(oldEngine, true);
-    ASSERT_EQ(controller.currentPhase(), EnginePhase::Cranking);
+    ASSERT_EQ(oldEngine.getEnginePhase(), EnginePhase::Cranking);
     ASSERT_TRUE(oldEngine.starterMotor_);
 
     // Hot-swap: reset controller for fresh engine
@@ -210,7 +215,7 @@ TEST(CrankingControllerTest, HotSwapWhileCranking_ReEngagesStarterOnNewEngine) {
     // Re-engage starter on new engine
     controller.engageStarter(newEngine, true);
 
-    EXPECT_EQ(controller.currentPhase(), EnginePhase::Cranking);
+    EXPECT_EQ(newEngine.getEnginePhase(), EnginePhase::Cranking);
     EXPECT_TRUE(newEngine.starterMotor_);  // Starter actually engaged on new engine
 
     // Step the new engine — should build fresh baseline
@@ -230,15 +235,15 @@ TEST(CrankingControllerTest, HotSwapWhileRunning_AutoCranksNewEngine) {
 
     // Get engine to Running state
     controller.engageStarter(oldEngine, true);
-    controller.setInitialPhase(EnginePhase::Running);
-    ASSERT_EQ(controller.currentPhase(), EnginePhase::Running);
+    oldEngine.setEnginePhase(EnginePhase::Running);
+    ASSERT_EQ(oldEngine.getEnginePhase(), EnginePhase::Running);
 
     // Hot-swap: reset + engage starter on new engine
     controller.reset();
     StubEngine newEngine;
     controller.engageStarter(newEngine, true);
 
-    EXPECT_EQ(controller.currentPhase(), EnginePhase::Cranking);
+    EXPECT_EQ(newEngine.getEnginePhase(), EnginePhase::Cranking);
     EXPECT_TRUE(newEngine.starterMotor_);
 }
 
@@ -250,47 +255,148 @@ TEST(CrankingControllerTest, HotSwapWhileStopped_NewEngineStaysStopped) {
     CrankingController controller;
     StubEngine oldEngine;
 
-    ASSERT_EQ(controller.currentPhase(), EnginePhase::Stopped);
+    ASSERT_EQ(oldEngine.getEnginePhase(), EnginePhase::Stopped);
 
     // Hot-swap: reset, do NOT engage starter
     controller.reset();
     StubEngine newEngine;
 
-    EXPECT_EQ(controller.currentPhase(), EnginePhase::Stopped);
+    EXPECT_EQ(newEngine.getEnginePhase(), EnginePhase::Stopped);
     EXPECT_FALSE(newEngine.starterMotor_);
 }
 
 // ============================================================================
-// Running → Stopping when ignition off
+// Running -> Stopping when ignition off
 // ============================================================================
 
 TEST(CrankingControllerTest, RunningWithIgnitionOff_TransitionsToStopping) {
     CrankingController controller;
     StubEngine engine;
 
-    controller.setInitialPhase(EnginePhase::Running);
+    engine.setEnginePhase(EnginePhase::Running);
     engine.stats_.currentRPM = 3000.0;
 
     auto state = controller.step(engine, 0.5, false, nullptr);
 
+    EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Stopping);
     EXPECT_EQ(state.phase, EnginePhase::Stopping);
 }
 
 // ============================================================================
-// Stopping → Stopped when RPM drops below threshold
+// Stopping -> Stopped when RPM drops below threshold
 // ============================================================================
 
 TEST(CrankingControllerTest, StoppingWithLowRPM_TransitionsToStopped) {
     CrankingController controller;
     StubEngine engine;
 
-    controller.setInitialPhase(EnginePhase::Running);
+    engine.setEnginePhase(EnginePhase::Running);
     engine.stats_.currentRPM = 3000.0;
-    controller.step(engine, 0.5, false, nullptr);  // → Stopping
-    ASSERT_EQ(controller.currentPhase(), EnginePhase::Stopping);
+    controller.step(engine, 0.5, false, nullptr);  // -> Stopping
+    ASSERT_EQ(engine.getEnginePhase(), EnginePhase::Stopping);
 
     engine.stats_.currentRPM = 2.0;  // Below STOPPED_RPM (5.0)
     auto state = controller.step(engine, 0.5, false, nullptr);
 
+    EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Stopped);
     EXPECT_EQ(state.phase, EnginePhase::Stopped);
+}
+
+// ============================================================================
+// Rollover: hot-swap with drivetrain momentum
+// No starter motor, RPM-only detection, uses user throttle
+// ============================================================================
+
+TEST(CrankingControllerTest, Rollover_TransitionsToRunning_WhenRPMAboveThreshold) {
+    CrankingController controller;
+    StubEngine engine;
+
+    engine.setEnginePhase(EnginePhase::Rollover);
+    engine.stats_.currentRPM = 600.0;
+
+    auto state = controller.step(engine, 0.3, true, nullptr);
+
+    EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Running);
+    EXPECT_EQ(state.phase, EnginePhase::Running);
+    EXPECT_FALSE(state.starterEngaged);
+    EXPECT_DOUBLE_EQ(state.startingThrottle, 0.3);  // User throttle, not cranking override
+}
+
+TEST(CrankingControllerTest, Rollover_StaysRollover_WhenRPMTooLow) {
+    CrankingController controller;
+    StubEngine engine;
+
+    engine.setEnginePhase(EnginePhase::Rollover);
+    engine.stats_.currentRPM = 100.0;  // Below MIN_CATCH_RPM
+
+    auto state = controller.step(engine, 0.3, true, nullptr);
+
+    EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Rollover);
+    EXPECT_EQ(state.phase, EnginePhase::Rollover);
+}
+
+TEST(CrankingControllerTest, Rollover_DoesNotCatch_WithoutIgnition) {
+    CrankingController controller;
+    StubEngine engine;
+
+    engine.setEnginePhase(EnginePhase::Rollover);
+    engine.stats_.currentRPM = 600.0;
+
+    auto state = controller.step(engine, 0.3, false, nullptr);
+
+    EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Rollover);
+}
+
+TEST(CrankingControllerTest, Rollover_FallsBackToCranking_AtZeroRPM) {
+    CrankingController controller;
+    StubEngine engine;
+
+    engine.setEnginePhase(EnginePhase::Rollover);
+    engine.stats_.currentRPM = 0.0;
+
+    for (int i = 0; i < 3; ++i) {
+        controller.step(engine, 0.3, true, nullptr);
+    }
+
+    // After ROLLOVER_FALLBACK_TICKS (3) at 0 RPM, should transition to Cranking
+    auto state = controller.step(engine, 0.3, true, nullptr);
+    EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Cranking);
+    EXPECT_TRUE(engine.starterMotor_);
+    EXPECT_TRUE(state.starterEngaged);
+}
+
+TEST(CrankingControllerTest, Rollover_UsesUserThrottle_NotCrankingOverride) {
+    CrankingController controller;
+    StubEngine engine;
+
+    engine.setEnginePhase(EnginePhase::Rollover);
+    engine.stats_.currentRPM = 100.0;  // Below catch threshold, stays in Rollover
+
+    auto state = controller.step(engine, 0.1, true, nullptr);
+
+    EXPECT_DOUBLE_EQ(state.startingThrottle, 0.1);  // User's throttle, not 0.55
+}
+
+TEST(CrankingControllerTest, EngageStarterFromRollover_TransitionsToCranking) {
+    CrankingController controller;
+    StubEngine engine;
+
+    engine.setEnginePhase(EnginePhase::Rollover);
+
+    controller.engageStarter(engine, true);
+
+    EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Cranking);
+    EXPECT_TRUE(engine.starterMotor_);
+}
+
+TEST(CrankingControllerTest, Rollover_DoesNotFallBackImmediately_ZeroRPMTick1) {
+    CrankingController controller;
+    StubEngine engine;
+
+    engine.setEnginePhase(EnginePhase::Rollover);
+    engine.stats_.currentRPM = 0.0;
+
+    // First tick at 0 RPM — should NOT fall back immediately
+    auto state = controller.step(engine, 0.3, true, nullptr);
+    EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Rollover);
 }

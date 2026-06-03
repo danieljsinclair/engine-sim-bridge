@@ -20,7 +20,6 @@ struct EngineInput {
     double throttle = 0.1;       // 0.0 - 1.0 (from keyboard/upstream)
     bool ignition = true;        // true = on (from keyboard/upstream)
     bool starterButton = false;  // momentary: true for one frame when pressed
-    bool shouldContinue = true;  // false = signal loop termination
 
     // Gear control
     int gearDelta = 0;           // +1 = shift up, -1 = shift down, 0 = no change
@@ -55,7 +54,6 @@ public:
 
     /**
      * Poll for input and return current engine inputs.
-     * Sets shouldContinue=false to signal loop termination.
      */
     virtual EngineInput OnUpdateSimulation(double dt) = 0;
 

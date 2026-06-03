@@ -57,7 +57,11 @@ all: build test presets
 # Compile everything (cmake configure + build)
 build:
 	@mkdir -p $(BUILD_DIR)
-	@cd $(BUILD_DIR) && cmake $(BRIDGE_TEST_CMAKE_FLAGS) ..
+	@if [ ! -f $(BUILD_DIR)/CMakeCache.txt ]; then \
+		cd $(BUILD_DIR) && cmake $(BRIDGE_TEST_CMAKE_FLAGS) ..; \
+	else \
+		echo "Bridge build directory configured, skipping CMake configure."; \
+	fi
 	+$(call build_bridge_targets)
 
 # Remove orphaned binaries, symlinks, and stray cmake junk from source dirs

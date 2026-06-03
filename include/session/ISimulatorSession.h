@@ -7,8 +7,9 @@
 //
 // Hot-swap:
 //   Preset changes are triggered by passing existingSession to initSimulation().
-//   The session swaps its internal simulator pointer, preserving the CrankingController
-//   state and audio hardware. The old simulator is kept alive (previousSimulator_)
+//   The session swaps its internal simulator pointer, preserving audio hardware.
+//   Engine phase is stored on the engine (single source of truth), not the controller.
+//   The old simulator is kept alive (previousSimulator_)
 //   until the next swap to prevent use-after-free in the audio callback.
 //   swapPreset() is the internal mechanism — it is NOT called directly by clients.
 //

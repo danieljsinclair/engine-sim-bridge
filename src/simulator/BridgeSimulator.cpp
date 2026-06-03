@@ -215,7 +215,10 @@ void BridgeSimulator::restoreDrivetrainState(const DrivetrainSnapshot& snapshot)
         trans->setClutchPressure(snapshot.gear > 0 ? 1.0 : 0.0);
     }
 
-    enginePhase_ = snapshot.enginePhase;
+    // Phase is NOT restored — it's operational state, not drivetrain physics.
+    // The new engine starts at Stopped. The caller (transferDrivetrainState)
+    // engages the starter, which transitions to Cranking. The engine catches
+    // via starter motor + transferred drivetrain momentum.
 }
 
 std::vector<uint8_t> BridgeSimulator::saveState() const {

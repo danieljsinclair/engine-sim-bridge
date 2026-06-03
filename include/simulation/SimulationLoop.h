@@ -8,6 +8,7 @@
 
 #include "simulator/EngineSimTypes.h"
 #include "simulation/CrankingController.h"
+#include <atomic>
 #include <string>
 #include <vector>
 #include <memory>
@@ -69,13 +70,14 @@ int runUnifiedAudioLoop(
     const SimulationConfig& config,
     IAudioBuffer& audioBuffer,
     CrankingController& crankingController,
+    const std::atomic<bool>& stopRequested,
     input::IInputProvider* inputProvider,
     presentation::IPresentation* presentation,
     telemetry::ITelemetryWriter* telemetryWriter,
     telemetry::ITelemetryReader* telemetryReader,
     ILogging* logger);
 
-std::unique_ptr<ISimulatorSession> initSimulation(
+std::unique_ptr<ISimulatorSession> createSession(
     const SimulationConfig& config,
     const std::string& scriptPath,
     std::unique_ptr<ISimulator> simulator,

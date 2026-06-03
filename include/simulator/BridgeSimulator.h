@@ -46,6 +46,7 @@ public:
     void setIgnition(bool on) override;
     void setStarterMotor(bool on) override;
     EnginePhase getEnginePhase() const override { return enginePhase_; }
+    void setEnginePhase(EnginePhase phase) override;
 
     // ISimulator state capture/restore for hot-swap
     std::vector<uint8_t> saveState() const override;
@@ -73,13 +74,11 @@ public:
     void setName(const std::string& name) { name_ = name; }
 
 private:
-    // Internal phase sync — not on any interface. CrankingController owns phase.
-    void setEnginePhase(EnginePhase phase);
-
     void initDependencies(ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter);
     void initAudioConfig(const ISimulatorConfig& config);
     void pushTelemetry(const EngineSimStats& stats);
 
+    // Single source of truth for engine phase — written by CrankingController via setEnginePhase()
     EnginePhase enginePhase_ = EnginePhase::Stopped;
 
     static void advanceFixedSteps(Simulator* sim, int simulationFrequency, double dt, bool ceil);
