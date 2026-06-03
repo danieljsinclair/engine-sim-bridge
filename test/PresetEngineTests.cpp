@@ -1211,6 +1211,36 @@ TEST_P(FactoryPresetTest, FactoryPresetCanBeSteppedViaUpdate) {
     isim->destroy();
 }
 
+// 9.7: When ISimulatorConfig.simulationFrequency is 0, BridgeSimulator reads
+// the engine's own frequency from the inner simulator (set by .mr script).
+// This is the path used by CLI when no --sim-freq flag is provided.
+TEST_P(FactoryPresetTest, ZeroConfigFrequencyPropagatesFromEngine) {
+    ISimulatorConfig zeroConfig;
+    zeroConfig.simulationFrequency = 0;
+
+    auto isim = SimulatorFactory::create(
+        SimulatorType::PistonEngine,
+        GetParam(),
+        TEST_ES_DIR,
+        zeroConfig);
+
+    ASSERT_NE(isim, nullptr);
+    ASSERT_TRUE(isim->create(zeroConfig, nullptr, nullptr));
+
+    int freq = isim->getSimulationFrequency();
+    EXPECT_GT(freq, 0) << "getSimulationFrequency() must return the engine's actual frequency, not 0";
+
+    // Cross-check against inner simulator to confirm they match
+    auto* bridge = dynamic_cast<BridgeSimulator*>(isim.get());
+    ASSERT_NE(bridge, nullptr);
+    Simulator* inner = bridge->getInternalSimulator();
+    ASSERT_NE(inner, nullptr);
+    EXPECT_EQ(freq, inner->getSimulationFrequency())
+        << "BridgeSimulator frequency must match inner simulator frequency";
+
+    isim->destroy();
+}
+
 INSTANTIATE_TEST_SUITE_P(
     Phase4FactoryPresets,
     FactoryPresetTest,

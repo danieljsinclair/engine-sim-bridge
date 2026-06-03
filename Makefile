@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := all
-.PHONY: all build clean scrub help remove-orphans check test test-fast test-quick testquick testdeep test-deep presets clean-presets clean-test-fixtures
+.PHONY: all build clean scrub help remove-orphans check test test-core test-isomorphism test-golden test-deep presets clean-presets clean-test-fixtures
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
@@ -12,16 +12,43 @@ BRIDGE_TEST_CMAKE_FLAGS := \
 	-DBUILD_IOS_ADAPTER_TESTS=ON \
 	-DBUILD_PHASE0_SPIKES=OFF
 BRIDGE_TEST_EXCLUDE := (_NOT_BUILT|_spike$$)
-# Six expensive groups excluded by test-fast/test-quick only.
-BRIDGE_TEST_SLOW_GROUPS_EXCLUDE := (PresetGoldenFileTest|ParameterIsomorphismTest\.EngineTopologyMatches|ParameterIsomorphismTest\.PortFlowFunctionsMatch|ParameterIsomorphismTest\.CamshaftLobeProfilesMatch|ParameterIsomorphismTest\.FuelParametersMatch|ParameterIsomorphismTest\.VehicleParametersMatch)
-# Full quick-mode exclusion: all parameter isomorphism + golden audio regressions.
-BRIDGE_TEST_QUICK_GROUPS_EXCLUDE := (PresetGoldenFileTest|ParameterIsomorphismTest)
+BRIDGE_TEST_GOLDEN_MATCH := PresetGoldenFileTest
+BRIDGE_TEST_ISOMORPHISM_MATCH := (IsomorphismFixtures/EndToEndPresetTest\.PresetLoadsAndProducesValidEngine|IsomorphismPresets/ParameterIsomorphismTest|AllEngines/RoundTripIsomorphismTest)
+BRIDGE_TEST_CORE_EXCLUDE := $(BRIDGE_TEST_EXCLUDE)|($(BRIDGE_TEST_GOLDEN_MATCH)|$(BRIDGE_TEST_ISOMORPHISM_MATCH))
 CTEST_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 BUILD_PARALLEL_LEVEL ?=
 CMAKE_BUILD_PARALLEL_FLAG := $(if $(strip $(BUILD_PARALLEL_LEVEL)),--parallel $(BUILD_PARALLEL_LEVEL),)
+BUILD_STAMP := $(BUILD_DIR)/.build-ready.stamp
+
+# Source inputs that affect the bridge build. This ensures the stamp is invalidated
+# when bridge or engine-sim sources change, so rebuilds happen when necessary.
+BUILD_INPUTS := $(shell find Makefile CMakeLists.txt src include test tools engine-sim -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' -o -name '*.h' -o -name '*.hh' -o -name '*.hpp' -o -name '*.cmake' \) | sort)
+
+ISOMORPHISM_STAMP := $(BUILD_DIR)/.test-isomorphism.stamp
 
 define build_bridge_targets
 	cmake --build $(BUILD_DIR) $(CMAKE_BUILD_PARALLEL_FLAG)
+endef
+
+bridge_print_result = printf '\033[0;$(1)m=== [engine-sim-bridge] RESULT: $(2) ===\033[0m\n'
+
+define bridge_print_hint
+	if [ -n "$(strip $(SKIP_HINT_MESSAGE))" ]; then printf '%s\n' "$(SKIP_HINT_MESSAGE)"; fi;
+endef
+
+define run_bridge_ctest_suite
+	@echo "$(BLOCK_START_MESSAGE)"; \
+	$(call bridge_print_hint) \
+	if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) $(CTEST_SELECTOR); then \
+		echo "$(SUMMARY_PASS_MESSAGE)"; \
+		$(call bridge_print_result,32,PASSED); \
+		$(call bridge_print_hint) \
+	else \
+		echo "$(SUMMARY_FAIL_MESSAGE)"; \
+		$(call bridge_print_result,31,FAILED); \
+		$(call bridge_print_hint) \
+		exit 1; \
+	fi
 endef
 
 # Preset compilation
@@ -33,10 +60,15 @@ PRESET_COMPILER := $(BUILD_DIR)/engine-sim-preset-compiler
 all: build test presets
 
 # Compile everything (cmake configure + build)
-build:
+build: $(BUILD_STAMP)
+
+$(BUILD_STAMP): $(BUILD_INPUTS) $(BUILD_DIR)/CMakeCache.txt
+	+$(call build_bridge_targets)
+	@touch $@
+
+$(BUILD_DIR)/CMakeCache.txt: CMakeLists.txt
 	@mkdir -p $(BUILD_DIR)
 	@cd $(BUILD_DIR) && cmake $(BRIDGE_TEST_CMAKE_FLAGS) ..
-	+$(call build_bridge_targets)
 
 # Remove orphaned binaries, symlinks, and stray cmake junk from source dirs
 remove-orphans:
@@ -53,6 +85,8 @@ remove-orphans:
 # Clean build artifacts (cascades to engine-sim via cmake)
 clean: remove-orphans clean-presets clean-test-fixtures
 	@if [ -d $(BUILD_DIR) ]; then cmake --build $(BUILD_DIR) --target clean >/dev/null 2>&1 || true; fi
+	@rm -f $(ISOMORPHISM_STAMP)
+	@rm -f $(BUILD_STAMP)
 	@rm -rf tmp
 
 # Full clean - remove entire build directory (superset of clean)
@@ -68,54 +102,34 @@ clean-test-fixtures:
 	@rm -rf $(BUILD_DIR)/test/runtime-fixtures
 	@echo "Done."
 
-# Run all bridge tests (depends on build + presets — isomorphism tests need JSON files)
-test: build presets
-	@if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)'; then \
-		echo "=== [engine-sim-bridge] SUMMARY: PASS (full) ==="; \
-		printf '\033[0;32m=== [engine-sim-bridge] RESULT: PASSED ===\033[0m\n'; \
-	else \
-		echo "=== [engine-sim-bridge] SUMMARY: FAIL (full) ==="; \
-		printf '\033[0;31m=== [engine-sim-bridge] RESULT: FAILED ===\033[0m\n'; \
-		exit 1; \
-	fi
+# Run the bridge suite in explicit tiers.
+test: build test-core test-deep
 
-# Fast inner-loop run: excludes six expensive realtime/isomorphism groups.
-test-fast: build presets
-	@if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)|$(BRIDGE_TEST_SLOW_GROUPS_EXCLUDE)'; then \
-		echo "=== [engine-sim-bridge] SUMMARY: PASS (fast) ==="; \
-		printf '\033[0;32m=== [engine-sim-bridge] RESULT: PASSED ===\033[0m\n'; \
-	else \
-		echo "=== [engine-sim-bridge] SUMMARY: FAIL (fast) ==="; \
-		printf '\033[0;31m=== [engine-sim-bridge] RESULT: FAILED ===\033[0m\n'; \
-		exit 1; \
-	fi
+test-core: CTEST_SELECTOR := -E '$(BRIDGE_TEST_CORE_EXCLUDE)'
+test-core: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: core bridge suite (factory + preset regression coverage) ===
+test-core: SKIP_HINT_MESSAGE := === [engine-sim-bridge] HINT: this is the always-on core suite in make test; there is no core-only skip target inside the safe path. Use app run-notest or run-quick only when you intentionally want to bypass the full test gate. ===
+test-core: SUMMARY_PASS_MESSAGE := === [engine-sim-bridge] SUMMARY: PASS (core) ===
+test-core: SUMMARY_FAIL_MESSAGE := === [engine-sim-bridge] SUMMARY: FAIL (core) ===
+test-core: build presets
+	$(run_bridge_ctest_suite)
 
-# Deep tier: run the long-running preset golden-audio regressions only.
-test-deep: build presets
-	@if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -R 'PresetGoldenFileTest'; then \
-		echo "=== [engine-sim-bridge] SUMMARY: PASS (deep) ==="; \
-		printf '\033[0;32m=== [engine-sim-bridge] RESULT: PASSED ===\033[0m\n'; \
-	else \
-		echo "=== [engine-sim-bridge] SUMMARY: FAIL (deep) ==="; \
-		printf '\033[0;31m=== [engine-sim-bridge] RESULT: FAILED ===\033[0m\n'; \
-		exit 1; \
-	fi
+test-isomorphism: CTEST_SELECTOR := -R '$(BRIDGE_TEST_ISOMORPHISM_MATCH)'
+test-isomorphism: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: isomorphism suite (preset parity + round-trip serialization) ===
+test-isomorphism: SKIP_HINT_MESSAGE := === [engine-sim-bridge] HINT: skip this next time by running make test-core instead of make test or make test-deep. ===
+test-isomorphism: SUMMARY_PASS_MESSAGE := === [engine-sim-bridge] SUMMARY: PASS (isomorphism) ===
+test-isomorphism: SUMMARY_FAIL_MESSAGE := === [engine-sim-bridge] SUMMARY: FAIL (isomorphism) ===
+test-isomorphism: $(ISOMORPHISM_STAMP)
+	@:
 
-# Quick inner-loop run: skip all parameter isomorphism and golden-audio groups.
-test-quick: build presets
-	@if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)|$(BRIDGE_TEST_QUICK_GROUPS_EXCLUDE)'; then \
-		echo "=== [engine-sim-bridge] SUMMARY: PASS (quick) ==="; \
-		printf '\033[0;32m=== [engine-sim-bridge] RESULT: PASSED ===\033[0m\n'; \
-	else \
-		echo "=== [engine-sim-bridge] SUMMARY: FAIL (quick) ==="; \
-		printf '\033[0;31m=== [engine-sim-bridge] RESULT: FAILED ===\033[0m\n'; \
-		exit 1; \
-	fi
+test-golden: CTEST_SELECTOR := -R '$(BRIDGE_TEST_GOLDEN_MATCH)'
+test-golden: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: golden-audio suite (preset vs Piranha reference) ===
+test-golden: SKIP_HINT_MESSAGE := === [engine-sim-bridge] HINT: skip this next time by running make test-core instead of make test or make test-deep. ===
+test-golden: SUMMARY_PASS_MESSAGE := === [engine-sim-bridge] SUMMARY: PASS (golden) ===
+test-golden: SUMMARY_FAIL_MESSAGE := === [engine-sim-bridge] SUMMARY: FAIL (golden) ===
+test-golden: build presets
+	$(run_bridge_ctest_suite)
 
-testquick: test-quick
-
-# Explicit long-running tier name; same coverage as full test.
-testdeep: test-deep
+test-deep: build test-isomorphism test-golden
 
 check: test
 
@@ -145,6 +159,33 @@ $(foreach engine,$(ENGINES),$(eval $(call PRESET_COMPILE_RULE,$(engine))))
 
 PRESET_JSONS := $(foreach engine,$(ENGINES),$(PRESET_DIR)/$(engine).json)
 
+ISOMORPHISM_MR_INPUTS := $(shell find es -type f -name '*.mr' -print 2>/dev/null | sed 's/ /\\ /g')
+ISOMORPHISM_CODE_INPUTS := $(shell find src/common src/preset include/common include/preset include/simulator -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) -print 2>/dev/null | sed 's/ /\\ /g')
+ISOMORPHISM_INPUTS = \
+	$(PRESET_JSONS) \
+	$(ISOMORPHISM_MR_INPUTS) \
+	$(ISOMORPHISM_CODE_INPUTS) \
+	CMakeLists.txt \
+	test/PresetIsomorphismTests.cpp \
+	tools/preset_compiler.cpp \
+	$(BUILD_DIR)/preset_isomorphism_tests
+
+$(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets
+	@mkdir -p $(dir $@)
+	@echo "$(BLOCK_START_MESSAGE)"; \
+	$(call bridge_print_hint) \
+	if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -R '$(BRIDGE_TEST_ISOMORPHISM_MATCH)'; then \
+		echo "=== [engine-sim-bridge] SUMMARY: PASS (isomorphism) ==="; \
+		$(call bridge_print_result,32,PASSED); \
+		$(call bridge_print_hint) \
+		touch $(abspath $@); \
+	else \
+		echo "=== [engine-sim-bridge] SUMMARY: FAIL (isomorphism) ==="; \
+		$(call bridge_print_result,31,FAILED); \
+		$(call bridge_print_hint) \
+		exit 1; \
+	fi
+
 # Build the preset compiler if it doesn't exist (e.g. after scrub)
 $(PRESET_COMPILER):
 	+@$(MAKE) build
@@ -160,10 +201,11 @@ help:
 	@echo "Targets:"
 	@echo "  make          - Build + test + presets (complete pipeline)"
 	@echo "  make build    - Compile everything (no tests)"
-	@echo "  make test     - Build then run full test suite"
-	@echo "  make test-deep - Run preset golden-audio regressions"
-	@echo "  make test-fast - Run tests excluding 6 heavy groups"
-	@echo "  make test-quick/testquick - Quick tests only"
+	@echo "  make test     - Build, run core tests, then deep tests"
+	@echo "  make test-core - Run the always-on bridge suite"
+	@echo "  make test-isomorphism - Run file-based incremental isomorphism tests when inputs are newer"
+	@echo "  make test-golden - Run preset golden-audio regressions"
+	@echo "  make test-deep - Run isomorphism + golden suites"
 	@echo "  make presets  - Compile .mr wrappers to JSON presets"
 	@echo "  make clean    - Clean build artifacts (fast rebuild)"
 	@echo "  make scrub    - Remove entire build directory (full clean)"

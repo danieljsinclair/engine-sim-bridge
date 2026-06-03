@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include "simulation/EnginePhase.h"
 
 namespace telemetry {
 
@@ -23,6 +24,7 @@ struct EngineStateTelemetry {
     int32_t activeChannels = 0;
     int32_t gear = 0;                // -1 = Park, 0 = Neutral, 1+ = Forward
     double speedMph = 0.0;           // Vehicle speed in MPH
+    EnginePhase enginePhase = EnginePhase::Stopped;
 };
 
 struct FramePerformanceTelemetry {
@@ -136,6 +138,7 @@ private:
         std::atomic<int32_t> activeChannels{0};
         std::atomic<int32_t> gear{0};
         std::atomic<double> speedMph{0.0};
+        std::atomic<int> enginePhase{0};
     };
 
     struct AtomicFramePerformance {

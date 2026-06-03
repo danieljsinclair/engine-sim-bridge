@@ -56,6 +56,7 @@ namespace EngineSimDefaults {
     constexpr float   DEFAULT_HARDWARE_VOLUME    = 1.0f; // Default hardware output volume (0.0 to 1.0)
     constexpr int32_t DEFAULT_PREFILL_MS         = 50;   // Default pre-fill buffer duration in ms for sync-pull mode
     constexpr double  DYNO_MAX_TORQUE_FT_LBS     = 500.0; // Base dyno brake torque — ~1.5x typical V8 peak, gives usable range
+    constexpr double  DYNO_IDLE_RPM              = 700.0; // Idle RPM — dyno won't brake below this speed
 }
 
 // ISimulatorConfig — Configuration for ISimulator implementations

@@ -19,8 +19,7 @@ namespace input {
 struct EngineInput {
     double throttle = 0.1;       // 0.0 - 1.0 (from keyboard/upstream)
     bool ignition = true;        // true = on (from keyboard/upstream)
-    bool starterSwitch = false;   // true = engaged (from keyboard/upstream)
-    bool shouldContinue = true;  // false = signal loop termination
+    bool starterButton = false;  // momentary: true for one frame when pressed
 
     // Gear control
     int gearDelta = 0;           // +1 = shift up, -1 = shift down, 0 = no change
@@ -28,7 +27,8 @@ struct EngineInput {
     // Dyno control
     double dynoTorqueScale = -1.0;  // -1 = unchanged, 0.0-1.0 = fraction of max torque
 
-    // Simulator auto-disengages starter when RPM > threshold
+    // Preset cycling
+    bool presetCycle = false;       // true = cycle to next preset engine configuration
 };
 
 // ============================================================================
@@ -54,7 +54,6 @@ public:
 
     /**
      * Poll for input and return current engine inputs.
-     * Sets shouldContinue=false to signal loop termination.
      */
     virtual EngineInput OnUpdateSimulation(double dt) = 0;
 

@@ -96,6 +96,14 @@ void SyncPullStrategy::stopPlayback(ISimulator* simulator) {
     logger_->info(LogMask::AUDIO, "SyncPullStrategy::stopPlayback: On-demand rendering stopped");
 }
 
+void SyncPullStrategy::swapSimulator(ISimulator* newSimulator) {
+    // Seamless hot-swap: replace the simulator pointer without stopping audio.
+    // The IOThread callback will see the new pointer on its next invocation.
+    // Caller must keep the old simulator alive (via previousSimulator_) to
+    // prevent use-after-free for any in-flight render.
+    simulator_ = newSimulator;
+}
+
 void SyncPullStrategy::resetBufferAfterWarmup() {
     logger_->debug(LogMask::AUDIO, "SyncPullStrategy::resetBufferAfterWarmup: No-op for sync-pull mode");
 }
@@ -111,7 +119,6 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
     }
 
     if (!simulator_ || shuttingDown_.load()) {
-        // Fill silence on shutdown or null simulator to prevent crackles
         EngineSimAudio::fillSilence(dst, buffer.frameCount);
         return true;
     }
@@ -152,7 +159,7 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
             // No frames produced: advance simulation and retry
             int retryCount = 0;
             while (retryCount < MAX_RETRIES && !shuttingDown_.load()) {
-                simulator_->update(1.0 / sampleRate_);  // One sample period to feed synthesizer
+                simulator_->update(1.0 / sampleRate_);
                 result = simulator_->renderOnDemand(
                     dst + (framesRendered * 2),
                     remainingFrames,
@@ -184,6 +191,10 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
 
     // Fill remaining buffer with silence on partial render to prevent crackles
     if (framesRendered < framesToGenerate) {
+        // NOTE: Should never happen in practice - could probaly just throw an exception here
+        logger_->warning(LogMask::AUDIO,
+            "SyncPullStrategy::render: rendered %d/%d frames, filling remaining %d with silence",
+            framesRendered, framesToGenerate, remainingFrames);
         float* remaining = dst + (framesRendered * 2);
         EngineSimAudio::fillSilence(remaining, framesToGenerate - framesRendered);
     }

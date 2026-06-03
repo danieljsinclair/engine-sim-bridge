@@ -79,6 +79,14 @@ public:
 
     virtual bool startPlayback(ISimulator* simulator) = 0;
     virtual void stopPlayback(ISimulator* simulator) = 0;
+
+    /**
+     * Swap the simulator pointer without stopping audio playback.
+     * Used for seamless preset hot-swap: the IOThread never sees null.
+     * The old simulator must stay alive until the next swap or session close.
+     */
+    virtual void swapSimulator(ISimulator* newSimulator) = 0;
+
     virtual void resetBufferAfterWarmup() = 0;
 
     // === Buffer-Specific Methods ===

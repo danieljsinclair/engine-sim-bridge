@@ -1,7 +1,9 @@
 #pragma once
 #include <string>
 #include <cstdint>
+#include <vector>
 #include "simulator/EngineSimTypes.h"
+#include "simulation/EnginePhase.h"
 
 class ILogging;
 
@@ -17,12 +19,18 @@ public:
     virtual void update(double deltaTime) = 0;
     virtual EngineSimStats getStats() const = 0;
     virtual void setThrottle(double position) = 0;
-    virtual void setIgnition(bool on) = 0;
-    virtual void setStarterMotor(bool on) = 0;
     virtual bool renderOnDemand(float* buffer, int32_t frames, int32_t* written) = 0;
     virtual bool readAudioBuffer(float* buffer, int32_t frames, int32_t* read) = 0;
     virtual bool start() = 0;
     virtual void stop() = 0;
     virtual int getSimulationFrequency() const = 0;
+
+    // Read-only phase — display/telemetry. Writing via ICombustionEngine::setEnginePhase().
+    virtual EnginePhase getEnginePhase() const { return EnginePhase::Stopped; }
+
+    // Drivetrain state capture/restore for hot-swap
+    virtual std::vector<uint8_t> saveState() const { return {}; }
+    virtual void restoreState(const std::vector<uint8_t>&) {}
+
     static const char* getVersion();
 };

@@ -49,6 +49,7 @@ public:
     void prepareBuffer() override;
     bool startPlayback(ISimulator* simulator) override;
     void stopPlayback(ISimulator* simulator) override;
+    void swapSimulator(ISimulator* newSimulator) override;
     void resetBufferAfterWarmup() override;
     void updateSimulation(ISimulator* simulator, double deltaTimeMs) override;
 

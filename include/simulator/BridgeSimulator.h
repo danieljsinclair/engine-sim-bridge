@@ -7,7 +7,9 @@
 #define BRIDGE_SIMULATOR_H
 
 #include "simulator/ISimulator.h"
+#include "simulator/ICombustionEngine.h"
 #include "simulator/EngineSimTypes.h"
+#include "simulation/EnginePhase.h"
 #include "common/ILogging.h"
 #include "telemetry/ITelemetryProvider.h"
 #include "telemetry/NullTelemetryWriter.h"
@@ -17,11 +19,11 @@
 #include <string>
 #include <vector>
 
-class BridgeSimulator : public ISimulator {
+class BridgeSimulator : public ICombustionEngine {
 public:
     // Constructor takes an already-initialized Simulator subclass.
     // The factory is responsible for creating and wiring the Simulator.
-    explicit BridgeSimulator(std::unique_ptr<Simulator> simulator);
+    explicit BridgeSimulator(std::unique_ptr<Simulator> simulator, const std::string& name = "Simulator");
     ~BridgeSimulator() override;
 
     // ISimulator lifecycle
@@ -43,12 +45,19 @@ public:
     void setThrottle(double position) override;
     void setIgnition(bool on) override;
     void setStarterMotor(bool on) override;
+    EnginePhase getEnginePhase() const override { return enginePhase_; }
+    void setEnginePhase(EnginePhase phase) override;
+
+    // ISimulator state capture/restore for hot-swap
+    std::vector<uint8_t> saveState() const override;
+    void restoreState(const std::vector<uint8_t>& data) override;
 
     // Drivetrain state transfer for engine hot-swap (preserves road speed)
     struct DrivetrainSnapshot {
         double vehicleMassVtheta = 0.0;
         double vehicleMassI = 0.0;
         double vehicleMassM = 0.0;
+        EnginePhase enginePhase = EnginePhase::Stopped;
         int gear = 0;
     };
     DrivetrainSnapshot captureDrivetrainState() const;
@@ -56,13 +65,21 @@ public:
     bool changeGear(int gearDelta);
     void setDynoTorqueScale(double scale);
 
-    // Set display name from script path (called by factory for PistonEngine mode)
-    void setNameFromScript(const std::string& scriptPath);
+    // Configure dyno in load torque mode (brake-only).
+    // loadFraction: 0.0-1.0 fraction of DYNO_MAX_TORQUE_FT_LBS.
+    // Returns true if configured, false if loadFraction <= 0.
+    bool configureDynoLoad(double loadFraction);
+
+    // Set display name directly
+    void setName(const std::string& name) { name_ = name; }
 
 private:
     void initDependencies(ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter);
     void initAudioConfig(const ISimulatorConfig& config);
     void pushTelemetry(const EngineSimStats& stats);
+
+    // Single source of truth for engine phase — written by CrankingController via setEnginePhase()
+    EnginePhase enginePhase_ = EnginePhase::Stopped;
 
     static void advanceFixedSteps(Simulator* sim, int simulationFrequency, double dt, bool ceil);
     void drainSynthesizerBuffer(Simulator* sim);
@@ -72,7 +89,6 @@ private:
     std::unique_ptr<Simulator> m_simulator;
     std::string m_lastError;
     std::string name_;
-    bool m_created = false;
 
     // Dependencies (never null after create())
     ILogging* logger_ = nullptr;
