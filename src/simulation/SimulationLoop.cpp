@@ -360,13 +360,13 @@ public:
         ASSERT(!closed_, "handoverSession: session is closed");
         ASSERT(newSimulator, "handoverSession: null simulator provided");
         ASSERT(simulator_, "handoverSession: current simulator is null");
-        
+
         logger_->info(LogMask::BRIDGE, "handoverSession: loading %s", presetFilePath.c_str());
 
         // Initialize the new simulator (audio config only, not pipeline)
         initializeSimulator(*newSimulator, config_, logger_, telemetryWriter_, &config_.engineConfig);
 
-        // pre-init the new simulator with the engine state, road speed, gears etc 
+        // pre-init the new simulator with the engine state, road speed, gears etc
         //as if we swapped the engine in a running vehicle. no effect on a non combustion sim
         transferDrivetrainState(*newSimulator, *simulator_, logger_);
 
@@ -382,6 +382,9 @@ public:
 
         // Update config path
         config_.configPath = presetFilePath;
+
+        // Reset stopped flag so the loop runs again when session->run() is called
+        stopped_.store(false, std::memory_order_release);
 
         logger_->info(LogMask::BRIDGE, "handoverSession: complete");
         return true;
