@@ -20,6 +20,10 @@ BUILD_PARALLEL_LEVEL ?=
 CMAKE_BUILD_PARALLEL_FLAG := $(if $(strip $(BUILD_PARALLEL_LEVEL)),--parallel $(BUILD_PARALLEL_LEVEL),)
 BUILD_STAMP := $(BUILD_DIR)/.build-ready.stamp
 
+# Source inputs that affect the bridge build. This ensures the stamp is invalidated
+# when bridge or engine-sim sources change, so rebuilds happen when necessary.
+BUILD_INPUTS := $(shell find Makefile CMakeLists.txt src include test tools engine-sim -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' -o -name '*.h' -o -name '*.hh' -o -name '*.hpp' -o -name '*.cmake' \) | sort)
+
 ISOMORPHISM_STAMP := $(BUILD_DIR)/.test-isomorphism.stamp
 
 define build_bridge_targets
@@ -58,7 +62,7 @@ all: build test presets
 # Compile everything (cmake configure + build)
 build: $(BUILD_STAMP)
 
-$(BUILD_STAMP): $(BUILD_DIR)/CMakeCache.txt
+$(BUILD_STAMP): $(BUILD_INPUTS) $(BUILD_DIR)/CMakeCache.txt
 	+$(call build_bridge_targets)
 	@touch $@
 
