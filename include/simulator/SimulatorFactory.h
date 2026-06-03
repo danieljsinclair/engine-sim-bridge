@@ -20,7 +20,7 @@ namespace telemetry { class ITelemetryWriter; }
 
 enum class SimulatorType {
     SineWave,      // SineSimulator (test mode)
-    PistonEngine   // PistonEngineSimulator (real physics)
+    PistonEngine   // PistonEngineSimulator (.mr script or .json preset)
 };
 
 // ============================================================================

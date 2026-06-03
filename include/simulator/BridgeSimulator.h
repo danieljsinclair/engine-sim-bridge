@@ -36,15 +36,25 @@ public:
     bool readAudioBuffer(float* buffer, int32_t frames, int32_t* read) override;
     bool start() override;
     void stop() override;
-
-    // ISimulator telemetry & control
+    int getSimulationFrequency() const override { return engineConfig_.simulationFrequency; }
     EngineSimStats getStats() const override;
+    Simulator* getInternalSimulator() { return m_simulator.get(); }
+    const Simulator* getInternalSimulator() const { return m_simulator.get(); }
     void setThrottle(double position) override;
     void setIgnition(bool on) override;
     void setStarterMotor(bool on) override;
 
-    Simulator* getInternalSimulator() { return m_simulator.get(); }
-    const Simulator* getInternalSimulator() const { return m_simulator.get(); }
+    // Drivetrain state transfer for engine hot-swap (preserves road speed)
+    struct DrivetrainSnapshot {
+        double vehicleMassVtheta = 0.0;
+        double vehicleMassI = 0.0;
+        double vehicleMassM = 0.0;
+        int gear = 0;
+    };
+    DrivetrainSnapshot captureDrivetrainState() const;
+    void restoreDrivetrainState(const DrivetrainSnapshot& snapshot);
+    bool changeGear(int gearDelta);
+    void setDynoTorqueScale(double scale);
 
     // Set display name from script path (called by factory for PistonEngine mode)
     void setNameFromScript(const std::string& scriptPath);

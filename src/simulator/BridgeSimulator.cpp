@@ -113,6 +113,19 @@ EngineSimStats BridgeSimulator::getStats() const {
         stats.currentRPM = m_simulator->getEngine()->getSpeed() * 60.0 / (2.0 * M_PI);
         stats.exhaustFlow = m_simulator->getTotalExhaustFlow();
         stats.processingTimeMs = m_simulator->getAverageProcessingTime() * 1000.0;
+
+        if (m_simulator->m_dyno.m_enabled) {
+            stats.dynoTorque = m_simulator->getFilteredDynoTorque();
+            stats.dynoTargetRPM = std::abs(m_simulator->m_dyno.m_rotationSpeed) * 30.0 / M_PI;
+        }
+
+        if (m_simulator->getTransmission()) {
+            stats.gear = m_simulator->getTransmission()->getGear();
+        }
+
+        if (m_simulator->getVehicle()) {
+            stats.speedMph = m_simulator->getVehicle()->getSpeed();
+        }
     }
     return stats;
 }
@@ -139,6 +152,69 @@ void BridgeSimulator::setStarterMotor(bool on) {
 }
 
 // ============================================================================
+// Drivetrain state transfer for engine hot-swap
+// ============================================================================
+
+bool BridgeSimulator::changeGear(int gearDelta) {
+    if (!m_simulator || gearDelta == 0) return false;
+
+    auto* trans = m_simulator->getTransmission();
+    if (!trans) return false;
+
+    int currentGear = trans->getGear();
+    int newGear = currentGear + gearDelta;
+    int gearCount = trans->getGearCount();
+
+    if (newGear < -1 || newGear >= gearCount) return false;
+
+    trans->changeGear(newGear);
+    trans->setClutchPressure(newGear > 0 ? 1.0 : 0.0);
+    return true;
+}
+
+void BridgeSimulator::setDynoTorqueScale(double scale) {
+    if (!m_simulator || scale < 0.0 || !m_simulator->m_dyno.m_enabled) return;
+    m_simulator->m_dyno.m_maxTorque = units::torque(EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS, units::ft_lb) * scale;
+}
+
+BridgeSimulator::DrivetrainSnapshot BridgeSimulator::captureDrivetrainState() const {
+    DrivetrainSnapshot snapshot;
+    if (!m_simulator) return snapshot;
+
+    auto* body = m_simulator->getVehicleMassBody();
+    if (body) {
+        snapshot.vehicleMassVtheta = body->v_theta;
+        snapshot.vehicleMassI = body->I;
+        snapshot.vehicleMassM = body->m;
+    }
+
+    auto* trans = m_simulator->getTransmission();
+    if (trans) {
+        snapshot.gear = trans->getGear();
+    }
+
+    return snapshot;
+}
+
+void BridgeSimulator::restoreDrivetrainState(const DrivetrainSnapshot& snapshot) {
+    if (!m_simulator) return;
+
+    auto* body = m_simulator->getVehicleMassBody();
+    if (body) {
+        body->v_theta = snapshot.vehicleMassVtheta;
+        body->I = snapshot.vehicleMassI;
+        body->m = snapshot.vehicleMassM;
+    }
+
+    // Restore gear and engage clutch so drivetrain spins the new engine
+    auto* trans = m_simulator->getTransmission();
+    if (trans && snapshot.gear >= 0) {
+        trans->changeGear(snapshot.gear);
+        trans->setClutchPressure(snapshot.gear > 0 ? 1.0 : 0.0);
+    }
+}
+
+// ============================================================================
 // Private Helpers
 // ============================================================================
 
@@ -160,8 +236,13 @@ void BridgeSimulator::initDependencies(ILogging* logger, telemetry::ITelemetryWr
 
 void BridgeSimulator::initAudioConfig(const ISimulatorConfig& config) {
     engineConfig_ = config;
-    // Pre-allocate conversion buffer for mono int16 samples (stereo float conversion happens elsewhere)
-    // Buffer will be resized on-demand if larger frames are requested
+    if (m_simulator) {
+        if (config.simulationFrequency > 0) {
+            m_simulator->setSimulationFrequency(config.simulationFrequency);
+        } else {
+            engineConfig_.simulationFrequency = m_simulator->getSimulationFrequency();
+        }
+    }
     ensureAudioConversionBufferSize(engineConfig_.maxChunkFrames);
 }
 
@@ -172,6 +253,8 @@ void BridgeSimulator::pushTelemetry(const EngineSimStats& stats) {
     engine.exhaustFlow = stats.exhaustFlow;
     engine.manifoldPressure = stats.manifoldPressure;
     engine.activeChannels = stats.activeChannels;
+    engine.gear = stats.gear;
+    engine.speedMph = stats.speedMph;
     telemetryWriter_->writeEngineState(engine);
 
     telemetry::FramePerformanceTelemetry perf;

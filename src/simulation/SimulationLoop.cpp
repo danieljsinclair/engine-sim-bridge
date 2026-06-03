@@ -6,6 +6,7 @@
 #include "simulation/SimulationLoop.h"
 
 #include "simulator/ISimulator.h"
+#include "simulator/BridgeSimulator.h"
 #include "simulator/EngineSimTypes.h"
 
 #include "hardware/IAudioHardwareProvider.h"
@@ -39,20 +40,23 @@ struct InputResult {
     double throttle = 0.1;
     bool ignition = true;
     bool shouldContinue = true;
+    int gearDelta = 0;
+    double dynoTorqueScale = -1.0;
 };
 
 InputResult pollInput(input::IInputProvider* inputProvider, double currentTime, double duration, double updateInterval) {
     if (inputProvider) {
         auto engineInput = inputProvider->OnUpdateSimulation(updateInterval);
-        return {engineInput.throttle, engineInput.ignition, engineInput.shouldContinue};
+        return {engineInput.throttle, engineInput.ignition, engineInput.shouldContinue,
+                engineInput.gearDelta, engineInput.dynoTorqueScale};
     }
     if (currentTime >= duration) {
-        return {0.1, true, false};
+        return {0.1, true, false, 0, -1.0};
     }
     auto timed = input::EngineInput{};
     timed.throttle = currentTime < THROTTLE_RAMP_DURATION_SECONDS
         ? currentTime / THROTTLE_RAMP_DURATION_SECONDS : FULL_THROTTLE;
-    return {timed.throttle, timed.ignition, true};
+    return {timed.throttle, timed.ignition, true, 0, -1.0};
 }
 
 struct CrankingState {
@@ -177,6 +181,28 @@ std::unique_ptr<IAudioHardwareProvider> createHardwareProvider(
     return provider;
 }
 
+void applyGearChange(BridgeSimulator* bridgeSim, int gearDelta, ILogging* logger) {
+    if (!bridgeSim || gearDelta == 0) return;
+    if (bridgeSim->changeGear(gearDelta)) {
+        logger->info(LogMask::BRIDGE, "Gear change: %+d", gearDelta);
+    }
+}
+
+void applyDynoControl(BridgeSimulator* bridgeSim, double scale, double& lastScale) {
+    if (!bridgeSim || scale < 0.0 || scale == lastScale) return;
+    bridgeSim->setDynoTorqueScale(scale);
+    lastScale = scale;
+}
+
+void applyVehicleControls(BridgeSimulator* bridgeSim, int gearDelta, double dynoTorqueScale,
+                          bool engineRunning, double& lastDynoTorqueScale, ILogging* logger) {
+    if (!bridgeSim) return;
+    applyGearChange(bridgeSim, gearDelta, logger);
+    if (engineRunning) {
+        applyDynoControl(bridgeSim, dynoTorqueScale, lastDynoTorqueScale);
+    }
+}
+
 void updatePresentation(presentation::IPresentation* presentation, const SimulationConfig& config,
                         double currentTime,
                         const EngineSimStats& stats, double throttle, bool ignition, bool starterEngaged,
@@ -199,8 +225,11 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.underrunCount = underrunCount;
     state.audioMode = audioBuffer.getModeString();
     state.ignition = ignition;
-    state.starterMotor = starterEngaged;
+    state.starterMotorEngaged = starterEngaged;
     state.exhaustFlow = stats.exhaustFlow;
+    state.gear = stats.gear;
+    state.dynoTorque = stats.dynoTorque;
+    state.dynoTargetRPM = stats.dynoTargetRPM;
     state.renderMs = timing.renderMs;
     state.headroomMs = timing.headroomMs;
     state.budgetPct = timing.budgetPct;
@@ -210,6 +239,7 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.generatingRateFps = timing.generatingRateFps;
     state.trendPct = timing.trendPct;
     state.sampleRate = config.sampleRate();
+    state.simulationFrequency = config.engineConfig.simulationFrequency;
 
     presentation->ShowEngineState(state);
 }
@@ -295,6 +325,9 @@ int runUnifiedAudioLoop(
     LoopTimer timer(config.updateInterval());
     CrankingState crankingState;
 
+    auto* bridgeSim = dynamic_cast<BridgeSimulator*>(&simulator);
+    double lastDynoTorqueScale = -1.0;
+
     logger->info(LogMask::BRIDGE, "runUnifiedAudioLoop starting simulation loop with %s", config.simulatorLabel.c_str());
 
     InputResult input;
@@ -304,6 +337,10 @@ int runUnifiedAudioLoop(
         simulator.setThrottle(cranking.effectiveThrottle);
         simulator.setIgnition(input.ignition);
 
+        applyVehicleControls(bridgeSim, input.gearDelta, input.dynoTorqueScale,
+                             crankingState.phase == CrankingState::Running,
+                             lastDynoTorqueScale, logger);
+
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * SECONDS_TO_MILLISECONDS);
 
         EngineSimStats stats = simulator.getStats();
@@ -312,8 +349,8 @@ int runUnifiedAudioLoop(
         writeTelemetry(telemetryWriter, currentTime, cranking.effectiveThrottle, input.ignition, cranking.starterEngaged);
 
         currentTime += config.updateInterval();
-        updatePresentation(presentation, config, currentTime, stats, cranking.effectiveThrottle, 
-                            input.ignition, cranking.starterEngaged, readUnderrunCount(telemetryReader), 
+        updatePresentation(presentation, config, currentTime, stats, cranking.effectiveThrottle,
+                            input.ignition, cranking.starterEngaged, readUnderrunCount(telemetryReader),
                             audioBuffer, telemetryReader);
 
         // Loop control
@@ -348,7 +385,7 @@ int runSimulation(
 
     // Initialize strategy
     AudioBufferConfig strategyConfig;
-    strategyConfig.channels = 2;
+    strategyConfig.channels = EngineSimAudio::STEREO;
     strategyConfig.synthLatency = config.engineConfig.targetSynthesizerLatency;
 
     if (!audioBuffer->initialize(strategyConfig, config.sampleRate())) {

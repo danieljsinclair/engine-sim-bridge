@@ -34,8 +34,7 @@ struct SimulationConfig {
     bool playAudio = false;
     float volume = EngineSimDefaults::DEFAULT_HARDWARE_VOLUME;
     bool syncPull = true;
-    double targetRPM = 0.0;
-    double targetLoad = -1.0;
+    double targetLoad = -1.0;   // -1 = no dyno, 0.0-1.0 = load torque fraction
     bool useDefaultEngine = false;
     const char* outputWav = nullptr;
     int preFillMs = EngineSimDefaults::DEFAULT_PREFILL_MS;

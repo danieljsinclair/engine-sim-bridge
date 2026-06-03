@@ -1,0 +1,66 @@
+# To activate these colours in the terminal, do either "cd ." to trigger a refresh
+# To change the vscode colours to match edit .vscode/settings.json to match
+#        "activityBar.background": "#123456",
+#        "statusBar.background":   "#123456",
+#        "activityBar.foreground": "#ABCDEF",
+#        "statusBar.foreground":   "#ABCDEF",
+#
+# Supported .axxtermcolors patterns:
+#   bg=#RRGGBB                Base background color for all directories.
+#   fg=#RRGGBB                Base foreground color for all directories.
+#
+#   bg.<branch>=#RRGGBB       Branch-only override when current git branch matches.
+#   fg.<branch>=#RRGGBB       Branch-only override when current git branch matches.
+#
+#   bg!<path>=#RRGGBB         Path-only override when current working directory
+#                              contains <path>. If <path> contains a slash, it is
+#                              treated as a partial path qualification and can
+#                              match directory segments anywhere inside the full
+#                              path.
+#   fg!<path>=#RRGGBB         Same as bg!<path> but for foreground.
+#
+#   bg.<branch>!<path>=#RRGGBB Branch+path override. Highest priority. Applies when
+#                              both the branch and path match.
+#   fg.<branch>!<path>=#RRGGBB Branch+path override for foreground.
+#
+# Pattern rules:
+#   * Plain names without slashes match only the final path component.
+#   * Patterns containing "/" match anywhere inside the current path.
+#   * ^prefix anchors match only when the path begins with prefix.
+#   * suffix$ anchors match only when the path ends with suffix.
+#   * Wildcards (*) are supported for flexible path matching.
+#
+# Examples:
+#   bg=#123456
+#   fg=#ABCDEF
+#   bg.master=#46a866
+#   fg.master=#000000
+#   bg!engine-sim-cli/engine-sim-bridge=#000000
+#   fg!engine-sim-cli/engine-sim-bridge=#FFFFFF
+#   bg.master!engine-sim-cli/#112233
+#   fg.master!engine-sim-cli/#223344
+
+# This code is wrapped to avoid being used unintentionally in other scripts.
+# Because the .. syntax is invalid, the file is parsed rather than sourced.
+# shellcheck disable=SC2276,SC2034
+function not_shell_code() {
+    # Base colors (for non-branch-specific)
+    bg=#123456
+    fg=#ABCDEF
+
+    # master/main branch overrides
+    bg!engine-sim-cli.claude=#46a866
+    fg!engine-sim-cli.claude=#000000
+
+    # master/main branch overrides
+    bg!engine-sim-cli.preset=#558844
+    fg!engine-sim-cli.preset=#dddddd
+
+    # master/main branch overrides
+    bg.preset-engine-config=#bbbbbb
+    
+    bg.preset-engine-config!engine-sim-bridge=#668866
+    fg.preset-engine-config!engine-sim-bridge=#dddddd
+
+    bg.virtual-ice-twin=#225566
+}
