@@ -18,6 +18,7 @@ BRIDGE_TEST_CORE_EXCLUDE := $(BRIDGE_TEST_EXCLUDE)|($(BRIDGE_TEST_GOLDEN_MATCH)|
 CTEST_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 BUILD_PARALLEL_LEVEL ?=
 CMAKE_BUILD_PARALLEL_FLAG := $(if $(strip $(BUILD_PARALLEL_LEVEL)),--parallel $(BUILD_PARALLEL_LEVEL),)
+BUILD_STAMP := $(BUILD_DIR)/.build-ready.stamp
 
 ISOMORPHISM_STAMP := $(BUILD_DIR)/.test-isomorphism.stamp
 
@@ -55,14 +56,15 @@ PRESET_COMPILER := $(BUILD_DIR)/engine-sim-preset-compiler
 all: build test presets
 
 # Compile everything (cmake configure + build)
-build:
-	@mkdir -p $(BUILD_DIR)
-	@if [ ! -f $(BUILD_DIR)/CMakeCache.txt ]; then \
-		cd $(BUILD_DIR) && cmake $(BRIDGE_TEST_CMAKE_FLAGS) ..; \
-	else \
-		echo "Bridge build directory configured, skipping CMake configure."; \
-	fi
+build: $(BUILD_STAMP)
+
+$(BUILD_STAMP): $(BUILD_DIR)/CMakeCache.txt
 	+$(call build_bridge_targets)
+	@touch $@
+
+$(BUILD_DIR)/CMakeCache.txt: CMakeLists.txt
+	@mkdir -p $(BUILD_DIR)
+	@cd $(BUILD_DIR) && cmake $(BRIDGE_TEST_CMAKE_FLAGS) ..
 
 # Remove orphaned binaries, symlinks, and stray cmake junk from source dirs
 remove-orphans:
@@ -80,6 +82,7 @@ remove-orphans:
 clean: remove-orphans clean-presets clean-test-fixtures
 	@if [ -d $(BUILD_DIR) ]; then cmake --build $(BUILD_DIR) --target clean >/dev/null 2>&1 || true; fi
 	@rm -f $(ISOMORPHISM_STAMP)
+	@rm -f $(BUILD_STAMP)
 	@rm -rf tmp
 
 # Full clean - remove entire build directory (superset of clean)
