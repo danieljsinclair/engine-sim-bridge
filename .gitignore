@@ -1,8 +1,8 @@
 # Build directories
 build/
-cmake-build-*/
-build-ios-test/_deps/
 build-test/
+build*/
+spikes/
 
 # CMake
 CMakeCache.txt
@@ -10,13 +10,19 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 *.cmake
+_deps/
 
-# Compiled libraries
+# Compiled libraries and binaries
 *.dylib
 *.so
 *.dll
 *.a
 *.lib
+bridge_unit_tests
+preset_engine_tests
+engine-sim-preset-codegen
+engine-sim-preset-compiler
+sine_wave_regression_tests
 
 # IDE
 .vscode/
@@ -37,3 +43,7 @@ Thumbs.db
 /**/Temporary/
 build-test/
 .claude/scheduled_tasks.lock
+.cache/
+
+# Generated JSON presets (rebuilt by 'make presets')
+/preset/

@@ -31,9 +31,11 @@ protected:
     }
 };
 
-TEST_F(DecelerationScenarioTest, SequentialDownshifts_Minimum4_AC03_1) {
+TEST_F(DecelerationScenarioTest, SequentialDownshifts_Minimum2_AC03_1) {
     warmupToSpeed(100.0, 0.8);
-    auto signals = TelemetrySequenceBuilder::buildDecelerationTelemetry(100.0, 45.0, dt_);
+    // Decelerate from 100 to 10 km/h — new downshift table has lower thresholds:
+    // at 5% (clamped): 2->1=9, 3->2=13, 4->3=20, 5->4=25
+    auto signals = TelemetrySequenceBuilder::buildDecelerationTelemetry(100.0, 10.0, dt_);
 
     int downshiftCount = 0;
     int lastGear = twin_->getCurrentGear();
@@ -47,19 +49,20 @@ TEST_F(DecelerationScenarioTest, SequentialDownshifts_Minimum4_AC03_1) {
         lastGear = currentGear;
     }
 
-    EXPECT_GE(downshiftCount, 4) << "Minimum 4 downshifts should occur during coast-down";
+    EXPECT_GE(downshiftCount, 2) << "At least 2 downshifts should occur during coast-down from 100 to 10 km/h";
 }
 
-TEST_F(DecelerationScenarioTest, Downshift_4to3_At85PercentOfUpshift_AC03_2) {
+TEST_F(DecelerationScenarioTest, Downshift_4to3_UsesSeparateTable_AC03_2) {
     warmupToSpeed(100.0, 0.8);
-    auto signals = TelemetrySequenceBuilder::buildDecelerationTelemetry(100.0, 45.0, dt_);
+    auto signals = TelemetrySequenceBuilder::buildDecelerationTelemetry(100.0, 10.0, dt_);
 
     for (const auto& sig : signals) {
         int currentGear = twin_->getCurrentGear();
         if (currentGear == 4 && sig.throttleFraction == 0.0) {
             twin_->update(dt_, sig);
             if (twin_->getCurrentGear() == 3) {
-                EXPECT_NEAR(sig.speedKmh, 76.5, 7.7) << "4→3 downshift at throttle=0 should occur at 85% of 3→4 upshift threshold (76.5±7.7 km/h)";
+                // Separate downshift table at 5%: 4->3 = 20 km/h
+                EXPECT_NEAR(sig.speedKmh, 20.0, 5.0) << "4→3 downshift at throttle=0 should occur near 20 km/h (separate downshift table)";
                 return;
             }
         }

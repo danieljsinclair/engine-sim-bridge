@@ -5,7 +5,7 @@ namespace input {
 KeyboardDemoThrottleSource::KeyboardDemoThrottleSource(IKeyboardInput& keyboard)
     : keyboard_(keyboard)
     , shouldContinue_(true)
-    , gearSelector_(0)   // NEUTRAL
+    , gearSelector_(GEAR_NEUTRAL)   // NEUTRAL
     , ignitionOn_(true) {
 }
 
@@ -13,7 +13,7 @@ int KeyboardDemoThrottleSource::prndlIndex() const {
     for (int i = 0; i < PRNDL_COUNT; ++i) {
         if (PRNDL_ORDER[i] == gearSelector_) return i;
     }
-    return 2; // Default to N if somehow out of range
+    return GEAR_NEUTRAL; // Default to N if somehow out of range
 }
 
 void KeyboardDemoThrottleSource::shiftUp() {

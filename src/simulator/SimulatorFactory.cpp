@@ -3,23 +3,157 @@
 // OCP: BridgeSimulator doesn't know what Simulator it has; factory is the only place that does.
 
 #include "simulator/SimulatorFactory.h"
+#include "simulation/SimulationLoop.h"
 #include "simulator/BridgeSimulator.h"
 #include "simulator/SineSimulator.h"
 #include "simulator/SineEngine.h"
 #include "simulator/SineVehicle.h"
 #include "simulator/SineTransmission.h"
+#include "simulator/ScriptCompileHelpers.h"
+#include "simulator/ScriptExecutionHelpers.h"
 #include "simulator/ScriptLoadHelpers.h"
+#include "simulator/PresetEngineFactory.h"
+#include "simulator/SimulatorInitHelpers.h"
 #include "simulator/EngineSimTypes.h"
 #include "common/ILogging.h"
 #include "telemetry/ITelemetryProvider.h"
 #include "piston_engine_simulator.h"
 
+#include "engine-sim/include/simulator.h"
+
 #include <memory>
 #include <stdexcept>
+#include <algorithm>
+#include <filesystem>
+
+static void initSimulator(Simulator* sim, const ISimulatorConfig& config);
+static bool endsWith(const std::string& str, const std::string& suffix);
+
+namespace {
+
+struct LoadedSimulation {
+    Engine* engine = nullptr;
+    Vehicle* vehicle = nullptr;
+    Transmission* transmission = nullptr;
+    std::string resolvedAssetPath;
+    int initialGear = -1;
+};
+
+// Metadata returned by each create function — the single wrap path consumes this.
+struct SimulatorInit {
+    std::unique_ptr<Simulator> simulator;
+    std::string name;
+    EnginePhase initialPhase = EnginePhase::Stopped;
+};
+
+SimulatorInit createSineWaveSimulator(const ISimulatorConfig& config) {
+    // SineEngine has no built-in frequency — must provide one explicitly
+    ISimulatorConfig sineConfig = config;
+    if (sineConfig.simulationFrequency <= 0) {
+        sineConfig.simulationFrequency = EngineSimDefaults::SIMULATION_FREQUENCY;
+    }
+    auto sineSim = std::make_unique<SineSimulator>();
+    initSimulator(sineSim.get(), sineConfig);
+    sineSim->loadSimulation(nullptr, nullptr, nullptr);
+    return {std::move(sineSim), "SineWave", EnginePhase::Running};
+}
+
+void applyLoadedEngineSettings(Simulator* simulator, Engine* engine) {
+    simulator->setSimulationFrequency(engine->getSimulationFrequency());
+
+    Synthesizer::AudioParameters audioParams = simulator->synthesizer().getAudioParameters();
+    audioParams.inputSampleNoise = static_cast<float>(engine->getInitialJitter());
+    audioParams.airNoise = static_cast<float>(engine->getInitialNoise());
+    audioParams.dF_F_mix = static_cast<float>(engine->getInitialHighFrequencyGain());
+    simulator->synthesizer().setAudioParameters(audioParams);
+}
+
+std::unique_ptr<Simulator> buildPistonEngineSimulator(
+    LoadedSimulation loaded,
+    const ISimulatorConfig& config,
+    ILogging* logger)
+{
+    auto pistonSim = std::make_unique<PistonEngineSimulator>();
+    initSimulator(pistonSim.get(), config);
+    pistonSim->loadSimulation(loaded.engine, loaded.vehicle, loaded.transmission);
+    applyLoadedEngineSettings(pistonSim.get(), loaded.engine);
+
+    if (loaded.transmission && loaded.initialGear >= 0) {
+        loaded.transmission->changeGear(loaded.initialGear);
+    }
+
+    if (!ScriptLoadHelpers::loadImpulseResponses(pistonSim.get(), loaded.engine, loaded.resolvedAssetPath, logger)) {
+        pistonSim->destroy();
+        throw std::runtime_error("Failed to load impulse responses (asset base: " + loaded.resolvedAssetPath + ")");
+    }
+
+    return pistonSim;
+}
+
+LoadedSimulation loadPresetSimulation(const std::string& scriptPath, const std::string& assetBasePath) {
+    PresetLoadResult result = PresetEngineFactory::loadFromFile(scriptPath);
+    if (!result.success()) {
+        throw std::runtime_error("Failed to load preset: " + scriptPath + " — " + result.error);
+    }
+
+    LoadedSimulation loaded;
+    loaded.engine = result.engine;
+    loaded.vehicle = result.vehicle;
+    loaded.transmission = result.transmission;
+    loaded.initialGear = result.initialGear;
+    loaded.resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(
+        ScriptLoadHelpers::normalizeScriptPath(scriptPath), assetBasePath);
+    return loaded;
+}
+
+LoadedSimulation loadScriptSimulation(const std::string& scriptPath, const std::string& assetBasePath) {
+    std::string normalizedPath = ScriptLoadHelpers::normalizeScriptPath(scriptPath);
+    std::string resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath, assetBasePath);
 
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
-#include "../scripting/include/compiler.h"
+    const auto simDir = script_compile_helpers::findEngineSimRoot(normalizedPath, resolvedAssetPath);
+    const es_script::Compiler::Output output = script_execution_helpers::compileScript(normalizedPath, simDir);
+
+    if (!output.engine) {
+        throw std::runtime_error("Script did not create an engine: " + normalizedPath);
+    }
+
+    LoadedSimulation loaded;
+    loaded.engine = output.engine;
+    loaded.vehicle = output.vehicle ? output.vehicle : ScriptLoadHelpers::createDefaultVehicle();
+    loaded.transmission = output.transmission ? output.transmission : ScriptLoadHelpers::createDefaultTransmission();
+    loaded.resolvedAssetPath = resolvedAssetPath;
+    return loaded;
+#else
+    throw std::runtime_error("Script loading not available (Piranha support disabled)");
 #endif
+}
+
+SimulatorInit createPistonEngineSimulator(
+    const std::string& scriptPath,
+    const std::string& assetBasePath,
+    const ISimulatorConfig& config,
+    ILogging* logger)
+{
+    std::string name;
+    std::unique_ptr<Simulator> sim;
+
+    if (scriptPath.empty()) {
+        sim = std::make_unique<PistonEngineSimulator>();
+        initSimulator(sim.get(), config);
+        name = "PistonEngine";
+    } else {
+        LoadedSimulation loaded = endsWith(scriptPath, ".json")
+            ? loadPresetSimulation(scriptPath, assetBasePath)
+            : loadScriptSimulation(scriptPath, assetBasePath);
+        sim = buildPistonEngineSimulator(std::move(loaded), config, logger);
+        name = std::filesystem::path(scriptPath).stem().string();
+    }
+
+    return {std::move(sim), std::move(name), EnginePhase::Stopped};
+}
+
+}  // namespace
 
 // ============================================================================
 // Shared Simulator init — common to all Simulator subclasses
@@ -35,6 +169,12 @@ static void initSimulator(Simulator* sim, const ISimulatorConfig& config) {
     sim->setTargetSynthesizerLatency(config.targetSynthesizerLatency);
 }
 
+static bool endsWith(const std::string& str, const std::string& suffix) {
+    if (suffix.size() > str.size()) return false;
+    return std::equal(suffix.rbegin(), suffix.rend(), str.rbegin(),
+        [](char a, char b) { return tolower(a) == tolower(b); });
+}
+
 // ============================================================================
 // SimulatorFactory Implementation
 // ============================================================================
@@ -47,88 +187,114 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
     ILogging* logger,
     telemetry::ITelemetryWriter* telemetryWriter)
 {
-    // Reserved for future factory-level telemetry wiring.
-    (void)telemetryWriter;
-
-    std::unique_ptr<Simulator> sim;
-
+    SimulatorInit simInit;
     switch (type) {
-        case SimulatorType::SineWave: {
-            auto sineSim = std::make_unique<SineSimulator>();
-            initSimulator(sineSim.get(), config);
-
-            // Keep SineWave creation symmetric with PistonEngine: the factory composes
-            // mode-specific parts and injects them via loadSimulation().
-            Engine* sineEngine = new SineEngine();
-            Vehicle* sineVehicle = new SineVehicle();
-            Transmission* sineTranny = new SineTransmission();
-            sineSim->loadSimulation(sineEngine, sineVehicle, sineTranny);
-
-            sim = std::move(sineSim);
+        case SimulatorType::SineWave:
+            simInit = createSineWaveSimulator(config);
             break;
-        }
 
-        case SimulatorType::PistonEngine: {
-            auto pistonSim = std::make_unique<PistonEngineSimulator>();
-            initSimulator(pistonSim.get(), config);
-
-            // Compile and load script if path provided
-            if (!scriptPath.empty()) {
-                std::string normalizedPath = ScriptLoadHelpers::normalizeScriptPath(scriptPath);
-                std::string resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath, assetBasePath);
-
-#ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
-                // Lazily create compiler
-                auto compiler = std::make_unique<es_script::Compiler>();
-                compiler->initialize();
-
-                if (!compiler->compile(normalizedPath.c_str())) {
-                    compiler->destroy();
-                    throw std::runtime_error("Failed to compile script: " + normalizedPath);
-                }
-
-                es_script::Compiler::Output output = compiler->execute();
-                Engine* engine = output.engine;
-                Vehicle* vehicle = output.vehicle ? output.vehicle : ScriptLoadHelpers::createDefaultVehicle();
-                Transmission* transmission = output.transmission ? output.transmission : ScriptLoadHelpers::createDefaultTransmission();
-
-                if (!engine) {
-                    compiler->destroy();
-                    throw std::runtime_error("Script did not create an engine: " + normalizedPath);
-                }
-
-                pistonSim->loadSimulation(engine, vehicle, transmission);
-
-                // Load impulse responses
-                if (!ScriptLoadHelpers::loadImpulseResponses(pistonSim.get(), engine, resolvedAssetPath, logger)) {
-                    compiler->destroy();
-                    throw std::runtime_error("Failed to load impulse responses (asset base: " + resolvedAssetPath + ")");
-                }
-
-                compiler->destroy();
-#else
-                throw std::runtime_error("Script loading not available (Piranha support disabled)");
-#endif
-            }
-
-            sim = std::move(pistonSim);
+        case SimulatorType::PistonEngine:
+            simInit = createPistonEngineSimulator(scriptPath, assetBasePath, config, logger);
             break;
-        }
 
         default:
             throw std::runtime_error("Unknown simulator type in SimulatorFactory::create()");
     }
 
-    auto bridgeSim = std::make_unique<BridgeSimulator>(std::move(sim));
-
-    // Set display name from script path for PistonEngine mode
-    if (type == SimulatorType::PistonEngine && !scriptPath.empty()) {
-        bridgeSim->setNameFromScript(scriptPath);
-    }
+    auto bridgeSim = std::make_unique<BridgeSimulator>(std::move(simInit.simulator), simInit.name);
 
     return bridgeSim;
 }
 
 SimulatorType SimulatorFactory::getDefaultType() {
     return SimulatorType::PistonEngine;
+}
+
+std::vector<std::string> SimulatorFactory::discoverPresets(const std::string& presetPath) {
+    std::vector<std::string> presets;
+    std::filesystem::path presetDir = std::filesystem::path(presetPath);
+
+    if (!std::filesystem::exists(presetDir)) {
+        return presets;
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(presetDir)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".json") {
+            presets.push_back(entry.path().string());
+        }
+    }
+
+    std::sort(presets.begin(), presets.end());
+    return presets;
+}
+
+// ============================================================================
+// configureLoadTorque - Configure dyno in load torque mode
+// hold=false + rotationSpeed=0 = brake-only (velocity-dependent damping).
+// m_maxTorque is the load knob — the engine must work against this torque.
+// Returns true if dyno was configured, false otherwise.
+// ============================================================================
+
+namespace {
+    bool configureLoadTorque(ISimulator* simulator, double loadFraction, ILogging* logger) {
+        if (loadFraction <= 0) return false;  // OK: no load to configure
+
+        auto* bridgeSim = dynamic_cast<BridgeSimulator*>(simulator);
+        const bool configured = bridgeSim->configureDynoLoad(loadFraction);
+
+        if (configured && logger) {
+            logger->info(LogMask::BRIDGE, "Load: %d%% (%d ft*lbs max)",
+                         static_cast<int>(loadFraction * 100),
+                         static_cast<int>(loadFraction * EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS));
+        }
+        return configured;
+    }
+}
+
+// ============================================================================
+// createAndConfigure - Create simulator and optionally configure load torque
+// ============================================================================
+
+std::unique_ptr<ISimulator> SimulatorFactory::createAndConfigure(
+    const SimulationConfig& config,
+    const std::string& scriptPath,
+    const std::string& assetBasePath,
+    ILogging* logger,
+    telemetry::ITelemetryWriter* telemetryWriter)
+{
+    auto sim = create(config.simulatorType, scriptPath, assetBasePath, config.engineConfig, logger, telemetryWriter);
+    configureLoadTorque(sim.get(), config.targetLoad, logger);
+    return sim;
+}
+
+// ============================================================================
+// discoverPresetPaths - Discover presets and find current index
+// ============================================================================
+
+SimulatorFactory::PresetDiscoveryResult SimulatorFactory::discoverPresetPaths(const std::string& presetPath) {
+    PresetDiscoveryResult result;
+    auto rawPaths = discoverPresets(presetPath);
+
+    for (auto& path : rawPaths) {
+        PresetNames info;
+        info.fullPath = std::move(path);
+
+        // Extract short name from filename stem (e.g., "v8.json" -> "v8")
+        std::filesystem::path p(info.fullPath);
+        info.shortName = p.stem().string();
+
+        result.presets.push_back(std::move(info));
+    }
+
+    if (result.presets.size() > 1) {
+        // Find current preset index in the sorted list
+        for (size_t i = 0; i < result.presets.size(); ++i) {
+            if (result.presets[i].fullPath == presetPath) {
+                result.currentIndex = i;
+                break;
+            }
+        }
+    }
+
+    return result;
 }

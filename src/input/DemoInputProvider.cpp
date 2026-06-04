@@ -1,4 +1,5 @@
 #include "input/DemoInputProvider.h"
+#include "input/DemoThrottleSource.h"
 #include <chrono>
 
 namespace input {
@@ -14,13 +15,18 @@ uint64_t getCurrentTimeMs() {
 
 DemoInputProvider::DemoInputProvider(
     std::unique_ptr<IThrottleSource> throttleSource,
+    std::unique_ptr<GearSelectorInput> gearSelector,
+    std::unique_ptr<IgnitionInput> ignition,
     const twin::IceVehicleProfile& profile,
     const DemoVehiclePhysicsConfig& physicsConfig
 )
     : profile_(profile)
     , throttleSource_(std::move(throttleSource))
+    , gearSelector_(std::move(gearSelector))
+    , ignition_(std::move(ignition))
     , twinProvider_(profile_)
-    , physics_(physicsConfig) {
+    , physics_(physicsConfig)
+    , demoThrottle_(static_cast<DemoThrottleSource*>(throttleSource_.get())) {
 }
 
 DemoInputProvider::~DemoInputProvider() {
@@ -55,9 +61,7 @@ bool DemoInputProvider::IsConnected() const {
 
 EngineInput DemoInputProvider::OnUpdateSimulation(double dt) {
     if (!initialized_ || !throttleSource_) {
-        EngineInput input;
-        input.shouldContinue = false;
-        return input;
+        return EngineInput{};
     }
 
     double throttle = throttleSource_->pollThrottle();
@@ -74,23 +78,21 @@ EngineInput DemoInputProvider::OnUpdateSimulation(double dt) {
 
     twinProvider_.setUpstreamSignal(signal);
 
-    // Forward gear selector and ignition from keyboard to twin
-    auto* kbSource = dynamic_cast<KeyboardDemoThrottleSource*>(throttleSource_.get());
-    if (kbSource) {
-        int currentSelector = kbSource->getGearSelector();
+    // Forward gear selector and ignition state to twin
+    if (gearSelector_) {
+        int currentSelector = gearSelector_->getState();
         if (currentSelector != lastForwardedSelector_) {
             twinProvider_.setGearSelector(currentSelector);
             lastForwardedSelector_ = currentSelector;
         }
-        twinProvider_.setIgnition(kbSource->getIgnition());
+    }
+
+    if (ignition_) {
+        twinProvider_.setIgnition(ignition_->isOn());
     }
 
     EngineInput input = twinProvider_.OnUpdateSimulation(dt);
     currentGear_ = input.gearAbsolute;
-
-    if (!throttleSource_->shouldContinue()) {
-        input.shouldContinue = false;
-    }
 
     return input;
 }
@@ -113,6 +115,61 @@ int DemoInputProvider::getDemoGear() const {
 
 void DemoInputProvider::provideFeedback(const EngineSimStats& stats) {
     twinProvider_.provideFeedback(stats);
+}
+
+// IDemoControls implementations
+void DemoInputProvider::setThrottle(double level) {
+    if (demoThrottle_) {
+        demoThrottle_->setThrottleLevel(level);
+    }
+}
+
+void DemoInputProvider::shiftUp() {
+    if (gearSelector_) {
+        gearSelector_->shiftUp();
+    }
+}
+
+void DemoInputProvider::shiftDown() {
+    if (gearSelector_) {
+        gearSelector_->shiftDown();
+    }
+}
+
+int DemoInputProvider::getGearSelectorState() const {
+    if (gearSelector_) {
+        return gearSelector_->getState();
+    }
+    return 0;
+}
+
+void DemoInputProvider::setIgnition(bool on) {
+    if (ignition_) {
+        ignition_->setOn(on);
+    }
+}
+
+void DemoInputProvider::toggleIgnition() {
+    if (ignition_) {
+        ignition_->toggle();
+    }
+}
+
+bool DemoInputProvider::isIgnitionOn() const {
+    if (ignition_) {
+        return ignition_->isOn();
+    }
+    return false;
+}
+
+void DemoInputProvider::requestExit() {
+    if (demoThrottle_) {
+        demoThrottle_->requestExit();
+    }
+}
+
+void DemoInputProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
+    twinProvider_.setGearboxLogger(logger);
 }
 
 }

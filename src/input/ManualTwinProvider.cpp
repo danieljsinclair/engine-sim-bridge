@@ -36,7 +36,6 @@ bool ManualTwinProvider::IsConnected() const {
 EngineInput ManualTwinProvider::OnUpdateSimulation(double dt) {
     if (!initialized_ || !throttleSource_) {
         EngineInput input;
-        input.shouldContinue = false;
         return input;
     }
 
@@ -64,15 +63,11 @@ EngineInput ManualTwinProvider::OnUpdateSimulation(double dt) {
     EngineInput input;
     input.throttle = output.throttle;
     input.ignition = output.ignition;
-    input.starterMotor = output.starterMotor;
+    input.starterButton = output.starterMotor;
     input.gearAbsolute = output.gear;
     input.clutchPressure = output.clutchPressure;
     input.gearSelector = static_cast<int>(output.gearSelector);
     input.gearAutoMode = false; // ManualTwin uses manual gearbox
-
-    if (!throttleSource_->shouldContinue()) {
-        input.shouldContinue = false;
-    }
 
     return input;
 }

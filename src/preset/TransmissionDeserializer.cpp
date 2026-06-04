@@ -1,0 +1,62 @@
+#include "preset/TransmissionDeserializer.h"
+
+#include "transmission.h"
+
+#include <stdexcept>
+#include <vector>
+
+using json::JsonValue;
+
+Transmission* TransmissionDeserializer::deserialize(const JsonValue& json, const std::string& context) {
+    const std::string ctx = context.empty() ? "transmission" : context;
+
+    if (!json.has("gearCount")) {
+        throw std::runtime_error("Missing required field 'gearCount' in " + ctx);
+    }
+
+    int gearCount = json["gearCount"].asInt();
+    if (gearCount <= 0) {
+        throw std::runtime_error("Invalid 'gearCount' in " + ctx);
+    }
+
+    // Read gear ratios array
+    std::vector<double> gearRatios;
+    if (json.has("gearRatios") && json["gearRatios"].isArray()) {
+        const JsonValue& ratiosJson = json["gearRatios"];
+        for (size_t i = 0; i < ratiosJson.size(); i++) {
+            gearRatios.push_back(ratiosJson[i].asNumber());
+        }
+    } else {
+        throw std::runtime_error("Missing required field 'gearRatios' in " + ctx);
+    }
+
+    if (static_cast<int>(gearRatios.size()) != gearCount) {
+        throw std::runtime_error("gearRatios count does not match gearCount in " + ctx);
+    }
+
+    if (!json.has("maxClutchTorque")) {
+        throw std::runtime_error("Missing required field 'maxClutchTorque' in " + ctx);
+    }
+    double maxClutchTorque = json["maxClutchTorque"].asNumber();
+
+    Transmission::Parameters params;
+    params.GearCount = gearCount;
+    params.GearRatios = gearRatios.data();
+    params.MaxClutchTorque = maxClutchTorque;
+
+    Transmission* trans = new Transmission();
+    trans->initialize(params);
+
+    // clutchPressure is safe to set here -- it's a simple scalar with no dependencies.
+    if (json.has("clutchPressure")) {
+        trans->setClutchPressure(json["clutchPressure"].asNumber());
+    }
+
+    // NOTE: currentGear is also in the JSON but cannot be applied here.
+    // changeGear() accesses m_vehicle->getMass() which is null at this point.
+    // PresetDeserializer reads it into PresetLoadResult::initialGear, and
+    // SimulatorFactory applies it after PistonEngineSimulator::loadSimulation()
+    // wires the vehicle via addToSystem().
+
+    return trans;
+}

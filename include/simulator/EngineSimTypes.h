@@ -5,6 +5,10 @@
 #include <stddef.h>
 #include <cstring>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 class ILogging;
 class Simulator;
 
@@ -61,8 +65,10 @@ namespace EngineSimDefaults {
     constexpr double  KMH_TO_MPH                 = 0.621371; // km/h to mph conversion factor
 
     // Physics conversion constants
-    constexpr double  MS_TO_KMH                  = 3.6;       // m/s to km/h (3600s/h / 1000m/km)
-    constexpr double  RAD_PER_SEC_TO_RPM         = 60.0 / (2.0 * 3.14159265358979323846); // rad/s to RPM
+    constexpr double  TWO_PI = 2.0 * M_PI;
+    constexpr double  MIN_TO_SECONDS             = 60.0;                    // minutes to seconds
+    constexpr double  MS_TO_KMH                  = 3.6;                     // m/s to km/h (3600s/h / 1000m/km)
+    constexpr double  RAD_PER_SEC_TO_RPM         = MIN_TO_SECONDS / TWO_PI;   // rad/s to RPM - One revolution is 2π radians, and there are 60 seconds in a minute, so the factor is 60 / (2π)
     constexpr double  MS_TO_SECONDS              = 1.0 / 1000.0; // milliseconds to seconds
 
     // Twin state machine thresholds
@@ -72,6 +78,7 @@ namespace EngineSimDefaults {
 
     // Display thresholds
     constexpr int     RPM_DISPLAY_FLOOR          = 10;    // RPM below this is displayed as 0 (suppresses transient noise)
+    constexpr double  DYNO_IDLE_RPM              = 700.0; // Idle RPM — dyno won't brake below this speed
 }
 
 // ISimulatorConfig — Configuration for ISimulator implementations
@@ -89,7 +96,7 @@ namespace EngineSimDefaults {
 // Note: volume and convolutionLevel are runtime-tunable defaults, not constants
 struct ISimulatorConfig {
     int32_t sampleRate = EngineSimDefaults::SAMPLE_RATE;
-    int32_t simulationFrequency = EngineSimDefaults::SIMULATION_FREQUENCY;
+    int32_t simulationFrequency = 0;  // 0 = use engine's actual frequency; >0 = explicit override
     int32_t fluidSimulationSteps = EngineSimDefaults::FLUID_SIMULATION_STEPS;
     int32_t maxChunkFrames = EngineSimDefaults::MAX_AUDIO_CHUNK_FRAMES;
     double targetSynthesizerLatency = EngineSimDefaults::TARGET_SYNTH_LATENCY;
@@ -120,10 +127,11 @@ struct EngineSimStats {
     // Gear selector state
     int gearSelector = 0;            // GearSelector value
     bool gearAutoMode = false;       // true=auto(ZF), false=manual
+    double speedMph = 0.0;           // Vehicle speed in MPH
 };
 
 namespace EngineSimAudio {
-    constexpr int STEREO = 2;
+    constexpr int STEREO = EngineSimDefaults::AUDIO_CHANNELS_STEREO;
 
 // Converts mono int16 samples to stereo float32 (interleaved) - balanced channels
 inline void convertInt16ToStereoFloat(

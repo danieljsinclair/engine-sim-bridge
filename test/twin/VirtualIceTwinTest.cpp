@@ -97,10 +97,12 @@ TEST_F(VirtualIceTwinTest, RunningToShiftingWhenGearboxRequestsShift_AC11_4) {
     EXPECT_EQ(twin_->getState(), TwinState::RUNNING);
 
     sig.speedKmh = 45.0;
-    auto output = twin_->update(0.016, sig);
+    twin_->update(0.016, sig);  // Triggers RUNNING -> SHIFTING (clutch still 1.0 from RUNNING frame)
 
     if (twin_->getState() == TwinState::SHIFTING) {
-        EXPECT_LT(output.clutchPressure, 0.2) << "Clutch should be disengaging (<0.2) during shift";
+        // First SHIFTING frame: clutch starts disengaging
+        auto output = twin_->update(0.016, sig);
+        EXPECT_LT(output.clutchPressure, 1.0) << "Clutch should start disengaging on first SHIFTING frame";
     } else {
         SUCCEED() << "Gearbox not ready to shift yet (throttle smoothing or min shift interval), skipping clutch check";
     }

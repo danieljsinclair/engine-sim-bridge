@@ -88,13 +88,6 @@ TEST_F(VirtualIceInputProviderTest, ClutchPressureMapsFromTwin) {
     EXPECT_LE(input.clutchPressure, 1.0);
 }
 
-TEST_F(VirtualIceInputProviderTest, ShouldContinueIsTrue) {
-    ASSERT_TRUE(provider_->Initialize());
-
-    EngineInput input = provider_->OnUpdateSimulation(0.016);
-    EXPECT_TRUE(input.shouldContinue);
-}
-
 TEST_F(VirtualIceInputProviderTest, CrankingStateActivatesStarterAndIgnition) {
     ASSERT_TRUE(provider_->Initialize());
 
@@ -107,6 +100,6 @@ TEST_F(VirtualIceInputProviderTest, CrankingStateActivatesStarterAndIgnition) {
 
     EngineInput input = provider_->OnUpdateSimulation(0.016);
     EXPECT_TRUE(input.ignition);
-    EXPECT_TRUE(input.starterMotor);
+    EXPECT_TRUE(input.starterButton);
     EXPECT_EQ(0, input.gearAbsolute);  // Neutral during cranking
 }

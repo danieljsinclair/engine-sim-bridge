@@ -7,6 +7,27 @@
 
 namespace ScriptLoadHelpers {
 
+/**
+ * Build the full path for a relative filename against an asset base path.
+ * Handles absolute paths, and detects when the filename already starts with
+ * the last path component of the asset base (e.g. "Presets/sound-library/...")
+ * to avoid double-prefixing.
+ */
+static std::string buildFullPath(const std::string& assetBasePath, const std::string& filename) {
+    if (filename[0] == '/' || (filename.length() > 1 && filename[1] == ':')) {
+        return filename;
+    }
+    size_t firstSlash = filename.find('/');
+    if (firstSlash != std::string::npos) {
+        size_t lastSlash = assetBasePath.find_last_of('/');
+        std::string lastComponent = assetBasePath.substr(lastSlash + 1);
+        if (filename.find(lastComponent + "/") == 0) {
+            return filename;
+        }
+    }
+    return assetBasePath + "/" + filename;
+}
+
 bool loadImpulseResponses(
     Simulator* simulator,
     Engine* engine,
@@ -30,26 +51,14 @@ bool loadImpulseResponses(
             continue;
         }
 
-        // Construct full path
-        std::string fullPath;
-        if (filename[0] == '/' || (filename.length() > 1 && filename[1] == ':')) {
-            fullPath = filename;
-        } else {
-            size_t firstSlash = filename.find('/');
-            if (firstSlash != std::string::npos) {
-                size_t lastSlash = assetBasePath.find_last_of('/');
-                std::string lastComponent = assetBasePath.substr(lastSlash + 1);
-                if (filename.find(lastComponent + "/") == 0) {
-                    fullPath = filename;
-                } else {
-                    fullPath = assetBasePath + "/" + filename;
-                }
-            } else {
-                fullPath = assetBasePath + "/" + filename;
-            }
-        }
+        // Construct full path deterministically.
+        // The deserializer normalizes the filename to "sound-library/..." (no "es/" prefix).
+        // resolveAssetBasePath returns the directory containing "sound-library/" on both
+        // macOS (<root>/es/) and iOS (<bundle>/). No fallbacks needed.
+        std::string fullPath = buildFullPath(assetBasePath, filename);
 
         WavLoader::Result wavResult = WavLoader::load(fullPath);
+
         if (!wavResult.valid) {
             if (logger) {
                 logger->error(LogMask::ASSET, "Failed to load required audio file: %s", fullPath.c_str());

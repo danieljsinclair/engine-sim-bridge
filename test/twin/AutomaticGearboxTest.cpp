@@ -19,14 +19,12 @@ TEST_F(AutomaticGearboxTest, UpshiftAt50PercentThrottle_AC_01_2)
 {
     AutomaticGearbox gearbox(profile);
 
-    // At 50% throttle, 1st->2nd should happen around 40 km/h
-    gearbox.update(0.1, 39.0, 0.5);
+    // At 50% throttle, 1st->2nd happens at interpolated ~28 km/h
+    // (between 40% row: 24 and 55% row: 30, t=0.667)
+    gearbox.update(0.1, 27.0, 0.5);
     EXPECT_EQ(gearbox.getCurrentGear(), 1);
 
-    gearbox.update(0.1, 40.0, 0.5);
-    EXPECT_EQ(gearbox.getCurrentGear(), 1);
-
-    gearbox.update(0.1, 41.0, 0.5);
+    gearbox.update(0.1, 29.0, 0.5);
     EXPECT_EQ(gearbox.getCurrentGear(), 2);
 }
 
@@ -34,14 +32,11 @@ TEST_F(AutomaticGearboxTest, UpshiftAt100PercentThrottle_AC_01_5)
 {
     AutomaticGearbox gearbox(profile);
 
-    // At 100% throttle, 1st->2nd should happen around 70 km/h
-    gearbox.update(0.1, 69.0, 1.0);
+    // At 100% throttle, 1st->2nd happens at 49 km/h (from shiftTable row 9)
+    gearbox.update(0.1, 48.0, 1.0);
     EXPECT_EQ(gearbox.getCurrentGear(), 1);
 
-    gearbox.update(0.1, 70.0, 1.0);
-    EXPECT_EQ(gearbox.getCurrentGear(), 1);
-
-    gearbox.update(0.1, 71.0, 1.0);
+    gearbox.update(0.1, 50.0, 1.0);
     EXPECT_EQ(gearbox.getCurrentGear(), 2);
 }
 
@@ -49,19 +44,17 @@ TEST_F(AutomaticGearboxTest, DownshiftAt85PercentOfUpshiftSpeed_AC_03_4)
 {
     AutomaticGearbox gearbox(profile);
 
-    // Accelerate to 2nd gear at 50% throttle
-    gearbox.update(0.1, 45.0, 0.5);
-    EXPECT_EQ(gearbox.getCurrentGear(), 2);
-
-    // Upshift speed for 1st->2nd at 50% is 40 km/h
-    // Downshift should occur at 85% = 34 km/h
+    // Accelerate to 2nd gear at 50% throttle (1->2 upshift at ~28 km/h,
+    // but below 2->3 upshift at ~42 km/h)
     gearbox.update(0.1, 35.0, 0.5);
     EXPECT_EQ(gearbox.getCurrentGear(), 2);
 
-    gearbox.update(0.1, 34.0, 0.5);
+    // Downshift table at 50%: 2->1 happens at interpolated ~20.67 km/h
+    // (between 40% row: 18 and 55% row: 22)
+    gearbox.update(0.1, 22.0, 0.5);
     EXPECT_EQ(gearbox.getCurrentGear(), 2);
 
-    gearbox.update(0.1, 33.0, 0.5);
+    gearbox.update(0.1, 20.0, 0.5);
     EXPECT_EQ(gearbox.getCurrentGear(), 1);
 }
 
@@ -69,17 +62,19 @@ TEST_F(AutomaticGearboxTest, CoastDownSequentialDownshifts_AC_03_1)
 {
     AutomaticGearbox gearbox(profile);
 
-    // Accelerate to high gear
+    // Accelerate to high gear at 80% throttle
     gearbox.update(0.1, 100.0, 0.8);
     EXPECT_GE(gearbox.getCurrentGear(), 3);
 
     int topGear = gearbox.getCurrentGear();
 
-    // Coast down (throttle = 0)
-    gearbox.update(0.1, 80.0, 0.0);
-    gearbox.update(0.1, 60.0, 0.0);
-    gearbox.update(0.1, 40.0, 0.0);
-    gearbox.update(0.1, 20.0, 0.0);
+    // Coast down (throttle = 0) — downshift table at 5% (clamped)
+    // Downshift thresholds at 5%: 2->1=9, 3->2=13, 4->3=20, 5->4=25
+    // Need to drop below each threshold sequentially
+    gearbox.update(0.1, 50.0, 0.0);
+    gearbox.update(0.1, 30.0, 0.0);
+    gearbox.update(0.1, 15.0, 0.0);  // Below 4->3=20 and 3->2=13 triggers
+    gearbox.update(0.1, 5.0, 0.0);   // Below 2->1=9
 
     // Should be in a lower gear now
     EXPECT_LT(gearbox.getCurrentGear(), topGear);
@@ -143,25 +138,26 @@ TEST_F(AutomaticGearboxTest, NoDownshiftBelowFirstGear_AC_10_3)
     EXPECT_FALSE(gearbox.requestsShift());
 }
 
-TEST_F(AutomaticGearboxTest, Min3SecondsBetweenShifts_AC_10_5)
+TEST_F(AutomaticGearboxTest, MinShiftIntervalBetweenConsecutiveShifts_AC_10_5)
 {
     AutomaticGearbox gearbox(profile);
 
-    // Perform an upshift
-    gearbox.update(0.1, 45.0, 0.5);
-    EXPECT_EQ(gearbox.getCurrentGear(), 2);
-
-    // Try to shift again immediately - should be blocked
+    // Upshift to 2nd gear at 50% throttle (1->2 at ~28 km/h)
     gearbox.update(0.1, 35.0, 0.5);
     EXPECT_EQ(gearbox.getCurrentGear(), 2);
 
-    // Advance 2.9 seconds - still blocked
-    gearbox.update(2.9, 35.0, 0.5);
+    // Immediately try to upshift to 3rd (2->3 at ~42 km/h at 50%)
+    // Should be blocked by upshift interval (2.0s for ZF 8HP45)
+    gearbox.update(0.1, 50.0, 0.5);
     EXPECT_EQ(gearbox.getCurrentGear(), 2);
 
-    // Advance past 3 seconds - shift allowed
-    gearbox.update(0.2, 33.0, 0.5);
-    EXPECT_EQ(gearbox.getCurrentGear(), 1);
+    // Advance 1.8 seconds (total 1.9s since last shift) - still blocked
+    gearbox.update(1.8, 50.0, 0.5);
+    EXPECT_EQ(gearbox.getCurrentGear(), 2);
+
+    // Advance past 2.0 seconds total - upshift allowed
+    gearbox.update(0.2, 50.0, 0.5);
+    EXPECT_EQ(gearbox.getCurrentGear(), 3);
 }
 
 TEST_F(AutomaticGearboxTest, KickdownDetectionThresholds_AC_10_4)
@@ -200,13 +196,13 @@ TEST_F(AutomaticGearboxTest, InterpolateShiftTableForIntermediateThrottle)
 {
     AutomaticGearbox gearbox(profile);
 
-    // At 40% throttle (between 25% and 50% rows)
-    // 25%: 1st->2nd at 30 km/h
-    // 50%: 1st->2nd at 40 km/h
-    // Interpolated at 40%: 36 km/h
-    gearbox.update(0.1, 35.0, 0.4);
+    // At 47% throttle (between 40% row and 55% row in new 10-level table)
+    // 40%: 1st->2nd at 24 km/h
+    // 55%: 1st->2nd at 30 km/h
+    // Interpolated at 47%: 24 + (0.47-0.40)/(0.55-0.40) * (30-24) = 24 + 0.467*6 = 26.8 km/h
+    gearbox.update(0.1, 26.0, 0.47);
     EXPECT_EQ(gearbox.getCurrentGear(), 1);
 
-    gearbox.update(0.1, 37.0, 0.4);
+    gearbox.update(0.1, 28.0, 0.47);
     EXPECT_EQ(gearbox.getCurrentGear(), 2);
 }

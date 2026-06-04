@@ -10,6 +10,7 @@
 #include <string>
 #include <memory>
 #include <functional>
+#include "simulation/EnginePhase.h"
 
 namespace presentation {
 
@@ -26,7 +27,9 @@ struct EngineState {
     int underrunCount;
     std::string audioMode;
     bool ignition;
-    bool starterMotor;
+    bool starterMotorEngaged;
+    EnginePhase enginePhase = EnginePhase::Stopped;
+    std::string presetShortName;  // Short name of current preset (for display)
     double exhaustFlow;  // m^3/s
     int gear = 0;
     int gearSelector = 0;       // GearSelector value
@@ -49,6 +52,7 @@ struct EngineState {
     double vehicleSpeedKmh = 0.0;
     double engineTorqueNm = 0.0;
     double drivetrainTorqueNm = 0.0;
+    int simulationFrequency = 0;  // Actual physics Hz from the loaded engine
 };
 
 // ============================================================================

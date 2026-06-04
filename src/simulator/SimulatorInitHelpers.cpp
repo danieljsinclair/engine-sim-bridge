@@ -6,6 +6,8 @@
 #include "simulator/SimulatorInitHelpers.h"
 
 #include "simulator.h"
+#include "engine.h"
+#include "synthesizer.h"
 // simulator.h transitively includes: engine.h, transmission.h, vehicle.h,
 // dynamometer.h, starter_motor.h, scs.h (RigidBody, RigidBodySystem, etc.)
 
@@ -63,6 +65,37 @@ void cleanupPhysics(
         delete[] stagingBuffer;
         stagingBuffer = nullptr;
     }
+}
+
+void initializeConvolutionFilters(Simulator* simulator) {
+    if (!simulator) return;
+
+    Engine* engine = simulator->getEngine();
+    if (!engine) return;
+
+    const int exhaustCount = engine->getExhaustSystemCount();
+    if (exhaustCount == 0) return;
+
+    // Unit impulse: [INT16_MAX] represents a single sample at full scale
+    // This initializes the ConvolutionFilter's m_shiftRegister to prevent null deref
+    static const int16_t kUnitImpulse[1] = { INT16_MAX };
+
+    for (int i = 0; i < exhaustCount; ++i) {
+        // Only initialize if not already initialized (avoid double-init)
+        // We can't easily check m_shiftRegister here, but unit impulse is safe to re-init
+        simulator->synthesizer().initializeImpulseResponse(
+            kUnitImpulse,
+            1,
+            1.0f,
+            i
+        );
+    }
+
+    // Disable convolution to save CPU (unit impulse makes it identity transform)
+    // Presets have no real IR data, so convolution is unnecessary
+    Synthesizer::AudioParameters params = simulator->synthesizer().getAudioParameters();
+    params.convolution = 0.0f;
+    simulator->synthesizer().setAudioParameters(params);
 }
 
 } // namespace SimulatorInitHelpers

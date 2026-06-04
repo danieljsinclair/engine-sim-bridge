@@ -27,8 +27,12 @@ public:
     bool getIgnition() const;
 
     // PRNDL order for cycling: P(-2) -> R(-1) -> N(0) -> D(99)
-    static constexpr int PRNDL_ORDER[] = {-2, -1, 0, 99};
-    static constexpr int PRNDL_COUNT = 4;
+    static constexpr int GEAR_PARK = (int)bridge::GearSelector::PARK;
+    static constexpr int GEAR_REVERSE = (int)bridge::GearSelector::REVERSE;
+    static constexpr int GEAR_NEUTRAL = (int)bridge::GearSelector::NEUTRAL;
+    static constexpr int GEAR_DRIVE = (int)bridge::GearSelector::DRIVE;
+    static constexpr int PRNDL_ORDER[] = {GEAR_PARK, GEAR_REVERSE, GEAR_NEUTRAL, GEAR_DRIVE};
+    static constexpr int PRNDL_COUNT = sizeof(PRNDL_ORDER) / sizeof(PRNDL_ORDER[0]);
 
     // Frames to hold last throttle after key release (bridges OS key repeat gaps)
     static constexpr int THROTTLE_HOLD_FRAMES = 9;

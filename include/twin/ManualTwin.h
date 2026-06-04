@@ -14,7 +14,7 @@ public:
     TwinState getState() const override;
 
     void setThrottle(double throttle);
-    void setGear(int gear);
+    int setGear(int gear);
     void requestGearUp();
     void requestGearDown();
     void setIgnition(bool on);

@@ -7,7 +7,9 @@
 #include "common/ILogging.h"
 
 #include <memory>
+#if defined(__APPLE__) && defined(__MACH__)
 #include <TargetConditionals.h>
+#endif
 
 // Platform-specific includes
 #if defined(__APPLE__) && defined(__MACH__)
@@ -19,6 +21,8 @@
         // Forward declare for pointer usage
         class AVAudioEngineHardwareProvider;
     #endif
+#elif defined(ESP_PLATFORM)
+    #include "hardware/ESP32I2SHardwareProvider.h"
 #endif
 
 // ================================================================
@@ -48,6 +52,8 @@ std::unique_ptr<IAudioHardwareProvider> AudioHardwareProviderFactory::createProv
         // from .mm code (ObjC++), not from this .cpp file
         return nullptr;
     #endif
+#elif defined(ESP_PLATFORM)
+    return std::make_unique<ESP32I2SHardwareProvider>(logger);
 #else
     // Other platforms not yet supported
     // Future: ESP32, Windows, Linux, etc.

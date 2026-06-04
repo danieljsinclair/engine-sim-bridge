@@ -266,3 +266,108 @@ TEST_F(SineWaveRenderTest, RenderOnDemand_StereoChannelsAreIdentical) {
             << " differ. Stereo channels from mono source should be identical.";
     }
 }
+
+// ============================================================================
+// GEAR CHANGE TESTS
+//
+// Proves that BridgeSimulator::changeGear() correctly shifts up and down
+// through the full gear range: P(-1) <-> N(0) <-> 1 <-> 2 <-> ...
+//
+// Uses SineSimulator (gearCount=1, so valid gears are -1 and 0).
+// Also creates a synthetic multi-gear transmission to test full range.
+// ============================================================================
+
+class GearChangeTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        auto sineSim = std::make_unique<SineSimulator>();
+        Simulator::Parameters simParams;
+        simParams.systemType = Simulator::SystemType::NsvOptimized;
+        sineSim->initialize(simParams);
+        sineSim->setSimulationFrequency(EngineSimDefaults::SIMULATION_FREQUENCY);
+        sineSim->setFluidSimulationSteps(EngineSimDefaults::FLUID_SIMULATION_STEPS);
+        sineSim->setTargetSynthesizerLatency(EngineSimDefaults::TARGET_SYNTH_LATENCY);
+        sineSim->loadSimulation(new SineEngine(), new SineVehicle(), new SineTransmission());
+        simulator_ = std::make_unique<BridgeSimulator>(std::move(sineSim));
+
+        ISimulatorConfig config;
+        config.sampleRate = EngineSimDefaults::SAMPLE_RATE;
+        config.simulationFrequency = EngineSimDefaults::SIMULATION_FREQUENCY;
+        ASSERT_TRUE(simulator_->create(config, nullptr, nullptr));
+    }
+
+    void TearDown() override {
+        if (simulator_) {
+            simulator_->destroy();
+        }
+    }
+
+    int currentGear() {
+        auto* raw = simulator_->getInternalSimulator();
+        return raw && raw->getTransmission() ? raw->getTransmission()->getGear() : -999;
+    }
+
+    int gearCount() {
+        auto* raw = simulator_->getInternalSimulator();
+        return raw && raw->getTransmission() ? raw->getTransmission()->getGearCount() : 0;
+    }
+
+    std::unique_ptr<BridgeSimulator> simulator_;
+};
+
+// Upshift from P(-1) to N(0) should succeed
+TEST_F(GearChangeTest, UpshiftFromParkToNeutral) {
+    ASSERT_EQ(currentGear(), -1) << "Should start in park";
+    EXPECT_TRUE(simulator_->changeGear(1));
+    EXPECT_EQ(currentGear(), 0) << "Upshift from P should go to N";
+}
+
+// Downshift from N(0) back to P(-1) should succeed
+TEST_F(GearChangeTest, DownshiftFromNeutralToPark) {
+    ASSERT_EQ(currentGear(), -1);
+    ASSERT_TRUE(simulator_->changeGear(1));
+    ASSERT_EQ(currentGear(), 0);
+
+    EXPECT_TRUE(simulator_->changeGear(-1));
+    EXPECT_EQ(currentGear(), -1) << "Downshift from N should go to P";
+}
+
+// Downshift from P(-1) is clamped to -1 (no change) but still returns true
+TEST_F(GearChangeTest, DownshiftFromParkClampedToPark) {
+    ASSERT_EQ(currentGear(), -1);
+    EXPECT_TRUE(simulator_->changeGear(-1));
+    EXPECT_EQ(currentGear(), -1) << "Gear should stay at P after clamped downshift";
+}
+
+// Zero delta should return false (no-op)
+TEST_F(GearChangeTest, ZeroDeltaReturnsFalse) {
+    EXPECT_FALSE(simulator_->changeGear(0));
+}
+
+// Full cycle: P -> N -> P -> N -> P
+TEST_F(GearChangeTest, FullCycleParkNeutralParkNeutralPark) {
+    ASSERT_EQ(currentGear(), -1);
+
+    EXPECT_TRUE(simulator_->changeGear(1));
+    EXPECT_EQ(currentGear(), 0);
+
+    EXPECT_TRUE(simulator_->changeGear(-1));
+    EXPECT_EQ(currentGear(), -1);
+
+    EXPECT_TRUE(simulator_->changeGear(1));
+    EXPECT_EQ(currentGear(), 0);
+
+    EXPECT_TRUE(simulator_->changeGear(-1));
+    EXPECT_EQ(currentGear(), -1);
+}
+
+// SineTransmission has gearCount=1, so valid gears are -1 and 0.
+// Upshift from N(0) is clamped to 0 (no change) but still returns true.
+TEST_F(GearChangeTest, UpshiftBeyondGearCountClampedToNeutral) {
+    ASSERT_EQ(currentGear(), -1);
+    ASSERT_TRUE(simulator_->changeGear(1));
+    ASSERT_EQ(currentGear(), 0);
+
+    EXPECT_TRUE(simulator_->changeGear(1)) << "Upshift from N(0) is clamped, not rejected";
+    EXPECT_EQ(currentGear(), 0) << "Gear should stay at N after clamped upshift";
+}

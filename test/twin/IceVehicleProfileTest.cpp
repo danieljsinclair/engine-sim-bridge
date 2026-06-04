@@ -51,64 +51,46 @@ TEST(IceVehicleProfile, ShiftTableCalibration)
 {
     IceVehicleProfile profile = IceVehicleProfile::zf8hp45();
 
-    // Verify shift table structure: 5 throttle levels (10%, 25%, 50%, 75%, 100%)
+    // Verify shift table structure: 10 throttle levels (5%..100%)
     // Each with 7 upshift thresholds (1->2, 2->3, ..., 7->8)
-    ASSERT_EQ(profile.shiftTable.size(), 5);
+    ASSERT_EQ(profile.shiftTable.size(), 10);
+    ASSERT_EQ(profile.shiftTableThrottleLevels.size(), 10);
 
-    // 10% throttle row
-    const auto& throttle10 = profile.shiftTable[0];
-    ASSERT_EQ(throttle10.size(), 7);
-    EXPECT_DOUBLE_EQ(throttle10[0], 20.0);
-    EXPECT_DOUBLE_EQ(throttle10[1], 35.0);
-    EXPECT_DOUBLE_EQ(throttle10[2], 50.0);
-    EXPECT_DOUBLE_EQ(throttle10[3], 65.0);
-    EXPECT_DOUBLE_EQ(throttle10[4], 80.0);
-    EXPECT_DOUBLE_EQ(throttle10[5], 95.0);
-    EXPECT_DOUBLE_EQ(throttle10[6], 110.0);
+    // Verify throttle level breakpoints
+    EXPECT_DOUBLE_EQ(profile.shiftTableThrottleLevels[0], 0.05);
+    EXPECT_DOUBLE_EQ(profile.shiftTableThrottleLevels[3], 0.40);
+    EXPECT_DOUBLE_EQ(profile.shiftTableThrottleLevels[9], 1.00);
 
-    // 25% throttle row
-    const auto& throttle25 = profile.shiftTable[1];
-    ASSERT_EQ(throttle25.size(), 7);
-    EXPECT_DOUBLE_EQ(throttle25[0], 30.0);
-    EXPECT_DOUBLE_EQ(throttle25[1], 50.0);
-    EXPECT_DOUBLE_EQ(throttle25[2], 70.0);
-    EXPECT_DOUBLE_EQ(throttle25[3], 90.0);
-    EXPECT_DOUBLE_EQ(throttle25[4], 110.0);
-    EXPECT_DOUBLE_EQ(throttle25[5], 130.0);
-    EXPECT_DOUBLE_EQ(throttle25[6], 155.0);
+    // 5% throttle row (light cruise)
+    const auto& throttle5 = profile.shiftTable[0];
+    ASSERT_EQ(throttle5.size(), 7);
+    EXPECT_DOUBLE_EQ(throttle5[0], 11.0);
+    EXPECT_DOUBLE_EQ(throttle5[1], 17.0);
+    EXPECT_DOUBLE_EQ(throttle5[6], 64.0);
 
-    // 50% throttle row
-    const auto& throttle50 = profile.shiftTable[2];
-    ASSERT_EQ(throttle50.size(), 7);
-    EXPECT_DOUBLE_EQ(throttle50[0], 40.0);
-    EXPECT_DOUBLE_EQ(throttle50[1], 65.0);
-    EXPECT_DOUBLE_EQ(throttle50[2], 90.0);
-    EXPECT_DOUBLE_EQ(throttle50[3], 115.0);
-    EXPECT_DOUBLE_EQ(throttle50[4], 140.0);
-    EXPECT_DOUBLE_EQ(throttle50[5], 170.0);
-    EXPECT_DOUBLE_EQ(throttle50[6], 200.0);
+    // 40% throttle row
+    const auto& throttle40 = profile.shiftTable[3];
+    ASSERT_EQ(throttle40.size(), 7);
+    EXPECT_DOUBLE_EQ(throttle40[0], 24.0);
+    EXPECT_DOUBLE_EQ(throttle40[1], 37.0);
+    EXPECT_DOUBLE_EQ(throttle40[6], 137.0);
 
-    // 75% throttle row
-    const auto& throttle75 = profile.shiftTable[3];
-    ASSERT_EQ(throttle75.size(), 7);
-    EXPECT_DOUBLE_EQ(throttle75[0], 55.0);
-    EXPECT_DOUBLE_EQ(throttle75[1], 85.0);
-    EXPECT_DOUBLE_EQ(throttle75[2], 115.0);
-    EXPECT_DOUBLE_EQ(throttle75[3], 145.0);
-    EXPECT_DOUBLE_EQ(throttle75[4], 180.0);
-    EXPECT_DOUBLE_EQ(throttle75[5], 215.0);
-    EXPECT_DOUBLE_EQ(throttle75[6], 255.0);
-
-    // 100% throttle row
-    const auto& throttle100 = profile.shiftTable[4];
+    // 100% throttle row (WOT)
+    const auto& throttle100 = profile.shiftTable[9];
     ASSERT_EQ(throttle100.size(), 7);
-    EXPECT_DOUBLE_EQ(throttle100[0], 70.0);
-    EXPECT_DOUBLE_EQ(throttle100[1], 105.0);
-    EXPECT_DOUBLE_EQ(throttle100[2], 140.0);
-    EXPECT_DOUBLE_EQ(throttle100[3], 180.0);
-    EXPECT_DOUBLE_EQ(throttle100[4], 220.0);
-    EXPECT_DOUBLE_EQ(throttle100[5], 265.0);
-    EXPECT_DOUBLE_EQ(throttle100[6], 315.0);
+    EXPECT_DOUBLE_EQ(throttle100[0], 49.0);
+    EXPECT_DOUBLE_EQ(throttle100[1], 73.0);
+    EXPECT_DOUBLE_EQ(throttle100[6], 274.0);
+
+    // Verify separate downshift table
+    ASSERT_TRUE(profile.separateDownshiftTableEnabled);
+    ASSERT_EQ(profile.downshiftTable.size(), 10);
+    ASSERT_EQ(profile.downshiftTableThrottleLevels.size(), 10);
+
+    // Downshift speeds should be lower than upshift speeds (hysteresis)
+    const auto& ds5 = profile.downshiftTable[0];
+    EXPECT_LT(ds5[0], throttle5[0]);  // 9 < 11
+    EXPECT_LT(ds5[6], throttle5[6]);  // 50 < 64
 }
 
 TEST(IceVehicleProfile, CustomConstruction)

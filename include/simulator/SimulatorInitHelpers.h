@@ -12,6 +12,7 @@ class Transmission;
 class Vehicle;
 class Dynamometer;
 class StarterMotor;
+class Simulator;
 
 namespace atg_scs {
     class RigidBodySystem;
@@ -53,6 +54,14 @@ void wirePhysics(
 void cleanupPhysics(
     atg_scs::RigidBodySystem*& system,
     double*& stagingBuffer);
+
+/// Initialize convolution filters with unit impulses to prevent null pointer crashes.
+/// Required when loading presets (no WAV impulse response files) because ConvolutionFilter::f()
+/// dereferences m_shiftRegister which is nullptr without this initialization.
+/// Even with convolution disabled, the unit impulse prevents segfault if re-enabled later.
+///
+/// @param simulator        The simulator to initialize (must have loaded engine/synthesizer)
+void initializeConvolutionFilters(Simulator* simulator);
 
 } // namespace SimulatorInitHelpers
 

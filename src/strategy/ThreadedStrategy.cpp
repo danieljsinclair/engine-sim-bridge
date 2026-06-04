@@ -96,14 +96,19 @@ void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFr
     framesToWrite = std::min(framesToWrite, MAX_FRAMES_PER_READ);
     framesToWrite = std::min(framesToWrite, bufferSize);
 
-    // Read from simulator and write to buffer
-    std::vector<float> buffer(framesToWrite * 2);
-    int totalRead = 0;
-    simulator->readAudioBuffer(buffer.data(), framesToWrite, &totalRead);
+    if (framesToWrite > 0) {
+        // Read from simulator and write to buffer
+        std::vector<float> buffer(framesToWrite * 2);
+        int32_t totalRead = 0;
+        simulator->readAudioBuffer(buffer.data(), framesToWrite, &totalRead);
 
-    if (totalRead > 0) {
-        AddFrames(buffer.data(), totalRead);
-        totalFramesWritten_ += totalRead;
+        if (totalRead > 0) {
+            AddFrames(buffer.data(), totalRead);
+            totalFramesWritten_ += totalRead;
+        }
+    }
+    else {
+        logger_->warning(LogMask::AUDIO, "ThreadedStrategy: Skipping buffer fill to prevent overflow (lead=%.0fms > target=%.0fms)", leadFrames * 1000.0 / sampleRate, targetLeadFrames * 1000.0 / sampleRate);
     }
 }
 
@@ -186,6 +191,30 @@ void ThreadedStrategy::stopPlayback(ISimulator* simulator) {
     audioState_.isPlaying.store(false);
 
     logger_->info(LogMask::AUDIO, "ThreadedStrategy::stopPlayback: Playback stopped");
+}
+
+void ThreadedStrategy::swapSimulator(ISimulator* newSimulator) {
+    // Stop the old simulator's audio rendering thread.
+    // The Synthesizer runs a background thread that converts raw simulation input
+    // into rendered audio. Without stopping it, the old thread keeps running
+    // (wasting resources) and the new simulator's thread never starts, causing
+    // silent audio after preset swap (readAudioBuffer returns 0 samples).
+    if (simulator_) {
+        simulator_->stop();
+    }
+
+    // Start the new simulator's audio rendering thread so the Synthesizer
+    // can process simulation input into rendered audio samples.
+    newSimulator->start();
+
+    // Reset circular buffer for a clean slate with the new simulator.
+    circularBuffer_.reset();
+    totalFramesWritten_ = 0;
+    totalFramesRead_ = 0;
+
+    simulator_ = newSimulator;
+
+    logger_->info(LogMask::AUDIO, "ThreadedStrategy::swapSimulator: Audio rendering thread restarted for new simulator");
 }
 
 void ThreadedStrategy::resetBufferAfterWarmup() {

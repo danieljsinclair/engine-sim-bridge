@@ -7,16 +7,27 @@
 #define SIMULATION_LOOP_H
 
 #include "simulator/EngineSimTypes.h"
+#include "simulation/CrankingController.h"
+#include <atomic>
 #include <string>
+#include <vector>
+#include <memory>
 
 class IAudioBuffer;
 class ISimulator;
+class ISimulatorSession;
 
 // Forward declarations for injectable interfaces
 namespace input { class IInputProvider; }
 namespace presentation { class IPresentation; }
 class ILogging;
 namespace telemetry { class ITelemetryWriter; class ITelemetryReader; }
+
+// Forward declaration of simulator type enum (defined in simulator/SimulatorFactory.h)
+enum class SimulatorType;
+
+// Exit code returned by runUnifiedAudioLoop when preset cycling is requested
+constexpr int EXIT_BUT_CONTINUE_NEXT = 2;
 
 // ============================================================================
 // SimulationConfig - Simulation parameters only (no infrastructure deps)
@@ -25,6 +36,7 @@ namespace telemetry { class ITelemetryWriter; class ITelemetryReader; }
 struct SimulationConfig {
     // Engine config — value type, inline defaults from EngineSimDefaults
     ISimulatorConfig engineConfig;
+    SimulatorType simulatorType{};
 
     // Simulation parameters
     std::string configPath;
@@ -35,7 +47,6 @@ struct SimulationConfig {
     float volume = EngineSimDefaults::DEFAULT_HARDWARE_VOLUME;
     bool syncPull = true;
     double targetLoad = -1.0;   // -1 = no dyno, 0.0-1.0 = load torque fraction
-    bool useDefaultEngine = false;
     const char* outputWav = nullptr;
     int preFillMs = EngineSimDefaults::DEFAULT_PREFILL_MS;
 
@@ -54,25 +65,28 @@ struct SimulationConfig {
 // Throws std::runtime_error on initialization failure (fail-fast).
 // ============================================================================
 
-int runUnifiedAudioLoop(
+int runSimulationLoop(
     ISimulator& simulator,
     const SimulationConfig& config,
     IAudioBuffer& audioBuffer,
+    CrankingController& crankingController,
+    const std::atomic<bool>& stopRequested,
     input::IInputProvider* inputProvider,
     presentation::IPresentation* presentation,
     telemetry::ITelemetryWriter* telemetryWriter,
     telemetry::ITelemetryReader* telemetryReader,
     ILogging* logger);
 
-int runSimulation(
+std::unique_ptr<ISimulatorSession> createSession(
     const SimulationConfig& config,
-    ISimulator& simulator,
+    const std::string& scriptPath,
+    std::unique_ptr<ISimulator> simulator,
     IAudioBuffer* audioBuffer,
-    input::IInputProvider* inputProvider,
-    presentation::IPresentation* presentation,
-    telemetry::ITelemetryWriter* telemetryWriter,
-    telemetry::ITelemetryReader* telemetryReader,
-    ILogging* logger
-);
+    std::unique_ptr<ISimulatorSession> existingSession = nullptr,
+    input::IInputProvider* inputProvider = nullptr,
+    presentation::IPresentation* presentation = nullptr,
+    telemetry::ITelemetryWriter* telemetryWriter = nullptr,
+    telemetry::ITelemetryReader* telemetryReader = nullptr,
+    ILogging* logger = nullptr);
 
 #endif // SIMULATION_LOOP_H

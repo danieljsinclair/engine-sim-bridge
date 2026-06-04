@@ -30,6 +30,9 @@ void InMemoryTelemetry::reset() {
     engineState_.exhaustFlow.store(0.0, std::memory_order_relaxed);
     engineState_.manifoldPressure.store(0.0, std::memory_order_relaxed);
     engineState_.activeChannels.store(0, std::memory_order_relaxed);
+    engineState_.gear.store(0, std::memory_order_relaxed);
+    engineState_.speedMph.store(0.0, std::memory_order_relaxed);
+    engineState_.enginePhase.store(0, std::memory_order_relaxed);
     framePerformance_.processingTimeMs.store(0.0, std::memory_order_relaxed);
     audioDiagnostics_.underrunCount.store(0, std::memory_order_relaxed);
     audioDiagnostics_.bufferHealthPct.store(0.0, std::memory_order_relaxed);
@@ -57,6 +60,9 @@ void InMemoryTelemetry::writeEngineState(const EngineStateTelemetry& state) {
     engineState_.exhaustFlow.store(state.exhaustFlow, std::memory_order_relaxed);
     engineState_.manifoldPressure.store(state.manifoldPressure, std::memory_order_relaxed);
     engineState_.activeChannels.store(state.activeChannels, std::memory_order_relaxed);
+    engineState_.gear.store(state.gear, std::memory_order_relaxed);
+    engineState_.speedMph.store(state.speedMph, std::memory_order_relaxed);
+    engineState_.enginePhase.store(static_cast<int>(state.enginePhase), std::memory_order_relaxed);
 }
 
 void InMemoryTelemetry::writeFramePerformance(const FramePerformanceTelemetry& perf) {
@@ -100,6 +106,9 @@ EngineStateTelemetry InMemoryTelemetry::getEngineState() const {
     state.exhaustFlow = engineState_.exhaustFlow.load(std::memory_order_relaxed);
     state.manifoldPressure = engineState_.manifoldPressure.load(std::memory_order_relaxed);
     state.activeChannels = engineState_.activeChannels.load(std::memory_order_relaxed);
+    state.gear = engineState_.gear.load(std::memory_order_relaxed);
+    state.speedMph = engineState_.speedMph.load(std::memory_order_relaxed);
+    state.enginePhase = static_cast<EnginePhase>(engineState_.enginePhase.load(std::memory_order_relaxed));
     return state;
 }
 

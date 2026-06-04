@@ -111,9 +111,10 @@ void ManualTwin::setThrottle(double throttle) {
     inputThrottle_ = throttle;
 }
 
-void ManualTwin::setGear(int gear) {
+int ManualTwin::setGear(int gear) {
     inputGear_ = gear;
     currentGear_ = gear;
+    return currentGear_;
 }
 
 void ManualTwin::requestGearUp() {

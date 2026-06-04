@@ -9,6 +9,8 @@ endif()
 
 project(engine-sim-bridge VERSION 1.0.0 LANGUAGES C CXX)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -35,8 +37,9 @@ set(ENGINE_SIM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 # Piranha's CMakeLists unconditionally calls find_package(Boost REQUIRED).
 # We can't cross-compile Boost for iOS, so we must skip the entire piranha subdirectory.
 # The approach: override add_subdirectory to skip piranha when building for iOS.
-if(IOS)
-    set(PIRANHA_ENABLED OFF CACHE BOOL "Disable scripting for iOS" FORCE)
+# ESP32: same issue — Boost unavailable, piranha Bison/Flex toolchain not cross-compilable.
+if(IOS OR ESP_PLATFORM)
+    set(PIRANHA_ENABLED OFF CACHE BOOL "Disable scripting for ${PLATFORM}" FORCE)
 endif()
 
 # Isolate submodule compiler flags: do not inherit our strict warnings/Werror
@@ -62,34 +65,6 @@ endif()
 set(CMAKE_CXX_FLAGS ${SAVED_CXX_FLAGS})
 set(CMAKE_C_FLAGS ${SAVED_C_FLAGS})
 
-# =========================================================
-# Compiler flag compatibility (Clang version differences)
-# =========================================================
-
-# -Wno-unused-but-set-variable was renamed to -Wno-unused-const-variable in newer Clang
-include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag(-Wno-unused-but-set-variable HAVE_UNUSED_BUT_SET)
-check_cxx_compiler_flag(-Wno-unused-const-variable HAVE_UNUSED_CONST_VAR)
-
-if(HAVE_UNUSED_BUT_SET)
-    set(UNUSED_VAR_SUPPRESS "-Wno-unused-but-set-variable")
-elseif(HAVE_UNUSED_CONST_VAR)
-    set(UNUSED_VAR_SUPPRESS "-Wno-unused-const-variable")
-else()
-    set(UNUSED_VAR_SUPPRESS "")
-endif()
-
-if(CMAKE_CXX_COMPILER_ID MATCHES "AppleClang|Clang|GNU")
-    add_compile_options(-Wall -Wextra)
-    if(APPLE)
-        add_compile_options(-Wno-unused-command-line-argument)
-    endif()
-    add_compile_options(-Wno-register)
-    if(UNUSED_VAR_SUPPRESS)
-        add_compile_options(${UNUSED_VAR_SUPPRESS})
-    endif()
-endif()
-
 # Real bridge library (uses actual engine-sim with polymorphic simulator selection)
 # Phase F: Audio infrastructure moved from CLI into bridge
 
@@ -111,13 +86,30 @@ set(BRIDGE_SOURCES
     # Telemetry
     src/telemetry/InMemoryTelemetry.cpp
     # Simulation loop
+    src/simulation/CrankingController.cpp
     src/simulation/SimulationLoop.cpp
     # Common utilities
     src/common/ConsoleLogger.cpp
     src/common/CircularBuffer.cpp
     src/common/JsonParser.cpp
+    src/common/PresetSerializer.cpp
     # Preset engine factory (JSON-based, for preset compiler output)
     src/simulator/PresetEngineFactory.cpp
+    # Preset deserializers (pure JSON -> engine object graph)
+    src/preset/PresetDeserializer.cpp
+    src/preset/FunctionDeserializer.cpp
+    src/preset/EngineDeserializer.cpp
+    src/preset/CrankshaftDeserializer.cpp
+    src/preset/ConnectingRodDeserializer.cpp
+    src/preset/CamshaftDeserializer.cpp
+    src/preset/CylinderBankDeserializer.cpp
+    src/preset/CylinderHeadDeserializer.cpp
+    src/preset/ExhaustSystemDeserializer.cpp
+    src/preset/IntakeDeserializer.cpp
+    src/preset/FuelDeserializer.cpp
+    src/preset/IgnitionModuleDeserializer.cpp
+    src/preset/VehicleDeserializer.cpp
+    src/preset/TransmissionDeserializer.cpp
     # Hardcoded C++ engine preset factories (works on iOS without Piranha)
     src/simulator/EnginePresets.cpp
     # Twin components
@@ -125,15 +117,24 @@ set(BRIDGE_SOURCES
     src/twin/ThrottleSmoother.cpp
     src/twin/VirtualIceTwin.cpp
     src/twin/ManualTwin.cpp
+    src/twin/GearboxCsvLogger.cpp
     # Input providers
     src/input/VirtualIceInputProvider.cpp
     src/input/ManualTwinProvider.cpp
     src/input/KeyboardDemoThrottleSource.cpp
     src/input/DemoInputProvider.cpp
+    src/input/DemoThrottleSource.cpp
+    src/input/GearSelectorInput.cpp
+    src/input/IgnitionInput.cpp
 )
 
 # Platform-specific audio hardware and factory
-if(IOS)
+if(ESP_PLATFORM)
+    # ESP32: Use I2S hardware provider
+    list(APPEND BRIDGE_SOURCES
+        src/hardware/ESP32I2SHardwareProvider.cpp
+    )
+elseif(IOS)
     # iOS: Use AVAudioEngine-based hardware provider (ObjC++)
     # Factory must be .mm to include AVAudioEngine headers
     list(APPEND BRIDGE_SOURCES
@@ -153,7 +154,8 @@ endif()
 
 # iOS builds produce a static library for linking into Xcode project
 # macOS builds produce a shared library (.dylib) for the CLI app
-if(IOS)
+# ESP32 builds produce a static library for linking into ESP-IDF component
+if(IOS OR ESP_PLATFORM)
     add_library(engine-sim-bridge STATIC ${BRIDGE_SOURCES})
 else()
     add_library(engine-sim-bridge SHARED ${BRIDGE_SOURCES})
@@ -164,6 +166,8 @@ if(IOS)
     set(AUDIO_LIBRARY "-framework AudioToolbox -framework CoreAudio -framework CoreFoundation -framework AVFoundation")
 elseif(APPLE)
     set(AUDIO_LIBRARY "-framework AudioToolbox -framework CoreAudio -framework CoreFoundation")
+elseif(ESP_PLATFORM)
+    set(AUDIO_LIBRARY "")
 endif()
 
 target_include_directories(engine-sim-bridge
@@ -253,7 +257,10 @@ endif()
 # Piranha/Boost required -- not available on iOS
 # -----------------------------------------------------------------------------
 if(NOT IOS AND TARGET engine-sim-script-interpreter)
-    add_executable(engine-sim-preset-compiler tools/preset_compiler.cpp)
+    add_executable(engine-sim-preset-compiler
+        tools/preset_compiler.cpp
+        src/common/PresetSerializer.cpp
+    )
     target_include_directories(engine-sim-preset-compiler
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -269,6 +276,24 @@ if(NOT IOS AND TARGET engine-sim-script-interpreter)
     )
     target_compile_options(engine-sim-preset-compiler PRIVATE -Wno-unused-parameter)
     target_compile_definitions(engine-sim-preset-compiler PRIVATE ATG_ENGINE_SIM_PIRANHA_ENABLED)
+
+    # Preset Code Generator (macOS build-time tool)
+    # Compiles .mr scripts to C++ source code for baked presets
+    add_executable(engine-sim-preset-codegen tools/preset_codegen.cpp)
+    target_include_directories(engine-sim-preset-codegen
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${ENGINE_SIM_PATH}/dependencies/dr_libs
+            ${ENGINE_SIM_PATH}/include
+            ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(engine-sim-preset-codegen
+        PRIVATE
+            engine-sim
+            engine-sim-script-interpreter
+    )
+    target_compile_definitions(engine-sim-preset-codegen PRIVATE ATG_ENGINE_SIM_PIRANHA_ENABLED)
 endif()
 
 # -----------------------------------------------------------------------------
@@ -278,12 +303,13 @@ endif()
 # iOS builds skip tests entirely
 # -----------------------------------------------------------------------------
 option(BUILD_BRIDGE_TESTS "Build engine-sim-bridge unit tests" ON)
-if(IOS)
-    set(BUILD_BRIDGE_TESTS OFF CACHE BOOL "Skip tests for iOS build" FORCE)
+if(IOS OR ESP_PLATFORM)
+    set(BUILD_BRIDGE_TESTS OFF CACHE BOOL "Skip tests for embedded build" FORCE)
 endif()
 if(BUILD_BRIDGE_TESTS)
     # Fetch GoogleTest if not available
     include(FetchContent)
+    include(GoogleTest)
     FetchContent_Declare(
         googletest
         GIT_REPOSITORY https://github.com/google/googletest.git
@@ -300,12 +326,14 @@ if(BUILD_BRIDGE_TESTS)
 
     add_executable(bridge_unit_tests
         test/BridgeUnitTests.cpp
+        test/CrankingControllerTests.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     target_link_libraries(bridge_unit_tests
         PRIVATE
+            engine-sim-bridge
             GTest::gtest_main
     )
     target_compile_options(bridge_unit_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
@@ -326,17 +354,62 @@ if(BUILD_BRIDGE_TESTS)
         )
         target_compile_definitions(preset_engine_tests PRIVATE
             TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
+            TEST_ENGINE_SIM_ASSETS="${ENGINE_SIM_PATH}/assets"
+            TEST_ES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/es"
+            TEST_ENGINE_SIM_ROOT="${ENGINE_SIM_PATH}"
         )
         target_link_libraries(preset_engine_tests
             PRIVATE
                 GTest::gtest_main
                 engine-sim-bridge
         )
-        if(ENGINE_SIM_PIRANHA_ENABLED)
-            target_compile_definitions(preset_engine_tests PRIVATE ENGINE_SIM_PIRANHA_ENABLED)
+        if(TARGET engine-sim-script-interpreter)
+            target_compile_definitions(preset_engine_tests PRIVATE
+                ENGINE_SIM_PIRANHA_ENABLED
+                TEST_PRESET_COMPILER_PATH="$<TARGET_FILE:engine-sim-preset-compiler>"
+            )
+            add_dependencies(preset_engine_tests engine-sim-preset-compiler)
         endif()
         if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-            add_test(NAME preset_engine_tests COMMAND preset_engine_tests --gtest_color=yes)
+            gtest_discover_tests(
+                preset_engine_tests
+                DISCOVERY_MODE PRE_TEST
+                EXTRA_ARGS --gtest_color=yes
+            )
+        endif()
+
+        # Isomorphism tests - proves .mr and JSON paths produce identical engines
+        add_executable(preset_isomorphism_tests
+            test/PresetIsomorphismTests.cpp
+        )
+        target_include_directories(preset_isomorphism_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${ENGINE_SIM_PATH}/include
+        )
+        target_compile_definitions(preset_isomorphism_tests PRIVATE
+            TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
+            TEST_ENGINE_SIM_ASSETS="${ENGINE_SIM_PATH}/assets"
+            TEST_ENGINE_SIM_ROOT="${ENGINE_SIM_PATH}"
+            TEST_PRESET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/preset"
+        )
+        if(TARGET engine-sim-script-interpreter)
+            target_compile_definitions(preset_isomorphism_tests PRIVATE
+                ENGINE_SIM_PIRANHA_ENABLED
+                TEST_PRESET_COMPILER_PATH="$<TARGET_FILE:engine-sim-preset-compiler>"
+            )
+            add_dependencies(preset_isomorphism_tests engine-sim-preset-compiler)
+        endif()
+        target_link_libraries(preset_isomorphism_tests
+            PRIVATE
+                GTest::gtest_main
+                engine-sim-bridge
+        )
+        if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+            gtest_discover_tests(
+                preset_isomorphism_tests
+                DISCOVERY_MODE PRE_TEST
+                EXTRA_ARGS --gtest_color=yes
+            )
         endif()
     endif()
 

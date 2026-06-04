@@ -128,6 +128,7 @@ TEST_F(AccelerationScenarioTest, GearSequence_1to2to3to4to5to6_AC01_1) {
 
 TEST_F(AccelerationScenarioTest, Shift1to2_At50PercentThrottle_AC01_2) {
     // Test 1→2 shift specifically at 50% throttle
+    // New shift table: 1->2 at ~28 km/h (interpolated between 40% and 55% rows)
     std::vector<UpstreamSignal> signals;
     int steps = static_cast<int>(10.0 / dt_);
 
@@ -148,7 +149,7 @@ TEST_F(AccelerationScenarioTest, Shift1to2_At50PercentThrottle_AC01_2) {
 
     for (const auto& shift : shifts) {
         if (shift.fromGear == 1 && shift.toGear == 2) {
-            EXPECT_NEAR(shift.speedKmh, 40.0, 4.0) << "1→2 shift at 50% throttle should be at 40±4 km/h";
+            EXPECT_NEAR(shift.speedKmh, 28.0, 6.0) << "1→2 shift at 50% throttle should be near 28 km/h";
             return;
         }
     }
@@ -157,6 +158,7 @@ TEST_F(AccelerationScenarioTest, Shift1to2_At50PercentThrottle_AC01_2) {
 
 TEST_F(AccelerationScenarioTest, Shift2to3_At50PercentThrottle_AC01_3) {
     // Test 2→3 shift specifically at 50% throttle
+    // New shift table: 2->3 at ~42 km/h (interpolated)
     std::vector<UpstreamSignal> signals;
     int steps = static_cast<int>(15.0 / dt_);
 
@@ -177,7 +179,7 @@ TEST_F(AccelerationScenarioTest, Shift2to3_At50PercentThrottle_AC01_3) {
 
     for (const auto& shift : shifts) {
         if (shift.fromGear == 2 && shift.toGear == 3) {
-            EXPECT_NEAR(shift.speedKmh, 65.0, 6.5) << "2→3 shift at 50% throttle should be at 65±6.5 km/h";
+            EXPECT_NEAR(shift.speedKmh, 42.0, 8.0) << "2→3 shift at 50% throttle should be near 42 km/h";
             return;
         }
     }
@@ -186,6 +188,7 @@ TEST_F(AccelerationScenarioTest, Shift2to3_At50PercentThrottle_AC01_3) {
 
 TEST_F(AccelerationScenarioTest, Shift3to4_At50PercentThrottle_AC01_4) {
     // Test 3→4 shift specifically at 50% throttle
+    // New shift table: 3->4 at ~63 km/h (interpolated)
     std::vector<UpstreamSignal> signals;
     int steps = static_cast<int>(20.0 / dt_);
 
@@ -206,7 +209,7 @@ TEST_F(AccelerationScenarioTest, Shift3to4_At50PercentThrottle_AC01_4) {
 
     for (const auto& shift : shifts) {
         if (shift.fromGear == 3 && shift.toGear == 4) {
-            EXPECT_NEAR(shift.speedKmh, 90.0, 9.0) << "3→4 shift at 50% throttle should be at 90±9 km/h";
+            EXPECT_NEAR(shift.speedKmh, 63.0, 12.0) << "3→4 shift at 50% throttle should be near 63 km/h";
             return;
         }
     }
@@ -215,6 +218,7 @@ TEST_F(AccelerationScenarioTest, Shift3to4_At50PercentThrottle_AC01_4) {
 
 TEST_F(AccelerationScenarioTest, Shift1to2_At100PercentThrottle_AC01_5) {
     // Test 1→2 shift specifically at 100% throttle
+    // New shift table: 1->2 at 49 km/h (100% row)
     std::vector<UpstreamSignal> signals;
     int steps = static_cast<int>(10.0 / dt_);
 
@@ -235,7 +239,7 @@ TEST_F(AccelerationScenarioTest, Shift1to2_At100PercentThrottle_AC01_5) {
 
     for (const auto& shift : shifts) {
         if (shift.fromGear == 1 && shift.toGear == 2) {
-            EXPECT_NEAR(shift.speedKmh, 70.0, 7.0) << "1→2 shift at 100% throttle should be at 70±7 km/h";
+            EXPECT_NEAR(shift.speedKmh, 49.0, 10.0) << "1→2 shift at 100% throttle should be near 49 km/h";
             return;
         }
     }

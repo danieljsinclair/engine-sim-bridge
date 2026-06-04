@@ -18,6 +18,9 @@ bool VirtualIceInputProvider::Initialize() {
 
     try {
         twin_ = std::make_unique<twin::VirtualIceTwin>(profile_);
+        if (pendingLogger_) {
+            twin_->setGearboxLogger(pendingLogger_);
+        }
         isInitialized_ = true;
         return true;
     } catch (const std::exception& e) {
@@ -37,7 +40,6 @@ bool VirtualIceInputProvider::IsConnected() const {
 
 EngineInput VirtualIceInputProvider::OnUpdateSimulation(double dt) {
     EngineInput input{};
-    input.shouldContinue = true;
 
     if (!isInitialized_ || !twin_) {
         lastError_ = "Provider not initialized";
@@ -52,7 +54,7 @@ EngineInput VirtualIceInputProvider::OnUpdateSimulation(double dt) {
     input.gearAbsolute = output.gear;
     input.clutchPressure = output.clutchPressure;
     input.ignition = output.ignition;
-    input.starterMotor = output.starterMotor;
+    input.starterButton = output.starterMotor;
     input.gearSelector = static_cast<int>(output.gearSelector);
     input.gearAutoMode = true; // VirtualIceTwin uses automatic gearbox
 
@@ -80,6 +82,13 @@ void VirtualIceInputProvider::setGearSelector(int selector) {
 void VirtualIceInputProvider::setIgnition(bool on) {
     if (twin_) {
         twin_->setIgnition(on);
+    }
+}
+
+void VirtualIceInputProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
+    pendingLogger_ = logger;
+    if (twin_) {
+        twin_->setGearboxLogger(logger);
     }
 }
 

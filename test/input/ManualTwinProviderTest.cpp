@@ -28,12 +28,11 @@ public:
     void update(double) override {}
     EngineSimStats getStats() const override { return {}; }
     void setThrottle(double) override {}
-    void setIgnition(bool) override {}
-    void setStarterMotor(bool) override {}
     bool renderOnDemand(float*, int32_t, int32_t*) override { return false; }
     bool readAudioBuffer(float*, int32_t, int32_t*) override { return false; }
     bool start() override { return true; }
     void stop() override {}
+    int getSimulationFrequency() const override { return 60; }
 
     double getEngineRpm() const override { return rpm; }
     double rpm = 0.0;
@@ -69,16 +68,16 @@ TEST_F(ManualTwinProviderTest, ShutdownDisconnects) {
     EXPECT_FALSE(provider_->IsConnected());
 }
 
-TEST_F(ManualTwinProviderTest, ReturnsTerminateWhenUninitialized) {
+TEST_F(ManualTwinProviderTest, ReturnsDefaultWhenUninitialized) {
     EngineInput input = provider_->OnUpdateSimulation(0.016);
-    EXPECT_FALSE(input.shouldContinue);
+    EXPECT_DOUBLE_EQ(input.throttle, 0.0);
 }
 
 TEST_F(ManualTwinProviderTest, StaysOffWithoutIgnitionAndStarter) {
     ASSERT_TRUE(provider_->Initialize());
 
     EngineInput input = provider_->OnUpdateSimulation(0.016);
-    EXPECT_FALSE(input.starterMotor);
+    EXPECT_FALSE(input.starterButton);
     EXPECT_FALSE(input.ignition);
     EXPECT_EQ(input.gearAbsolute, 0); // Neutral
 }
@@ -90,7 +89,7 @@ TEST_F(ManualTwinProviderTest, CrankingActivatesWithIgnitionAndStarter) {
     provider_->setStarterRequested(true);
     EngineInput input = provider_->OnUpdateSimulation(0.016);
 
-    EXPECT_TRUE(input.starterMotor);
+    EXPECT_TRUE(input.starterButton);
     EXPECT_TRUE(input.ignition);
     EXPECT_EQ(input.gearAbsolute, 0); // Neutral during cranking
     EXPECT_DOUBLE_EQ(input.clutchPressure, 0.0);
@@ -106,7 +105,7 @@ TEST_F(ManualTwinProviderTest, TransitionsToRunningWhenRpmRises) {
     throttle_->throttle = 0.7;
     EngineInput input = provider_->OnUpdateSimulation(0.016);
 
-    EXPECT_FALSE(input.starterMotor);
+    EXPECT_FALSE(input.starterButton);
     EXPECT_DOUBLE_EQ(input.throttle, 0.7);
 }
 
@@ -124,18 +123,6 @@ TEST_F(ManualTwinProviderTest, ThrottlePassthroughWhenRunning) {
     EngineInput input = provider_->OnUpdateSimulation(0.016);
 
     EXPECT_DOUBLE_EQ(input.throttle, 0.5);
-}
-
-TEST_F(ManualTwinProviderTest, ShouldContinueReflectsThrottleSource) {
-    ASSERT_TRUE(provider_->Initialize());
-    provider_->setIgnitionRequested(true);
-    provider_->setStarterRequested(true);
-    provider_->OnUpdateSimulation(0.016);
-
-    throttle_->continueFlag = false;
-    sim_.rpm = 500.0;
-    EngineInput input = provider_->OnUpdateSimulation(0.016);
-    EXPECT_FALSE(input.shouldContinue);
 }
 
 TEST_F(ManualTwinProviderTest, GearUpFromNeutralWhenRunning) {

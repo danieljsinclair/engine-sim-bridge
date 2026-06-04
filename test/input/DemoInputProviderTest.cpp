@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include <input/DemoInputProvider.h>
 #include <input/IThrottleSource.h>
+#include <input/GearSelectorInput.h>
+#include <input/IgnitionInput.h>
 #include <twin/IceVehicleProfile.h>
 
 using namespace input;
@@ -32,7 +34,10 @@ protected:
 
     void SetUp() override {
         provider_ = std::make_unique<DemoInputProvider>(
-            std::move(throttleSource_), profile_);
+            std::move(throttleSource_),
+            std::make_unique<GearSelectorInput>(),
+            std::make_unique<IgnitionInput>(),
+            profile_);
     }
 };
 
@@ -48,7 +53,7 @@ TEST_F(DemoInputProviderTest, GetProviderName_ReturnsDemo) {
 TEST_F(DemoInputProviderTest, OnUpdate_ReturnsValidEngineInput) {
     ASSERT_TRUE(provider_->Initialize());
     EngineInput input = provider_->OnUpdateSimulation(0.016);
-    EXPECT_TRUE(input.shouldContinue);
+    EXPECT_DOUBLE_EQ(input.throttle, 0.0);
 }
 
 TEST_F(DemoInputProviderTest, ThrottlePropagatesToEngineInput) {
@@ -88,12 +93,14 @@ TEST_F(DemoInputProviderTest, ClutchPressure_InValidRange) {
     }
 }
 
-TEST_F(DemoInputProviderTest, ShouldContinue_False_WhenThrottleSourceExits) {
+TEST_F(DemoInputProviderTest, ThrottleSourceExit_NoLongerPropagatesToInput) {
+    // shouldContinue was removed from EngineInput — exit is now via session->stop()
     rawSource_->setShouldContinue(false);
     ASSERT_TRUE(provider_->Initialize());
 
     EngineInput input = provider_->OnUpdateSimulation(0.016);
-    EXPECT_FALSE(input.shouldContinue);
+    // No crash, input still valid, throttle source's exit intent no longer in input struct
+    EXPECT_GE(input.gearAbsolute, -1);
 }
 
 TEST_F(DemoInputProviderTest, SpeedIncreasesOverTime_FullThrottle) {
