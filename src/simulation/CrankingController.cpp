@@ -58,9 +58,6 @@ CrankingController::State CrankingController::step(
             if (stats.currentRPM < STOPPED_RPM) {
                 engine.setEnginePhase(EnginePhase::Stopped);
                 phase = EnginePhase::Stopped;
-            } else if (engineCaught(stats, inputIgnition)) {
-                engine.setEnginePhase(EnginePhase::Running);
-                phase = EnginePhase::Running;
             }
             break;
 
