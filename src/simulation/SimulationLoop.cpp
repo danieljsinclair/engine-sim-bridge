@@ -254,7 +254,7 @@ void warnWavExportNotSupported(bool outputWavRequested, ILogging* logger) {
 
 // ============================================================================
 // SimulatorSession - Concrete session managing audio hardware + simulator lifecycle
-// Owns audio hardware for session lifetime. Reuses runUnifiedAudioLoop() for the main tick loop.
+// Owns audio hardware for session lifetime. Reuses runSimulationLoop() for the main tick loop.
 // Hot-swap is triggered by initSimulation(existingSession) — the session swaps its internal simulator pointer.
 // ============================================================================
 
@@ -304,7 +304,7 @@ public:
         }
 
         // Delegate to existing loop — returns EXIT_BUT_CONTINUE_NEXT on 'P' press
-        int exitCode = runUnifiedAudioLoop(
+        int exitCode = runSimulationLoop(
             *simulator_, config_, *audioBuffer_, crankingController_,
             stopped_,
             inputProvider_, presentation_,
@@ -422,7 +422,7 @@ private:
 // Unified Main Loop Implementation
 // ============================================================================
 
-int runUnifiedAudioLoop(
+int runSimulationLoop(
     ISimulator& simulator,
     const SimulationConfig& config,
     IAudioBuffer& audioBuffer,
@@ -437,7 +437,7 @@ int runUnifiedAudioLoop(
     double currentTime = 0.0;
     LoopTimer timer(config.updateInterval());
 
-    logger->info(LogMask::BRIDGE, "runUnifiedAudioLoop starting simulation loop with %s", config.simulatorLabel.c_str());
+    logger->info(LogMask::BRIDGE, "runSimulationLoop starting simulation loop with %s", config.simulatorLabel.c_str());
 
     // Track first tick to trigger auto-start in non-interactive mode
     bool isFirstTick = true;
