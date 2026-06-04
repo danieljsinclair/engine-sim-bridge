@@ -85,6 +85,12 @@ private:
 
     // Throughput timing
     std::chrono::steady_clock::time_point lastThroughputTime_;
+
+    // Crossfade state for hot-swap (prevents clicks/pops)
+    float lastLeftSample_ = 0.0f;
+    float lastRightSample_ = 0.0f;
+    int crossfadeSamplesRemaining_ = 0;
+    static constexpr int CROSSFADE_SAMPLES = 176; // ~4ms at 44100Hz
 };
 
 #endif // SYNC_PULL_STRATEGY_H

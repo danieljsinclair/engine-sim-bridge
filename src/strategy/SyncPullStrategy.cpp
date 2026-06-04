@@ -83,6 +83,11 @@ bool SyncPullStrategy::startPlayback(ISimulator* simulator) {
     audioState_.isPlaying.store(true);
     lastThroughputTime_ = std::chrono::steady_clock::now();
 
+    // Reset crossfade state on start
+    lastLeftSample_ = 0.0f;
+    lastRightSample_ = 0.0f;
+    crossfadeSamplesRemaining_ = 0;
+
     logger_->info(LogMask::AUDIO, "SyncPullStrategy::startPlayback: On-demand rendering started");
 
     return true;
@@ -102,6 +107,9 @@ void SyncPullStrategy::swapSimulator(ISimulator* newSimulator) {
     // Caller must keep the old simulator alive (via previousSimulator_) to
     // prevent use-after-free for any in-flight render.
     simulator_ = newSimulator;
+
+    // Enable crossfade for next render to prevent clicks/pops
+    crossfadeSamplesRemaining_ = CROSSFADE_SAMPLES;
 }
 
 void SyncPullStrategy::resetBufferAfterWarmup() {
@@ -197,6 +205,36 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
             framesRendered, framesToGenerate, remainingFrames);
         float* remaining = dst + (framesRendered * 2);
         EngineSimAudio::fillSilence(remaining, framesToGenerate - framesRendered);
+    }
+
+    // Apply crossfade if hot-swap is in progress
+    if (crossfadeSamplesRemaining_ > 0 && framesRendered > 0) {
+        int samplesToCrossfade = std::min(framesRendered * 2, crossfadeSamplesRemaining_);
+        float inv = 1.0f / static_cast<float>(CROSSFADE_SAMPLES);
+
+        for (int i = 0; i < samplesToCrossfade; i += 2) {
+            float mix = (static_cast<float>(CROSSFADE_SAMPLES - crossfadeSamplesRemaining_ + i) * inv);
+            mix = std::max(0.0f, std::min(1.0f, mix)); // Clamp to [0, 1]
+
+            // Left channel
+            float newLeft = dst[i];
+            dst[i] = lastLeftSample_ * (1.0f - mix) + newLeft * mix;
+
+            // Right channel
+            float newRight = dst[i + 1];
+            dst[i + 1] = lastRightSample_ * (1.0f - mix) + newRight * mix;
+        }
+
+        crossfadeSamplesRemaining_ -= samplesToCrossfade;
+        if (crossfadeSamplesRemaining_ < 0) {
+            crossfadeSamplesRemaining_ = 0;
+        }
+    }
+
+    // Track last sample values for next crossfade (update after crossfade)
+    if (framesRendered > 0) {
+        lastLeftSample_ = dst[(framesRendered - 1) * 2];
+        lastRightSample_ = dst[(framesRendered - 1) * 2 + 1];
     }
 
     auto callbackEnd = std::chrono::high_resolution_clock::now();
