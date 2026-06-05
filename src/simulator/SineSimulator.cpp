@@ -3,6 +3,9 @@
 // Overrides simulateStep_() and writeToSynthesizer() for sine-specific behaviour.
 
 #include "simulator/SineSimulator.h"
+#include "simulator/SineEngine.h"
+#include "simulator/SineVehicle.h"
+#include "simulator/SineTransmission.h"
 #include "simulator/SimulatorInitHelpers.h"
 #include "simulator/EngineSimTypes.h"
 #include "synthesizer.h"
@@ -14,9 +17,9 @@ SineSimulator::~SineSimulator() {
 }
 
 void SineSimulator::loadSimulation(Engine* engine, Vehicle* vehicle, Transmission* transmission) {
-    if (!engine || !vehicle || !transmission) {
-        throw std::invalid_argument("SineSimulator::loadSimulation requires non-null engine/vehicle/transmission");
-    }
+    if (!engine) engine = new SineEngine();
+    if (!vehicle) vehicle = new SineVehicle();
+    if (!transmission) transmission = new SineTransmission();
 
     // Store pointers in base class — same as PistonEngineSimulator line 34
     Simulator::loadSimulation(engine, vehicle, transmission);

@@ -470,7 +470,7 @@ int runSimulationLoop(
     // Initialise and track these mutating values for the loop lifetime
     double lastDynoTorqueScale = -1.0;
     EngineSimStats previousStats = {};
-    inputProvider->provideFeedback(previousStats);
+    if (inputProvider) inputProvider->provideFeedback(previousStats); // NOTE: input is presently optional for direct control, eg. testing or non-interactive CLI mode. I'm not entirely happy with this and wonder if we should assert there's always an input provider but I can see the argument for allowing one to be optional
  
     // MAIN LOOP
     do {
