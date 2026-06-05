@@ -15,14 +15,12 @@ public:
 
     // IThrottleSource
     double pollThrottle() override;
-    bool shouldContinue() const override;
 
     // State control — called by the consumer (CLI, OBD driver, iOS app)
     void setThrottleLevel(double level);   // 0.0–1.0, latches until next call
-    void requestExit();                    // signals shouldContinue = false
+    void requestExit();                    // signals exit (no-op in new lifecycle)
 
 private:
-    bool shouldContinue_;
     double lastThrottle_ = 0.0;
 };
 

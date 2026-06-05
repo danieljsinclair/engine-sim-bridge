@@ -195,7 +195,7 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.rpm = stats.currentRPM;
     state.throttle = throttle;
     state.load = stats.currentLoad;
-    state.speed = stats.speedMph;
+    state.speedMph = stats.speedMph();
     state.underrunCount = underrunCount;
     state.audioMode = audioBuffer.getModeString();
     state.ignition = ignition;

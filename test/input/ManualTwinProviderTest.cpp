@@ -13,10 +13,8 @@ namespace {
 class MockThrottleSource : public IThrottleSource {
 public:
     double pollThrottle() override { return throttle; }
-    bool shouldContinue() const override { return continueFlag; }
 
     double throttle = 0.0;
-    bool continueFlag = true;
 };
 
 class MockSimulator : public ISimulator {

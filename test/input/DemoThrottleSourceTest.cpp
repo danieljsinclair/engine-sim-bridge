@@ -57,16 +57,6 @@ TEST_F(DemoThrottleSourceTest, ThrottleChangesOnlyWhenSet) {
     }
 }
 
-TEST_F(DemoThrottleSourceTest, RequestExit_SetsShouldContinueFalse) {
-    EXPECT_TRUE(throttleSource_->shouldContinue());
-    throttleSource_->requestExit();
-    EXPECT_FALSE(throttleSource_->shouldContinue());
-}
-
-TEST_F(DemoThrottleSourceTest, ShouldContinue_DefaultsToTrue) {
-    EXPECT_TRUE(throttleSource_->shouldContinue());
-}
-
 TEST_F(DemoThrottleSourceTest, DefaultThrottleIsZero) {
     EXPECT_DOUBLE_EQ(throttleSource_->pollThrottle(), 0.0);
 }

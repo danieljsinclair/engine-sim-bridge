@@ -123,7 +123,6 @@ void BridgeSimulator::getVehicleStats(EngineSimStats& stats) const {
     if (m_simulator->getVehicle()) {
         // Vehicle::getSpeed() returns m/s
         stats.vehicleSpeedKmh = m_simulator->getVehicle()->getSpeed() * EngineSimDefaults::MS_TO_KMH;
-        stats.speedMph = stats.vehicleSpeedKmh * EngineSimDefaults::KMH_TO_MPH;
     }
 }
 
@@ -192,7 +191,7 @@ int BridgeSimulator::setGear(int gear) {
     int newGear = 0x7FFFFFFF;
     if (m_simulator->getTransmission()) {
         // Translate bridge convention (BridgeGear) to engine-sim convention (EngineSimGear)
-        int engineSimGear = (gear <= 0) ? -1 : gear - 1;
+        int engineSimGear = static_cast<int>(bridge::toEngineSim(static_cast<bridge::BridgeGear>(gear)));
         m_simulator->getTransmission()->changeGear(engineSimGear);
         newGear = engineSimGear;
     }
@@ -364,7 +363,7 @@ void BridgeSimulator::pushTelemetry(const EngineSimStats& stats) {
     engine.manifoldPressure = stats.manifoldPressure;
     engine.activeChannels = stats.activeChannels;
     engine.gear = stats.gear;
-    engine.speedMph = stats.speedMph;
+    engine.speedMph = stats.speedMph();
     engine.enginePhase = enginePhase_;
     telemetryWriter_->writeEngineState(engine);
 

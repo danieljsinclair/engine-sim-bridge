@@ -23,7 +23,7 @@ struct EngineState {
     double rpm;
     double throttle;
     double load;
-    double speed;
+    double speedMph;
     int underrunCount;
     std::string audioMode;
     bool ignition;

@@ -40,8 +40,11 @@ public:
     void stop() override;
     int getSimulationFrequency() const override { return engineConfig_.simulationFrequency; }
     EngineSimStats getStats() const override;
+
+    // TODO: circle-back — remove getInternalSimulator(); tests should inject dependencies instead
     Simulator* getInternalSimulator() { return m_simulator.get(); }
     const Simulator* getInternalSimulator() const { return m_simulator.get(); }
+
     void setThrottle(double position) override;
     void setIgnition(bool on) override;
     void setStarterMotor(bool on) override;

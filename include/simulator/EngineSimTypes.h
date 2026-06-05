@@ -127,7 +127,9 @@ struct EngineSimStats {
     // Gear selector state
     int gearSelector = 0;            // GearSelector value
     bool gearAutoMode = false;       // true=auto(ZF), false=manual
-    double speedMph = 0.0;           // Vehicle speed in MPH
+
+    // Computed accessors (vehicleSpeedKmh is single source of truth)
+    double speedMph() const { return vehicleSpeedKmh * EngineSimDefaults::KMH_TO_MPH; }
 };
 
 namespace EngineSimAudio {

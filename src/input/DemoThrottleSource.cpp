@@ -2,24 +2,19 @@
 
 namespace input {
 
-DemoThrottleSource::DemoThrottleSource()
-    : shouldContinue_(true) {
-}
+DemoThrottleSource::DemoThrottleSource() = default;
 
 void DemoThrottleSource::setThrottleLevel(double level) {
     lastThrottle_ = level;
 }
 
 void DemoThrottleSource::requestExit() {
-    shouldContinue_ = false;
+    // Exit is now handled by session->stop() in the simulation loop
+    // This method remains for API compatibility but is a no-op
 }
 
 double DemoThrottleSource::pollThrottle() {
     return lastThrottle_;
-}
-
-bool DemoThrottleSource::shouldContinue() const {
-    return shouldContinue_;
 }
 
 } // namespace input

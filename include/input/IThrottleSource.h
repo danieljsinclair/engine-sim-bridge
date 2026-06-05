@@ -7,7 +7,6 @@ class IThrottleSource {
 public:
     virtual ~IThrottleSource() = default;
     virtual double pollThrottle() = 0;
-    virtual bool shouldContinue() const = 0;
 };
 
 }

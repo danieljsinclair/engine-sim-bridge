@@ -126,12 +126,6 @@ TEST(GearboxDiagnostic, FullThrottleAcceleration) {
 
         // Tick the simulation
         input::EngineInput input = provider->OnUpdateSimulation(DT);
-
-        // If the provider says stop, honour it
-        if (!input.shouldContinue) {
-            std::cout << "Provider requested exit at frame " << frame << std::endl;
-            break;
-        }
     }
 
     // --- 7. Report summary ---

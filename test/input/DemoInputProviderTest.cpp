@@ -15,18 +15,15 @@ using namespace bridge;
 
 class MockThrottleSource : public IThrottleSource {
 public:
-    explicit MockThrottleSource(double throttle = 0.0, bool cont = true)
-        : throttle_(throttle), shouldContinue_(cont) {}
+    explicit MockThrottleSource(double throttle = 0.0)
+        : throttle_(throttle) {}
 
     double pollThrottle() override { return throttle_; }
-    bool shouldContinue() const override { return shouldContinue_; }
 
     void setThrottle(double t) { throttle_ = t; }
-    void setShouldContinue(bool c) { shouldContinue_ = c; }
 
 private:
     double throttle_;
-    bool shouldContinue_;
 };
 
 class DemoInputProviderTest : public ::testing::Test {
@@ -100,12 +97,12 @@ TEST_F(DemoInputProviderTest, ClutchPressure_InValidRange) {
     }
 }
 
-TEST_F(DemoInputProviderTest, ShouldContinue_False_WhenThrottleSourceExits) {
-    rawThrottle_->requestExit();
+TEST_F(DemoInputProviderTest, RequestExit_ViaIDemoControls_NoCrash) {
     ASSERT_TRUE(provider_->Initialize());
-
+    provider_->requestExit();
     EngineInput input = provider_->OnUpdateSimulation(0.016);
-    // No crash, input still valid, throttle source's exit intent no longer in input struct
+    // requestExit() is now a no-op in the throttle source
+    // exit is handled by session->stop() in the simulation loop
     EXPECT_GE(input.gearAbsolute, -1);
 }
 
@@ -191,14 +188,6 @@ TEST_F(DemoInputProviderTest, ToggleIgnition_FlipsState) {
     EXPECT_NE(initial, afterToggle);
 }
 
-TEST_F(DemoInputProviderTest, RequestExit_ViaIDemoControls) {
-    ASSERT_TRUE(provider_->Initialize());
-    provider_->requestExit();
-    EngineInput input = provider_->OnUpdateSimulation(0.016);
-    // shouldContinue removed from EngineInput — exit is now via session->stop()
-    // requestExit() signals the throttle source; no crash or exception is sufficient
-    EXPECT_GE(input.gearAbsolute, -1);
-}
 
 // ============================================================================
 // Full-chain integration test - reproduces live demo data path

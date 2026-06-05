@@ -1,6 +1,7 @@
 #include <twin/AutomaticGearbox.h>
 #include <twin/IGearboxLogger.h>
 #include <twin/GearboxLogEntry.h>
+#include <simulator/EngineSimTypes.h>
 #include <algorithm>
 #include <cmath>
 
@@ -308,7 +309,7 @@ double AutomaticGearbox::getEngineRpm(double speedKmh, int gear) const {
         return 0.0;
     }
 
-    double speedMs = speedKmh / 3.6;
+    double speedMs = speedKmh / EngineSimDefaults::MS_TO_KMH;
     double wheelRpm = speedMs / (2.0 * M_PI * profile_.tireRadiusM) * 60.0;
     double engineRpm = wheelRpm * profile_.gearRatios[gear - 1] * profile_.diffRatio;
 
