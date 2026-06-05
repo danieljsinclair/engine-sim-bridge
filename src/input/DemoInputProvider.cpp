@@ -65,7 +65,8 @@ EngineInput DemoInputProvider::OnUpdateSimulation(double dt) {
     }
 
     double throttle = throttleSource_->pollThrottle();
-    physics_.update(dt, throttle);
+    double brake = brakeInput_.pollLevel();
+    physics_.update(dt, throttle, brake);
 
     roadSpeedKmh_ = physics_.getSpeedKmh();
 
@@ -170,6 +171,10 @@ void DemoInputProvider::requestExit() {
 
 void DemoInputProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
     twinProvider_.setGearboxLogger(logger);
+}
+
+void DemoInputProvider::setBrake(double level) {
+    brakeInput_.setLevel(level);
 }
 
 }

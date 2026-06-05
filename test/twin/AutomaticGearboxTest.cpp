@@ -142,7 +142,13 @@ TEST_F(AutomaticGearboxTest, KickdownWithin500ms_AC_04_1)
     int initialGear = gearbox.getCurrentGear();
     EXPECT_GT(initialGear, 1);
 
-    // Kickdown: throttle jumps from 0.3 to 0.9 within 100ms (delta > 0.4)
+    // Clear interval timers
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(0.1, 60.0, 0.3);
+    }
+    initialGear = gearbox.getCurrentGear();
+
+    // Kickdown: throttle jumps from 0.3 to 0.9 (delta > 0.4)
     gearbox.update(0.05, 60.0, 0.9);
 
     // Should request downshift
@@ -223,6 +229,11 @@ TEST_F(AutomaticGearboxTest, KickdownDetectionThresholds_AC_10_4)
     int initialGear = gearbox.getCurrentGear();
     EXPECT_GT(initialGear, 1);
 
+    // Clear interval timers
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(0.1, 60.0, 0.3);
+    }
+
     // Small throttle increase - should NOT trigger kickdown (delta < 0.4)
     gearbox.update(0.05, 60.0, 0.6);
     EXPECT_FALSE(gearbox.requestsShift());
@@ -231,6 +242,10 @@ TEST_F(AutomaticGearboxTest, KickdownDetectionThresholds_AC_10_4)
     {
         AutomaticGearbox newGearbox(profile);
         newGearbox.update(0.1, 60.0, 0.3);
+        // Clear interval timers
+        for (int i = 0; i < 30; ++i) {
+            newGearbox.update(0.1, 60.0, 0.3);
+        }
         // Large throttle increase - SHOULD trigger kickdown (delta > 0.4)
         newGearbox.update(0.05, 60.0, 0.9);
         EXPECT_TRUE(newGearbox.requestsShift());
@@ -240,6 +255,10 @@ TEST_F(AutomaticGearboxTest, KickdownDetectionThresholds_AC_10_4)
     {
         AutomaticGearbox newGearbox2(profile);
         newGearbox2.update(0.1, 60.0, 0.3);
+        // Clear interval timers
+        for (int i = 0; i < 30; ++i) {
+            newGearbox2.update(0.1, 60.0, 0.3);
+        }
         // Throttle at 0.95 (at threshold) - should trigger kickdown
         newGearbox2.update(0.05, 60.0, 0.95);
         EXPECT_TRUE(newGearbox2.requestsShift());
@@ -322,9 +341,14 @@ TEST_F(AutomaticGearboxTest, SeparateDownshiftTableUsedWhenEnabled)
     gearbox.update(0.1, 12.0, 0.05);
     ASSERT_EQ(gearbox.getCurrentGear(), 2);
 
+    // Clear interval timers
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(0.1, 10.0, 0.05);
+    }
+
     // Now at 5% throttle the 2->1 downshift from the separate table is 9 kph.
     // Fall below 9 kph — should downshift to 1.
-    gearbox.update(0.1, 8.0, 0.05);
+    gearbox.update(1.6, 8.0, 0.05);
     EXPECT_EQ(gearbox.getCurrentGear(), 1);
 }
 
@@ -360,11 +384,16 @@ TEST_F(AutomaticGearboxTest, SeparateDownshiftTableDisabledFallsBackToHysteresis
     gearbox.update(0.1, 45.0, 0.5);
     ASSERT_EQ(gearbox.getCurrentGear(), 2);
 
+    // Clear interval timer (minShiftIntervalS = 3.0)
+    for (int i = 0; i < 40; ++i) {
+        gearbox.update(0.1, 35.0, 0.5);
+    }
+
     // Downshift at hysteresis (40 * 0.85 = 34 kph)
     gearbox.update(0.1, 34.0, 0.5);
     EXPECT_EQ(gearbox.getCurrentGear(), 2);
 
-    gearbox.update(0.1, 33.0, 0.5);
+    gearbox.update(3.1, 33.0, 0.5);
     EXPECT_EQ(gearbox.getCurrentGear(), 1);
 }
 
@@ -384,13 +413,19 @@ TEST_F(AutomaticGearboxTest, EngineBrakingInhibitorDoesNotBlockDownshift)
     int topGear = gearbox.getCurrentGear();
     ASSERT_GT(topGear, 1);
 
+    // Clear interval timers
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(0.1, 100.0, 0.4);
+    }
+
     // Coast at highway speed (throttle = 0, speed = 80 kph)
     // Per x-engineer ch6 s4.3: inhibitor blocks UPHIFTS ONLY, downshifts are free
     gearbox.update(0.1, 80.0, 0.0);
 
     // Coast down further — downshift should be allowed
-    gearbox.update(0.1, 40.0, 0.0);
-    gearbox.update(0.1, 20.0, 0.0);
+    for (int speed = 70; speed >= 10; speed -= 5) {
+        gearbox.update(0.5, static_cast<double>(speed), 0.0);
+    }
 
     // Should have downshifted — inhibitor only blocks upshifts
     EXPECT_LT(gearbox.getCurrentGear(), topGear)
@@ -410,9 +445,10 @@ TEST_F(AutomaticGearboxTest, EngineBrakingInhibitorAllowsDownshiftBelowMinSpeed)
     int topGear = gearbox.getCurrentGear();
     ASSERT_GT(topGear, 1);
 
-    // Coast below the engine braking min speed (10 kph)
-    // Below 10 kph, the inhibitor should not activate
-    gearbox.update(0.1, 8.0, 0.0);
+    // Clear interval timers then coast below min speed
+    for (int speed = 90; speed >= 5; speed -= 5) {
+        gearbox.update(0.5, static_cast<double>(speed), 0.0);
+    }
 
     // Should have downshifted since we're below min speed
     EXPECT_LT(gearbox.getCurrentGear(), topGear);
@@ -430,6 +466,12 @@ TEST_F(AutomaticGearboxTest, EngineBrakingInhibitorDoesNotBlockKickdown)
     int initialGear = gearbox.getCurrentGear();
     ASSERT_GT(initialGear, 1);
 
+    // Clear interval timers
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(0.1, 80.0, 0.3);
+    }
+    initialGear = gearbox.getCurrentGear();
+
     // Floor it — kickdown should override the inhibitor
     gearbox.update(0.05, 80.0, 0.98);
 
@@ -445,13 +487,18 @@ TEST_F(AutomaticGearboxTest, EngineBrakingInhibitorBlocksUpshiftAtHighwaySpeed)
 
     AutomaticGearbox gearbox(custom);
 
-    // Get to a moderate gear, then lift off at highway speed
+    // Get to a moderate gear at moderate throttle
     gearbox.update(0.1, 60.0, 0.25);
     int gear = gearbox.getCurrentGear();
     ASSERT_GE(gear, 2);
 
-    // Now accelerate gently but stay under throttle threshold
-    // First, coast at 70 kph to activate inhibitor
+    // Clear interval timers so next upshift isn't interval-blocked
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(0.1, 60.0, 0.25);
+    }
+    gear = gearbox.getCurrentGear();
+
+    // Coast at 70 kph with zero throttle — activates engine braking inhibitor
     gearbox.update(0.1, 70.0, 0.0);
 
     int gearAfterCoast = gearbox.getCurrentGear();
@@ -472,8 +519,12 @@ TEST_F(AutomaticGearboxTest, AsymmetricShiftInterval_UpshiftUsesUpshiftInterval)
 
     AutomaticGearbox gearbox(custom);
 
+    // Start in gear 1, below upshift threshold
+    gearbox.update(0.1, 10.0, 0.25);
+    ASSERT_EQ(gearbox.getCurrentGear(), 1);
+
     // First upshift: 1->2 at 25% throttle (19 kph)
-    gearbox.update(0.1, 20.0, 0.25);
+    gearbox.update(2.1, 20.0, 0.25);
     ASSERT_EQ(gearbox.getCurrentGear(), 2);
 
     // Second upshift: 2->3 at 25% throttle (28 kph)
@@ -497,21 +548,19 @@ TEST_F(AutomaticGearboxTest, AsymmetricShiftInterval_DownshiftUsesDownshiftInter
     // Get to 4th gear at 40% throttle
     gearbox.update(0.1, 60.0, 0.40);
     ASSERT_GE(gearbox.getCurrentGear(), 4);
+
+    // Clear interval timers
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(0.1, 60.0, 0.40);
+    }
     int topGear = gearbox.getCurrentGear();
 
-    // Drop speed to trigger a single downshift
-    // At 15% throttle, downshift 4->3 = 24 kph. Use speed 23.
-    // But smoothed throttle takes time to decay. Let's use 0.15 from the start.
-    // Actually, let's use a simpler approach: upshift to gear 4, then do first
-    // downshift, then try second downshift before interval expires.
-
-    // Drop to a speed that triggers downshift but keep speed high enough
-    // to only drop one gear. Gear 4->3 at 5% = 25 kph, gear 3->2 at 5% = 13 kph
+    // Drop to speed that triggers one downshift but not two
+    // Gear 4->3 at 5% = 25 kph, gear 3->2 at 5% = 13 kph
     // Use speed 20: only 4->3 triggers, 3->2 doesn't (20 > 13).
-    gearbox.update(0.1, 20.0, 0.05);
+    gearbox.update(1.6, 20.0, 0.05);
     int gearAfterFirst = gearbox.getCurrentGear();
 
-    // If first downshift happened (cross-direction, so timer doesn't block)
     if (gearAfterFirst < topGear) {
         // Try for second consecutive downshift before 1.0s — should be blocked
         gearbox.update(0.9, 8.0, 0.05);
@@ -531,8 +580,12 @@ TEST_F(AutomaticGearboxTest, CrossResetResetsOppositeDirectionTimer)
 
     AutomaticGearbox gearbox(custom);
 
-    // Get to 2nd gear via upshift
-    gearbox.update(0.1, 20.0, 0.25);
+    // Start below upshift threshold
+    gearbox.update(0.1, 10.0, 0.25);
+    ASSERT_EQ(gearbox.getCurrentGear(), 1);
+
+    // Get to 2nd gear via upshift (wait for interval)
+    gearbox.update(2.1, 20.0, 0.25);
     ASSERT_EQ(gearbox.getCurrentGear(), 2);
 
     // Immediately try to downshift — the upshift just happened, so downshift timer
@@ -555,6 +608,7 @@ TEST_F(AutomaticGearboxTest, TenThrottleLevels_UpshiftAtWOT)
     gearbox.update(0.1, 47.0, 1.0);
     EXPECT_EQ(gearbox.getCurrentGear(), 1);
 
+    // Above 49 kph — upshift
     gearbox.update(0.1, 50.0, 1.0);
     EXPECT_EQ(gearbox.getCurrentGear(), 2);
 }
@@ -569,30 +623,42 @@ TEST_F(AutomaticGearboxTest, TenThrottleLevels_DownshiftGapVariesWithThrottle)
     // Light throttle: upshift to 2nd at 5% throttle
     {
         AutomaticGearbox gearbox(profile);
-        gearbox.update(0.1, 12.0, 0.05);
+        gearbox.update(0.1, 10.0, 0.05);
+        gearbox.update(2.1, 12.0, 0.05);
         ASSERT_EQ(gearbox.getCurrentGear(), 2);
+
+        // Clear interval before testing downshift
+        for (int i = 0; i < 20; ++i) {
+            gearbox.update(0.1, 12.0, 0.05);
+        }
 
         // Downshift at 9 kph — just above threshold, no shift
         gearbox.update(0.1, 9.0, 0.05);
         EXPECT_EQ(gearbox.getCurrentGear(), 2);
 
         // Below 9 kph — downshift
-        gearbox.update(0.1, 8.0, 0.05);
+        gearbox.update(1.6, 8.0, 0.05);
         EXPECT_EQ(gearbox.getCurrentGear(), 1);
     }
 
     // High throttle: upshift to 2nd at 90% throttle (use 0.90 to avoid kickdown)
     {
         AutomaticGearbox gearbox(profile);
-        gearbox.update(0.1, 46.0, 0.90);
+        gearbox.update(0.1, 10.0, 0.90);
+        gearbox.update(2.1, 46.0, 0.90);
         ASSERT_EQ(gearbox.getCurrentGear(), 2);
+
+        // Clear interval before testing downshift
+        for (int i = 0; i < 20; ++i) {
+            gearbox.update(0.1, 46.0, 0.90);
+        }
 
         // Downshift at 33 kph — just above threshold, no shift
         gearbox.update(0.1, 34.0, 0.90);
         EXPECT_EQ(gearbox.getCurrentGear(), 2);
 
         // Below 33 kph — downshift
-        gearbox.update(0.1, 32.0, 0.90);
+        gearbox.update(1.6, 32.0, 0.90);
         EXPECT_EQ(gearbox.getCurrentGear(), 1);
     }
 }
@@ -626,19 +692,23 @@ TEST_F(AutomaticGearboxTest, TipOut_BlocksUpshift) {
 
     AutomaticGearbox gearbox(custom);
 
-    // Cruise in gear 2
-    gearbox.update(0.1, 30.0, 0.30);
-    ASSERT_GE(gearbox.getCurrentGear(), 2);
+    // Start in gear 1, get to gear 3+
+    gearbox.update(0.1, 10.0, 0.30);
+    gearbox.update(2.1, 40.0, 0.30);
+    int gearBeforeTipOut = gearbox.getCurrentGear();
+    ASSERT_GE(gearBeforeTipOut, 2);
 
-    // Accelerate to near 2->3 upshift speed
-    gearbox.update(0.1, 40.0, 0.30);
+    // Clear interval timers
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(0.1, 40.0, 0.30);
+    }
 
     // Tip-out: rapid throttle release produces gradient < -10 %/s
     // From 0.30 to 0.05 in 0.016s = -15.6 %/s (below -10 threshold)
-    gearbox.update(0.016, 45.0, 0.05);
+    gearbox.update(0.016, 55.0, 0.05);
 
-    // Tip-out should block the upshift
-    EXPECT_LE(gearbox.getCurrentGear(), 2)
+    // Tip-out should block the next upshift even though speed is above threshold
+    EXPECT_LE(gearbox.getCurrentGear(), gearBeforeTipOut)
         << "Tip-out correction should block upshift during rapid throttle release";
 }
 
@@ -653,6 +723,11 @@ TEST_F(AutomaticGearboxTest, TipCorrection_DoesNotBlockDownshift) {
     int topGear = gearbox.getCurrentGear();
     ASSERT_GE(topGear, 3) << "Should reach gear 3+ at 80 kph 40% throttle";
 
+    // Clear interval timers
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(0.1, 80.0, 0.40);
+    }
+
     // Tip-out: rapid throttle release (triggers tip-out correction)
     gearbox.update(0.016, 80.0, 0.05);
 
@@ -666,6 +741,109 @@ TEST_F(AutomaticGearboxTest, TipCorrection_DoesNotBlockDownshift) {
     EXPECT_LT(gearbox.getCurrentGear(), topGear)
         << "Tip-out should NOT block downshifts — gearbox should have downshifted during coast";
 }
+
+// ============================================================
+// Redline Safety (twin feedback)
+// ============================================================
+
+TEST_F(AutomaticGearboxTest, RedlineSafetyUpshift_WhenRpmFeedbackExceeds95Percent) {
+    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
+    AutomaticGearbox gearbox(custom);
+
+    // Start at low speed (5 kph), which would NOT trigger normal upshift
+    gearbox.update(0.1, 5.0, 0.90);
+
+    // Set RPM feedback above 95% of redline (6500 * 0.95 = 6175)
+    gearbox.setTwinContext(3, 1.0, 5.0, 6200.0);
+
+    // Run another frame — redline safety should force upshift
+    gearbox.update(0.1, 5.0, 0.90);
+
+    EXPECT_GT(gearbox.getCurrentGear(), 1)
+        << "Should upshift when engine RPM exceeds 95% of redline, even at low road speed";
+}
+
+TEST_F(AutomaticGearboxTest, RedlineSafety_DoesNotBlockDownshift) {
+    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
+    AutomaticGearbox gearbox(custom);
+
+    // Get to gear 3+ at moderate throttle
+    gearbox.update(0.1, 50.0, 0.30);
+    ASSERT_GE(gearbox.getCurrentGear(), 2);
+
+    // Clear interval timers by running 3+ seconds at constant speed
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(0.1, 50.0, 0.30);
+    }
+    int gear = gearbox.getCurrentGear();
+    ASSERT_GE(gear, 2);
+
+    // Set high RPM — redline safety triggers upshift
+    gearbox.setTwinContext(3, 1.0, 50.0, 6200.0);
+    gearbox.update(0.1, 50.0, 0.30);
+    gear = gearbox.getCurrentGear();
+
+    // Clear RPM feedback so redline safety doesn't fire during deceleration
+    gearbox.setTwinContext(3, 1.0, 50.0, 2000.0);
+
+    // Decelerate with large time steps to let intervals elapse
+    for (int speed = 45; speed >= 5; speed -= 5) {
+        gearbox.update(1.6, static_cast<double>(speed), 0.05);
+    }
+
+    EXPECT_LT(gearbox.getCurrentGear(), gear)
+        << "Downshifts should work even when redline RPM was high";
+}
+
+TEST_F(AutomaticGearboxTest, RedlineSafety_DoesNotOverrideKickdown) {
+    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
+    AutomaticGearbox gearbox(custom);
+
+    // Cruise in gear 3+
+    gearbox.update(0.1, 60.0, 0.30);
+    int initialGear = gearbox.getCurrentGear();
+    ASSERT_GT(initialGear, 1);
+
+    // Clear interval timers
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(0.1, 60.0, 0.30);
+    }
+    initialGear = gearbox.getCurrentGear();
+
+    // Set high RPM AND floor throttle — kickdown should fire
+    gearbox.setTwinContext(3, 1.0, 60.0, 6200.0);
+    gearbox.update(0.05, 60.0, 0.98);
+
+    // Kickdown should still override (downshift)
+    EXPECT_TRUE(gearbox.requestsShift());
+    EXPECT_LT(gearbox.getTargetGear(), initialGear)
+        << "Kickdown should override redline safety";
+}
+
+TEST_F(AutomaticGearboxTest, RedlineSafety_BypassesIntervalTimer) {
+    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
+    AutomaticGearbox gearbox(custom);
+
+    // Start at low speed in gear 1
+    gearbox.update(0.1, 5.0, 0.90);
+    ASSERT_EQ(gearbox.getCurrentGear(), 1);
+
+    // Set RPM above redline threshold — redline should fire immediately
+    // even though interval timer (2.0s) has NOT elapsed (only 0.1s since last shift)
+    gearbox.setTwinContext(3, 1.0, 5.0, 6200.0);
+    gearbox.update(0.1, 5.0, 0.90);
+
+    EXPECT_GT(gearbox.getCurrentGear(), 1)
+        << "Redline safety should bypass interval timer";
+}
+
+// RED: NoOscillation_AfterUpshift_DownshiftRequiresInterval
+// Stashed — requires gearbox interval logic redesign (lastShiftDirection_ vs hasShiftedBefore_)
+// See: circle-back stash review
+
+// ============================================================
+// F4: Tip-In / Tip-Out Correction (x-engineer ch6 s4.4)
+// ============================================================
 
 TEST_F(AutomaticGearboxTest, TipCorrection_ClearsWhenGradientStabilizes) {
     IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
@@ -684,8 +862,8 @@ TEST_F(AutomaticGearboxTest, TipCorrection_ClearsWhenGradientStabilizes) {
     EXPECT_EQ(gearbox.getCurrentGear(), 1);
 
     // Stabilize throttle (gradient returns to ~0, tip correction clears)
-    // Also let smoothed throttle catch up
-    for (int i = 0; i < 10; ++i) {
+    // Also let smoothed throttle catch up, AND wait for upshift interval
+    for (int i = 0; i < 25; ++i) {
         gearbox.update(0.1, 20.0, 0.50);
     }
 

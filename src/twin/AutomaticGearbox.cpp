@@ -102,8 +102,22 @@ void AutomaticGearbox::update(double dt, double speedKmh, double throttleFractio
     bool canDownshift =
         (lastShiftDirection_ != -1 || timeSinceLastShiftS_ >= downInterval2);
 
-    // Check for upshift(s)
-    if (canUpshift) {
+    // Redline safety: bypasses normal interval — engine approaching rev limiter
+    bool redlineUpshift = rpmFeedback_ > 0 && rpmFeedback_ > profile_.redlineRpm * 0.95;
+    if (redlineUpshift && currentGear_ < static_cast<int>(profile_.gearRatios.size())) {
+        double upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle_);
+        if (upshiftSpeed <= 0 || speedKmh <= upshiftSpeed) {
+            currentGear_ = currentGear_ + 1;
+            requestsShift_ = true;
+            hasShiftedBefore_ = true;
+            lastShiftDirection_ = 1;
+            targetGear_ = currentGear_;
+            timeSinceLastShiftS_ = 0.0;
+        }
+    }
+
+    // Check for speed-based upshift(s) — skip if redline already shifted this frame
+    if (canUpshift && !requestsShift_) {
         while (currentGear_ < static_cast<int>(profile_.gearRatios.size())) {
             double upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle_);
             if (upshiftSpeed > 0 && speedKmh > upshiftSpeed) {
@@ -117,7 +131,7 @@ void AutomaticGearbox::update(double dt, double speedKmh, double throttleFractio
         }
         if (requestsShift_) {
             targetGear_ = currentGear_;
-            timeSinceLastShiftS_ = 0.0;  // Cross-reset: resets both up/down timers
+            timeSinceLastShiftS_ = 0.0;
         }
     }
 
@@ -136,7 +150,7 @@ void AutomaticGearbox::update(double dt, double speedKmh, double throttleFractio
         }
         if (requestsShift_) {
             targetGear_ = currentGear_;
-            timeSinceLastShiftS_ = 0.0;  // Cross-reset: resets both up/down timers
+            timeSinceLastShiftS_ = 0.0;
         }
     }
 
