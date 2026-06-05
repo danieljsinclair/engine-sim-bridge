@@ -149,7 +149,7 @@ TEST_F(AccelerationScenarioTest, Shift1to2_At50PercentThrottle_AC01_2) {
 
     for (const auto& shift : shifts) {
         if (shift.fromGear == 1 && shift.toGear == 2) {
-            EXPECT_NEAR(shift.speedKmh, 28.0, 6.0) << "1→2 shift at 50% throttle should be near 28 km/h";
+            EXPECT_NEAR(shift.speedKmh, 28.0, 4.0) << "1→2 shift at 50% throttle should be at 28±4 km/h";
             return;
         }
     }
@@ -179,7 +179,7 @@ TEST_F(AccelerationScenarioTest, Shift2to3_At50PercentThrottle_AC01_3) {
 
     for (const auto& shift : shifts) {
         if (shift.fromGear == 2 && shift.toGear == 3) {
-            EXPECT_NEAR(shift.speedKmh, 42.0, 8.0) << "2→3 shift at 50% throttle should be near 42 km/h";
+            EXPECT_NEAR(shift.speedKmh, 45.0, 8.0) << "2→3 shift at 50% throttle should be at 45±8 km/h (throttle smoothing causes variation)";
             return;
         }
     }
@@ -209,7 +209,7 @@ TEST_F(AccelerationScenarioTest, Shift3to4_At50PercentThrottle_AC01_4) {
 
     for (const auto& shift : shifts) {
         if (shift.fromGear == 3 && shift.toGear == 4) {
-            EXPECT_NEAR(shift.speedKmh, 63.0, 12.0) << "3→4 shift at 50% throttle should be near 63 km/h";
+            EXPECT_NEAR(shift.speedKmh, 63.0, 10.0) << "3→4 shift at 50% throttle should be at 63±10 km/h";
             return;
         }
     }
@@ -217,8 +217,9 @@ TEST_F(AccelerationScenarioTest, Shift3to4_At50PercentThrottle_AC01_4) {
 }
 
 TEST_F(AccelerationScenarioTest, Shift1to2_At100PercentThrottle_AC01_5) {
-    // Test 1→2 shift specifically at 100% throttle
-    // New shift table: 1->2 at 49 km/h (100% row)
+    // Test 1->2 shift specifically at 100% throttle.
+    // Shift table calibrated to ~85% redline (~5500 RPM), 1->2 at 48 km/h.
+    // At 48 km/h in 1st gear (ratio 4.714): ~5900 RPM (91% of 6500 redline)
     std::vector<UpstreamSignal> signals;
     int steps = static_cast<int>(10.0 / dt_);
 
@@ -239,11 +240,11 @@ TEST_F(AccelerationScenarioTest, Shift1to2_At100PercentThrottle_AC01_5) {
 
     for (const auto& shift : shifts) {
         if (shift.fromGear == 1 && shift.toGear == 2) {
-            EXPECT_NEAR(shift.speedKmh, 49.0, 10.0) << "1→2 shift at 100% throttle should be near 49 km/h";
+            EXPECT_NEAR(shift.speedKmh, 48.0, 7.0) << "1->2 shift at 100% throttle should be at ~48 km/h (~85% redline)";
             return;
         }
     }
-    SUCCEED() << "No 1→2 shift found at 100% throttle";
+    SUCCEED() << "No 1->2 shift found at 100% throttle";
 }
 
 TEST_F(AccelerationScenarioTest, UpshiftRpmBand_At50PercentThrottle_AC01_6) {

@@ -3,6 +3,7 @@
 #include <twin/IceVehicleProfile.h>
 #include <io/UpstreamSignal.h>
 #include <simulator/GearConventions.h>
+#include <input/DemoVehiclePhysics.h>
 
 using namespace twin;
 using namespace input;
@@ -97,12 +98,13 @@ TEST_F(VirtualIceTwinTest, RunningToShiftingWhenGearboxRequestsShift_AC11_4) {
     EXPECT_EQ(twin_->getState(), TwinState::RUNNING);
 
     sig.speedKmh = 45.0;
-    twin_->update(0.016, sig);  // Triggers RUNNING -> SHIFTING (clutch still 1.0 from RUNNING frame)
+    twin_->update(0.016, sig);
 
     if (twin_->getState() == TwinState::SHIFTING) {
-        // First SHIFTING frame: clutch starts disengaging
+        // Check next frame — the first frame transitions RUNNING→SHIFTING but
+        // the output still carries clutchPressure from the RUNNING case.
         auto output = twin_->update(0.016, sig);
-        EXPECT_LT(output.clutchPressure, 1.0) << "Clutch should start disengaging on first SHIFTING frame";
+        EXPECT_LT(output.clutchPressure, 1.0) << "Clutch should be disengaging after entering SHIFTING state";
     } else {
         SUCCEED() << "Gearbox not ready to shift yet (throttle smoothing or min shift interval), skipping clutch check";
     }
@@ -310,4 +312,140 @@ TEST_F(VirtualIceTwinTest, RunningToIdle_WhenSelectorNeutral_AC14) {
     sig.speedKmh = 0.0;
     twin_->update(0.016, sig);
     EXPECT_EQ(twin_->getState(), TwinState::IDLE);
+}
+
+// ============================================================================
+// New: RUNNING→IDLE uses threshold, not exact equality
+// ============================================================================
+
+TEST_F(VirtualIceTwinTest, RunningToIdle_UsesThresholdNotExactZero_AC11_6) {
+    auto sig = makeValidSignal(0.1, 5.0);
+    advanceThroughCranking();
+
+    for (int i = 0; i < 10; ++i) {
+        twin_->update(0.016, sig);
+    }
+
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    // Transition should happen with small non-zero values below thresholds
+    // speed < standstillThresholdKmh (1.0) AND throttle < throttleRunningToIdleThreshold (0.02)
+    sig.throttleFraction = 0.01;  // Below threshold but not zero
+    sig.speedKmh = 0.5;           // Below threshold but not zero
+    twin_->update(0.016, sig);
+
+    EXPECT_EQ(twin_->getState(), TwinState::IDLE)
+        << "RUNNING->IDLE should transition when speed < 1.0 km/h and throttle < 2%";
+}
+
+TEST_F(VirtualIceTwinTest, RunningStaysRunning_WhenSpeedAboveStandstillThreshold) {
+    auto sig = makeValidSignal(0.1, 5.0);
+    advanceThroughCranking();
+
+    for (int i = 0; i < 10; ++i) {
+        twin_->update(0.016, sig);
+    }
+
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    // Even with zero throttle, if speed > standstillThreshold, stay in RUNNING
+    sig.throttleFraction = 0.0;
+    sig.speedKmh = 2.0;  // Above standstill threshold of 1.0
+    twin_->update(0.016, sig);
+
+    EXPECT_EQ(twin_->getState(), TwinState::RUNNING)
+        << "Should stay RUNNING when speed > standstill threshold, even with zero throttle";
+}
+
+// ============================================================================
+// RED PHASE TEST: Gearbox uses signal speed, not feedback speed for shift decisions
+// ============================================================================
+
+TEST_F(VirtualIceTwinTest, FeedbackSpeedDoesNotOverrideSignalSpeedForUpshift) {
+    // Warm up through state machine: OFF -> CRANKING -> IDLE -> RUNNING
+    advanceThroughCranking();
+    auto sig = makeValidSignal(0.1, 0.0);
+    twin_->update(0.016, sig);
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    // Set vehicle speed feedback to a LOW value (5 kph) - this would keep gearbox in gear 1
+    twin_->setVehicleSpeedFeedback(5.0);
+
+    // But provide upstream signal with HIGH speed (40 kph) at 50% throttle
+    // This should trigger 1->2 upshift if gearbox uses signal speed
+    sig.throttleFraction = 0.5;
+    sig.speedKmh = 40.0;
+
+    // Run several frames to pass shift interval gate (minShiftIntervalS starts at 0 since no shift yet)
+    // 40 kph at 50% throttle is well above the 15 kph upshift threshold for 1->2 shift
+    for (int i = 0; i < 20; ++i) {
+        twin_->update(0.016, sig);
+    }
+
+    // Assert: Gear should be > 1 if gearbox uses signal speed for shift decisions
+    // This test WILL FAIL with current code because gearbox uses feedback speed (5 kph)
+    EXPECT_GT(twin_->getCurrentGear(), 1)
+        << "Gearbox should upshift based on signal.speedKmh (40 kph), "
+        << "not feedback speed (5 kph)";
+}
+
+// ============================================================================
+// DIAGNOSTIC TEST: 20% throttle gentle acceleration shifting issue
+// ============================================================================
+
+TEST_F(VirtualIceTwinTest, GentleAcceleration_20PercentThrottle_ShiftsToGear2) {
+    advanceThroughCranking();
+
+    // Set selector to DRIVE and transition to RUNNING
+    twin_->setGearSelector(bridge::GearSelector::DRIVE);
+    auto sig = makeValidSignal(0.06, 0.0);  // Just above idle threshold
+    twin_->update(0.016, sig);
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    // Use DemoVehiclePhysics to generate realistic speed at 20% throttle
+    input::DemoVehiclePhysics physics;
+    double dt = 1.0 / 60.0;
+
+    printf("\n=== DIAGNOSTIC: 20%% Throttle Gentle Acceleration ===\n");
+    printf("  Time(s)  Speed(kph)  Gear  State\n");
+    printf("  -------  ----------  ----  -----\n");
+
+    for (int i = 0; i < static_cast<int>(60.0 / dt); ++i) {
+        double t = i * dt;
+        double throttle = 0.20;
+
+        // Update demo physics (same as live demo)
+        physics.update(dt, throttle);
+        double speedKmh = physics.getSpeedKmh();
+
+        // Create upstream signal with demo physics speed
+        UpstreamSignal signal;
+        signal.throttleFraction = throttle;
+        signal.speedKmh = speedKmh;
+        signal.timestampUtcMs = static_cast<uint64_t>(t * 1000) + 2000;
+        signal.isValid = true;
+
+        twin_->update(dt, signal);
+
+        int gear = twin_->getCurrentGear();
+
+        // Print diagnostics every 5 seconds
+        if (i % static_cast<int>(5.0 / dt) == 0) {
+            printf("  %6.1f  %10.1f  %4d  %d\n",
+                   t, speedKmh, gear, static_cast<int>(twin_->getState()));
+        }
+
+        // Early exit if we shifted to gear 2
+        if (gear >= 2 && t < 30.0) {
+            printf("  *** SHIFTED to gear %d at t=%.1fs, speed=%.1f kph ***\n", gear, t, speedKmh);
+            break;
+        }
+    }
+
+    printf("  Final: speed=%.1f kph, gear=%d\n", physics.getSpeedKmh(), twin_->getCurrentGear());
+    printf("=====================================================\n\n");
+
+    EXPECT_GE(twin_->getCurrentGear(), 2)
+        << "At 20% throttle with DemoVehiclePhysics, gearbox should shift to gear 2 within 60 seconds. "
+        << "Final speed: " << physics.getSpeedKmh() << " kph";
 }

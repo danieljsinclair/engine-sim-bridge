@@ -88,17 +88,18 @@ struct IceVehicleProfile {
         p.shiftTableThrottleLevels = {0.05, 0.15, 0.25, 0.40, 0.55, 0.70, 0.80, 0.90, 0.95, 1.00};
 
         // Upshift table (10 throttle levels x 7 shift columns)
+        // Calibrated to maintain ~85% redline (~5500 RPM) at WOT
         p.shiftTable = {
             {11, 17, 26, 32, 42, 54, 64},    // 5%
             {15, 22, 33, 41, 54, 69, 82},    // 15%
             {19, 28, 42, 53, 69, 88, 105},   // 25%
-            {24, 37, 55, 69, 90, 115, 137},  // 40%
-            {30, 45, 67, 85, 110, 142, 169}, // 55%
-            {36, 54, 80, 101, 131, 169, 201},// 70%
-            {41, 61, 91, 115, 149, 192, 229},// 80%
-            {45, 67, 100, 127, 164, 211, 251},// 90%
-            {47, 70, 105, 132, 171, 220, 262},// 95%
-            {49, 73, 109, 138, 179, 230, 274} // 100%
+            {23, 35, 52, 65, 85, 110, 130},  // 40%
+            {29, 43, 64, 81, 105, 136, 161}, // 55%
+            {35, 52, 77, 97, 126, 163, 194},// 70%
+            {40, 59, 88, 110, 143, 185, 220},// 80%
+            {44, 65, 97, 122, 159, 205, 244},// 90%
+            {46, 68, 102, 128, 167, 215, 256},// 95%
+            {48, 71, 106, 134, 174, 225, 268} // 100% (~85% redline)
         };
 
         // Separate downshift table
@@ -129,9 +130,9 @@ struct IceVehicleProfile {
         p.throttleSmoothingTauMs = 50.0;
         p.minShiftIntervalS = 3.0;
 
-        // Asymmetric shift intervals (ZF 8HP45)
+        // Asymmetric shift intervals (ZF 8HP45 per x-engineer ch6 s4.2)
         p.upshiftMinIntervalS = 2.0;
-        p.downshiftMinIntervalS = 1.5;
+        p.downshiftMinIntervalS = 1.0;
 
         // Engine braking inhibitor
         p.engineBrakingInhibitorEnabled = true;

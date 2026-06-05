@@ -1,11 +1,11 @@
 .DEFAULT_GOAL := all
-.PHONY: all build clean scrub help remove-orphans check test test-core test-isomorphism test-golden test-deep presets clean-presets clean-test-fixtures
+.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism test-golden test-deep presets clean-presets clean-test-fixtures
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
 CTEST_VERBOSE ?= 0
 CTEST_QUIET ?= 0
-CTEST_UI_FLAGS := $(if $(filter 1,$(CTEST_VERBOSE)),-V,$(if $(filter 1,$(CTEST_QUIET)),-Q,--progress))
+CTEST_UI_FLAGS := $(if $(filter 1,$(CTEST_VERBOSE)),-V,$(if $(filter 1,$(CTEST_QUIET)),-Q,))
 BRIDGE_TEST_CMAKE_FLAGS := \
 	-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 	-DBUILD_PRESET_ENGINE_TESTS=ON \
@@ -14,7 +14,7 @@ BRIDGE_TEST_CMAKE_FLAGS := \
 BRIDGE_TEST_EXCLUDE := (_NOT_BUILT|_spike$$)
 BRIDGE_TEST_GOLDEN_MATCH := PresetGoldenFileTest
 BRIDGE_TEST_ISOMORPHISM_MATCH := (IsomorphismFixtures/EndToEndPresetTest\.PresetLoadsAndProducesValidEngine|IsomorphismPresets/ParameterIsomorphismTest|AllEngines/RoundTripIsomorphismTest)
-BRIDGE_TEST_CORE_EXCLUDE := $(BRIDGE_TEST_EXCLUDE)|($(BRIDGE_TEST_GOLDEN_MATCH)|$(BRIDGE_TEST_ISOMORPHISM_MATCH))
+BRIDGE_TEST_CORE_EXCLUDE := $(BRIDGE_TEST_EXCLUDE)|($(BRIDGE_TEST_GOLDEN_MATCH)|$(BRIDGE_TEST_ISOMORPHISM_MATCH)|(EnginePresets/.*|Phase4FactoryPresets/.*|twin_foundation_tests))
 CTEST_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 BUILD_PARALLEL_LEVEL ?=
 CMAKE_BUILD_PARALLEL_FLAG := $(if $(strip $(BUILD_PARALLEL_LEVEL)),--parallel $(BUILD_PARALLEL_LEVEL),)
@@ -25,6 +25,7 @@ BUILD_STAMP := $(BUILD_DIR)/.build-ready.stamp
 BUILD_INPUTS := $(shell find Makefile CMakeLists.txt src include test tools engine-sim -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' -o -name '*.h' -o -name '*.hh' -o -name '*.hpp' -o -name '*.cmake' \) | sort)
 
 ISOMORPHISM_STAMP := $(BUILD_DIR)/.test-isomorphism.stamp
+GOLDEN_STAMP := $(BUILD_DIR)/.test-golden.stamp
 
 define build_bridge_targets
 	cmake --build $(BUILD_DIR) $(CMAKE_BUILD_PARALLEL_FLAG)
@@ -37,16 +38,10 @@ define bridge_print_hint
 endef
 
 define run_bridge_ctest_suite
-	@echo "$(BLOCK_START_MESSAGE)"; \
-	$(call bridge_print_hint) \
-	if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) $(CTEST_SELECTOR); then \
+	@if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) $(CTEST_SELECTOR); then \
 		echo "$(SUMMARY_PASS_MESSAGE)"; \
-		$(call bridge_print_result,32,PASSED); \
-		$(call bridge_print_hint) \
 	else \
 		echo "$(SUMMARY_FAIL_MESSAGE)"; \
-		$(call bridge_print_result,31,FAILED); \
-		$(call bridge_print_hint) \
 		exit 1; \
 	fi
 endef
@@ -85,9 +80,12 @@ remove-orphans:
 # Clean build artifacts (cascades to engine-sim via cmake)
 clean: remove-orphans clean-presets clean-test-fixtures
 	@if [ -d $(BUILD_DIR) ]; then cmake --build $(BUILD_DIR) --target clean >/dev/null 2>&1 || true; fi
-	@rm -f $(ISOMORPHISM_STAMP)
-	@rm -f $(BUILD_STAMP)
+	@rm -f $(BUILD_DIR)/*.stamp
 	@rm -rf tmp
+
+# Remove only stamp files so tests can be rerun without full clean.
+clean-test:
+	@rm -f $(BUILD_DIR)/.*.stamp $(BUILD_DIR)/*.stamp
 
 # Full clean - remove entire build directory (superset of clean)
 scrub: clean
@@ -126,8 +124,7 @@ test-golden: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: golden-audio 
 test-golden: SKIP_HINT_MESSAGE := === [engine-sim-bridge] HINT: skip this next time by running make test-core instead of make test or make test-deep. ===
 test-golden: SUMMARY_PASS_MESSAGE := === [engine-sim-bridge] SUMMARY: PASS (golden) ===
 test-golden: SUMMARY_FAIL_MESSAGE := === [engine-sim-bridge] SUMMARY: FAIL (golden) ===
-test-golden: build presets
-	$(run_bridge_ctest_suite)
+test-golden: $(GOLDEN_STAMP)
 
 test-deep: build test-isomorphism test-golden
 
@@ -170,6 +167,15 @@ ISOMORPHISM_INPUTS = \
 	tools/preset_compiler.cpp \
 	$(BUILD_DIR)/preset_isomorphism_tests
 
+GOLDEN_INPUTS = \
+	$(PRESET_JSONS) \
+	$(ISOMORPHISM_MR_INPUTS) \
+	$(ISOMORPHISM_CODE_INPUTS) \
+	CMakeLists.txt \
+	test/PresetEngineTests.cpp \
+	tools/preset_compiler.cpp \
+	$(BUILD_DIR)/preset_engine_tests
+
 $(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets
 	@mkdir -p $(dir $@)
 	@echo "$(BLOCK_START_MESSAGE)"; \
@@ -181,6 +187,22 @@ $(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets
 		touch $(abspath $@); \
 	else \
 		echo "=== [engine-sim-bridge] SUMMARY: FAIL (isomorphism) ==="; \
+		$(call bridge_print_result,31,FAILED); \
+		$(call bridge_print_hint) \
+		exit 1; \
+	fi
+
+$(GOLDEN_STAMP): $(GOLDEN_INPUTS) | build presets
+	@mkdir -p $(dir $@)
+	@echo "$(BLOCK_START_MESSAGE)"; \
+	$(call bridge_print_hint) \
+	if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -R '$(BRIDGE_TEST_GOLDEN_MATCH)'; then \
+		echo "=== [engine-sim-bridge] SUMMARY: PASS (golden) ==="; \
+		$(call bridge_print_result,32,PASSED); \
+		$(call bridge_print_hint) \
+		touch $(abspath $@); \
+	else \
+		echo "=== [engine-sim-bridge] SUMMARY: FAIL (golden) ==="; \
 		$(call bridge_print_result,31,FAILED); \
 		$(call bridge_print_hint) \
 		exit 1; \

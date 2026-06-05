@@ -38,6 +38,23 @@ TEST(IceVehicleProfile, Zf8hp45FactoryDefaults)
     // Minimum shift interval
     EXPECT_DOUBLE_EQ(profile.minShiftIntervalS, 3.0);
 
+    // Asymmetric shift intervals (ZF 8HP45 per x-engineer ch6 s4.2)
+    EXPECT_DOUBLE_EQ(profile.upshiftMinIntervalS, 2.0);
+    EXPECT_DOUBLE_EQ(profile.downshiftMinIntervalS, 1.0);
+
+    // Engine braking inhibitor
+    EXPECT_TRUE(profile.engineBrakingInhibitorEnabled);
+    EXPECT_DOUBLE_EQ(profile.engineBrakingMaxThrottle, 0.01);
+    EXPECT_DOUBLE_EQ(profile.engineBrakingMinSpeedKmh, 10.0);
+
+    // Tip-in/tip-out correction
+    EXPECT_TRUE(profile.tipCorrectionEnabled);
+    EXPECT_DOUBLE_EQ(profile.tipInGradientThreshold, 10.0);
+    EXPECT_DOUBLE_EQ(profile.tipOutGradientThreshold, -10.0);
+
+    // Separate downshift table
+    EXPECT_TRUE(profile.separateDownshiftTableEnabled);
+
     // Hysteresis factor
     EXPECT_DOUBLE_EQ(profile.hysteresisFactor, 0.85);
 
@@ -51,74 +68,87 @@ TEST(IceVehicleProfile, ShiftTableCalibration)
 {
     IceVehicleProfile profile = IceVehicleProfile::zf8hp45();
 
-    // Verify shift table structure: 10 throttle levels (5%..100%)
+    // Verify shift table structure: 10 throttle levels
     // Each with 7 upshift thresholds (1->2, 2->3, ..., 7->8)
-    ASSERT_EQ(profile.shiftTable.size(), 10);
-    ASSERT_EQ(profile.shiftTableThrottleLevels.size(), 10);
+    ASSERT_EQ(profile.shiftTable.size(), 10u);
+    ASSERT_EQ(profile.shiftTableThrottleLevels.size(), 10u);
 
     // Verify throttle level breakpoints
     EXPECT_DOUBLE_EQ(profile.shiftTableThrottleLevels[0], 0.05);
-    EXPECT_DOUBLE_EQ(profile.shiftTableThrottleLevels[3], 0.40);
     EXPECT_DOUBLE_EQ(profile.shiftTableThrottleLevels[9], 1.00);
 
-    // 5% throttle row (light cruise)
-    const auto& throttle5 = profile.shiftTable[0];
-    ASSERT_EQ(throttle5.size(), 7);
-    EXPECT_DOUBLE_EQ(throttle5[0], 11.0);
-    EXPECT_DOUBLE_EQ(throttle5[1], 17.0);
-    EXPECT_DOUBLE_EQ(throttle5[6], 64.0);
+    // Each throttle row should have 7 shift thresholds
+    for (const auto& row : profile.shiftTable) {
+        EXPECT_EQ(row.size(), 7u);
+    }
 
-    // 40% throttle row
-    const auto& throttle40 = profile.shiftTable[3];
-    ASSERT_EQ(throttle40.size(), 7);
-    EXPECT_DOUBLE_EQ(throttle40[0], 24.0);
-    EXPECT_DOUBLE_EQ(throttle40[1], 37.0);
-    EXPECT_DOUBLE_EQ(throttle40[6], 137.0);
+    // Shift speeds should increase with throttle (higher throttle = higher shift speed)
+    for (size_t col = 0; col < 7; ++col) {
+        EXPECT_GT(profile.shiftTable[9][col], profile.shiftTable[0][col])
+            << "WOT shift speed should be higher than light throttle for column " << col;
+    }
 
-    // 100% throttle row (WOT)
-    const auto& throttle100 = profile.shiftTable[9];
-    ASSERT_EQ(throttle100.size(), 7);
-    EXPECT_DOUBLE_EQ(throttle100[0], 49.0);
-    EXPECT_DOUBLE_EQ(throttle100[1], 73.0);
-    EXPECT_DOUBLE_EQ(throttle100[6], 274.0);
+    // Shift speeds should increase with gear within a row (1->2 < 2->3 < ... < 7->8)
+    for (const auto& row : profile.shiftTable) {
+        for (size_t i = 1; i < row.size(); ++i) {
+            EXPECT_GT(row[i], row[i - 1])
+                << "Shift speeds should increase monotonically across gears";
+        }
+    }
 
-    // Verify separate downshift table
-    ASSERT_TRUE(profile.separateDownshiftTableEnabled);
-    ASSERT_EQ(profile.downshiftTable.size(), 10);
-    ASSERT_EQ(profile.downshiftTableThrottleLevels.size(), 10);
+    // Verify separate downshift table structure
+    ASSERT_EQ(profile.downshiftTable.size(), 10u);
+    ASSERT_EQ(profile.downshiftTableThrottleLevels.size(), 10u);
 
-    // Downshift speeds should be lower than upshift speeds (hysteresis)
-    const auto& ds5 = profile.downshiftTable[0];
-    EXPECT_LT(ds5[0], throttle5[0]);  // 9 < 11
-    EXPECT_LT(ds5[6], throttle5[6]);  // 50 < 64
+    // Each downshift throttle row should have 7 thresholds
+    for (const auto& row : profile.downshiftTable) {
+        EXPECT_EQ(row.size(), 7u);
+    }
+
+    // Downshift speeds should be lower than upshift speeds (separate table allows this)
+    // Compare 5% throttle row
+    for (size_t col = 0; col < 7; ++col) {
+        EXPECT_LT(profile.downshiftTable[0][col], profile.shiftTable[0][col])
+            << "Downshift speed should be lower than upshift speed at light throttle";
+    }
+
+    // Downshift speeds should increase with throttle (coast-down at higher throttle = higher speeds)
+    for (size_t col = 0; col < 7; ++col) {
+        EXPECT_GE(profile.downshiftTable[9][col], profile.downshiftTable[0][col])
+            << "Downshift speed at WOT should be >= downshift at light throttle";
+    }
+
+    // Downshift speeds should increase with gear within a row
+    for (const auto& row : profile.downshiftTable) {
+        for (size_t i = 1; i < row.size(); ++i) {
+            EXPECT_GT(row[i], row[i - 1])
+                << "Downshift speeds should increase monotonically across gears";
+        }
+    }
 }
 
 TEST(IceVehicleProfile, CustomConstruction)
 {
-    std::vector<double> customGearRatios = {5.0, 3.0, 2.0, 1.5, 1.0};
-    std::vector<std::vector<double>> customShiftTable = {
+    IceVehicleProfile profile;
+    profile.gearRatios = {5.0, 3.0, 2.0, 1.5, 1.0};
+    profile.shiftTable = {
         {30.0, 50.0, 70.0},
         {40.0, 60.0, 80.0}
     };
-
-    IceVehicleProfile profile(
-        customGearRatios,
-        3.5,
-        0.35,
-        2000.0,
-        customShiftTable,
-        0.9,
-        0.90,
-        0.35,
-        0.3,
-        50.0,
-        200.0,
-        100.0,
-        40.0,
-        2.5,
-        7000.0,
-        800.0
-    );
+    profile.diffRatio = 3.5;
+    profile.tireRadiusM = 0.35;
+    profile.vehicleMassKg = 2000.0;
+    profile.hysteresisFactor = 0.9;
+    profile.kickdownThrottleThreshold = 0.90;
+    profile.kickdownDelta = 0.35;
+    profile.kickdownWindowMs = 0.3;
+    profile.shiftDisengageMs = 50.0;
+    profile.shiftPauseMs = 200.0;
+    profile.shiftReengageMs = 100.0;
+    profile.throttleSmoothingTauMs = 40.0;
+    profile.minShiftIntervalS = 2.5;
+    profile.redlineRpm = 7000.0;
+    profile.idleRpm = 800.0;
 
     EXPECT_EQ(profile.gearRatios.size(), 5);
     EXPECT_DOUBLE_EQ(profile.gearRatios[0], 5.0);

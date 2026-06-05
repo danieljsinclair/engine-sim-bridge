@@ -61,13 +61,23 @@ graph TD
 
 ```mermaid
 graph LR
-    SIM["ISimulator"] -->|"EngineSimStats"| LOOP["SimulationLoop"]
+    SIM["ISimulator<br/>(engine-sim)"] -->|"EngineSimStats {<br/>- currentRPM<br/>- vehicleSpeedKmh*<br/>- engineTorqueNm*<br/>- drivetrainTorqueNm*<br/>- gearSelector*<br/>- gear<br/>- ...}"| LOOP["SimulationLoop"]
     LOOP -->|"provideFeedback(stats)"| IP["IInputProvider"]
     IP -->|"TwinFeedback {engineRpm, vehicleSpeedKmh}"| TWIN["IVehicleTwin"]
     TWIN -->|"TwinOutput {throttle, gear, clutchPressure, ...}"| IP
     IP -->|"EngineInput"| LOOP
     LOOP -->|"setThrottle, setGear, setClutchPressure"| SIM
+
+    classDef feedback fill:#ffcccc,stroke:#ff0000,stroke-width:2px;
+    class SIM,LOOP feedback;
 ```
+
+**Feedback Data Sources (twin → engine-sim → stats → twin):**
+- `vehicleSpeedKmh`: From vehicle model (engine-sim internal physics)
+- `engineTorqueNm`: From clutch `F_t[0][0]` (engine side torque)
+- `drivetrainTorqueNm`: From clutch `F_t[0][1] × ratios` (drivetrain side torque)
+- `currentRPM`: From crankshaft angular velocity
+- `gearSelector`: Gear selector state (PRND + manual)
 
 ---
 
@@ -262,6 +272,10 @@ classDiagram
         +dynoTargetRPM: double
         +dynoTorqueScale: double
         +gear: int
+        +vehicleSpeedKmh: double  // feedback from vehicle model
+        +engineTorqueNm: double  // feedback from clutch F_t[0][0]
+        +drivetrainTorqueNm: double  // feedback from clutch F_t[0][1] × ratios
+        +gearSelector: int  // feedback: GearSelector state
     }
 
     class EngineState {
