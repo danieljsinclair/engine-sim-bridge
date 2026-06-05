@@ -16,7 +16,7 @@ BRIDGE_TEST_GOLDEN_MATCH := PresetGoldenFileTest
 BRIDGE_TEST_ISOMORPHISM_MATCH := (IsomorphismFixtures/EndToEndPresetTest\.PresetLoadsAndProducesValidEngine|IsomorphismPresets/ParameterIsomorphismTest|AllEngines/RoundTripIsomorphismTest)
 BRIDGE_TEST_CORE_EXCLUDE := $(BRIDGE_TEST_EXCLUDE)|($(BRIDGE_TEST_GOLDEN_MATCH)|$(BRIDGE_TEST_ISOMORPHISM_MATCH)|(EnginePresets/.*|Phase4FactoryPresets/.*|twin_foundation_tests))
 CTEST_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
-BUILD_PARALLEL_LEVEL ?=
+BUILD_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 CMAKE_BUILD_PARALLEL_FLAG := $(if $(strip $(BUILD_PARALLEL_LEVEL)),--parallel $(BUILD_PARALLEL_LEVEL),)
 BUILD_STAMP := $(BUILD_DIR)/.build-ready.stamp
 
