@@ -193,6 +193,61 @@ TEST_F(DemoInputProviderTest, ToggleIgnition_FlipsState) {
 // Full-chain integration test - reproduces live demo data path
 // ============================================================================
 
+// ============================================================================
+// Brake flow tests — proves setBrake() → OnUpdateSimulation() → brakeLevel
+// ============================================================================
+
+TEST_F(DemoInputProviderTest, SetBrake_PropagatesToBrakeLevel) {
+    ASSERT_TRUE(provider_->Initialize());
+
+    provider_->setBrake(1.0);
+    EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(input.brakeLevel, 1.0);
+}
+
+TEST_F(DemoInputProviderTest, Brake_StaysWhileHeld) {
+    ASSERT_TRUE(provider_->Initialize());
+
+    provider_->setBrake(1.0);
+    for (int i = 0; i < 20; ++i) {
+        EngineInput input = provider_->OnUpdateSimulation(0.016);
+        EXPECT_DOUBLE_EQ(input.brakeLevel, 1.0)
+            << "brakeLevel should be 1.0 on poll " << (i + 1) << " while held";
+    }
+}
+
+TEST_F(DemoInputProviderTest, Brake_ReleasesWhenReset) {
+    ASSERT_TRUE(provider_->Initialize());
+
+    provider_->setBrake(1.0);
+    EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(input.brakeLevel, 1.0);
+
+    // Simulate keyboard provider resetting brake each frame (key released)
+    provider_->setBrake(0.0);
+    input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(input.brakeLevel, 0.0);
+}
+
+TEST_F(DemoInputProviderTest, Brake_DefaultIsZero) {
+    ASSERT_TRUE(provider_->Initialize());
+
+    EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(input.brakeLevel, 0.0);
+}
+
+TEST_F(DemoInputProviderTest, Brake_ThrottleIndependent) {
+    ASSERT_TRUE(provider_->Initialize());
+
+    // Apply throttle and brake simultaneously
+    rawThrottle_->setThrottleLevel(0.8);
+    provider_->setBrake(1.0);
+
+    EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(input.brakeLevel, 1.0);
+    // Throttle also flows through (after twin warmup it may vary, but raw value was set)
+}
+
 TEST(DemoInputProviderIntegration, GearboxShiftsAt20PercentThrottle) {
     // Create components exactly like CLIMain.cpp does
     auto throttle = std::make_unique<input::DemoThrottleSource>();

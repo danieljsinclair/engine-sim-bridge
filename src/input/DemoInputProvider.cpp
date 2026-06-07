@@ -95,6 +95,12 @@ EngineInput DemoInputProvider::OnUpdateSimulation(double dt) {
     EngineInput input = twinProvider_.OnUpdateSimulation(dt);
     currentGear_ = input.gearAbsolute;
 
+    // NOTE: brakeLevel is tracked but has no physics effect yet.
+    // Dyno-based approach was investigated but dyno is a velocity-targeting
+    // measurement constraint, not a brake. Needs Vehicle drag/force API.
+    // TODO: circle-back — proper vehicle braking
+    input.brakeLevel = brake;
+
     return input;
 }
 

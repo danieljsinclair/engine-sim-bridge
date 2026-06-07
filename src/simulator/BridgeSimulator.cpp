@@ -27,6 +27,15 @@ BridgeSimulator::~BridgeSimulator() {
 bool BridgeSimulator::create(const ISimulatorConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) {
     initDependencies(logger, telemetryWriter);
     initAudioConfig(config);
+
+    // Wire brake constraint into the physics system
+    if (m_simulator->getVehicle() != nullptr) {
+        m_brakeConstraint.initialize(
+            m_simulator->getVehicleMassBody(),
+            m_simulator->getVehicle());
+        m_simulator->getSystem()->addConstraint(&m_brakeConstraint);
+    }
+
     return true;
 }
 
@@ -236,6 +245,10 @@ void BridgeSimulator::setClutchPressure(double pressure) {
     if (m_simulator->getTransmission()) {
         m_simulator->getTransmission()->setClutchPressure(pressure);
     }
+}
+
+void BridgeSimulator::setBrakePressure(double pressure) {
+    m_brakeConstraint.setBrakeLevel(pressure);
 }
 
 double BridgeSimulator::getEngineRpm() const {

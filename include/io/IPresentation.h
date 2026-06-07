@@ -53,6 +53,7 @@ struct EngineState {
     double engineTorqueNm = 0.0;
     double drivetrainTorqueNm = 0.0;
     int simulationFrequency = 0;  // Actual physics Hz from the loaded engine
+    double brakeLevel = 0.0;       // 0.0 = no brake, 1.0 = full brake
 };
 
 // ============================================================================

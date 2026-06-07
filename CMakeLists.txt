@@ -75,6 +75,7 @@ set(BRIDGE_SOURCES
     src/simulator/SimulatorInitHelpers.cpp
     src/simulator/SimulatorFactory.cpp
     src/simulator/BridgeSimulator.cpp
+    src/simulator/BrakeConstraint.cpp
     src/simulator/ScriptLoadHelpers.cpp
     src/simulator/ISimulator.cpp
     # Audio strategies
@@ -127,6 +128,7 @@ set(BRIDGE_SOURCES
     src/input/IgnitionInput.cpp
     src/input/DemoInputProvider.cpp
     src/input/BrakeInput.cpp
+    src/input/KeyHoldBridge.cpp
 )
 
 # Platform-specific audio hardware and factory
@@ -328,9 +330,13 @@ if(BUILD_BRIDGE_TESTS)
     add_executable(bridge_unit_tests
         test/BridgeUnitTests.cpp
         test/CrankingControllerTests.cpp
+        test/simulator/BrakeConstraintTest.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/dependencies/submodules/simple-2d-constraint-solver/include
     )
     target_link_libraries(bridge_unit_tests
         PRIVATE
@@ -553,6 +559,8 @@ if(BUILD_BRIDGE_TESTS)
         test/input/GearSelectorInputTest.cpp
         test/input/IgnitionInputTest.cpp
         test/input/BrakeInputTest.cpp
+        test/input/KeyHoldBridgeTest.cpp
+        test/input/BrakeChainTest.cpp
     )
     target_include_directories(demo_input_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include

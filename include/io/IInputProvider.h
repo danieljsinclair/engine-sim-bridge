@@ -29,6 +29,9 @@ struct EngineInput {
     // Dyno control
     double dynoTorqueScale = -1.0;  // -1 = unchanged, 0.0-1.0 = fraction of max torque
 
+    // Brake control (HACK: engine braking via dyno, not wheel braking)
+    double brakeLevel = 0.0;        // 0.0 = no brake, 1.0 = full brake
+
     // Twin control
     int gearAbsolute = -1;          // -1 = use gearDelta logic, 0+ = set this gear directly
     double clutchPressure = -1.0;   // -1 = unchanged, 0.0-1.0 = set clutch pressure

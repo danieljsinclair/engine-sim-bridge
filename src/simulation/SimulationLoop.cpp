@@ -165,6 +165,9 @@ void applyVehicleControls(
         simulator.setClutchPressure(input.clutchPressure);
     }
 
+    // Brake
+    simulator.setBrakePressure(input.brakeLevel);
+
     // QUESTION: This is superceded by CrankingController now, right?
     // // Twin starter motor control — only when twin explicitly sets it
     // // Default input.starterMotor is false; don't override warmup starter logic
@@ -181,7 +184,8 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
                         int underrunCount, IAudioBuffer& audioBuffer,
                         telemetry::ITelemetryReader* telemetryReader,
                         const std::string& presetShortName,
-                        int actualSimFrequency) {
+                        int actualSimFrequency,
+                        double brakeLevel) {
     if (!presentation) return;
 
     // Read audio timing diagnostics from telemetry (strategies push to telemetry after each render)
@@ -221,6 +225,7 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.drivetrainTorqueNm = stats.drivetrainTorqueNm;
     state.simulationFrequency = actualSimFrequency;
     state.presetShortName = presetShortName;
+    state.brakeLevel = brakeLevel;
 
     presentation->ShowEngineState(state);
 }
@@ -498,7 +503,8 @@ int runSimulationLoop(
         updatePresentation(presentation, config,
             currentTime, stats, crankingState.startingThrottle, input.ignition, crankingState.starterEngaged, crankingState.phase,
             readUnderrunCount(telemetryReader), audioBuffer, telemetryReader,
-            simulator.getName(), simulator.getSimulationFrequency());
+            simulator.getName(), simulator.getSimulationFrequency(),
+            input.brakeLevel);
 
         // Timing control - QUESTION: should/can pollInput go before waitUntilNextTick or can waitUntilNextTick go at the bottom before the loop while, o rjust before input.preseCycle
         timer.waitUntilNextTick();
