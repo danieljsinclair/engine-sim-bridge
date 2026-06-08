@@ -36,6 +36,27 @@
 // SimulationConfig — value type, compiler-generated special members
 
 // ============================================================================
+// PresentationContext - Bundles parameters for updatePresentation()
+// ============================================================================
+
+struct PresentationContext {
+    presentation::IPresentation* presentation;
+    const SimulationConfig* config;
+    double currentTime;
+    const EngineSimStats* stats;
+    double throttle;
+    bool ignition;
+    bool starterEngaged;
+    EnginePhase phase;
+    int underrunCount;
+    IAudioBuffer* audioBuffer;
+    telemetry::ITelemetryReader* telemetryReader;
+    const char* presetShortName;
+    int actualSimFrequency;
+    double brakeLevel;
+};
+
+// ============================================================================
 // Private Helper Functions - SRP Compliance
 // ============================================================================
 
@@ -177,40 +198,32 @@ void applyVehicleControls(
 
 }
 
-void updatePresentation(presentation::IPresentation* presentation, const SimulationConfig& config,
-                        double currentTime,
-                        const EngineSimStats& stats, double throttle, bool ignition, bool starterEngaged,
-                        EnginePhase phase,
-                        int underrunCount, IAudioBuffer& audioBuffer,
-                        telemetry::ITelemetryReader* telemetryReader,
-                        const std::string& presetShortName,
-                        int actualSimFrequency,
-                        double brakeLevel) {
-    if (!presentation) return;
+void updatePresentation(const PresentationContext& ctx) {
+    if (!ctx.presentation) return;
 
     // Read audio timing diagnostics from telemetry (strategies push to telemetry after each render)
     telemetry::AudioTimingTelemetry timing;
-    if (telemetryReader) {
-        timing = telemetryReader->getAudioTiming();
+    if (ctx.telemetryReader) {
+        timing = ctx.telemetryReader->getAudioTiming();
     }
 
     presentation::EngineState state;
-    state.timestamp = currentTime;
-    state.rpm = stats.currentRPM;
-    state.throttle = throttle;
-    state.load = stats.currentLoad;
-    state.speedMph = stats.speedMph();
-    state.underrunCount = underrunCount;
-    state.audioMode = audioBuffer.getModeString();
-    state.ignition = ignition;
-    state.starterMotorEngaged = starterEngaged;
-    state.enginePhase = phase;
-    state.exhaustFlow = stats.exhaustFlow;
-    state.gear = stats.gear;
-    state.gearSelector = stats.gearSelector;
-    state.gearAutoMode = stats.gearAutoMode;
-    state.dynoTorque = stats.dynoTorque;
-    state.dynoTargetRPM = stats.dynoTargetRPM;
+    state.timestamp = ctx.currentTime;
+    state.rpm = ctx.stats->currentRPM;
+    state.throttle = ctx.throttle;
+    state.load = ctx.stats->currentLoad;
+    state.speedMph = ctx.stats->speedMph();
+    state.underrunCount = ctx.underrunCount;
+    state.audioMode = ctx.audioBuffer->getModeString();
+    state.ignition = ctx.ignition;
+    state.starterMotorEngaged = ctx.starterEngaged;
+    state.enginePhase = ctx.phase;
+    state.exhaustFlow = ctx.stats->exhaustFlow;
+    state.gear = ctx.stats->gear;
+    state.gearSelector = ctx.stats->gearSelector;
+    state.gearAutoMode = ctx.stats->gearAutoMode;
+    state.dynoTorque = ctx.stats->dynoTorque;
+    state.dynoTargetRPM = ctx.stats->dynoTargetRPM;
     state.renderMs = timing.renderMs;
     state.headroomMs = timing.headroomMs;
     state.budgetPct = timing.budgetPct;
@@ -219,15 +232,15 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.callbackRateHz = timing.callbackRateHz;
     state.generatingRateFps = timing.generatingRateFps;
     state.trendPct = timing.trendPct;
-    state.sampleRate = config.sampleRate();
-    state.vehicleSpeedKmh = stats.vehicleSpeedKmh;
-    state.engineTorqueNm = stats.engineTorqueNm;
-    state.drivetrainTorqueNm = stats.drivetrainTorqueNm;
-    state.simulationFrequency = actualSimFrequency;
-    state.presetShortName = presetShortName;
-    state.brakeLevel = brakeLevel;
+    state.sampleRate = ctx.config->sampleRate();
+    state.vehicleSpeedKmh = ctx.stats->vehicleSpeedKmh;
+    state.engineTorqueNm = ctx.stats->engineTorqueNm;
+    state.drivetrainTorqueNm = ctx.stats->drivetrainTorqueNm;
+    state.simulationFrequency = ctx.actualSimFrequency;
+    state.presetShortName = ctx.presetShortName ? ctx.presetShortName : "";
+    state.brakeLevel = ctx.brakeLevel;
 
-    presentation->ShowEngineState(state);
+    ctx.presentation->ShowEngineState(state);
 }
 
 void writeTelemetry(telemetry::ITelemetryWriter* telemetryWriter,
@@ -500,11 +513,23 @@ int runSimulationLoop(
         writeTelemetry(telemetryWriter, currentTime, crankingState.startingThrottle, input.ignition, crankingState.starterEngaged);
 
         currentTime += config.updateInterval();
-        updatePresentation(presentation, config,
-            currentTime, stats, crankingState.startingThrottle, input.ignition, crankingState.starterEngaged, crankingState.phase,
-            readUnderrunCount(telemetryReader), audioBuffer, telemetryReader,
-            simulator.getName(), simulator.getSimulationFrequency(),
-            input.brakeLevel);
+        PresentationContext presCtx{
+            presentation,
+            &config,
+            currentTime,
+            &stats,
+            crankingState.startingThrottle,
+            input.ignition,
+            crankingState.starterEngaged,
+            crankingState.phase,
+            readUnderrunCount(telemetryReader),
+            &audioBuffer,
+            telemetryReader,
+            simulator.getName(),
+            simulator.getSimulationFrequency(),
+            input.brakeLevel
+        };
+        updatePresentation(presCtx);
 
         // Timing control - QUESTION: should/can pollInput go before waitUntilNextTick or can waitUntilNextTick go at the bottom before the loop while, o rjust before input.preseCycle
         timer.waitUntilNextTick();
