@@ -8,6 +8,7 @@ void KeyHoldBridge::drainInput(std::function<int()> reader, double deltaTimeMs) 
     for (auto& [k, state] : keys_) {
         state.pressed = false;
         state.released = false;
+        state.repeating = false;
     }
 
     // Drain all pending OS key events
@@ -19,6 +20,7 @@ void KeyHoldBridge::drainInput(std::function<int()> reader, double deltaTimeMs) 
             state.pressed = true;  // edge: up → down
             state.seenRepeat = false;  // Reset repeat flag on new press
         } else {
+            state.repeating = true;  // OS repeat event while key is held
             state.seenRepeat = true;  // In repeat mode after first event
         }
         state.down = true;
@@ -48,6 +50,11 @@ bool KeyHoldBridge::isKeyDown(int key) const {
 bool KeyHoldBridge::isKeyPressed(int key) const {
     auto it = keys_.find(key);
     return it != keys_.end() && it->second.pressed;
+}
+
+bool KeyHoldBridge::isKeyRepeating(int key) const {
+    auto it = keys_.find(key);
+    return it != keys_.end() && it->second.repeating;
 }
 
 bool KeyHoldBridge::isKeyReleased(int key) const {

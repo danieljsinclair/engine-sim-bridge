@@ -33,6 +33,9 @@ public:
     // True for one frame when key transitions from up → down
     bool isKeyPressed(int key) const;
 
+    // True for one frame when an OS repeat event is received (not initial press)
+    bool isKeyRepeating(int key) const;
+
     // True for one frame when key transitions from down → up (timeout)
     bool isKeyReleased(int key) const;
 
@@ -42,6 +45,7 @@ private:
         bool down = false;
         bool pressed = false;   // edge: up→down this frame
         bool released = false;  // edge: down→up this frame
+        bool repeating = false; // edge: OS repeat event received this frame
         bool seenRepeat = false;  // true after receiving 2+ events (in repeat mode)
     };
 

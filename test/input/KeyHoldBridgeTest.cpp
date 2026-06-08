@@ -235,6 +235,75 @@ TEST_F(KeyHoldBridgeTest, DualTimeout_RepeatModeExpiresIn50ms) {
     EXPECT_TRUE(bridge_.isKeyReleased('b'));
 }
 
+// isKeyRepeating: fires once per frame when OS repeat event received (not initial press)
+
+TEST_F(KeyHoldBridgeTest, Repeat_InitialPressNotARepeat) {
+    reader_.enqueue('w');
+    drain();
+    EXPECT_TRUE(bridge_.isKeyPressed('w'));
+    EXPECT_FALSE(bridge_.isKeyRepeating('w'))
+        << "Initial press is NOT a repeat";
+}
+
+TEST_F(KeyHoldBridgeTest, Repeat_SecondEventIsARepeat) {
+    reader_.enqueue('w');
+    drain();
+    EXPECT_FALSE(bridge_.isKeyRepeating('w'));
+
+    // OS repeat event arrives
+    reader_.enqueue('w');
+    drain();
+    EXPECT_TRUE(bridge_.isKeyRepeating('w'))
+        << "Second event while key is already down is a repeat";
+}
+
+TEST_F(KeyHoldBridgeTest, Repeat_ContinuousHoldFiresEveryFrame) {
+    reader_.enqueue('w');
+    drain();
+    EXPECT_FALSE(bridge_.isKeyRepeating('w'));  // initial press
+
+    for (int i = 0; i < 5; ++i) {
+        reader_.enqueue('w');
+        drain();
+        EXPECT_TRUE(bridge_.isKeyRepeating('w'))
+            << "OS repeat on frame " << (i + 2) << " should be a repeat";
+    }
+}
+
+TEST_F(KeyHoldBridgeTest, Repeat_NoEventNotARepeat) {
+    reader_.enqueue('w');
+    drain();
+
+    // No event this frame — within timeout so still down, but NOT repeating
+    drain();
+    EXPECT_TRUE(bridge_.isKeyDown('w'));   // still held
+    EXPECT_FALSE(bridge_.isKeyRepeating('w'))
+        << "No event this frame means no repeat";
+}
+
+TEST_F(KeyHoldBridgeTest, Repeat_AfterReleaseAndRepress) {
+    reader_.enqueue('w');
+    drain();  // initial press
+
+    reader_.enqueue('w');
+    drain();  // repeat
+
+    // Release via timeout
+    double elapsedMs = 0.0;
+    while (elapsedMs < KeyHoldBridge::REPEAT_TIMEOUT_MS) {
+        drain(16.0);
+        elapsedMs += 16.0;
+    }
+    EXPECT_FALSE(bridge_.isKeyDown('w'));
+
+    // Press again — should be a new press, not a repeat
+    reader_.enqueue('w');
+    drain();
+    EXPECT_TRUE(bridge_.isKeyPressed('w'));
+    EXPECT_FALSE(bridge_.isKeyRepeating('w'))
+        << "After release, new press is NOT a repeat";
+}
+
 // NEW: Test transition from initial to repeat mode
 TEST_F(KeyHoldBridgeTest, DualTimeout_TransitionToRepeatMode) {
     // Initial press only
