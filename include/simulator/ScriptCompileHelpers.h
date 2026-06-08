@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <string>
 #include <sstream>
-
+#include <iostream>
 #include <unistd.h>
 
 namespace script_compile_helpers {
@@ -121,8 +121,13 @@ inline ScriptCompileTarget prepareScriptCompileTarget(
         wrapper << "main()\n";
         target.compileTarget = target.wrapperPath;
     } else {
+        // create path if it doesn't exist yet
+        if (!fs::exists(target.assetsDir)) {
+            fs::create_directories(target.assetsDir);
+        }
         target.tempScriptPath = target.assetsDir /
             ("_bridge_tmp_" + absScriptPath.stem().string() + "_" + std::to_string(getpid()) + ".mr");
+        std::cout << "Copying script from " << absScriptPath << " to: " << target.tempScriptPath << std::endl;
         fs::copy_file(absScriptPath, target.tempScriptPath, fs::copy_options::overwrite_existing);
         target.relativeImport = target.tempScriptPath.filename().generic_string();
         target.compileTarget = target.tempScriptPath;

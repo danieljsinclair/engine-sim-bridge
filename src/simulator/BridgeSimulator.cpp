@@ -4,10 +4,12 @@
 // regardless of which Simulator subclass is injected (OCP).
 
 #include "simulator/BridgeSimulator.h"
+#include "simulator/GearConventions.h"
 
 #include <vector>
 #include <cstring>
 #include <common/Verification.h>
+#include "simulator/BridgeSimulator.h"
 
 BridgeSimulator::BridgeSimulator(std::unique_ptr<Simulator> simulator, const std::string& name)
     : m_simulator(std::move(simulator))
@@ -25,6 +27,15 @@ BridgeSimulator::~BridgeSimulator() {
 bool BridgeSimulator::create(const ISimulatorConfig& config, ILogging* logger, telemetry::ITelemetryWriter* telemetryWriter) {
     initDependencies(logger, telemetryWriter);
     initAudioConfig(config);
+
+    // Wire brake constraint into the physics system
+    if (m_simulator->getVehicle() != nullptr) {
+        m_brakeConstraint.initialize(
+            m_simulator->getVehicleMassBody(),
+            m_simulator->getVehicle());
+        m_simulator->getSystem()->addConstraint(&m_brakeConstraint);
+    }
+
     return true;
 }
 
@@ -97,25 +108,72 @@ void BridgeSimulator::stop() {
 // ISimulator Telemetry & Control
 // ============================================================================
 
+void BridgeSimulator::getEngineStats(EngineSimStats& stats) const {
+    ASSERT(m_simulator, "BridgeSimulator::getStats() called but m_simulator is null");
+    if (m_simulator->getEngine()) {
+        stats.currentRPM = m_simulator->getEngine()->getSpeed() * EngineSimDefaults::RAD_PER_SEC_TO_RPM;
+        stats.exhaustFlow = m_simulator->getTotalExhaustFlow();
+        stats.processingTimeMs = m_simulator->getAverageProcessingTime() * 1000.0;
+    }
+}
+
+void BridgeSimulator::getDynoStats(EngineSimStats& stats) const {
+    ASSERT(m_simulator, "BridgeSimulator::getDynoStats() called but m_simulator is null");
+    if (m_simulator->m_dyno.m_enabled) {
+        stats.dynoTorque = m_simulator->getFilteredDynoTorque();
+        stats.dynoTargetRPM = std::abs(m_simulator->m_dyno.m_rotationSpeed) * EngineSimDefaults::RAD_PER_SEC_TO_RPM;
+        // Engine torque from dyno measurement (internal units = Nm)
+        stats.engineTorqueNm = m_simulator->getFilteredDynoTorque();
+    }
+}
+
+void BridgeSimulator::getVehicleStats(EngineSimStats& stats) const {
+    ASSERT(m_simulator, "BridgeSimulator::getStats() called but m_simulator is null");
+    if (m_simulator->getVehicle()) {
+        // Vehicle::getSpeed() returns m/s
+        stats.vehicleSpeedKmh = m_simulator->getVehicle()->getSpeed() * EngineSimDefaults::MS_TO_KMH;
+    }
+}
+
+void BridgeSimulator::getTransmissionStats(EngineSimStats& stats) const {
+    ASSERT(m_simulator, "BridgeSimulator::getStats() called but m_simulator is null");
+    if (m_simulator->getTransmission()) {
+        // Translate engine-sim convention (EngineSimGear) to bridge convention (BridgeGear)
+        int rawGear = m_simulator->getTransmission()->getGear();
+        stats.gear = static_cast<int>(bridge::toBridge(rawGear));
+
+        // Real torque from clutch constraint (populated by solver after each step)
+        if (!m_simulator->m_dyno.m_enabled) {
+            const auto& clutch = m_simulator->getTransmission()->getClutchConstraint();
+            // ClutchConstraint J = [-1, +1] on angular velocity of body 0 (crankshaft),
+            // body 1 (drivetrain virtual mass). The solver stores F_t[i][k] = J * lambda/dt.
+            // Engine crankshaft spins CW (v_theta < 0). During acceleration, lambda < 0
+            // so F_t[0][0] > 0 (clutch reaction opposing engine) and F_t[0][1] < 0
+            // (clutch driving the drivetrain in its negative/CW direction).
+            // For user display: engine producing power = positive, engine braking = negative.
+            stats.engineTorqueNm = clutch.F_t[0][0];
+            stats.drivetrainTorqueNm = -clutch.F_t[0][1];
+
+            // Wheel-side torque: clutch torque * gear_ratio * diff_ratio.
+            // A friction clutch transmits equal-and-opposite torque (Newton's 3rd law),
+            // so both sides show the same magnitude. Gear multiplication gives different
+            // values -- engine side = raw clutch torque, wheel side = multiplied torque.
+            const double gearRatio = m_simulator->getTransmission()->getGearRatio();
+            if (m_simulator->getVehicle() && gearRatio > 0.0) {
+                const double diffRatio = m_simulator->getVehicle()->getDiffRatio();
+                stats.drivetrainTorqueNm = -clutch.F_t[0][1] * gearRatio * diffRatio;
+            }
+        }
+    }
+}
+
 EngineSimStats BridgeSimulator::getStats() const {
     EngineSimStats stats = {};
 
-    stats.currentRPM = m_simulator->getEngine()->getSpeed() * 60.0 / (2.0 * M_PI);
-    stats.exhaustFlow = m_simulator->getTotalExhaustFlow();
-    stats.processingTimeMs = m_simulator->getAverageProcessingTime() * 1000.0;
-
-    if (m_simulator->m_dyno.m_enabled) {
-        stats.dynoTorque = m_simulator->getFilteredDynoTorque();
-        stats.dynoTargetRPM = std::abs(m_simulator->m_dyno.m_rotationSpeed) * 30.0 / M_PI;
-    }
-
-    if (m_simulator->getTransmission()) {
-        stats.gear = m_simulator->getTransmission()->getGear();
-    }
-
-    if (m_simulator->getVehicle()) {
-        stats.speedMph = m_simulator->getVehicle()->getSpeed();
-    }
+    getEngineStats(stats);
+    getDynoStats(stats);
+    getVehicleStats(stats);
+    getTransmissionStats(stats);
 
     return stats;
 }
@@ -138,8 +196,24 @@ void BridgeSimulator::setStarterMotor(bool on) {
     m_simulator->m_starterMotor.m_enabled = on;
 }
 
-void BridgeSimulator::setEnginePhase(EnginePhase phase) {
-    enginePhase_ = phase;
+int BridgeSimulator::setGear(int gear) {
+    int newGear = 0x7FFFFFFF;
+    if (m_simulator->getTransmission()) {
+        // Translate bridge convention (BridgeGear) to engine-sim convention (EngineSimGear)
+        int engineSimGear = static_cast<int>(bridge::toEngineSim(static_cast<bridge::BridgeGear>(gear)));
+        m_simulator->getTransmission()->changeGear(engineSimGear);
+        newGear = engineSimGear;
+    }
+    return newGear;
+}
+
+int BridgeSimulator::getGear() const {
+    if (m_simulator->getTransmission()) {
+        int engineSimGear = m_simulator->getTransmission()->getGear();
+        return static_cast<int>(bridge::toBridge(engineSimGear));
+
+    }
+    return 0;  // Default to neutral if no transmission
 }
 
 // ============================================================================
@@ -150,17 +224,38 @@ bool BridgeSimulator::changeGear(int gearDelta) {
     if (gearDelta == 0) return false;  // OK: no change requested
 
     auto* trans = m_simulator->getTransmission();
-    if (!trans) return false;
+    if (!trans) {
+        logger_->warning(LogMask::BRIDGE, "Cannot change gear: no transmission in simulator");
+        return false;
+    }
 
     int currentGear = trans->getGear();
     int newGear = currentGear + gearDelta;
     int gearCount = trans->getGearCount();
 
-    if (newGear < -1 || newGear >= gearCount) return false;
+    newGear = std::max(newGear, -1);  // Clamp at -1 (neutral)
+    newGear = std::min(newGear, gearCount - 1);  // Clamp at max gear
 
     trans->changeGear(newGear);
     trans->setClutchPressure(newGear > 0 ? 1.0 : 0.0);
     return true;
+}
+
+void BridgeSimulator::setClutchPressure(double pressure) {
+    if (m_simulator->getTransmission()) {
+        m_simulator->getTransmission()->setClutchPressure(pressure);
+    }
+}
+
+void BridgeSimulator::setBrakePressure(double pressure) {
+    m_brakeConstraint.setBrakeLevel(pressure);
+}
+
+double BridgeSimulator::getEngineRpm() const {
+    if (m_simulator->getEngine()) {
+        return m_simulator->getEngine()->getSpeed() * EngineSimDefaults::RAD_PER_SEC_TO_RPM;
+    }
+    return 0.0;
 }
 
 void BridgeSimulator::setDynoTorqueScale(double scale) {
@@ -178,6 +273,10 @@ bool BridgeSimulator::configureDynoLoad(double loadFraction) {
     m_simulator->m_dyno.m_rotationSpeed = EngineSimDefaults::DYNO_IDLE_RPM * radPerRpm;
     m_simulator->m_dyno.m_maxTorque = units::torque(EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS, units::ft_lb) * loadFraction;
     return true;
+}
+
+void BridgeSimulator::setEnginePhase(EnginePhase phase) {
+    enginePhase_ = phase;
 }
 
 BridgeSimulator::DrivetrainSnapshot BridgeSimulator::captureDrivetrainState() const {
@@ -277,7 +376,7 @@ void BridgeSimulator::pushTelemetry(const EngineSimStats& stats) {
     engine.manifoldPressure = stats.manifoldPressure;
     engine.activeChannels = stats.activeChannels;
     engine.gear = stats.gear;
-    engine.speedMph = stats.speedMph;
+    engine.speedMph = stats.speedMph();
     engine.enginePhase = enginePhase_;
     telemetryWriter_->writeEngineState(engine);
 

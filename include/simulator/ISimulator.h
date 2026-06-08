@@ -20,6 +20,13 @@ public:
     virtual EngineSimStats getStats() const = 0;
     virtual void setThrottle(double position) = 0;
     virtual bool renderOnDemand(float* buffer, int32_t frames, int32_t* written) = 0;
+
+    // Twin-specific control methods
+    virtual int setGear(int /* gear */) { return 0;}
+    virtual int getGear() const { return 0; }
+    virtual void setClutchPressure(double /* pressure */) {}
+    virtual void setBrakePressure(double /* pressure */) {}
+    virtual double getEngineRpm() const { return 0.0; }
     virtual bool readAudioBuffer(float* buffer, int32_t frames, int32_t* read) = 0;
     virtual bool start() = 0;
     virtual void stop() = 0;

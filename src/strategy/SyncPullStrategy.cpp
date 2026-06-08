@@ -93,7 +93,7 @@ bool SyncPullStrategy::startPlayback(ISimulator* simulator) {
     return true;
 }
 
-void SyncPullStrategy::stopPlayback(ISimulator* simulator) {
+void SyncPullStrategy::stopPlayback(ISimulator* /* simulator */) {
     shuttingDown_.store(true);
     simulator_ = nullptr;
     audioState_.isPlaying.store(false);
@@ -116,7 +116,7 @@ void SyncPullStrategy::resetBufferAfterWarmup() {
     logger_->debug(LogMask::AUDIO, "SyncPullStrategy::resetBufferAfterWarmup: No-op for sync-pull mode");
 }
 
-void SyncPullStrategy::updateSimulation(ISimulator* simulator, double deltaTimeMs) {
+void SyncPullStrategy::updateSimulation(ISimulator* /* simulator */, double /* deltaTimeMs */) {
     // Sync-pull mode updates simulation during render callback
 }
 
@@ -267,8 +267,8 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
 }
 
 bool SyncPullStrategy::AddFrames(
-    float* buffer,
-    int frameCount
+    float* /* buffer */,
+    int /* frameCount */
 ) {
     logger_->debug(LogMask::AUDIO, "SyncPullStrategy::AddFrames: No-op for sync-pull mode");
     return true;

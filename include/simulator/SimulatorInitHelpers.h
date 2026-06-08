@@ -16,7 +16,7 @@ class Simulator;
 
 namespace atg_scs {
     class RigidBodySystem;
-    class RigidBody;
+    struct RigidBody;
 }
 
 namespace SimulatorInitHelpers {

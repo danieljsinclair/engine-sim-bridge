@@ -5,6 +5,10 @@
 #include <stddef.h>
 #include <cstring>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 class ILogging;
 class Simulator;
 
@@ -56,6 +60,24 @@ namespace EngineSimDefaults {
     constexpr float   DEFAULT_HARDWARE_VOLUME    = 1.0f; // Default hardware output volume (0.0 to 1.0)
     constexpr int32_t DEFAULT_PREFILL_MS         = 50;   // Default pre-fill buffer duration in ms for sync-pull mode
     constexpr double  DYNO_MAX_TORQUE_FT_LBS     = 500.0; // Base dyno brake torque — ~1.5x typical V8 peak, gives usable range
+
+    // Display conversion constants
+    constexpr double  KMH_TO_MPH                 = 0.621371; // km/h to mph conversion factor
+
+    // Physics conversion constants
+    constexpr double  TWO_PI = 2.0 * M_PI;
+    constexpr double  MIN_TO_SECONDS             = 60.0;                    // minutes to seconds
+    constexpr double  MS_TO_KMH                  = 3.6;                     // m/s to km/h (3600s/h / 1000m/km)
+    constexpr double  RAD_PER_SEC_TO_RPM         = MIN_TO_SECONDS / TWO_PI;   // rad/s to RPM - One revolution is 2π radians, and there are 60 seconds in a minute, so the factor is 60 / (2π)
+    constexpr double  MS_TO_SECONDS              = 1.0 / 1000.0; // milliseconds to seconds
+
+    // Twin state machine thresholds
+    constexpr double  TELEMETRY_TIMEOUT_S         = 5.0;   // Seconds without valid telemetry before OFF transition
+    constexpr double  CRANKING_THROTTLE           = 0.6;   // Throttle fraction during cranking
+    constexpr double  STANDSTILL_SPEED_MS         = 0.001; // Below this speed (m/s), vehicle is considered stopped
+
+    // Display thresholds
+    constexpr int     RPM_DISPLAY_FLOOR          = 10;    // RPM below this is displayed as 0 (suppresses transient noise)
     constexpr double  DYNO_IDLE_RPM              = 700.0; // Idle RPM — dyno won't brake below this speed
 }
 
@@ -95,8 +117,19 @@ struct EngineSimStats {
     double dynoTorque = 0.0;         // Current dyno applied torque (ft*lbs)
     double dynoTargetRPM = 0.0;      // Dyno target RPM (0 = disabled)
     double dynoTorqueScale = 1.0;    // Current torque scale (0-1)
-    int gear = 0;                    // -1 = Park, 0 = Neutral, 1+ = Forward
-    double speedMph = 0.0;           // Vehicle speed in MPH
+    int gear = 0;                    // Current gear (0 = neutral)
+
+    // Vehicle telemetry
+    double vehicleSpeedKmh = 0.0;
+    double engineTorqueNm = 0.0;
+    double drivetrainTorqueNm = 0.0;
+
+    // Gear selector state
+    int gearSelector = 0;            // GearSelector value
+    bool gearAutoMode = false;       // true=auto(ZF), false=manual
+
+    // Computed accessors (vehicleSpeedKmh is single source of truth)
+    double speedMph() const { return vehicleSpeedKmh * EngineSimDefaults::KMH_TO_MPH; }
 };
 
 namespace EngineSimAudio {

@@ -1,4 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
+
+# Prevent in-source builds that overwrite hand-written Makefiles
+if(CMAKE_BINARY_DIR STREQUAL CMAKE_SOURCE_DIR)
+    message(FATAL_ERROR
+        "In-source builds not allowed. Run 'make' from the repo root instead. "
+        "Or: cmake -B build && cmake --build build")
+endif()
+
 project(engine-sim-bridge VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -47,6 +55,12 @@ set(CMAKE_C_FLAGS "")
 # The old bug where this would permanently cache binaries was fixed in 2022.
 add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_ALL)
 
+# Keep third-party piranha warnings out of normal build output.
+# We keep piranha enabled, but suppress known noisy warnings from that submodule.
+if(TARGET piranha)
+    target_compile_options(piranha PRIVATE -Wno-unused-parameter)
+endif()
+
 # Restore our original compiler flags after including submodules
 set(CMAKE_CXX_FLAGS ${SAVED_CXX_FLAGS})
 set(CMAKE_C_FLAGS ${SAVED_C_FLAGS})
@@ -61,6 +75,7 @@ set(BRIDGE_SOURCES
     src/simulator/SimulatorInitHelpers.cpp
     src/simulator/SimulatorFactory.cpp
     src/simulator/BridgeSimulator.cpp
+    src/simulator/BrakeConstraint.cpp
     src/simulator/ScriptLoadHelpers.cpp
     src/simulator/ISimulator.cpp
     # Audio strategies
@@ -98,6 +113,22 @@ set(BRIDGE_SOURCES
     src/preset/TransmissionDeserializer.cpp
     # Hardcoded C++ engine preset factories (works on iOS without Piranha)
     src/simulator/EnginePresets.cpp
+    # Twin components
+    src/twin/AutomaticGearbox.cpp
+    src/twin/GearboxCsvLogger.cpp
+    src/twin/ThrottleSmoother.cpp
+    src/twin/VirtualIceTwin.cpp
+    src/twin/ManualTwin.cpp
+    src/twin/GearboxCsvLogger.cpp
+    # Input providers
+    src/input/VirtualIceInputProvider.cpp
+    src/input/ManualTwinProvider.cpp
+    src/input/DemoThrottleSource.cpp
+    src/input/GearSelectorInput.cpp
+    src/input/IgnitionInput.cpp
+    src/input/DemoInputProvider.cpp
+    src/input/BrakeInput.cpp
+    src/input/KeyHoldBridge.cpp
 )
 
 # Platform-specific audio hardware and factory
@@ -157,7 +188,7 @@ target_link_libraries(engine-sim-bridge
         ${AUDIO_LIBRARY}
 )
 
-target_compile_options(engine-sim-bridge PRIVATE -g)
+target_compile_options(engine-sim-bridge PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags -Wno-unused-private-field -g)
 
 if(TARGET engine-sim-script-interpreter)
     target_link_libraries(engine-sim-bridge
@@ -246,6 +277,7 @@ if(NOT IOS AND TARGET engine-sim-script-interpreter)
             engine-sim
             engine-sim-script-interpreter
     )
+    target_compile_options(engine-sim-preset-compiler PRIVATE -Wno-unused-parameter)
     target_compile_definitions(engine-sim-preset-compiler PRIVATE ATG_ENGINE_SIM_PIRANHA_ENABLED)
 
     # Preset Code Generator (macOS build-time tool)
@@ -298,15 +330,20 @@ if(BUILD_BRIDGE_TESTS)
     add_executable(bridge_unit_tests
         test/BridgeUnitTests.cpp
         test/CrankingControllerTests.cpp
+        test/simulator/BrakeConstraintTest.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/dependencies/submodules/simple-2d-constraint-solver/include
     )
     target_link_libraries(bridge_unit_tests
         PRIVATE
             engine-sim-bridge
             GTest::gtest_main
     )
+    target_compile_options(bridge_unit_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
 
     if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME bridge_unit_tests COMMAND bridge_unit_tests --gtest_color=yes)
@@ -402,6 +439,7 @@ if(BUILD_BRIDGE_TESTS)
             engine-sim-bridge
             ${AUDIO_LIBRARY}
     )
+    target_compile_options(sine_wave_regression_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
     if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME sine_wave_regression_tests COMMAND sine_wave_regression_tests --gtest_color=yes)
     endif()
@@ -424,6 +462,163 @@ if(BUILD_BRIDGE_TESTS)
         )
         if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
             add_test(NAME ios_adapter_tests COMMAND ios_adapter_tests --gtest_color=yes)
+        endif()
+    endif()
+
+    # Twin foundation tests - tests for UpstreamSignal and IceVehicleProfile
+    add_executable(twin_foundation_tests
+        test/twin/UpstreamSignalTest.cpp
+        test/twin/IceVehicleProfileTest.cpp
+    )
+    target_include_directories(twin_foundation_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_foundation_tests
+        PRIVATE
+            GTest::gtest_main
+    )
+    target_compile_options(twin_foundation_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_foundation_tests COMMAND twin_foundation_tests --gtest_color=yes)
+    endif()
+
+    # Twin gearbox tests - tests for AutomaticGearbox
+    add_executable(twin_gearbox_tests
+        test/twin/AutomaticGearboxTest.cpp
+    )
+    target_include_directories(twin_gearbox_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_gearbox_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(twin_gearbox_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_gearbox_tests COMMAND twin_gearbox_tests --gtest_color=yes)
+    endif()
+
+    # Twin core tests - tests for ThrottleSmoother, VirtualIceTwin, and ManualTwin
+    add_executable(twin_core_tests
+        test/twin/ThrottleSmootherTest.cpp
+        test/twin/VirtualIceTwinTest.cpp
+        test/twin/ManualTwinTest.cpp
+    )
+    target_include_directories(twin_core_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_core_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(twin_core_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_core_tests COMMAND twin_core_tests --gtest_color=yes)
+    endif()
+
+    # Twin input provider tests - tests for VirtualIceInputProvider
+    add_executable(twin_input_tests
+        test/input/VirtualIceInputProviderTest.cpp
+    )
+    target_include_directories(twin_input_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_input_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(twin_input_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_input_tests COMMAND twin_input_tests --gtest_color=yes)
+    endif()
+
+    # Manual twin provider tests - tests for ManualTwinProvider
+    add_executable(manual_twin_provider_tests
+        test/input/ManualTwinProviderTest.cpp
+    )
+    target_include_directories(manual_twin_provider_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(manual_twin_provider_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(manual_twin_provider_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME manual_twin_provider_tests COMMAND manual_twin_provider_tests --gtest_color=yes)
+    endif()
+
+    # Demo input tests - tests for DemoThrottleSource and DemoInputProvider
+    add_executable(demo_input_tests
+        test/input/DemoThrottleSourceTest.cpp
+        test/input/DemoInputProviderTest.cpp
+        test/input/GearSelectorInputTest.cpp
+        test/input/IgnitionInputTest.cpp
+        test/input/BrakeInputTest.cpp
+        test/input/KeyHoldBridgeTest.cpp
+        test/input/BrakeChainTest.cpp
+    )
+    target_include_directories(demo_input_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(demo_input_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(demo_input_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME demo_input_tests COMMAND demo_input_tests --gtest_color=yes)
+    endif()
+
+    # Twin scenario tests - Phase 1 acceptance criteria tests
+    add_executable(twin_scenario_tests
+        test/scenarios/AccelerationScenarioTest.cpp
+        test/scenarios/CruiseScenarioTest.cpp
+        test/scenarios/DecelerationScenarioTest.cpp
+        test/scenarios/KickdownScenarioTest.cpp
+        test/scenarios/StandstillScenarioTest.cpp
+        test/scenarios/LaunchScenarioTest.cpp
+        test/scenarios/TelemetrySequenceBuilder.cpp
+    )
+    target_include_directories(twin_scenario_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(twin_scenario_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(twin_scenario_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_scenario_tests COMMAND twin_scenario_tests --gtest_color=yes)
+    endif()
+
+    # Twin physics integration tests - requires engine-sim linkage
+    option(BUILD_INTEGRATION_TESTS "Build integration tests that require engine-sim" OFF)
+    if(BUILD_INTEGRATION_TESTS)
+        add_executable(twin_integration_tests
+            test/scenarios/TwinPhysicsIntegrationTest.cpp
+            test/scenarios/TelemetrySequenceBuilder.cpp
+        )
+        target_include_directories(twin_integration_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/test
+        )
+        target_link_libraries(twin_integration_tests
+            PRIVATE
+                GTest::gtest_main
+                engine-sim-bridge
+        )
+        target_compile_definitions(twin_integration_tests PRIVATE BUILD_INTEGRATION_TESTS=ON)
+        target_compile_options(twin_integration_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+        if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+            add_test(NAME twin_integration_tests COMMAND twin_integration_tests --gtest_color=yes)
         endif()
     endif()
 endif()
@@ -456,6 +651,7 @@ if(BUILD_PHASE0_SPIKES)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
     )
     add_test(NAME audio_sweep_spike COMMAND audio_sweep_spike)
+    set_tests_properties(audio_sweep_spike PROPERTIES LABELS "spike")
 
     # ---- Clutch Parameter Sweep Spike ----
     add_executable(clutch_sweep_spike
@@ -477,6 +673,7 @@ if(BUILD_PHASE0_SPIKES)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
     )
     add_test(NAME clutch_sweep_spike COMMAND clutch_sweep_spike)
+    set_tests_properties(clutch_sweep_spike PROPERTIES LABELS "spike")
 
     # ---- Telemetry Jitter Spike ----
     add_executable(jitter_test_spike
@@ -497,6 +694,7 @@ if(BUILD_PHASE0_SPIKES)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
     )
     add_test(NAME jitter_test_spike COMMAND jitter_test_spike)
+    set_tests_properties(jitter_test_spike PROPERTIES LABELS "spike")
 
     # ---- Dyno Tracking Spike ----
     add_executable(dyno_tracking_spike
@@ -515,6 +713,7 @@ if(BUILD_PHASE0_SPIKES)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
     )
     add_test(NAME dyno_tracking_spike COMMAND dyno_tracking_spike)
+    set_tests_properties(dyno_tracking_spike PROPERTIES LABELS "spike")
 
     # ---- Dyno Launch Control Spike ----
     add_executable(dyno_launch_control_spike
@@ -533,6 +732,7 @@ if(BUILD_PHASE0_SPIKES)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
     )
     add_test(NAME dyno_launch_control_spike COMMAND dyno_launch_control_spike)
+    set_tests_properties(dyno_launch_control_spike PROPERTIES LABELS "spike")
 
     # ---- Real Engine Audio Spike (Subaru EJ25) ----
     add_executable(real_engine_audio_spike
@@ -554,5 +754,25 @@ if(BUILD_PHASE0_SPIKES)
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
     )
     add_test(NAME real_engine_audio_spike COMMAND real_engine_audio_spike)
+    set_tests_properties(real_engine_audio_spike PROPERTIES LABELS "spike")
+
+    # ---- Gearbox Diagnostic Spike ----
+    add_executable(gearbox_diagnostic_spike
+        test/spikes/GearboxDiagnosticSpike.cpp
+    )
+    target_include_directories(gearbox_diagnostic_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+    )
+    target_link_libraries(gearbox_diagnostic_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    set_target_properties(gearbox_diagnostic_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME gearbox_diagnostic_spike COMMAND gearbox_diagnostic_spike)
+    set_tests_properties(gearbox_diagnostic_spike PROPERTIES LABELS "spike")
 endif()
 

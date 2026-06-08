@@ -10,20 +10,19 @@
 #include "simulator/EngineSimTypes.h"
 #include "synthesizer.h"
 #include <cmath>
+#include <stdexcept>
 
 SineSimulator::~SineSimulator() {
     destroy();
 }
 
 void SineSimulator::loadSimulation(Engine* engine, Vehicle* vehicle, Transmission* transmission) {
-    // Ignore passed-in pointers (nullptr from factory) — create sine-specific objects instead.
-    // This mirrors PistonEngineSimulator which receives real objects from the script compiler.
-    Engine* sineEngine = new SineEngine();
-    Vehicle* sineVehicle = new SineVehicle();
-    Transmission* sineTranny = new SineTransmission();
+    if (!engine) engine = new SineEngine();
+    if (!vehicle) vehicle = new SineVehicle();
+    if (!transmission) transmission = new SineTransmission();
 
     // Store pointers in base class — same as PistonEngineSimulator line 34
-    Simulator::loadSimulation(sineEngine, sineVehicle, sineTranny);
+    Simulator::loadSimulation(engine, vehicle, transmission);
 
     // Initialize synthesizer — base loadSimulation() doesn't call it.
     // PistonEngineSimulator gets it via placeAndInitialize(); we call directly.
@@ -48,11 +47,11 @@ void SineSimulator::loadSimulation(Engine* engine, Vehicle* vehicle, Transmissio
 
     // Shared physics wiring — DRY via SimulatorInitHelpers
     SimulatorInitHelpers::wirePhysics(
-        sineEngine, sineTranny, sineVehicle,
+        engine, transmission, vehicle,
         m_vehicleMass, m_system,
         m_dyno, m_starterMotor,
         m_exhaustFlowStagingBuffer,
-        sineEngine->getExhaustSystemCount());
+        engine->getExhaustSystemCount());
 }
 
 void SineSimulator::destroy() {
@@ -63,7 +62,7 @@ void SineSimulator::destroy() {
     // Shared system/staging cleanup — DRY via SimulatorInitHelpers
     SimulatorInitHelpers::cleanupPhysics(m_system, m_exhaustFlowStagingBuffer);
 
-    // SineSimulator owns engine/vehicle/transmission (created via new in loadSimulation())
+    // SineSimulator owns engine/vehicle/transmission (injected by factory in create())
     if (m_engine)        { m_engine->destroy(); delete m_engine;        m_engine = nullptr; }
     if (m_vehicle)       { delete m_vehicle;                            m_vehicle = nullptr; }
     if (m_transmission)  { delete m_transmission;                       m_transmission = nullptr; }

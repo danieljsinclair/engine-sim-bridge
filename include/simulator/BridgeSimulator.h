@@ -14,6 +14,7 @@
 #include "telemetry/ITelemetryProvider.h"
 #include "telemetry/NullTelemetryWriter.h"
 #include "engine-sim/include/simulator.h"
+#include "simulator/BrakeConstraint.h"
 
 #include <memory>
 #include <string>
@@ -40,11 +41,19 @@ public:
     void stop() override;
     int getSimulationFrequency() const override { return engineConfig_.simulationFrequency; }
     EngineSimStats getStats() const override;
+
+    // TODO: circle-back — remove getInternalSimulator(); tests should inject dependencies instead
     Simulator* getInternalSimulator() { return m_simulator.get(); }
     const Simulator* getInternalSimulator() const { return m_simulator.get(); }
+
     void setThrottle(double position) override;
     void setIgnition(bool on) override;
     void setStarterMotor(bool on) override;
+    int setGear(int gear) override;
+    int getGear() const override;
+    void setClutchPressure(double pressure) override;
+    void setBrakePressure(double pressure) override;
+    double getEngineRpm() const override;
     EnginePhase getEnginePhase() const override { return enginePhase_; }
     void setEnginePhase(EnginePhase phase) override;
 
@@ -87,8 +96,15 @@ private:
     int16_t* ensureAudioConversionBufferSize(size_t requiredSize);
 
     std::unique_ptr<Simulator> m_simulator;
+    BrakeConstraint m_brakeConstraint;
     std::string m_lastError;
     std::string name_;
+
+    // metrics
+    void getEngineStats(EngineSimStats& stats) const;
+    void getDynoStats(EngineSimStats& stats) const;
+    void getVehicleStats(EngineSimStats& stats) const;
+    void getTransmissionStats(EngineSimStats& stats) const;
 
     // Dependencies (never null after create())
     ILogging* logger_ = nullptr;

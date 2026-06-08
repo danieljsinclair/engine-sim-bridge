@@ -117,10 +117,11 @@ std::unique_ptr<IAudioHardwareProvider> createHardwareProvider(
     return provider;
 }
 
-void applyGearChange(BridgeSimulator* bridgeSim, int gearDelta, ILogging* logger) {
-    if (gearDelta == 0) return;  // OK: no-op when no change requested
-    if (bridgeSim->changeGear(gearDelta)) {
-        logger->info(LogMask::BRIDGE, "Gear change: %+d", gearDelta);
+// Apply gear changes from keyboard input ([/] keys). Clamps at gear 0 (neutral).
+void applyGearChange(BridgeSimulator* engineSim, int gearDelta, ILogging* logger) {
+
+    if (engineSim->changeGear(gearDelta)) {
+        logger->info(LogMask::BRIDGE, "New gear: %+d", engineSim->getGear());
     }
 }
 
@@ -132,23 +133,48 @@ void applyDynoControl(BridgeSimulator* bridgeSim, double scale, double& lastScal
 }
 
 void applyVehicleControls(
-    ISimulator& simulator, ICombustionEngine* combustion, BridgeSimulator* bridgeSim,
+    ISimulator& simulator, ICombustionEngine* combustionEngine,
     const input::EngineInput& input, const CrankingController::State& crankingState,
     double& lastDynoTorqueScale, ILogging* logger)
 {
+    auto* bridgeSim = dynamic_cast<BridgeSimulator*>(&simulator);
+
     simulator.setThrottle(crankingState.startingThrottle);
 
-    if (combustion) {
-        combustion->setIgnition(input.ignition);
+    if (combustionEngine) {
+        combustionEngine->setIgnition(input.ignition);
+    }
+
+    // Apply gear changes: twin gearAbsolute takes priority over keyboard gearDelta
+    if (input.gearAbsolute >= 0) {
+        simulator.setGear(input.gearAbsolute);
+    } else {
+        applyGearChange(bridgeSim, input.gearDelta, logger);
     }
 
     // Vehicle controls (gear, dyno) — dyno only when engine running
-    if (bridgeSim){
-        applyGearChange(bridgeSim, input.gearDelta, logger);
-        if (!crankingState.starterEngaged) {
-            applyDynoControl(bridgeSim, input.dynoTorqueScale, lastDynoTorqueScale);
-        }
+    if (!crankingState.starterEngaged) {
+        // HACK: Should put the clutch in here really
+        applyDynoControl(bridgeSim, input.dynoTorqueScale, lastDynoTorqueScale);
+    } else {
+        logger->info(LogMask::BRIDGE, "Cranking: starter engaged, dyno disabled - consider using the clutch instead");
     }
+
+    // Twin clutch control (direct pressure, overrides applyGearChange's hardwired clutch)
+    if (input.clutchPressure >= 0.0) {
+        simulator.setClutchPressure(input.clutchPressure);
+    }
+
+    // Brake
+    simulator.setBrakePressure(input.brakeLevel);
+
+    // QUESTION: This is superceded by CrankingController now, right?
+    // // Twin starter motor control — only when twin explicitly sets it
+    // // Default input.starterMotor is false; don't override warmup starter logic
+    // if (input.gearAbsolute >= 0) {
+    //     simulator.setStarterMotor(input.starterMotor);
+    // }
+
 }
 
 void updatePresentation(presentation::IPresentation* presentation, const SimulationConfig& config,
@@ -158,7 +184,8 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
                         int underrunCount, IAudioBuffer& audioBuffer,
                         telemetry::ITelemetryReader* telemetryReader,
                         const std::string& presetShortName,
-                        int actualSimFrequency) {
+                        int actualSimFrequency,
+                        double brakeLevel) {
     if (!presentation) return;
 
     // Read audio timing diagnostics from telemetry (strategies push to telemetry after each render)
@@ -172,7 +199,7 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.rpm = stats.currentRPM;
     state.throttle = throttle;
     state.load = stats.currentLoad;
-    state.speed = stats.speedMph;
+    state.speedMph = stats.speedMph();
     state.underrunCount = underrunCount;
     state.audioMode = audioBuffer.getModeString();
     state.ignition = ignition;
@@ -180,6 +207,8 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.enginePhase = phase;
     state.exhaustFlow = stats.exhaustFlow;
     state.gear = stats.gear;
+    state.gearSelector = stats.gearSelector;
+    state.gearAutoMode = stats.gearAutoMode;
     state.dynoTorque = stats.dynoTorque;
     state.dynoTargetRPM = stats.dynoTargetRPM;
     state.renderMs = timing.renderMs;
@@ -191,8 +220,12 @@ void updatePresentation(presentation::IPresentation* presentation, const Simulat
     state.generatingRateFps = timing.generatingRateFps;
     state.trendPct = timing.trendPct;
     state.sampleRate = config.sampleRate();
+    state.vehicleSpeedKmh = stats.vehicleSpeedKmh;
+    state.engineTorqueNm = stats.engineTorqueNm;
+    state.drivetrainTorqueNm = stats.drivetrainTorqueNm;
     state.simulationFrequency = actualSimFrequency;
     state.presetShortName = presetShortName;
+    state.brakeLevel = brakeLevel;
 
     presentation->ShowEngineState(state);
 }
@@ -244,12 +277,6 @@ void cleanupSimulation(IAudioHardwareProvider* hardwareProvider, ISimulator& sim
         hardwareProvider->cleanup();
     }
     simulator.destroy();
-}
-
-void warnWavExportNotSupported(bool outputWavRequested, ILogging* logger) {
-    if (outputWavRequested) {
-        logger->warning(LogMask::AUDIO, "WAV export not supported in unified mode - use the old engine mode code path");
-    }
 }
 
 // ============================================================================
@@ -306,7 +333,7 @@ public:
         // Delegate to existing loop — returns EXIT_BUT_CONTINUE_NEXT on 'P' press
         int exitCode = runSimulationLoop(
             *simulator_, config_, *audioBuffer_, crankingController_,
-            stopped_,
+            stopRequested_,
             inputProvider_, presentation_,
             telemetryWriter_, telemetryReader_, logger_);
 
@@ -319,7 +346,7 @@ public:
     }
 
     void stop() override {
-        stopped_.store(true, std::memory_order_release);
+        stopRequested_.store(true, std::memory_order_release);
     }
 
     bool hasDrivetrainMomentum(const BridgeSimulator::DrivetrainSnapshot& snapshot) const {
@@ -384,7 +411,7 @@ public:
         config_.configPath = presetFilePath;
 
         // Reset stopped flag so the loop runs again when session->run() is called
-        stopped_.store(false, std::memory_order_release);
+        stopRequested_.store(false, std::memory_order_release);
 
         logger_->info(LogMask::BRIDGE, "handoverSession: complete");
         return true;
@@ -412,7 +439,7 @@ private:
     telemetry::ITelemetryReader* telemetryReader_;
     ILogging* logger_;
     CrankingController crankingController_;
-    std::atomic<bool> stopped_{false};
+    std::atomic<bool> stopRequested_{false};
     bool closed_{false};
 };
 
@@ -443,17 +470,14 @@ int runSimulationLoop(
     bool isFirstTick = true;
     input::EngineInput input;
 
-    auto* bridgeSim = dynamic_cast<BridgeSimulator*>(&simulator);
     auto* combustion = dynamic_cast<ICombustionEngine*>(&simulator);
 
-    // Phase is now on the engine (single source of truth).
-    // transferDrivetrainState() restores enginePhase_ before this loop starts.
-    // CrankingController::step() reads phase from engine.getEnginePhase().
-    // No sync needed here — the old setPhase() call has been removed.
-
+    // Initialise and track these mutating values for the loop lifetime
     double lastDynoTorqueScale = -1.0;
-    const std::string presetShortName = bridgeSim ? bridgeSim->getName() : "";
-
+    EngineSimStats previousStats = {};
+    if (inputProvider) inputProvider->provideFeedback(previousStats); // NOTE: input is presently optional for direct control, eg. testing or non-interactive CLI mode. I'm not entirely happy with this and wonder if we should assert there's always an input provider but I can see the argument for allowing one to be optional
+ 
+    // MAIN LOOP
     do {
         // Non-interactive timeout: stop the loop when duration expires
         if (config.duration > 0.0 && currentTime >= config.duration) break;
@@ -463,20 +487,30 @@ int runSimulationLoop(
             ? crankingController.step(*combustion, input.throttle, input.ignition, logger)
             : CrankingController::State{input.throttle, false, EnginePhase::Running};
 
-        applyVehicleControls(simulator, combustion, bridgeSim, input, crankingState, lastDynoTorqueScale, logger);
+        applyVehicleControls(simulator, combustion, input, crankingState, lastDynoTorqueScale, logger);
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * SECONDS_TO_MILLISECONDS);
 
+        // Get standard engine sim data and overlay input-provider gear state onto stats for display
         EngineSimStats stats = simulator.getStats();
+        stats.gearSelector = input.gearSelector;
+        stats.gearAutoMode = input.gearAutoMode;
+
         audioBuffer.fillBufferFromEngine(&simulator, config.framesPerUpdate());
 
         writeTelemetry(telemetryWriter, currentTime, crankingState.startingThrottle, input.ignition, crankingState.starterEngaged);
 
         currentTime += config.updateInterval();
-        updatePresentation(presentation, config, currentTime, stats, crankingState.startingThrottle, input.ignition, crankingState.starterEngaged, crankingState.phase, readUnderrunCount(telemetryReader), audioBuffer, telemetryReader, presetShortName, simulator.getSimulationFrequency());
+        updatePresentation(presentation, config,
+            currentTime, stats, crankingState.startingThrottle, input.ignition, crankingState.starterEngaged, crankingState.phase,
+            readUnderrunCount(telemetryReader), audioBuffer, telemetryReader,
+            simulator.getName(), simulator.getSimulationFrequency(),
+            input.brakeLevel);
 
+        // Timing control - QUESTION: should/can pollInput go before waitUntilNextTick or can waitUntilNextTick go at the bottom before the loop while, o rjust before input.preseCycle
         timer.waitUntilNextTick();
         input = pollInput(inputProvider, currentTime, config.updateInterval(), isFirstTick);
         isFirstTick = false;
+        previousStats = stats;
 
         if (input.presetCycle) {
             return EXIT_BUT_CONTINUE_NEXT;

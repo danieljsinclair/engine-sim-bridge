@@ -2,6 +2,7 @@
 build/
 build-test/
 build*/
+spikes/
 
 # CMake
 CMakeCache.txt
@@ -38,7 +39,10 @@ Thumbs.db
 *.log
 *.dat
 *.tmp
+.cache/
 /**/Temporary/
+build-test/
+.claude/scheduled_tasks.lock
 .cache/
 
 # Generated JSON presets (rebuilt by 'make presets')

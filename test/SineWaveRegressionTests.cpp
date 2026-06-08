@@ -16,6 +16,9 @@
 
 #include "simulator/BridgeSimulator.h"
 #include "simulator/SineSimulator.h"
+#include "simulator/SineEngine.h"
+#include "simulator/SineVehicle.h"
+#include "simulator/SineTransmission.h"
 
 // ============================================================================
 // Helper: Compute smoothness metric for a sequence of float samples.
@@ -82,7 +85,7 @@ protected:
         sineSim->setSimulationFrequency(EngineSimDefaults::SIMULATION_FREQUENCY);
         sineSim->setFluidSimulationSteps(EngineSimDefaults::FLUID_SIMULATION_STEPS);
         sineSim->setTargetSynthesizerLatency(EngineSimDefaults::TARGET_SYNTH_LATENCY);
-        sineSim->loadSimulation(nullptr, nullptr, nullptr);
+        sineSim->loadSimulation(new SineEngine(), new SineVehicle(), new SineTransmission());
         simulator_ = std::make_unique<BridgeSimulator>(std::move(sineSim));
 
         // Use default constructor to get proper defaults from EngineSimDefaults
@@ -284,7 +287,7 @@ protected:
         sineSim->setSimulationFrequency(EngineSimDefaults::SIMULATION_FREQUENCY);
         sineSim->setFluidSimulationSteps(EngineSimDefaults::FLUID_SIMULATION_STEPS);
         sineSim->setTargetSynthesizerLatency(EngineSimDefaults::TARGET_SYNTH_LATENCY);
-        sineSim->loadSimulation(nullptr, nullptr, nullptr);
+        sineSim->loadSimulation(new SineEngine(), new SineVehicle(), new SineTransmission());
         simulator_ = std::make_unique<BridgeSimulator>(std::move(sineSim));
 
         ISimulatorConfig config;
@@ -329,11 +332,11 @@ TEST_F(GearChangeTest, DownshiftFromNeutralToPark) {
     EXPECT_EQ(currentGear(), -1) << "Downshift from N should go to P";
 }
 
-// Downshift from P(-1) should fail (can't go below -1)
-TEST_F(GearChangeTest, DownshiftFromParkRejected) {
+// Downshift from P(-1) is clamped to -1 (no change) but still returns true
+TEST_F(GearChangeTest, DownshiftFromParkClampedToPark) {
     ASSERT_EQ(currentGear(), -1);
-    EXPECT_FALSE(simulator_->changeGear(-1));
-    EXPECT_EQ(currentGear(), -1) << "Gear should stay at P after rejected downshift";
+    EXPECT_TRUE(simulator_->changeGear(-1));
+    EXPECT_EQ(currentGear(), -1) << "Gear should stay at P after clamped downshift";
 }
 
 // Zero delta should return false (no-op)
@@ -359,12 +362,12 @@ TEST_F(GearChangeTest, FullCycleParkNeutralParkNeutralPark) {
 }
 
 // SineTransmission has gearCount=1, so valid gears are -1 and 0.
-// Upshift from N(0) should fail (would go to gear 1, which equals gearCount).
-TEST_F(GearChangeTest, UpshiftBeyondGearCountRejected) {
+// Upshift from N(0) is clamped to 0 (no change) but still returns true.
+TEST_F(GearChangeTest, UpshiftBeyondGearCountClampedToNeutral) {
     ASSERT_EQ(currentGear(), -1);
     ASSERT_TRUE(simulator_->changeGear(1));
     ASSERT_EQ(currentGear(), 0);
 
-    EXPECT_FALSE(simulator_->changeGear(1)) << "Upshift from N(0) should fail (gearCount=1)";
-    EXPECT_EQ(currentGear(), 0) << "Gear should stay at N after rejected upshift";
+    EXPECT_TRUE(simulator_->changeGear(1)) << "Upshift from N(0) is clamped, not rejected";
+    EXPECT_EQ(currentGear(), 0) << "Gear should stay at N after clamped upshift";
 }
