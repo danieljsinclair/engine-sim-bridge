@@ -29,13 +29,9 @@ public:
         EnginePhase phase;
     };
 
-    // Original methods (to be removed in Step 5)
-    void engageStarter(ICombustionEngine& engine, bool startStopButton);
-    State step(ICombustionEngine& engine, double userThrottle, bool ignition, ILogging* logger);
-
-    // Pure decision methods (additive - Step 1)
-    TransitionDecision engageStarterPure(ICombustionEngine& engine, bool startStopButton);
-    TransitionDecision stepPure(ICombustionEngine& engine, double userThrottle, bool ignition);
+    // Decision methods (return TransitionDecision instead of mutating engine)
+    TransitionDecision engageStarter(ICombustionEngine& engine, bool startStopButton);
+    TransitionDecision step(ICombustionEngine& engine, double userThrottle, bool ignition);
 
     void reset();
 

@@ -388,7 +388,9 @@ public:
                 combustion->setEnginePhase(EnginePhase::Rollover);
                 logger->info(LogMask::BRIDGE, "Hot-swap → Rollover (gear=%d, vtheta=%.1f)", snapshot.gear, snapshot.vehicleMassVtheta);
             } else {
-                crankingController_.engageStarter(*combustion, true);
+                auto decision = crankingController_.engageStarter(*combustion, true);
+                combustion->setEnginePhase(decision.targetPhase);
+                combustion->setStarterMotor(decision.starterMotor);
                 logger->info(LogMask::BRIDGE, "Hot-swap → Cranking (neutral, starter engaged)");
             }
         } else {
@@ -495,10 +497,19 @@ int runSimulationLoop(
         // Non-interactive timeout: stop the loop when duration expires
         if (config.duration > 0.0 && currentTime >= config.duration) break;
 
-        if (combustion) crankingController.engageStarter(*combustion, input.starterButton);
-        auto crankingState = combustion
-            ? crankingController.step(*combustion, input.throttle, input.ignition, logger)
-            : CrankingController::State{input.throttle, false, EnginePhase::Running};
+        if (combustion) {
+            auto starterDecision = crankingController.engageStarter(*combustion, input.starterButton);
+            combustion->setEnginePhase(starterDecision.targetPhase);
+            combustion->setStarterMotor(starterDecision.starterMotor);
+        }
+        auto crankingDecision = combustion
+            ? crankingController.step(*combustion, input.throttle, input.ignition)
+            : CrankingController::TransitionDecision{EnginePhase::Running, false, input.throttle, false};
+        if (combustion && crankingDecision.isTransition) {
+            combustion->setEnginePhase(crankingDecision.targetPhase);
+            combustion->setStarterMotor(crankingDecision.starterMotor);
+        }
+        auto crankingState = CrankingController::State{crankingDecision.effectiveThrottle, combustion && crankingDecision.starterMotor, crankingDecision.targetPhase};
 
         applyVehicleControls(simulator, combustion, input, crankingState, lastDynoTorqueScale, logger);
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * SECONDS_TO_MILLISECONDS);
