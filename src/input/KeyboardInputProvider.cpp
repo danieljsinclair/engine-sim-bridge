@@ -102,6 +102,14 @@ void KeyboardInputProvider::processKeys(double dt) {
     } else if (keyHold_.isKeyReleased('b')) {
         target_->setBrake(0.0);
     }
+
+    // Speed control: active (hold to ramp)
+    if (keyHold_.isKeyActive(',')) {
+        target_->adjustSpeed(-2.0);
+    }
+    if (keyHold_.isKeyActive('.')) {
+        target_->adjustSpeed(2.0);
+    }
 }
 
 std::string KeyboardInputProvider::GetProviderName() const { return "Keyboard"; }

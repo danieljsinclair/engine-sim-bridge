@@ -183,4 +183,37 @@ void DemoInputProvider::setBrake(double level) {
     brakeInput_.setLevel(level);
 }
 
+EngineInput DemoInputProvider::enhanceInput(const EngineInput& baseInput, double dt) {
+    if (!initialized_ || !throttleSource_) {
+        return baseInput;
+    }
+
+    // Run DemoVehiclePhysics with keyboard throttle to get road speed
+    double throttle = baseInput.throttle;
+    physics_.update(dt, throttle, baseInput.brakeLevel);
+    roadSpeedKmh_ = physics_.getSpeedKmh();
+
+    // Feed speed + throttle to twin for gear/clutch decisions only
+    UpstreamSignal signal;
+    signal.throttleFraction = throttle;
+    signal.speedKmh = roadSpeedKmh_;
+    signal.accelerationG = physics_.getAccelerationG();
+    signal.timestampUtcMs = getCurrentTimeMs();
+    signal.isValid = true;
+    twinProvider_.setUpstreamSignal(signal);
+    twinProvider_.setIgnition(baseInput.ignition);
+
+    EngineInput twinInput = twinProvider_.OnUpdateSimulation(dt);
+    currentGear_ = twinInput.gearAbsolute;
+
+    // Preserve ALL keyboard state; merge ONLY gear/clutch from twin
+    EngineInput result = baseInput;
+    result.gearAbsolute = twinInput.gearAbsolute;
+    result.clutchPressure = twinInput.clutchPressure;
+    result.gearSelector = twinInput.gearSelector;
+    result.gearAutoMode = true;
+
+    return result;
+}
+
 }
