@@ -146,9 +146,9 @@ void applyGearChange(BridgeSimulator* engineSim, int gearDelta, ILogging* logger
     }
 }
 
-void applyDecision(BridgeSimulator* bridge, const TransitionDecision& decision) {
-    if (!bridge) return;
-    bridge->applyTransition(decision);
+void applyDecision(ICombustionEngine* engine, const TransitionDecision& decision) {
+    if (!engine) return;
+    engine->applyTransition(decision);
 }
 
 void applyDynoControl(BridgeSimulator* bridgeSim, double scale, double& lastScale) {
@@ -391,11 +391,11 @@ public:
 
             if (hasDrivetrainMomentum(snapshot)) {
                 auto rolloverDecision = TransitionDecision{EnginePhase::Rollover, false, 0.0, true};
-                applyDecision(newBridge, rolloverDecision);
+                applyDecision(combustion, rolloverDecision);
                 logger->info(LogMask::BRIDGE, "Hot-swap → Rollover (gear=%d, vtheta=%.1f)", snapshot.gear, snapshot.vehicleMassVtheta);
             } else {
                 auto decision = crankingController_.engageStarter(*combustion, true);
-                applyDecision(newBridge, decision);
+                applyDecision(combustion, decision);
                 logger->info(LogMask::BRIDGE, "Hot-swap → Cranking (neutral, starter engaged)");
             }
         } else {
@@ -491,7 +491,6 @@ int runSimulationLoop(
     input::EngineInput input;
 
     auto* combustion = dynamic_cast<ICombustionEngine*>(&simulator);
-    auto* bridgeSim = dynamic_cast<BridgeSimulator*>(&simulator);
 
     // Initialise and track these mutating values for the loop lifetime
     double lastDynoTorqueScale = -1.0;
@@ -505,13 +504,13 @@ int runSimulationLoop(
 
         if (combustion) {
             auto starterDecision = crankingController.engageStarter(*combustion, input.starterButton);
-            applyDecision(bridgeSim, starterDecision);
+            applyDecision(combustion, starterDecision);
         }
         auto crankingDecision = combustion
             ? crankingController.step(*combustion, input.throttle, input.ignition)
             : TransitionDecision{EnginePhase::Running, false, input.throttle, false};
         if (combustion) {
-            applyDecision(bridgeSim, crankingDecision);
+            applyDecision(combustion, crankingDecision);
         }
         auto crankingState = CrankingController::State{crankingDecision.effectiveThrottle, combustion && crankingDecision.starterMotor, crankingDecision.targetPhase};
 
