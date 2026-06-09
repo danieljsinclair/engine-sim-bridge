@@ -26,7 +26,7 @@ namespace telemetry { class ITelemetryWriter; class ITelemetryReader; }
 // Forward declaration of simulator type enum (defined in simulator/SimulatorFactory.h)
 enum class SimulatorType;
 
-// Exit code returned by runUnifiedAudioLoop when preset cycling is requested
+// Exit code returned by runSimulationLoop when preset cycling is requested
 constexpr int EXIT_BUT_CONTINUE_NEXT = 2;
 
 // ============================================================================

@@ -5,13 +5,6 @@
 #include "simulator/ICombustionEngine.h"
 #include "common/ILogging.h"
 
-#define CRANKING_DEBUG false
-#if CRANKING_DEBUG
-#define IF_CRANKING_DEBUG(x) x
-#else
-#define IF_CRANKING_DEBUG(x)
-#endif
-
 void CrankingController::engageStarter(ICombustionEngine& engine, bool startStopButton) {
     if (startStopButton) {
         EnginePhase phase = engine.getEnginePhase();
@@ -65,22 +58,10 @@ CrankingController::State CrankingController::step(
             if (stats.currentRPM < STOPPED_RPM) {
                 engine.setEnginePhase(EnginePhase::Stopped);
                 phase = EnginePhase::Stopped;
-            } else if (engineCaught(stats, inputIgnition)) {
-                engine.setEnginePhase(EnginePhase::Running);
-                phase = EnginePhase::Running;
             }
             break;
 
         case EnginePhase::Cranking:
-            IF_CRANKING_DEBUG(
-                if (ticks_ <= BASELINE_TICKS || ticks_ % 20 == 0) {
-                    logger->info(LogMask::BRIDGE,
-                        "Crank tick %d: RPM=%.0f exhaust=%.6f baseline=%.6f",
-                        ticks_, stats.currentRPM, stats.exhaustFlow,
-                        exhaustFlowBaseline_);
-                }
-            );
-
             if (++ticks_ <= BASELINE_TICKS) {
                 exhaustFlowSum_ += stats.exhaustFlow;
                 if (ticks_ == BASELINE_TICKS) {
