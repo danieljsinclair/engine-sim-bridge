@@ -403,3 +403,95 @@ TEST(CrankingControllerTest, Rollover_DoesNotFallBackImmediately_ZeroRPMTick1) {
     EXPECT_EQ(state.phase, EnginePhase::Rollover);
     EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Rollover);
 }
+
+// ============================================================================
+// Pure method tests (Step 3) - verify TransitionDecision return values
+// ============================================================================
+
+TEST(CrankingControllerTest, EngageStarterPure_FromStopped_ReturnsCrankingDecision) {
+    CrankingController controller;
+    StubEngine engine;
+
+    auto decision = controller.engageStarterPure(engine, true);
+
+    EXPECT_EQ(decision.targetPhase, EnginePhase::Cranking);
+    EXPECT_TRUE(decision.starterMotor);
+    EXPECT_TRUE(decision.isTransition);
+    EXPECT_EQ(decision.effectiveThrottle, 0.0);
+}
+
+TEST(CrankingControllerTest, EngageStarterPure_ButtonFalse_ReturnsNoTransition) {
+    CrankingController controller;
+    StubEngine engine;
+
+    auto decision = controller.engageStarterPure(engine, false);
+
+    EXPECT_EQ(decision.targetPhase, EnginePhase::Stopped);
+    EXPECT_FALSE(decision.starterMotor);
+    EXPECT_FALSE(decision.isTransition);
+}
+
+TEST(CrankingControllerTest, EngageStarterPure_FromCranking_ReturnsStoppedDecision) {
+    CrankingController controller;
+    StubEngine engine;
+    engine.phase_ = EnginePhase::Cranking;
+
+    auto decision = controller.engageStarterPure(engine, true);
+
+    EXPECT_EQ(decision.targetPhase, EnginePhase::Stopped);
+    EXPECT_FALSE(decision.starterMotor);
+    EXPECT_TRUE(decision.isTransition);
+}
+
+TEST(CrankingControllerTest, StepPure_RunningWithIgnitionOff_ReturnsStoppingDecision) {
+    CrankingController controller;
+    StubEngine engine;
+    engine.phase_ = EnginePhase::Running;
+    engine.stats_.currentRPM = 3000.0;
+
+    auto decision = controller.stepPure(engine, 0.5, false);
+
+    EXPECT_EQ(decision.targetPhase, EnginePhase::Stopping);
+    EXPECT_TRUE(decision.isTransition);
+    EXPECT_FALSE(decision.starterMotor);
+}
+
+TEST(CrankingControllerTest, StepPure_CrankingWithCatch RPM_ReturnsRunningDecision) {
+    CrankingController controller;
+    StubEngine engine;
+    engine.phase_ = EnginePhase::Cranking;
+    engine.stats_.currentRPM = 1000.0;
+    engine.stats_.exhaustFlow = 3.0;
+
+    // Advance past baseline ticks
+    for (int i = 0; i < 11; i++) {
+        controller.stepPure(engine, 0.5, true);
+    }
+
+    auto decision = controller.stepPure(engine, 0.5, true);
+
+    EXPECT_EQ(decision.targetPhase, EnginePhase::Running);
+    EXPECT_FALSE(decision.starterMotor);
+    EXPECT_TRUE(decision.isTransition);
+    EXPECT_DOUBLE_EQ(decision.effectiveThrottle, 0.55);  // CRANKING_THROTTLE
+}
+
+TEST(CrankingControllerTest, StepPure_CrankingWithCatchRPM_ReturnsRunningDecision) {
+    CrankingController controller;
+    StubEngine engine;
+    engine.phase_ = EnginePhase::Cranking;
+    engine.stats_.currentRPM = 1000.0;
+    engine.stats_.exhaustFlow = 3.0;
+
+    // Advance past baseline ticks
+    for (int i = 0; i < 11; i++) {
+        controller.stepPure(engine, 0.5, true);
+    }
+
+    auto decision = controller.stepPure(engine, 0.5, true);
+
+    EXPECT_EQ(decision.targetPhase, EnginePhase::Running);
+    EXPECT_FALSE(decision.starterMotor);
+    EXPECT_TRUE(decision.isTransition);
+    EXPECT_DOUBLE_EQ(decision.effectiveThrottle, 0.55);  // CRANKING_THROTTLE
+}
