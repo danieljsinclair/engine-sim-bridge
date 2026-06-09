@@ -275,7 +275,7 @@ bool BridgeSimulator::configureDynoLoad(double loadFraction) {
     return true;
 }
 
-void BridgeSimulator::applyTransition(const CrankingController::TransitionDecision& decision) {
+void BridgeSimulator::applyTransition(const TransitionDecision& decision) {
     if (!decision.isTransition) return;
     enginePhase_ = decision.targetPhase;
     m_simulator->m_starterMotor.m_enabled = decision.starterMotor;

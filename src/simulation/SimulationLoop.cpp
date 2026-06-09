@@ -146,7 +146,7 @@ void applyGearChange(BridgeSimulator* engineSim, int gearDelta, ILogging* logger
     }
 }
 
-void applyDecision(BridgeSimulator* bridge, const CrankingController::TransitionDecision& decision) {
+void applyDecision(BridgeSimulator* bridge, const TransitionDecision& decision) {
     if (!bridge) return;
     bridge->applyTransition(decision);
 }
@@ -390,7 +390,7 @@ public:
             if (!combustion) return;
 
             if (hasDrivetrainMomentum(snapshot)) {
-                auto rolloverDecision = CrankingController::TransitionDecision{EnginePhase::Rollover, false, 0.0, true};
+                auto rolloverDecision = TransitionDecision{EnginePhase::Rollover, false, 0.0, true};
                 applyDecision(newBridge, rolloverDecision);
                 logger->info(LogMask::BRIDGE, "Hot-swap → Rollover (gear=%d, vtheta=%.1f)", snapshot.gear, snapshot.vehicleMassVtheta);
             } else {
@@ -509,7 +509,7 @@ int runSimulationLoop(
         }
         auto crankingDecision = combustion
             ? crankingController.step(*combustion, input.throttle, input.ignition)
-            : CrankingController::TransitionDecision{EnginePhase::Running, false, input.throttle, false};
+            : TransitionDecision{EnginePhase::Running, false, input.throttle, false};
         if (combustion) {
             applyDecision(bridgeSim, crankingDecision);
         }

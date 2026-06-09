@@ -9,7 +9,7 @@
 // Decision methods - return TransitionDecision instead of mutating engine
 // ============================================================================
 
-CrankingController::TransitionDecision CrankingController::engageStarter(
+TransitionDecision CrankingController::engageStarter(
     ICombustionEngine& engine, bool startStopButton) {
     TransitionDecision decision{engine.getEnginePhase(), false, 0.0, false};
 
@@ -44,7 +44,7 @@ CrankingController::TransitionDecision CrankingController::engageStarter(
     return decision;
 }
 
-CrankingController::TransitionDecision CrankingController::step(
+TransitionDecision CrankingController::step(
     ICombustionEngine& engine, double userThrottle, bool inputIgnition) {
     EnginePhase phase = engine.getEnginePhase();
     EngineSimStats stats = engine.getStats();

@@ -16,13 +16,6 @@ class ILogging;
 
 class CrankingController {
 public:
-    struct TransitionDecision {
-        EnginePhase targetPhase;
-        bool starterMotor;
-        double effectiveThrottle;
-        bool isTransition;
-    };
-
     struct State {
         double startingThrottle;
         bool starterEngaged;

@@ -33,6 +33,11 @@ public:
     void setIgnition(bool on) override { ignition_ = on; }
     void setStarterMotor(bool on) override { starterMotor_ = on; }
     EnginePhase getEnginePhase() const override { return phase_; }
+    void applyTransition(const TransitionDecision& decision) override {
+        if (!decision.isTransition) return;
+        phase_ = decision.targetPhase;
+        starterMotor_ = decision.starterMotor;
+    }
 };
 
 } // namespace

@@ -13,6 +13,13 @@ enum class EnginePhase {
     Stopping    // Ignition off, waiting for RPM to drop
 };
 
+struct TransitionDecision {
+    EnginePhase targetPhase;
+    bool starterMotor;
+    double effectiveThrottle;
+    bool isTransition;
+};
+
 constexpr const char *EnginePhaseName(EnginePhase phase) noexcept {
     switch (phase) {
         case  EnginePhase::Stopped: return "\033[31m Stopped\033[0m"; // RED

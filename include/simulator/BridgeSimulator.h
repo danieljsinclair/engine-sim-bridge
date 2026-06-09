@@ -10,7 +10,6 @@
 #include "simulator/ICombustionEngine.h"
 #include "simulator/EngineSimTypes.h"
 #include "simulation/EnginePhase.h"
-#include "simulation/CrankingController.h"
 #include "common/ILogging.h"
 #include "telemetry/ITelemetryProvider.h"
 #include "telemetry/NullTelemetryWriter.h"
@@ -56,7 +55,7 @@ public:
     void setBrakePressure(double pressure) override;
     double getEngineRpm() const override;
     EnginePhase getEnginePhase() const override { return enginePhase_; }
-    void applyTransition(const CrankingController::TransitionDecision& decision);
+    void applyTransition(const TransitionDecision& decision) override;
 
     // ISimulator state capture/restore for hot-swap
     std::vector<uint8_t> saveState() const override;
