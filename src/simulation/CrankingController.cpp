@@ -100,6 +100,105 @@ void CrankingController::reset() {
     exhaustFlowBaseline_ = 0.0;
 }
 
+// ============================================================================
+// Pure decision methods (Step 2) - return decisions instead of applying them
+// ============================================================================
+
+CrankingController::TransitionDecision CrankingController::engageStarterPure(
+    ICombustionEngine& engine, bool startStopButton) {
+    TransitionDecision decision{engine.getEnginePhase(), false, 0.0, false};
+
+    if (!startStopButton) {
+        return decision;
+    }
+
+    switch (decision.targetPhase) {
+        case EnginePhase::Stopped:
+            reset();
+            decision.starterMotor = true;
+            decision.targetPhase = EnginePhase::Cranking;
+            decision.isTransition = true;
+            break;
+
+        case EnginePhase::Cranking:
+            decision.starterMotor = false;
+            decision.targetPhase = EnginePhase::Stopped;
+            decision.isTransition = true;
+            break;
+
+        case EnginePhase::Rollover:
+            decision.starterMotor = true;
+            decision.targetPhase = EnginePhase::Cranking;
+            decision.isTransition = true;
+            break;
+
+        default:
+            break;
+    }
+
+    return decision;
+}
+
+CrankingController::TransitionDecision CrankingController::stepPure(
+    ICombustionEngine& engine, double userThrottle, bool inputIgnition) {
+    EnginePhase phase = engine.getEnginePhase();
+    EngineSimStats stats = engine.getStats();
+    double effectiveThrottle = userThrottle;
+    constexpr double CRANKING_THROTTLE = 0.55;
+
+    TransitionDecision decision{phase, false, effectiveThrottle, false};
+
+    switch(phase) {
+        case EnginePhase::Running:
+            if (!inputIgnition) {
+                decision.targetPhase = EnginePhase::Stopping;
+                decision.isTransition = true;
+            } else if (stats.currentRPM < STOPPED_RPM) {
+                decision.targetPhase = EnginePhase::Stopped;
+                decision.isTransition = true;
+            }
+            break;
+
+        case EnginePhase::Stopping:
+            if (stats.currentRPM < STOPPED_RPM) {
+                decision.targetPhase = EnginePhase::Stopped;
+                decision.isTransition = true;
+            }
+            break;
+
+        case EnginePhase::Cranking:
+            if (++ticks_ <= BASELINE_TICKS) {
+                exhaustFlowSum_ += stats.exhaustFlow;
+                if (ticks_ == BASELINE_TICKS) {
+                    exhaustFlowBaseline_ = exhaustFlowSum_ / BASELINE_TICKS;
+                }
+            } else if (engineCaught(stats, inputIgnition)) {
+                decision.starterMotor = false;
+                decision.targetPhase = EnginePhase::Running;
+                decision.isTransition = true;
+            }
+            decision.effectiveThrottle = CRANKING_THROTTLE;
+            break;
+
+        case EnginePhase::Rollover:
+            if (engineCanCatch(stats, inputIgnition)) {
+                decision.targetPhase = EnginePhase::Running;
+                decision.isTransition = true;
+            } else if (stats.currentRPM < STOPPED_RPM && ++ticks_ > ROLLOVER_FALLBACK_TICKS) {
+                decision.starterMotor = true;
+                decision.targetPhase = EnginePhase::Cranking;
+                decision.isTransition = true;
+            }
+            break;
+
+        case EnginePhase::Stopped:
+        default:
+            break;
+    }
+
+    return decision;
+}
+
 bool CrankingController::engineCaught(const EngineSimStats& stats, bool inputIgnition) const {
     return engineCanCatch(stats, inputIgnition) && stats.exhaustFlow > exhaustFlowBaseline_ * CATCH_RATIO;
 }
