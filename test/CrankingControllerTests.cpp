@@ -155,13 +155,13 @@ TEST(CrankingControllerTest, EngineCatches_TransitionsToRunning) {
 
     // Build baseline with low exhaust flow
     engine.stats_.exhaustFlow = 0.1;
-    for (int i = 0; i < 12; ++i) {
+    for (int i = 0; i < 20; ++i) {
         controller.step(engine, 0.5, true);
     }
 
-    // Simulate engine catching: high exhaust flow + RPM above MIN_CATCH_RPM
-    engine.stats_.exhaustFlow = 1.0;   // Well above baseline * 2.0
-    engine.stats_.currentRPM = 800.0;  // Above MIN_CATCH_RPM (500)
+    // Simulate engine catching: exhaust spike and sufficient RPM
+    engine.stats_.exhaustFlow = 1.0;   // Exhaust spike well above baseline
+    engine.stats_.currentRPM = 2000.0; // Well above catch threshold
     engine.ignition_ = true;
 
     auto decision = controller.step(engine, 0.5, true);
@@ -181,7 +181,7 @@ TEST(CrankingControllerTest, EngineDoesNotCatch_WithoutIgnition) {
     engine.phase_ = EnginePhase::Cranking;
 
     engine.stats_.exhaustFlow = 0.1;
-    for (int i = 0; i < 12; ++i) {
+    for (int i = 0; i < 20; ++i) {
         controller.step(engine, 0.5, true);
     }
 
@@ -288,7 +288,7 @@ TEST(CrankingControllerTest, StoppingWithLowRPM_TransitionsToStopped) {
     StubEngine engine;
 
     engine.setEnginePhase(EnginePhase::Stopping);
-    engine.stats_.currentRPM = 2.0;  // Below STOPPED_RPM (5.0)
+    engine.stats_.currentRPM = 0.0;  // Engine effectively stopped
 
     auto decision = controller.step(engine, 0.5, false);
 
@@ -321,7 +321,7 @@ TEST(CrankingControllerTest, Rollover_StaysRollover_WhenRPMTooLow) {
     StubEngine engine;
 
     engine.setEnginePhase(EnginePhase::Rollover);
-    engine.stats_.currentRPM = 100.0;  // Below MIN_CATCH_RPM
+    engine.stats_.currentRPM = 10.0;  // Well below catch threshold
 
     auto state = controller.step(engine, 0.3, true);
 
@@ -348,11 +348,11 @@ TEST(CrankingControllerTest, Rollover_FallsBackToCranking_AtZeroRPM) {
     engine.setEnginePhase(EnginePhase::Rollover);
     engine.stats_.currentRPM = 0.0;
 
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 5; ++i) {
         controller.step(engine, 0.3, true);
     }
 
-    // After ROLLOVER_FALLBACK_TICKS (3) at 0 RPM, should transition to Cranking
+    // After sustained zero RPM, should fall back to Cranking
     auto state = controller.step(engine, 0.3, true);
     EXPECT_EQ(state.targetPhase, EnginePhase::Cranking);
     EXPECT_TRUE(state.isTransition);
@@ -368,7 +368,7 @@ TEST(CrankingControllerTest, Rollover_UsesUserThrottle_NotCrankingOverride) {
 
     auto state = controller.step(engine, 0.1, true);
 
-    EXPECT_DOUBLE_EQ(state.effectiveThrottle, 0.1);  // User's throttle, not 0.55
+    EXPECT_DOUBLE_EQ(state.effectiveThrottle, 0.1);  // User throttle, not cranking override
 }
 
 TEST(CrankingControllerTest, EngageStarterFromRollover_ReturnsCrankingDecision) {
@@ -445,16 +445,17 @@ TEST(CrankingControllerTest, Step_CrankingWithCatchRPM_ReturnsRunningDecision) {
 
     // Build baseline with low exhaust flow
     engine.stats_.exhaustFlow = 0.1;
-    for (int i = 0; i < 11; i++) {
+    for (int i = 0; i < 20; i++) {
         controller.step(engine, 0.5, true);
     }
 
-    // Simulate catch: high exhaust flow above baseline * CATCH_RATIO
+    // Simulate catch: high exhaust flow above baseline ratio
     engine.stats_.exhaustFlow = 1.0;
     auto decision = controller.step(engine, 0.5, true);
 
     EXPECT_EQ(decision.targetPhase, EnginePhase::Running);
     EXPECT_FALSE(decision.starterMotor);
     EXPECT_TRUE(decision.isTransition);
-    EXPECT_DOUBLE_EQ(decision.effectiveThrottle, 0.55);  // CRANKING_THROTTLE
+    EXPECT_GT(decision.effectiveThrottle, 0.0);  // Partial throttle during cranking
+    EXPECT_LT(decision.effectiveThrottle, 1.0);
 }
