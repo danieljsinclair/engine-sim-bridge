@@ -56,7 +56,6 @@ public:
     void setBrakePressure(double pressure) override;
     double getEngineRpm() const override;
     EnginePhase getEnginePhase() const override { return enginePhase_; }
-    void setEnginePhase(EnginePhase phase) override;
     void applyTransition(const CrankingController::TransitionDecision& decision);
 
     // ISimulator state capture/restore for hot-swap
@@ -89,8 +88,9 @@ private:
     void initAudioConfig(const ISimulatorConfig& config);
     void pushTelemetry(const EngineSimStats& stats);
 
-    // Single source of truth for engine phase — written by CrankingController via setEnginePhase()
+    // Single source of truth for engine phase — written via applyTransition()
     EnginePhase enginePhase_ = EnginePhase::Stopped;
+    void setEnginePhase(EnginePhase phase);
 
     static void advanceFixedSteps(Simulator* sim, int simulationFrequency, double dt, bool ceil);
     void drainSynthesizerBuffer(Simulator* sim);

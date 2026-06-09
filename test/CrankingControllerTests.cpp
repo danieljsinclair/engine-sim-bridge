@@ -33,7 +33,6 @@ public:
     void setIgnition(bool on) override { ignition_ = on; }
     void setStarterMotor(bool on) override { starterMotor_ = on; }
     EnginePhase getEnginePhase() const override { return phase_; }
-    void setEnginePhase(EnginePhase phase) override { phase_ = phase; }
 };
 
 } // namespace
@@ -217,7 +216,7 @@ TEST(CrankingControllerTest, HotSwapWhileCranking_ReEngagesStarterOnNewEngine) {
     EXPECT_TRUE(decision.isTransition);
 
     // Apply the decision to the new engine (caller's responsibility)
-    newEngine.setEnginePhase(EnginePhase::Cranking);
+    newEngine.phase_ = EnginePhase::Cranking;
 
     // Step the new engine -- should build fresh baseline
     newEngine.stats_.exhaustFlow = 0.2;
@@ -270,7 +269,7 @@ TEST(CrankingControllerTest, RunningWithIgnitionOff_TransitionsToStopping) {
     CrankingController controller;
     StubEngine engine;
 
-    engine.setEnginePhase(EnginePhase::Running);
+    engine.phase_ = EnginePhase::Running;
     engine.stats_.currentRPM = 3000.0;
 
     auto decision = controller.step(engine, 0.5, false);
@@ -287,7 +286,7 @@ TEST(CrankingControllerTest, StoppingWithLowRPM_TransitionsToStopped) {
     CrankingController controller;
     StubEngine engine;
 
-    engine.setEnginePhase(EnginePhase::Stopping);
+    engine.phase_ = EnginePhase::Stopping;
     engine.stats_.currentRPM = 0.0;  // Engine effectively stopped
 
     auto decision = controller.step(engine, 0.5, false);
@@ -305,7 +304,7 @@ TEST(CrankingControllerTest, Rollover_TransitionsToRunning_WhenRPMAboveThreshold
     CrankingController controller;
     StubEngine engine;
 
-    engine.setEnginePhase(EnginePhase::Rollover);
+    engine.phase_ = EnginePhase::Rollover;
     engine.stats_.currentRPM = 600.0;
 
     auto state = controller.step(engine, 0.3, true);
@@ -320,7 +319,7 @@ TEST(CrankingControllerTest, Rollover_StaysRollover_WhenRPMTooLow) {
     CrankingController controller;
     StubEngine engine;
 
-    engine.setEnginePhase(EnginePhase::Rollover);
+    engine.phase_ = EnginePhase::Rollover;
     engine.stats_.currentRPM = 10.0;  // Well below catch threshold
 
     auto state = controller.step(engine, 0.3, true);
@@ -333,7 +332,7 @@ TEST(CrankingControllerTest, Rollover_DoesNotCatch_WithoutIgnition) {
     CrankingController controller;
     StubEngine engine;
 
-    engine.setEnginePhase(EnginePhase::Rollover);
+    engine.phase_ = EnginePhase::Rollover;
     engine.stats_.currentRPM = 600.0;
 
     auto state = controller.step(engine, 0.3, false);
@@ -345,7 +344,7 @@ TEST(CrankingControllerTest, Rollover_FallsBackToCranking_AtZeroRPM) {
     CrankingController controller;
     StubEngine engine;
 
-    engine.setEnginePhase(EnginePhase::Rollover);
+    engine.phase_ = EnginePhase::Rollover;
     engine.stats_.currentRPM = 0.0;
 
     for (int i = 0; i < 5; ++i) {
@@ -363,7 +362,7 @@ TEST(CrankingControllerTest, Rollover_UsesUserThrottle_NotCrankingOverride) {
     CrankingController controller;
     StubEngine engine;
 
-    engine.setEnginePhase(EnginePhase::Rollover);
+    engine.phase_ = EnginePhase::Rollover;
     engine.stats_.currentRPM = 100.0;  // Below catch threshold, stays in Rollover
 
     auto state = controller.step(engine, 0.1, true);
@@ -375,7 +374,7 @@ TEST(CrankingControllerTest, EngageStarterFromRollover_ReturnsCrankingDecision) 
     CrankingController controller;
     StubEngine engine;
 
-    engine.setEnginePhase(EnginePhase::Rollover);
+    engine.phase_ = EnginePhase::Rollover;
 
     auto decision = controller.engageStarter(engine, true);
 
@@ -388,7 +387,7 @@ TEST(CrankingControllerTest, Rollover_DoesNotFallBackImmediately_ZeroRPMTick1) {
     CrankingController controller;
     StubEngine engine;
 
-    engine.setEnginePhase(EnginePhase::Rollover);
+    engine.phase_ = EnginePhase::Rollover;
     engine.stats_.currentRPM = 0.0;
 
     // First tick at 0 RPM -- should NOT fall back immediately

@@ -32,7 +32,7 @@ public:
     virtual void stop() = 0;
     virtual int getSimulationFrequency() const = 0;
 
-    // Read-only phase — display/telemetry. Writing via ICombustionEngine::setEnginePhase().
+    // Read-only phase — display/telemetry. Writing via BridgeSimulator::applyTransition().
     virtual EnginePhase getEnginePhase() const { return EnginePhase::Stopped; }
 
     // Drivetrain state capture/restore for hot-swap

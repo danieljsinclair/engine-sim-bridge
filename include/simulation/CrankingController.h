@@ -3,7 +3,7 @@
 // for the Stopped/Cranking/Running/Stopping state machine.
 //
 // Phase is NOT stored here — it lives on ICombustionEngine (single source of truth).
-// All phase reads/writes go through engine.getEnginePhase()/engine.setEnginePhase().
+// Controller returns TransitionDecision; callers apply via BridgeSimulator::applyTransition().
 
 #ifndef CRANKING_CONTROLLER_H
 #define CRANKING_CONTROLLER_H
