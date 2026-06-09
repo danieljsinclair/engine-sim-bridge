@@ -19,6 +19,7 @@ public:
     void quit() override;
     void setThrottle(double level) override;
     void adjustThrottle(double delta) override;
+    void setThrottleMomentary(double level) override;
     void shiftUp() override;
     void shiftDown() override;
     void toggleIgnition() override;
@@ -47,6 +48,8 @@ private:
     bool presetCycle_;
     bool quitRequested_;
     bool throttleTouched_;  // true if set/adjusted this frame
+    double latchedThrottle_;  // Baseline set by W/Z/R/Space
+    bool momentaryActive_;   // True when a 0-9 key is being held
     ILogging* logger_;
 };
 

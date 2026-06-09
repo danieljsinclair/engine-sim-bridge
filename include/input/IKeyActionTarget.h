@@ -24,6 +24,7 @@ public:
     virtual void adjustDynoTorque(double) {}
     virtual void releaseDynoTorque() {}
     virtual void setBrake(double) {}
+    virtual void setThrottleMomentary(double) {}
 
     virtual EngineInput buildEngineInput(double dt) { (void)dt; return {}; }
 };

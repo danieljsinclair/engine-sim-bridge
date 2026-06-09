@@ -444,3 +444,128 @@ TEST_F(EngineInputTargetTest, BuildInput_ReturnsCorrectEngineInput) {
     EXPECT_EQ(input2.gearDelta, 0);
     EXPECT_FALSE(input2.presetCycle);
 }
+
+// ============================================================================
+// Tests 29-35: Throttle latch vs momentary semantics
+// ============================================================================
+
+// Latched keys: W/Z/R/Space -- set and forget, NO decay
+
+TEST_F(EngineInputTargetTest, AdjustThrottleUp_LatchesAndStays) {
+    target->adjustThrottle(0.05);  // W key: 0.1 + 0.05 = 0.15
+    auto input1 = target->buildInput();
+    EXPECT_DOUBLE_EQ(input1.throttle, 0.15);
+
+    // Multiple frames with no key -- should NOT decay
+    for (int i = 0; i < 100; i++) {
+        auto input = target->buildInput();
+        EXPECT_DOUBLE_EQ(input.throttle, 0.15) << "Latched throttle should not decay at frame " << i;
+    }
+}
+
+TEST_F(EngineInputTargetTest, AdjustThrottleDown_LatchesAndStays) {
+    target->adjustThrottle(-0.05);  // Z key: 0.1 - 0.05 = 0.05
+    auto input1 = target->buildInput();
+    EXPECT_DOUBLE_EQ(input1.throttle, 0.05);
+
+    // No decay
+    auto input2 = target->buildInput();
+    EXPECT_DOUBLE_EQ(input2.throttle, 0.05);
+}
+
+TEST_F(EngineInputTargetTest, SetThrottle20_LatchesAndStays) {
+    target->setThrottle(0.2);  // R key
+    auto input = target->buildInput();
+    EXPECT_DOUBLE_EQ(input.throttle, 0.2);
+
+    // No decay over many frames
+    for (int i = 0; i < 50; i++) {
+        auto input = target->buildInput();
+        EXPECT_DOUBLE_EQ(input.throttle, 0.2) << "R throttle should not decay at frame " << i;
+    }
+}
+
+TEST_F(EngineInputTargetTest, SetThrottleZero_LatchesAndStays) {
+    target->setThrottle(0.0);  // Space
+    auto input = target->buildInput();
+    EXPECT_DOUBLE_EQ(input.throttle, 0.0);
+
+    auto input2 = target->buildInput();
+    EXPECT_DOUBLE_EQ(input2.throttle, 0.0);
+}
+
+// Momentary keys: 0-9 -- held only, smooth decay back to latched baseline on release
+
+TEST_F(EngineInputTargetTest, MomentaryThrottle_HeldStays_DecaysToBaseline) {
+    // Set a latched baseline first
+    target->adjustThrottle(0.05);  // W: baseline = 0.15
+    target->buildInput();
+
+    // Press 7 (momentary 70%)
+    target->setThrottleMomentary(0.7);
+    auto input1 = target->buildInput();
+    EXPECT_DOUBLE_EQ(input1.throttle, 0.7);
+
+    // Release (no key next frame) -- throttle should decay toward baseline 0.15
+    // First frame after release: moves toward baseline (not instant)
+    auto input2 = target->buildInput();
+    EXPECT_LT(input2.throttle, 0.7);
+    EXPECT_GT(input2.throttle, 0.15);
+
+    // After enough frames, converges to baseline
+    double lastThrottle = input2.throttle;
+    for (int i = 0; i < 100; i++) {
+        auto input = target->buildInput();
+        lastThrottle = input.throttle;
+    }
+    EXPECT_NEAR(lastThrottle, 0.15, 0.005);
+}
+
+TEST_F(EngineInputTargetTest, MomentaryThrottle_NoBaseline_DecaysToZero) {
+    // Press Space to set latched baseline to 0
+    target->setThrottle(0.0);
+    target->buildInput();
+
+    // Press 5 (momentary 50%)
+    target->setThrottleMomentary(0.5);
+    auto input1 = target->buildInput();
+    EXPECT_DOUBLE_EQ(input1.throttle, 0.5);
+
+    // Release -- decays toward baseline (0)
+    auto input2 = target->buildInput();
+    EXPECT_LT(input2.throttle, 0.5);
+    EXPECT_GT(input2.throttle, 0.0);
+
+    // Converges to baseline
+    double lastThrottle = input2.throttle;
+    for (int i = 0; i < 100; i++) {
+        auto input = target->buildInput();
+        lastThrottle = input.throttle;
+    }
+    EXPECT_NEAR(lastThrottle, 0.0, 0.005);
+}
+
+TEST_F(EngineInputTargetTest, MomentaryThrottle_HeldMultipleFrames_ThenDecaysToBaseline) {
+    target->setThrottle(0.2);  // R: baseline = 0.2
+    target->buildInput();
+
+    // Hold 9 (momentary 90%) for 10 frames
+    for (int i = 0; i < 10; i++) {
+        target->setThrottleMomentary(0.9);
+        auto input = target->buildInput();
+        EXPECT_DOUBLE_EQ(input.throttle, 0.9) << "Momentary should hold at frame " << i;
+    }
+
+    // Release -- decays toward baseline (not instant)
+    auto input = target->buildInput();
+    EXPECT_LT(input.throttle, 0.9);
+    EXPECT_GT(input.throttle, 0.2);
+
+    // Converges to baseline
+    double lastThrottle = input.throttle;
+    for (int i = 0; i < 100; i++) {
+        auto input = target->buildInput();
+        lastThrottle = input.throttle;
+    }
+    EXPECT_NEAR(lastThrottle, 0.2, 0.005);
+}

@@ -18,13 +18,27 @@ EngineInputTarget::EngineInputTarget(ILogging* logger)
     , presetCycle_(false)
     , quitRequested_(false)
     , throttleTouched_(false)
+    , latchedThrottle_(0.1)
+    , momentaryActive_(false)
     , logger_(logger) {
 }
 
 void EngineInputTarget::quit() { quitRequested_ = true; }
-void EngineInputTarget::setThrottle(double level) { throttle_ = level; throttleTouched_ = true; }
+void EngineInputTarget::setThrottle(double level) {
+    throttle_ = level;
+    latchedThrottle_ = level;
+    throttleTouched_ = true;
+    momentaryActive_ = false;
+}
 void EngineInputTarget::adjustThrottle(double delta) {
     throttle_ = std::clamp(throttle_ + delta, 0.0, 1.0);
+    latchedThrottle_ = throttle_;
+    throttleTouched_ = true;
+    momentaryActive_ = false;
+}
+void EngineInputTarget::setThrottleMomentary(double level) {
+    throttle_ = level;
+    momentaryActive_ = true;
     throttleTouched_ = true;
 }
 void EngineInputTarget::shiftUp() { gearDelta_ = 1; gearSelector_++; }
@@ -44,10 +58,13 @@ void EngineInputTarget::releaseDynoTorque() {
 void EngineInputTarget::setBrake(double level) { brakeLevel_ = level; }
 
 EngineInput EngineInputTarget::buildInput() {
-    // Auto-decay: throttle returns toward 0 when no key was held this frame
-    if (!throttleTouched_) {
-        throttle_ *= 0.95;
-        throttle_ = std::max(throttle_, 0.0);
+    if (!throttleTouched_ && momentaryActive_) {
+        // Smooth decay toward latched baseline (~15% of remaining distance per frame)
+        throttle_ = latchedThrottle_ + (throttle_ - latchedThrottle_) * 0.85;
+        if (std::abs(throttle_ - latchedThrottle_) < 0.005) {
+            throttle_ = latchedThrottle_;
+            momentaryActive_ = false;
+        }
     }
 
     EngineInput input;
