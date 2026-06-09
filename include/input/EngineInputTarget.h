@@ -8,11 +8,13 @@
 #include "input/IKeyActionTarget.h"
 #include "io/IInputProvider.h"
 
+class ILogging;
+
 namespace input {
 
 class EngineInputTarget : public IKeyActionTarget {
 public:
-    EngineInputTarget();
+    explicit EngineInputTarget(ILogging* logger = nullptr);
 
     void quit() override;
     void setThrottle(double level) override;
@@ -45,6 +47,7 @@ private:
     bool presetCycle_;
     bool quitRequested_;
     bool throttleTouched_;  // true if set/adjusted this frame
+    ILogging* logger_;
 };
 
 } // namespace input

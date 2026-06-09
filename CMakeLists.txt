@@ -564,9 +564,11 @@ if(BUILD_BRIDGE_TESTS)
         test/input/BrakeInputTest.cpp
         test/input/KeyHoldBridgeTest.cpp
         test/input/BrakeChainTest.cpp
+        test/input/DemoChainIntegrationTest.cpp
     )
     target_include_directories(demo_input_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
     )
     target_link_libraries(demo_input_tests
         PRIVATE
