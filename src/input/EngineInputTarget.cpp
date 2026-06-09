@@ -2,6 +2,7 @@
 // TDD RED PHASE: Stub implementation. Tests will drive the real implementation.
 
 #include "input/EngineInputTarget.h"
+#include "input/IDemoSpeedEnhancer.h"
 #include "common/ILogging.h"
 #include <algorithm>
 
@@ -21,6 +22,10 @@ EngineInputTarget::EngineInputTarget(ILogging* logger)
     , latchedThrottle_(0.1)
     , momentaryActive_(false)
     , logger_(logger) {
+}
+
+void EngineInputTarget::setSpeedEnhancer(IDemoSpeedEnhancer* enhancer) {
+    speedEnhancer_ = enhancer;
 }
 
 void EngineInputTarget::quit() { quitRequested_ = true; }
@@ -56,6 +61,9 @@ void EngineInputTarget::releaseDynoTorque() {
     if (logger_) logger_->info(LogMask::BRIDGE, "Dyno torque released");
 }
 void EngineInputTarget::setBrake(double level) { brakeLevel_ = level; }
+void EngineInputTarget::adjustSpeed(double delta) {
+    roadSpeedKmh_ = std::clamp(roadSpeedKmh_ + delta, 0.0, 300.0);
+}
 
 EngineInput EngineInputTarget::buildInput() {
     if (!throttleTouched_ && momentaryActive_) {
@@ -77,11 +85,24 @@ EngineInput EngineInputTarget::buildInput() {
     input.brakeLevel = brakeLevel_;
     input.presetCycle = presetCycle_;
     input.gearAutoMode = false;
+    input.roadSpeedKmh = roadSpeedKmh_;
 
     gearDelta_ = 0;
     starterButton_ = false;
     presetCycle_ = false;
     throttleTouched_ = false;
+
+    return input;
+}
+
+EngineInput EngineInputTarget::buildEngineInput(double dt) {
+    EngineInput input = buildInput();
+
+    // If a speed enhancer is present, enhance the input with speed data
+    // The enhancer receives the base keyboard state and adds computed speed/physics
+    if (speedEnhancer_) {
+        input = speedEnhancer_->enhanceInput(input, dt);
+    }
 
     return input;
 }

@@ -38,6 +38,7 @@ struct EngineInput {
     double vehicleSpeedTargetKmh = -1.0; // -1 = unchanged, for future SpeedTrackingForce
     int gearSelector = 0;           // GearSelector value for display
     bool gearAutoMode = false;      // true=auto(ZF), false=manual
+    double roadSpeedKmh = 0.0;      // Virtual ICE Twin: manual road speed control (km/h)
 
     // Simulator auto-disengages starter when RPM > threshold
     // Preset cycling

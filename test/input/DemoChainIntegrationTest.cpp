@@ -1,14 +1,14 @@
-// DemoChainIntegrationTest.cpp - End-to-end demo chain wiring test
-// Proves: MockKeyboard -> KeyboardInputProvider -> DemoControlsTarget -> DemoInputProvider
-// Verifies key actions propagate through the full consolidated chain to EngineInput.
+// DemoChainIntegrationTest.cpp - End-to-end unified chain wiring test
+// Proves: MockKeyboard -> KeyboardInputProvider -> EngineInputTarget (+ DemoInputProvider enhancer)
+// Verifies key actions propagate through the full unified chain to EngineInput.
 
 #include "input/KeyboardInputProvider.h"
 #include "input/DemoInputProvider.h"
-#include "input/DemoControlsTarget.h"
+#include "input/EngineInputTarget.h"
 #include "input/DemoThrottleSource.h"
 #include "input/GearSelectorInput.h"
 #include "input/IgnitionInput.h"
-#include "input/IDemoControls.h"
+#include "input/IDemoSpeedEnhancer.h"
 #include "twin/IceVehicleProfile.h"
 #include "mocks/MockKeyboardInput.h"
 
@@ -22,12 +22,15 @@ class DemoChainIntegrationTest : public ::testing::Test {
 protected:
     IceVehicleProfile profile_{IceVehicleProfile::zf8hp45()};
     MockKeyboardInput* rawKeyboard_ = nullptr;
-    DemoInputProvider* rawDemoProvider_ = nullptr;
     std::unique_ptr<KeyboardInputProvider> provider_;
+    std::unique_ptr<EngineInputTarget> target_;
+    std::unique_ptr<DemoInputProvider> demoProvider_;
 
     void SetUp() override {
         auto keyboard = std::make_unique<MockKeyboardInput>();
         rawKeyboard_ = keyboard.get();
+
+        auto target = std::make_unique<EngineInputTarget>();
 
         auto throttle = std::make_unique<DemoThrottleSource>();
         auto demoProvider = std::make_unique<DemoInputProvider>(
@@ -36,20 +39,18 @@ protected:
             std::make_unique<IgnitionInput>(),
             profile_
         );
-        rawDemoProvider_ = demoProvider.get();
-        ASSERT_TRUE(rawDemoProvider_->Initialize());
+        ASSERT_TRUE(demoProvider->Initialize());
 
-        IDemoControls* controls = dynamic_cast<IDemoControls*>(demoProvider.get());
-        auto target = std::make_unique<DemoControlsTarget>(controls);
-        target->setDemoProvider(demoProvider.get());
+        // Wire demo provider as speed enhancer (same as CLIMain --connect-demo)
+        target->setSpeedEnhancer(demoProvider.get());
 
-        provider_ = std::make_unique<KeyboardInputProvider>(
+        auto provider = std::make_unique<KeyboardInputProvider>(
             std::move(keyboard), target.get());
-        ASSERT_TRUE(provider_->Initialize());
+        ASSERT_TRUE(provider->Initialize());
 
-        // Transfer ownership so they outlive the provider
-        demoProvider_.reset(demoProvider.release());
-        target_.reset(target.release());
+        target_ = std::move(target);
+        demoProvider_ = std::move(demoProvider);
+        provider_ = std::move(provider);
     }
 
     EngineInput pressAndTick(int key, double dt = 16.0) {
@@ -60,24 +61,18 @@ protected:
     EngineInput tick(double dt = 16.0) {
         return provider_->OnUpdateSimulation(dt);
     }
-
-private:
-    std::unique_ptr<DemoInputProvider> demoProvider_;
-    std::unique_ptr<DemoControlsTarget> target_;
 };
 
-// PROVE: pressing 'b' propagates through the full chain to brakeLevel
+// PROVE: brake key propagates through chain to brakeLevel
 TEST_F(DemoChainIntegrationTest, BrakeKey_PropagatesThroughChain) {
     EngineInput input = pressAndTick('b');
-    EXPECT_DOUBLE_EQ(input.brakeLevel, 1.0)
-        << "Brake should propagate from keyboard through DemoControlsTarget to EngineInput";
+    EXPECT_DOUBLE_EQ(input.brakeLevel, 1.0);
 }
 
 // PROVE: brake clears after key release + timeout
 TEST_F(DemoChainIntegrationTest, BrakeReleased_ClearsAfterTimeout) {
     pressAndTick('b');
 
-    // Drain past timeout (initial + repeat)
     double elapsedMs = 0.0;
     while (elapsedMs < 300.0) {
         tick();
@@ -85,41 +80,38 @@ TEST_F(DemoChainIntegrationTest, BrakeReleased_ClearsAfterTimeout) {
     }
 
     EngineInput input = tick();
-    EXPECT_DOUBLE_EQ(input.brakeLevel, 0.0)
-        << "Brake should clear after key release timeout";
+    EXPECT_DOUBLE_EQ(input.brakeLevel, 0.0);
 }
 
-// PROVE: shift up key propagates through chain to gearDelta
-TEST_F(DemoChainIntegrationTest, ShiftUpKey_PropagatesThroughChain) {
-    EngineInput input = pressAndTick(']');
-    // DemoInputProvider processes gearDelta through its gearbox logic
-    // At minimum, the key press should not crash and should produce valid output
-    EXPECT_GE(input.gearDelta, 0)
-        << "Shift up should produce non-negative gearDelta through demo chain";
+// PROVE: keyboard throttle is PRESERVED through the enhancer chain
+// (the enhancer only adds gear/clutch, never overwrites throttle)
+TEST_F(DemoChainIntegrationTest, Throttle_PreservedThroughEnhancer) {
+    EngineInput input = pressAndTick('w');
+    // EngineInputTarget default is 0.1, +0.05 = 0.15
+    EXPECT_DOUBLE_EQ(input.throttle, 0.15);
 }
 
-// PROVE: quit key propagates through chain
-TEST_F(DemoChainIntegrationTest, QuitKey_PropagatesThroughChain) {
-    pressAndTick('q');
-    // The chain should not crash; quit is edge-triggered in KeyboardInputProvider
-    // and calls target->quit() which should set quitRequested on the demo side
-}
-
-// PROVE: ignition toggle propagates through chain
+// PROVE: ignition toggle works through the unified chain
 TEST_F(DemoChainIntegrationTest, IgnitionToggle_PropagatesThroughChain) {
     EngineInput input1 = tick();
-    bool ignitionBefore = input1.ignition;
+    EXPECT_TRUE(input1.ignition);
 
     EngineInput input2 = pressAndTick('i');
-    // Ignition should toggle from the DemoInputProvider's internal state
-    EXPECT_NE(input2.ignition, ignitionBefore)
-        << "Ignition toggle should propagate through the demo chain";
+    EXPECT_FALSE(input2.ignition);
 }
 
-// PROVE: no keys produces default EngineInput (baseline stability)
+// PROVE: gear shift through keyboard produces gearDelta in output
+TEST_F(DemoChainIntegrationTest, ShiftUp_ProducesGearDelta) {
+    EngineInput input = pressAndTick(']');
+    // The enhancer may modify gearAbsolute, but gearDelta should be non-zero
+    EXPECT_EQ(input.gearDelta, 1);
+}
+
+// PROVE: no keys produces stable default EngineInput
 TEST_F(DemoChainIntegrationTest, NoKeys_ProducesStableDefault) {
     EngineInput input = tick();
     EXPECT_DOUBLE_EQ(input.brakeLevel, 0.0);
     EXPECT_FALSE(input.starterButton);
     EXPECT_EQ(input.gearDelta, 0);
+    EXPECT_DOUBLE_EQ(input.throttle, 0.1);  // default throttle
 }

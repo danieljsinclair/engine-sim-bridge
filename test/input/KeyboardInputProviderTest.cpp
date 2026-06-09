@@ -3,8 +3,8 @@
 // Tests verify the KeyboardInputProvider dispatches key actions to IKeyActionTarget
 // correctly, using KeyHoldBridge for key state tracking.
 //
-// Tests 1-20: Key dispatch via consolidated KeyboardInputProvider + MockKeyActionTarget
-// Tests 21-28: EngineInputTarget state management
+// Tests 1-23: Key dispatch via consolidated KeyboardInputProvider + MockKeyActionTarget
+// Tests 24-31: EngineInputTarget state management
 
 #include "input/KeyboardInputProvider.h"
 #include "input/EngineInputTarget.h"
@@ -247,7 +247,37 @@ TEST_F(KeyboardDispatchTest, BKeyHeld_SetsBrakeEachFrame) {
 }
 
 // ============================================================================
-// Tests 14-16: Dyno torque
+// Tests 14-17: Speed control (comma and dot keys)
+// ============================================================================
+
+TEST_F(KeyboardDispatchTest, CommaKey_DecreasesSpeed) {
+    createProvider();
+    pressKey(',');
+    ASSERT_FALSE(mockTargetPtr->calls.empty());
+    EXPECT_DOUBLE_EQ(mockTargetPtr->lastSpeedDelta, -2.0);
+}
+
+TEST_F(KeyboardDispatchTest, DotKey_IncreasesSpeed) {
+    createProvider();
+    pressKey('.');
+    ASSERT_FALSE(mockTargetPtr->calls.empty());
+    EXPECT_DOUBLE_EQ(mockTargetPtr->lastSpeedDelta, 2.0);
+}
+
+TEST_F(KeyboardDispatchTest, CommaKeyHeld_RampsSpeed) {
+    createProvider();
+    // First press
+    mockKeyboardPtr->enqueue(',');
+    drainFrame();
+    // OS repeat (same key arriving again next frame)
+    mockKeyboardPtr->enqueue(',');
+    drainFrame();
+
+    EXPECT_GE(mockTargetPtr->speedAdjustCount, 2) << "Comma key held via OS repeat should fire multiple times";
+}
+
+// ============================================================================
+// Tests 18-21: Dyno torque
 // ============================================================================
 
 TEST_F(KeyboardDispatchTest, EKey_DecreasesDynoTorque) {
@@ -271,7 +301,7 @@ TEST_F(KeyboardDispatchTest, CKey_ReleasesDynoTorque) {
 }
 
 // ============================================================================
-// Test 17: Preset cycle
+// Test 22: Preset cycle
 // ============================================================================
 
 TEST_F(KeyboardDispatchTest, PKey_CyclesPreset) {
@@ -281,7 +311,7 @@ TEST_F(KeyboardDispatchTest, PKey_CyclesPreset) {
 }
 
 // ============================================================================
-// Test 18: Quit
+// Test 23: Quit
 // ============================================================================
 
 TEST_F(KeyboardDispatchTest, QKey_TriggersQuit) {
@@ -297,7 +327,7 @@ TEST_F(KeyboardDispatchTest, EscapeKey_TriggersQuit) {
 }
 
 // ============================================================================
-// Test 19: No key = nothing called
+// Test 24: No key = nothing called
 // ============================================================================
 
 TEST_F(KeyboardDispatchTest, NoKey_NothingCalled) {
@@ -307,7 +337,7 @@ TEST_F(KeyboardDispatchTest, NoKey_NothingCalled) {
 }
 
 // ============================================================================
-// Test 20: Edge-triggered shift (repeat does NOT shift again)
+// Test 25: Edge-triggered shift (repeat does NOT shift again)
 // ============================================================================
 
 TEST_F(KeyboardDispatchTest, ShiftRepeat_DoesNotShiftAgain) {
@@ -338,7 +368,7 @@ protected:
 };
 
 // ============================================================================
-// Test 21: adjustThrottle increases
+// Test 26: adjustThrottle increases
 // ============================================================================
 
 TEST_F(EngineInputTargetTest, AdjustThrottleUp_IncreasesBy005) {
@@ -348,7 +378,7 @@ TEST_F(EngineInputTargetTest, AdjustThrottleUp_IncreasesBy005) {
 }
 
 // ============================================================================
-// Test 22: adjustThrottle decreases
+// Test 27: adjustThrottle decreases
 // ============================================================================
 
 TEST_F(EngineInputTargetTest, AdjustThrottleDown_DecreasesBy005) {
@@ -359,7 +389,7 @@ TEST_F(EngineInputTargetTest, AdjustThrottleDown_DecreasesBy005) {
 }
 
 // ============================================================================
-// Test 23: setThrottle absolute
+// Test 28: setThrottle absolute
 // ============================================================================
 
 TEST_F(EngineInputTargetTest, SetThrottle_SetsAbsolute) {
@@ -369,7 +399,7 @@ TEST_F(EngineInputTargetTest, SetThrottle_SetsAbsolute) {
 }
 
 // ============================================================================
-// Test 24: shiftUp increments gearSelector and sets gearDelta
+// Test 29: shiftUp increments gearSelector and sets gearDelta
 // ============================================================================
 
 TEST_F(EngineInputTargetTest, ShiftUp_IncrementsGearSelectorAndSetsDelta) {
@@ -380,7 +410,7 @@ TEST_F(EngineInputTargetTest, ShiftUp_IncrementsGearSelectorAndSetsDelta) {
 }
 
 // ============================================================================
-// Test 25: toggleIgnition flips state
+// Test 30: toggleIgnition flips state
 // ============================================================================
 
 TEST_F(EngineInputTargetTest, ToggleIgnition_FlipsState) {
@@ -397,7 +427,7 @@ TEST_F(EngineInputTargetTest, ToggleIgnition_FlipsState) {
 }
 
 // ============================================================================
-// Test 26: setStarter is momentary
+// Test 31: setStarter is momentary
 // ============================================================================
 
 TEST_F(EngineInputTargetTest, SetStarter_SetsMomentaryFlag) {
@@ -411,7 +441,7 @@ TEST_F(EngineInputTargetTest, SetStarter_SetsMomentaryFlag) {
 }
 
 // ============================================================================
-// Test 27: setBrake sets brakeLevel
+// Test 32: setBrake sets brakeLevel
 // ============================================================================
 
 TEST_F(EngineInputTargetTest, SetBrake_SetsLevel) {
@@ -421,7 +451,7 @@ TEST_F(EngineInputTargetTest, SetBrake_SetsLevel) {
 }
 
 // ============================================================================
-// Test 28: buildInput returns correct EngineInput
+// Test 33: buildInput returns correct EngineInput
 // ============================================================================
 
 TEST_F(EngineInputTargetTest, BuildInput_ReturnsCorrectEngineInput) {
@@ -446,7 +476,7 @@ TEST_F(EngineInputTargetTest, BuildInput_ReturnsCorrectEngineInput) {
 }
 
 // ============================================================================
-// Tests 29-35: Throttle latch vs momentary semantics
+// Tests 34-40: Throttle latch vs momentary semantics
 // ============================================================================
 
 // Latched keys: W/Z/R/Space -- set and forget, NO decay
@@ -568,4 +598,41 @@ TEST_F(EngineInputTargetTest, MomentaryThrottle_HeldMultipleFrames_ThenDecaysToB
         lastThrottle = input.throttle;
     }
     EXPECT_NEAR(lastThrottle, 0.2, 0.005);
+}
+
+// ============================================================================
+// Tests 41-45: Speed control state
+// ============================================================================
+
+TEST_F(EngineInputTargetTest, AdjustSpeedUp_IncreasesByDelta) {
+    target->adjustSpeed(10.0);
+    EngineInput input = target->buildInput();
+    EXPECT_DOUBLE_EQ(input.roadSpeedKmh, 10.0);
+}
+
+TEST_F(EngineInputTargetTest, AdjustSpeedDown_DecreasesByDelta) {
+    target->adjustSpeed(50.0);
+    target->adjustSpeed(-10.0);
+    EngineInput input = target->buildInput();
+    EXPECT_DOUBLE_EQ(input.roadSpeedKmh, 40.0);
+}
+
+TEST_F(EngineInputTargetTest, AdjustSpeed_ClampsToZero) {
+    target->adjustSpeed(50.0);
+    target->adjustSpeed(-100.0);  // Try to go below zero
+    EngineInput input = target->buildInput();
+    EXPECT_DOUBLE_EQ(input.roadSpeedKmh, 0.0);
+}
+
+TEST_F(EngineInputTargetTest, AdjustSpeed_ClampsToMax) {
+    target->adjustSpeed(200.0);
+    target->adjustSpeed(150.0);  // Try to exceed 300 km/h
+    EngineInput input = target->buildInput();
+    EXPECT_DOUBLE_EQ(input.roadSpeedKmh, 300.0);
+}
+
+TEST_F(EngineInputTargetTest, BuildInput_IncludesRoadSpeed) {
+    target->adjustSpeed(100.0);
+    EngineInput input = target->buildInput();
+    EXPECT_DOUBLE_EQ(input.roadSpeedKmh, 100.0);
 }
