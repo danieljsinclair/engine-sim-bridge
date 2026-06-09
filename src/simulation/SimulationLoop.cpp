@@ -146,6 +146,12 @@ void applyGearChange(BridgeSimulator* engineSim, int gearDelta, ILogging* logger
     }
 }
 
+void applyDecision(ICombustionEngine& engine, const CrankingController::TransitionDecision& decision) {
+    if (!decision.isTransition) return;
+    engine.setEnginePhase(decision.targetPhase);
+    engine.setStarterMotor(decision.starterMotor);
+}
+
 void applyDynoControl(BridgeSimulator* bridgeSim, double scale, double& lastScale) {
     if (scale == lastScale) return;  // OK: no-op when unchanged
     if (scale < 0.0) return;  // OK: negative values are invalid, ignore silently
@@ -385,12 +391,12 @@ public:
             if (!combustion) return;
 
             if (hasDrivetrainMomentum(snapshot)) {
-                combustion->setEnginePhase(EnginePhase::Rollover);
+                auto rolloverDecision = CrankingController::TransitionDecision{EnginePhase::Rollover, false, 0.0, true};
+                applyDecision(*combustion, rolloverDecision);
                 logger->info(LogMask::BRIDGE, "Hot-swap → Rollover (gear=%d, vtheta=%.1f)", snapshot.gear, snapshot.vehicleMassVtheta);
             } else {
                 auto decision = crankingController_.engageStarter(*combustion, true);
-                combustion->setEnginePhase(decision.targetPhase);
-                combustion->setStarterMotor(decision.starterMotor);
+                applyDecision(*combustion, decision);
                 logger->info(LogMask::BRIDGE, "Hot-swap → Cranking (neutral, starter engaged)");
             }
         } else {
@@ -499,15 +505,13 @@ int runSimulationLoop(
 
         if (combustion) {
             auto starterDecision = crankingController.engageStarter(*combustion, input.starterButton);
-            combustion->setEnginePhase(starterDecision.targetPhase);
-            combustion->setStarterMotor(starterDecision.starterMotor);
+            applyDecision(*combustion, starterDecision);
         }
         auto crankingDecision = combustion
             ? crankingController.step(*combustion, input.throttle, input.ignition)
             : CrankingController::TransitionDecision{EnginePhase::Running, false, input.throttle, false};
-        if (combustion && crankingDecision.isTransition) {
-            combustion->setEnginePhase(crankingDecision.targetPhase);
-            combustion->setStarterMotor(crankingDecision.starterMotor);
+        if (combustion) {
+            applyDecision(*combustion, crankingDecision);
         }
         auto crankingState = CrankingController::State{crankingDecision.effectiveThrottle, combustion && crankingDecision.starterMotor, crankingDecision.targetPhase};
 
