@@ -90,7 +90,6 @@ private:
 
     // Single source of truth for engine phase — written via applyTransition()
     EnginePhase enginePhase_ = EnginePhase::Stopped;
-    void setEnginePhase(EnginePhase phase);
 
     static void advanceFixedSteps(Simulator* sim, int simulationFrequency, double dt, bool ceil);
     void drainSynthesizerBuffer(Simulator* sim);
