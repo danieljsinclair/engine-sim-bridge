@@ -9,7 +9,7 @@
 namespace input {
 
 EngineInputTarget::EngineInputTarget(ILogging* logger)
-    : throttle_(0.1)
+    : throttle_(0.0)
     , ignition_(true)
     , starterButton_(false)
     , gearDelta_(0)
@@ -19,7 +19,7 @@ EngineInputTarget::EngineInputTarget(ILogging* logger)
     , presetCycle_(false)
     , quitRequested_(false)
     , throttleTouched_(false)
-    , latchedThrottle_(0.1)
+    , latchedThrottle_(0.00)
     , momentaryActive_(false)
     , logger_(logger) {
 }

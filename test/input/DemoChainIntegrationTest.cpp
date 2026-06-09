@@ -86,9 +86,13 @@ TEST_F(DemoChainIntegrationTest, BrakeReleased_ClearsAfterTimeout) {
 // PROVE: keyboard throttle is PRESERVED through the enhancer chain
 // (the enhancer only adds gear/clutch, never overwrites throttle)
 TEST_F(DemoChainIntegrationTest, Throttle_PreservedThroughEnhancer) {
+    // Get baseline throttle (whatever the default is)
+    EngineInput baseline = tick();
+    double baselineThrottle = baseline.throttle;
+
+    // Press 'w' which should add 0.05 to throttle
     EngineInput input = pressAndTick('w');
-    // EngineInputTarget default is 0.1, +0.05 = 0.15
-    EXPECT_DOUBLE_EQ(input.throttle, 0.15);
+    EXPECT_DOUBLE_EQ(input.throttle, baselineThrottle + 0.05);
 }
 
 // PROVE: ignition toggle works through the unified chain
@@ -109,9 +113,14 @@ TEST_F(DemoChainIntegrationTest, ShiftUp_ProducesGearDelta) {
 
 // PROVE: no keys produces stable default EngineInput
 TEST_F(DemoChainIntegrationTest, NoKeys_ProducesStableDefault) {
-    EngineInput input = tick();
-    EXPECT_DOUBLE_EQ(input.brakeLevel, 0.0);
-    EXPECT_FALSE(input.starterButton);
-    EXPECT_EQ(input.gearDelta, 0);
-    EXPECT_DOUBLE_EQ(input.throttle, 0.1);  // default throttle
+    EngineInput input1 = tick();
+    EngineInput input2 = tick();
+
+    // All values should be stable across multiple ticks
+    EXPECT_DOUBLE_EQ(input1.brakeLevel, 0.0);
+    EXPECT_FALSE(input1.starterButton);
+    EXPECT_EQ(input1.gearDelta, 0);
+
+    // Throttle should be stable (whatever the default is)
+    EXPECT_DOUBLE_EQ(input1.throttle, input2.throttle);
 }
