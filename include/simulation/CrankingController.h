@@ -16,14 +16,27 @@ class ILogging;
 
 class CrankingController {
 public:
+    struct TransitionDecision {
+        EnginePhase targetPhase;
+        bool starterMotor;
+        double effectiveThrottle;
+        bool isTransition;
+    };
+
     struct State {
         double startingThrottle;
         bool starterEngaged;
         EnginePhase phase;
     };
 
+    // Original methods (to be removed in Step 5)
     void engageStarter(ICombustionEngine& engine, bool startStopButton);
     State step(ICombustionEngine& engine, double userThrottle, bool ignition, ILogging* logger);
+
+    // Pure decision methods (additive - Step 1)
+    TransitionDecision engageStarterPure(ICombustionEngine& engine, bool startStopButton);
+    TransitionDecision stepPure(ICombustionEngine& engine, double userThrottle, bool ignition);
+
     void reset();
 
 private:
