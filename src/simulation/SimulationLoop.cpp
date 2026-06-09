@@ -139,10 +139,10 @@ std::unique_ptr<IAudioHardwareProvider> createHardwareProvider(
 }
 
 // Apply gear changes from keyboard input ([/] keys). Clamps at gear 0 (neutral).
-void applyGearChange(BridgeSimulator* engineSim, int gearDelta, ILogging* logger) {
+void applyGearChange(ISimulator& simulator, int gearDelta, ILogging* logger) {
 
-    if (engineSim->changeGear(gearDelta)) {
-        logger->info(LogMask::BRIDGE, "New gear: %+d", engineSim->getGear());
+    if (simulator.changeGear(gearDelta)) {
+        logger->info(LogMask::BRIDGE, "New gear: %+d", simulator.getGear());
     }
 }
 
@@ -151,10 +151,10 @@ void applyDecision(ICombustionEngine* engine, const TransitionDecision& decision
     engine->applyTransition(decision);
 }
 
-void applyDynoControl(BridgeSimulator* bridgeSim, double scale, double& lastScale) {
+void applyDynoControl(ISimulator& simulator, double scale, double& lastScale) {
     if (scale == lastScale) return;  // OK: no-op when unchanged
     if (scale < 0.0) return;  // OK: negative values are invalid, ignore silently
-    bridgeSim->setDynoTorqueScale(scale);
+    simulator.setDynoTorqueScale(scale);
     lastScale = scale;
 }
 
@@ -163,8 +163,6 @@ void applyVehicleControls(
     const input::EngineInput& input, const CrankingController::State& crankingState,
     double& lastDynoTorqueScale, ILogging* logger)
 {
-    auto* bridgeSim = dynamic_cast<BridgeSimulator*>(&simulator);
-
     simulator.setThrottle(crankingState.startingThrottle);
 
     if (combustionEngine) {
@@ -175,13 +173,13 @@ void applyVehicleControls(
     if (input.gearAbsolute >= 0) {
         simulator.setGear(input.gearAbsolute);
     } else {
-        applyGearChange(bridgeSim, input.gearDelta, logger);
+        applyGearChange(simulator, input.gearDelta, logger);
     }
 
     // Vehicle controls (gear, dyno) — dyno only when engine running
     if (!crankingState.starterEngaged) {
         // HACK: Should put the clutch in here really
-        applyDynoControl(bridgeSim, input.dynoTorqueScale, lastDynoTorqueScale);
+        applyDynoControl(simulator, input.dynoTorqueScale, lastDynoTorqueScale);
     } else {
         logger->info(LogMask::BRIDGE, "Cranking: starter engaged, dyno disabled - consider using the clutch instead");
     }

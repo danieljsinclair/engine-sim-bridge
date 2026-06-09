@@ -24,9 +24,11 @@ public:
     // Twin-specific control methods
     virtual int setGear(int /* gear */) { return 0;}
     virtual int getGear() const { return 0; }
+    virtual bool changeGear(int /* gearDelta */) { return false; }
     virtual void setClutchPressure(double /* pressure */) {}
     virtual void setBrakePressure(double /* pressure */) {}
     virtual double getEngineRpm() const { return 0.0; }
+    virtual void setDynoTorqueScale(double /* scale */) {}
     virtual bool readAudioBuffer(float* buffer, int32_t frames, int32_t* read) = 0;
     virtual bool start() = 0;
     virtual void stop() = 0;

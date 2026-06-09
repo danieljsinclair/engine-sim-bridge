@@ -71,8 +71,8 @@ public:
     };
     DrivetrainSnapshot captureDrivetrainState() const;
     void restoreDrivetrainState(const DrivetrainSnapshot& snapshot);
-    bool changeGear(int gearDelta);
-    void setDynoTorqueScale(double scale);
+    bool changeGear(int gearDelta) override;
+    void setDynoTorqueScale(double scale) override;
 
     // Configure dyno in load torque mode (brake-only).
     // loadFraction: 0.0-1.0 fraction of DYNO_MAX_TORQUE_FT_LBS.
