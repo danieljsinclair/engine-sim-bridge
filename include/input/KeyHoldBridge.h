@@ -3,6 +3,7 @@
 
 #include <unordered_map>
 #include <functional>
+#include <initializer_list>
 
 namespace input {
 
@@ -38,6 +39,12 @@ public:
 
     // True for one frame when key transitions from down → up (timeout)
     bool isKeyReleased(int key) const;
+
+    // True on press OR OS repeat — the "hold to ramp" pattern
+    bool isKeyActive(int key) const;
+
+    // True if any of the given keys is active
+    bool isKeyActiveAny(std::initializer_list<int> keys) const;
 
 private:
     struct KeyState {

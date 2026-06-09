@@ -129,6 +129,9 @@ set(BRIDGE_SOURCES
     src/input/DemoInputProvider.cpp
     src/input/BrakeInput.cpp
     src/input/KeyHoldBridge.cpp
+    src/input/KeyboardInputProvider.cpp
+    src/input/EngineInputTarget.cpp
+    src/input/DemoControlsTarget.cpp
 )
 
 # Platform-specific audio hardware and factory
@@ -573,6 +576,24 @@ if(BUILD_BRIDGE_TESTS)
     target_compile_options(demo_input_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
     if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME demo_input_tests COMMAND demo_input_tests --gtest_color=yes)
+    endif()
+
+    # Keyboard consolidation tests - consolidated KeyboardInputProvider + EngineInputTarget
+    add_executable(keyboard_consolidation_tests
+        test/input/KeyboardInputProviderTest.cpp
+    )
+    target_include_directories(keyboard_consolidation_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(keyboard_consolidation_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(keyboard_consolidation_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME keyboard_consolidation_tests COMMAND keyboard_consolidation_tests --gtest_color=yes)
     endif()
 
     # Twin scenario tests - Phase 1 acceptance criteria tests

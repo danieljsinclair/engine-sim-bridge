@@ -62,4 +62,16 @@ bool KeyHoldBridge::isKeyReleased(int key) const {
     return it != keys_.end() && it->second.released;
 }
 
+bool KeyHoldBridge::isKeyActive(int key) const {
+    auto it = keys_.find(key);
+    return it != keys_.end() && (it->second.pressed || it->second.repeating);
+}
+
+bool KeyHoldBridge::isKeyActiveAny(std::initializer_list<int> keys) const {
+    for (int key : keys) {
+        if (isKeyActive(key)) return true;
+    }
+    return false;
+}
+
 } // namespace input
