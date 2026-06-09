@@ -31,6 +31,53 @@ struct ScriptCompileTarget {
     std::filesystem::path wrapperPath;
     std::string relativeImport;
     bool insideAssets = false;
+
+    ~ScriptCompileTarget() {
+        cleanup();
+    }
+
+    // Non-copyable to prevent double-cleanup
+    ScriptCompileTarget() = default;
+    ScriptCompileTarget(const ScriptCompileTarget&) = delete;
+    ScriptCompileTarget& operator=(const ScriptCompileTarget&) = delete;
+    ScriptCompileTarget(ScriptCompileTarget&& o) noexcept
+        : simDir(std::move(o.simDir))
+        , assetsDir(std::move(o.assetsDir))
+        , compileTarget(std::move(o.compileTarget))
+        , tempScriptPath(std::move(o.tempScriptPath))
+        , wrapperPath(std::move(o.wrapperPath))
+        , relativeImport(std::move(o.relativeImport))
+        , insideAssets(o.insideAssets) {
+        o.tempScriptPath.clear();
+        o.wrapperPath.clear();
+    }
+    ScriptCompileTarget& operator=(ScriptCompileTarget&& o) noexcept {
+        if (this != &o) {
+            cleanup();
+            simDir = std::move(o.simDir);
+            assetsDir = std::move(o.assetsDir);
+            compileTarget = std::move(o.compileTarget);
+            tempScriptPath = std::move(o.tempScriptPath);
+            wrapperPath = std::move(o.wrapperPath);
+            relativeImport = std::move(o.relativeImport);
+            insideAssets = o.insideAssets;
+            o.tempScriptPath.clear();
+            o.wrapperPath.clear();
+        }
+        return *this;
+    }
+
+private:
+    void cleanup() {
+        if (!wrapperPath.empty()) {
+            std::filesystem::remove(wrapperPath);
+            wrapperPath.clear();
+        }
+        if (!tempScriptPath.empty()) {
+            std::filesystem::remove(tempScriptPath);
+            tempScriptPath.clear();
+        }
+    }
 };
 
 inline std::filesystem::path findEngineSimRoot(
@@ -136,13 +183,8 @@ inline ScriptCompileTarget prepareScriptCompileTarget(
     return target;
 }
 
-inline void cleanupScriptCompileTarget(const ScriptCompileTarget& target) {
-    if (!target.wrapperPath.empty()) {
-        std::filesystem::remove(target.wrapperPath);
-    }
-    if (!target.tempScriptPath.empty()) {
-        std::filesystem::remove(target.tempScriptPath);
-    }
-}
+// Cleanup is handled automatically by ScriptCompileTarget's destructor (RAII).
+// This function is retained for backwards compatibility with existing callers.
+inline void cleanupScriptCompileTarget(const ScriptCompileTarget& /*target*/) {}
 
 }  // namespace script_compile_helpers
