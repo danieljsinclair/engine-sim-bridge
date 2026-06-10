@@ -2,6 +2,7 @@
 // Extracted from engine_sim_cli.cpp for SOLID SRP compliance
 // Phase E: Uses ISimulator* instead of EngineSimHandle/EngineSimAPI&
 // Phase F: Moved to engine-sim-bridge for reusability (GUI, iOS, headless)
+// Phase G: Refactored from free function to class with injected dependencies
 
 #include "simulation/SimulationLoop.h"
 #include "simulation/CrankingController.h"
@@ -27,27 +28,6 @@
 #include <thread>
 #include <chrono>
 
-#define CRANKING_DEBUG false  // Enable detailed logging for cranking state transitions
-#if CRANKING_DEBUG
-#define IF_CRANKING_DEBUG(x) x
-#else
-#define IF_CRANKING_DEBUG(x)
-#endif
-
-// SimulationConfig — value type, compiler-generated special members
-
-// ============================================================================
-// CrankingStepResult - Data carrier for cranking decision output
-// ============================================================================
-
-struct CrankingStepResult {
-    TransitionDecision decision;
-    CrankingController::State crankingState;
-};
-
-// ============================================================================
-// Private Helper Functions - SRP Compliance
-// ============================================================================
 
 namespace {
 
@@ -57,9 +37,15 @@ static constexpr double FULL_THROTTLE = 1.0;                     // Maximum thro
 static constexpr double SECONDS_TO_MICROSECONDS = 1000000.0;
 static constexpr double SECONDS_TO_MILLISECONDS = 1000.0;
 
-input::EngineInput pollInput(input::IInputProvider* inputProvider, double currentTime, double updateInterval, bool isFirstTick) {
-    if (inputProvider) {
-        return inputProvider->OnUpdateSimulation(updateInterval);
+} // anonymous namespace — constants only
+
+// ============================================================================
+// SimulationLoop - Private methods (file scope, access members directly)
+// ============================================================================
+
+input::EngineInput SimulationLoop::pollInput(double currentTime, double updateInterval, bool isFirstTick) {
+    if (inputProvider_) {
+        return inputProvider_->OnUpdateSimulation(updateInterval);
     }
     input::EngineInput timed;
     timed.throttle = currentTime < THROTTLE_RAMP_DURATION_SECONDS
@@ -72,32 +58,32 @@ input::EngineInput pollInput(input::IInputProvider* inputProvider, double curren
     return timed;
 }
 
-// Build and present engine state for this tick
-void updatePresentation(presentation::IPresentation* presentation,
-                        telemetry::ITelemetryReader* telemetryReader,
-                        IAudioBuffer& audioBuffer,
-                        const SimulationConfig& config,
-                        ISimulator& simulator,
+void SimulationLoop::updatePresentation(
                         const EngineSimStats& stats,
                         const CrankingController::State& crankingState,
                         const input::EngineInput& input,
                         double tickTime) {
 
-    if (!presentation) return;
+    if (!presentation_) return;
 
     telemetry::AudioTimingTelemetry timing;
-    if (telemetryReader) {
-        timing = telemetryReader->getAudioTiming();
+    if (telemetryReader_) {
+        timing = telemetryReader_->getAudioTiming();
     }
-    
+
     presentation::EngineState state;
     state.engine = presentation::builders::buildEngineState(stats, crankingState);
     state.drivetrain = presentation::builders::buildDrivetrainState(stats);
     state.controls = presentation::builders::buildControlState(input, crankingState);
-    state.audio = presentation::builders::buildAudioState(timing, telemetryReader, audioBuffer, config, tickTime, simulator);
-    state.presetShortName = simulator.getName() ? simulator.getName() : "";
-    presentation->ShowEngineState(state);
+    state.audio = presentation::builders::buildAudioState(timing, telemetryReader_, audioBuffer_, config_, tickTime, simulator_);
+    state.presetShortName = simulator_.getName() ? simulator_.getName() : "";
+    presentation_->ShowEngineState(state);
 }
+
+// ============================================================================
+// File-local helpers — pure functions and internal types
+// ============================================================================
+namespace {
 
 // Timing control for 60Hz loop pacing using sleep_until for accuracy
 struct LoopTimer {
@@ -163,16 +149,23 @@ void applyDecision(ICombustionEngine* combustionEngine, const TransitionDecision
     combustionEngine->applyTransition(decision);
 }
 
-CrankingController::State applyCrankingDecision(ICombustionEngine* combustionEngine,
-                                                CrankingController& crankingController,
-                                                input::EngineInput& engineInput) {
+} // anonymous namespace — file-local helpers
+
+// ============================================================================
+// SimulationLoop - Private methods (file scope, access members directly)
+// ============================================================================
+
+CrankingController::State SimulationLoop::applyCrankingDecision(
+                                                ICombustionEngine* combustionEngine,
+                                                const input::EngineInput& engineInput) {
+
     auto crankingDecision = TransitionDecision{EnginePhase::Running, false, engineInput.throttle, false};
 
     if (combustionEngine) {
-        auto startingDecision = crankingController.engageStarter(*combustionEngine, engineInput.starterButton, engineInput.ignition);
-        applyDecision(combustionEngine, startingDecision);
+        auto starterDecision = crankingController_.engageStarter(*combustionEngine, engineInput.starterButton, engineInput.ignition);
+        applyDecision(combustionEngine, starterDecision);
 
-        crankingDecision = crankingController.step(*combustionEngine, engineInput.throttle, engineInput.ignition);
+        crankingDecision = crankingController_.step(*combustionEngine, engineInput.throttle, engineInput.ignition);
         applyDecision(combustionEngine, crankingDecision);
     }
 
@@ -186,12 +179,12 @@ void applyDynoControl(ISimulator& simulator, double scale, double& lastScale) {
     lastScale = scale;
 }
 
-void applyVehicleControls(
-    ISimulator& simulator, ICombustionEngine* combustionEngine,
+void SimulationLoop::applyVehicleControls(
+    ICombustionEngine* combustionEngine,
     const input::EngineInput& input, const CrankingController::State& crankingState,
-    double& lastDynoTorqueScale, ILogging* logger)
-{
-    simulator.setThrottle(crankingState.startingThrottle);
+    double& lastDynoTorqueScale) {
+
+    simulator_.setThrottle(crankingState.startingThrottle);
 
     if (combustionEngine) {
         combustionEngine->setIgnition(input.ignition);
@@ -199,57 +192,47 @@ void applyVehicleControls(
 
     // Apply gear changes: twin gearAbsolute takes priority over keyboard gearDelta
     if (input.gearAbsolute >= 0) {
-        simulator.setGear(input.gearAbsolute);
+        simulator_.setGear(input.gearAbsolute);
     } else {
-        applyGearChange(simulator, input.gearDelta, logger);
+        applyGearChange(simulator_, input.gearDelta, logger_);
     }
 
     // Vehicle controls (gear, dyno) — dyno only when engine running
     if (!crankingState.starterEngaged) {
         // HACK: Should put the clutch in here really
-        applyDynoControl(simulator, input.dynoTorqueScale, lastDynoTorqueScale);
+        applyDynoControl(simulator_, input.dynoTorqueScale, lastDynoTorqueScale);
     } else {
-        logger->info(LogMask::BRIDGE, "Cranking: starter engaged, dyno disabled - consider using the clutch instead");
+        logger_->info(LogMask::BRIDGE, "Cranking: starter engaged, dyno disabled - consider using the clutch instead");
     }
 
     // Twin clutch control (direct pressure, overrides applyGearChange's hardwired clutch)
     if (input.clutchPressure >= 0.0) {
-        simulator.setClutchPressure(input.clutchPressure);
+        simulator_.setClutchPressure(input.clutchPressure);
     }
 
     // Brake
-    simulator.setBrakePressure(input.brakeLevel);
-
-    // QUESTION: This is superceded by CrankingController now, right?
-    // // Twin starter motor control — only when twin explicitly sets it
-    // // Default input.starterMotor is false; don't override warmup starter logic
-    // if (input.gearAbsolute >= 0) {
-    //     simulator.setStarterMotor(input.starterMotor);
-    // }
-
+    simulator_.setBrakePressure(input.brakeLevel);
 }
 
-void writeTelemetry(telemetry::ITelemetryWriter* telemetryWriter,
-                    double currentTime,
-                    double throttle,
-                    bool ignition,
-                    bool starterEngaged) {
-    // Push vehicle inputs (loop owns throttle/ignition, simulator doesn't)
+void SimulationLoop::writeTelemetry(double currentTime, double throttle, bool ignition, bool starterEngaged) {
+    if (!telemetryWriter_) return;
+
     telemetry::VehicleInputsTelemetry inputs;
     inputs.throttlePosition = throttle;
     inputs.ignitionOn = ignition;
     inputs.starterMotorEngaged = starterEngaged;
-    telemetryWriter->writeVehicleInputs(inputs);
+    telemetryWriter_->writeVehicleInputs(inputs);
 
     // Push simulator metrics
     telemetry::SimulatorMetricsTelemetry metrics;
     metrics.timestamp = currentTime;
-    telemetryWriter->writeSimulatorMetrics(metrics);
-
-    // Note: EngineStateTelemetry and FramePerformanceTelemetry are pushed
-    // by BridgeSimulator::update() -- SRP/ISP compliance
-    // Note: AudioDiagnostics and AudioTiming are pushed by strategies
+    telemetryWriter_->writeSimulatorMetrics(metrics);
 }
+
+// ============================================================================
+// File-local helpers (continued) + SimulatorSession
+// ============================================================================
+namespace {
 
 // Initialize the simulator: create with audio config.
 // Script loading is handled by SimulatorFactory before this is called.
@@ -282,6 +265,7 @@ void cleanupSimulation(IAudioHardwareProvider* hardwareProvider, ISimulator& sim
 // SimulatorSession - Concrete session managing audio hardware + simulator lifecycle
 // Owns audio hardware for session lifetime. Reuses runSimulationLoop() for the main tick loop.
 // Hot-swap is triggered by initSimulation(existingSession) — the session swaps its internal simulator pointer.
+// Composes SimulationLoop for the main tick execution.
 // ============================================================================
 
 class SimulatorSession : public ISimulatorSession {
@@ -329,12 +313,14 @@ public:
             }
         }
 
-        // Delegate to existing loop — returns EXIT_BUT_CONTINUE_NEXT on 'P' press
-        int exitCode = runSimulationLoop(
+        // Create loop with injected dependencies — no parameter plumbing
+        SimulationLoop loop(
             *simulator_, config_, *audioBuffer_, crankingController_,
             stopRequested_,
             inputProvider_, presentation_,
             telemetryWriter_, telemetryReader_, logger_);
+
+        int exitCode = loop.run();
 
         // Stop audio only on final exit, not on preset cycle
         if (exitCode != EXIT_BUT_CONTINUE_NEXT) {
@@ -447,10 +433,10 @@ private:
 } // anonymous namespace
 
 // ============================================================================
-// Unified Main Loop Implementation
+// SimulationLoop - Implementation
 // ============================================================================
 
-int runSimulationLoop(
+SimulationLoop::SimulationLoop(
     ISimulator& simulator,
     const SimulationConfig& config,
     IAudioBuffer& audioBuffer,
@@ -461,11 +447,23 @@ int runSimulationLoop(
     telemetry::ITelemetryWriter* telemetryWriter,
     telemetry::ITelemetryReader* telemetryReader,
     ILogging* logger)
-{
-    double currentTime = 0.0;
-    LoopTimer timer(config.updateInterval());
+        : simulator_(simulator)
+        , config_(config)
+        , audioBuffer_(audioBuffer)
+        , crankingController_(crankingController)
+        , stopRequested_(stopRequested)
+        , inputProvider_(inputProvider)
+        , presentation_(presentation)
+        , telemetryWriter_(telemetryWriter)
+        , telemetryReader_(telemetryReader)
+        , logger_(logger)
+    {}
 
-    logger->info(LogMask::BRIDGE, "runSimulationLoop starting simulation loop with %s", config.simulatorLabel.c_str());
+int SimulationLoop::run() {
+    double currentTime = 0.0;
+    LoopTimer timer(config_.updateInterval());
+
+    logger_->info(LogMask::BRIDGE, "SimulationLoop starting with %s", config_.simulatorLabel.c_str());
 
     // Track for the loop lifetime - first tick to trigger auto-start in non-interactive mode
     bool isFirstTick = true;
@@ -474,43 +472,41 @@ int runSimulationLoop(
     // Initialise and track these mutating values for the loop lifetime
     double lastDynoTorqueScale = -1.0;
     EngineSimStats previousStats = {};
-    if (inputProvider) inputProvider->provideFeedback(previousStats); // NOTE: input is presently optional for direct control, eg. testing or non-interactive CLI mode. I'm not entirely happy with this and wonder if we should assert there's always an input provider but I can see the argument for allowing one to be optional
- 
-    // MAIN LOOP
-    auto* combustionEngine = dynamic_cast<ICombustionEngine*>(&simulator);
+    if (inputProvider_) inputProvider_->provideFeedback(previousStats);
+
+    auto* combustionEngine = dynamic_cast<ICombustionEngine*>(&simulator_);
     do {
-        // Non-interactive timeout: stop the loop when duration expires
-        if (config.duration > 0.0 && currentTime >= config.duration) break;
+        if (config_.duration > 0.0 && currentTime >= config_.duration) break;
 
-        CrankingController::State crankingState = applyCrankingDecision(combustionEngine, crankingController, engineInput);
+        CrankingController::State crankingState = applyCrankingDecision(combustionEngine, engineInput);
 
-        applyVehicleControls(simulator, combustionEngine, engineInput, crankingState, lastDynoTorqueScale, logger);
+        applyVehicleControls(combustionEngine, engineInput, crankingState, lastDynoTorqueScale);
 
-        audioBuffer.updateSimulation(&simulator, config.updateInterval() * SECONDS_TO_MILLISECONDS);
-        audioBuffer.fillBufferFromEngine(&simulator, config.framesPerUpdate());
+        audioBuffer_.updateSimulation(&simulator_, config_.updateInterval() * SECONDS_TO_MILLISECONDS);
+        audioBuffer_.fillBufferFromEngine(&simulator_, config_.framesPerUpdate());
 
-        writeTelemetry(telemetryWriter, currentTime, crankingState.startingThrottle, engineInput.ignition, crankingState.starterEngaged);
+        writeTelemetry(currentTime, crankingState.startingThrottle, engineInput.ignition, crankingState.starterEngaged);
 
-        EngineSimStats stats = simulator.getStats();
-        currentTime += config.updateInterval();
-        updatePresentation(presentation, telemetryReader, audioBuffer, config, simulator, stats, crankingState, engineInput, currentTime);
+        EngineSimStats stats = simulator_.getStats();
+        currentTime += config_.updateInterval();
+        updatePresentation(stats, crankingState, engineInput, currentTime);
 
         // Loop control: sleep until next tick, poll input, track previous stats for edge detection in input providers, check stop flag
         timer.waitUntilNextTick();
-        engineInput = pollInput(inputProvider, currentTime, config.updateInterval(), isFirstTick);
+        engineInput = pollInput(currentTime, config_.updateInterval(), isFirstTick);
         isFirstTick = false;
         previousStats = stats;
 
         if (engineInput.presetCycle) {
             return EXIT_BUT_CONTINUE_NEXT;
         }
-    } while (!stopRequested.load(std::memory_order_acquire));
+    } while (!stopRequested_.load(std::memory_order_acquire));
 
     return 0;
 }
 
 // ============================================================================
-// Main Simulation Entry Point - Factory that creates a session
+// Session factory - GLOBAL scope
 // ============================================================================
 
 std::unique_ptr<ISimulatorSession> createSession(
@@ -568,4 +564,4 @@ std::unique_ptr<ISimulatorSession> createSession(
         inputProvider, presentation,
         telemetryWriter, telemetryReader,
         logger);
-}
+}// GLOBAL scope — session factory, no access to SimulationLoop members
