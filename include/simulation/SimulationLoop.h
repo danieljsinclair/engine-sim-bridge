@@ -1,16 +1,17 @@
-// SimulationLoop.h - Simulation loop functions
+// SimulationLoop.h - Simulation loop class and session factory
 // Extracted from engine_sim_cli.cpp for SOLID SRP compliance
 // Phase E: Takes ISimulator* instead of EngineSimHandle/EngineSimAPI&
 // Phase F: Moved to engine-sim-bridge for reusability (GUI, iOS, headless)
+// Phase G: Refactored from free function to class with injected dependencies
 
 #ifndef SIMULATION_LOOP_H
 #define SIMULATION_LOOP_H
 
 #include "simulator/EngineSimTypes.h"
 #include "simulation/CrankingController.h"
+#include "io/IInputProvider.h"
 #include <atomic>
 #include <string>
-#include <vector>
 #include <memory>
 
 class IAudioBuffer;
@@ -18,7 +19,6 @@ class ISimulator;
 class ISimulatorSession;
 
 // Forward declarations for injectable interfaces
-namespace input { class IInputProvider; }
 namespace presentation { class IPresentation; }
 class ILogging;
 namespace telemetry { class ITelemetryWriter; class ITelemetryReader; }
@@ -26,7 +26,7 @@ namespace telemetry { class ITelemetryWriter; class ITelemetryReader; }
 // Forward declaration of simulator type enum (defined in simulator/SimulatorFactory.h)
 enum class SimulatorType;
 
-// Exit code returned by runSimulationLoop when preset cycling is requested
+// Exit code returned by SimulationLoop::run() when preset cycling is requested
 constexpr int EXIT_BUT_CONTINUE_NEXT = 2;
 
 // ============================================================================
@@ -61,12 +61,13 @@ struct SimulationConfig {
 };
 
 // ============================================================================
-// Main simulation entry point
-// Dependencies injected: simulator, strategy, inputProvider, presentation, logger
-// Throws std::runtime_error on initialization failure (fail-fast).
+// SimulationLoop - Main tick loop with injected dependencies
+// Dependencies are set once at construction; run() needs no parameters.
 // ============================================================================
 
-int runSimulationLoop(
+class SimulationLoop {
+public: 
+  SimulationLoop(
     ISimulator& simulator,
     const SimulationConfig& config,
     IAudioBuffer& audioBuffer,
@@ -77,6 +78,54 @@ int runSimulationLoop(
     telemetry::ITelemetryWriter* telemetryWriter,
     telemetry::ITelemetryReader* telemetryReader,
     ILogging* logger);
+
+    // Run the loop until stopRequested or duration expires.
+    // Returns EXIT_BUT_CONTINUE_NEXT on preset cycle, 0 on normal exit.
+    int run();
+
+private:
+    // Cranking decision — single entry point for combustion/sine-mode fork
+    CrankingController::State applyCrankingDecision(
+        ICombustionEngine* combustionEngine,
+        const input::EngineInput& engineInput);
+
+    // Apply throttle, ignition, gear, dyno, clutch, brake to simulator
+    void applyVehicleControls(
+        ICombustionEngine* combustionEngine,
+        const input::EngineInput& input,
+        const CrankingController::State& crankingState,
+        double& lastDynoTorqueScale);
+
+    // Push telemetry for this tick
+    void writeTelemetry(double currentTime, double throttle,
+                        bool ignition, bool starterEngaged);
+
+    // Build and present engine state for this tick
+    void updatePresentation(const EngineSimStats& stats,
+                            const CrankingController::State& crankingState,
+                            const input::EngineInput& input,
+                            double tickTime);
+
+    // Poll input provider or generate timed input for non-interactive mode
+    input::EngineInput pollInput(double currentTime, double updateInterval, bool isFirstTick);
+
+    // Injected dependencies — set once, read-only during run()
+    ISimulator& simulator_;
+    const SimulationConfig& config_;
+    IAudioBuffer& audioBuffer_;
+    CrankingController& crankingController_;
+    const std::atomic<bool>& stopRequested_;
+    input::IInputProvider* inputProvider_;
+    presentation::IPresentation* presentation_;
+    telemetry::ITelemetryWriter* telemetryWriter_;
+    telemetry::ITelemetryReader* telemetryReader_;
+    ILogging* logger_;
+};
+
+// ============================================================================
+// Session factory — creates or hot-swaps a SimulatorSession
+// Throws std::runtime_error on initialization failure (fail-fast).
+// ============================================================================
 
 std::unique_ptr<ISimulatorSession> createSession(
     const SimulationConfig& config,
