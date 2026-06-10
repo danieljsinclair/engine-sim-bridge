@@ -430,33 +430,6 @@ private:
     bool closed_{false};
 };
 
-
-// ============================================================================
-// Extracted loop helpers — keep the main loop body a thin orchestrator
-// ============================================================================
-
-CrankingStepResult applyCrankingDecision(ISimulator& simulator, ICombustionEngine* combustion, const input::EngineInput& input, CrankingController& crankingController, ILogging* logger) {
-    if (combustion) {
-        auto starterDecision = crankingController.engageStarter(*combustion, input.starterButton, input.ignition);
-        applyDecision(combustion, starterDecision);
-    }
-    auto crankingDecision = combustion
-        ? crankingController.step(*combustion, input.throttle, input.ignition)
-        : TransitionDecision{EnginePhase::Running, false, input.throttle, false};
-    if (combustion) {
-        applyDecision(combustion, crankingDecision);
-    }
-    return CrankingStepResult{crankingDecision, CrankingController::State{crankingDecision.effectiveThrottle, combustion && crankingDecision.starterMotor, crankingDecision.targetPhase}};
-}
-
-EngineSimStats applyGearControlsToEngineStats(ISimulator& simulator, const input::EngineInput& input) {
-    // Get standard engine sim data and overlay input-provider gear state onto stats for display
-    EngineSimStats stats = simulator.getStats();
-    stats.gearSelector = input.gearSelector;
-    stats.gearAutoMode = input.gearAutoMode;
-    return stats;
-}
-
 } // anonymous namespace
 
 // ============================================================================
