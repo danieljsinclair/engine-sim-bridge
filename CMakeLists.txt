@@ -88,6 +88,7 @@ set(BRIDGE_SOURCES
     src/telemetry/InMemoryTelemetry.cpp
     # Simulation loop
     src/simulation/CrankingController.cpp
+    src/simulation/PresentationStateBuilders.cpp
     src/simulation/SimulationLoop.cpp
     # Common utilities
     src/common/ConsoleLogger.cpp

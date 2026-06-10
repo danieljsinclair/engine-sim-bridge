@@ -19,36 +19,39 @@ namespace presentation {
 // ============================================================================
 
 struct EngineState {
-    // From simulator stats (ISimulator::getStats)
+    // Engine physics + operational state
     struct Engine {
         double rpm = 0.0;
         double load = 0.0;
         double exhaustFlow = 0.0;     // m^3/s
         double engineTorqueNm = 0.0;
         double drivetrainTorqueNm = 0.0;
+        bool starterEngaged = false;   // Starter motor physically engaged with engine
+        EnginePhase phase = EnginePhase::Stopped;
     } engine;
 
-    // Mechanical + operational state (sim stats + cranking controller + input)
+    // Mechanical transmission state
     struct Drivetrain {
         double speedMph = 0.0;
         double vehicleSpeedKmh = 0.0;
         int gear = 0;
-        int gearSelector = 0;          // From input provider (source of truth)
-        bool gearAutoMode = false;     // From input provider
-        double dynoTorque = 0.0;       // ft*lbs (0 when dyno disabled)
+        double dynoTorque = 0.0;
         double dynoTargetRPM = 0.0;
-        double throttle = 0.0;         // Effective throttle (cranking-aware, from CrankingController)
-        bool starterEngaged = false;   // From CrankingController
     } drivetrain;
 
-    // User controls (from input provider only)
+    // User control inputs (what the driver is commanding)
     struct Controls {
+        double throttle = 0.0;         // Effective (cranking-aware)
         bool ignition = false;
         double brakeLevel = 0.0;
+        int gearSelector = 0;
+        bool gearAutoMode = false;
     } controls;
 
-    // From audio buffer / telemetry (observability, not functional)
+    // Audio + timing diagnostics (observability only)
     struct Audio {
+        double timestamp = 0.0;
+        int simulationFrequency = 0;
         int underrunCount = 0;
         std::string audioMode;
         double renderMs = 0.0;
@@ -63,9 +66,6 @@ struct EngineState {
     } audio;
 
     // Cross-cutting
-    double timestamp = 0.0;
-    EnginePhase phase = EnginePhase::Stopped;
-    int simulationFrequency = 0;
     std::string presetShortName;
 };
 
