@@ -1,0 +1,68 @@
+# CodeQL Advanced analysis for engine-sim-bridge
+# C++ analysis requires macOS (CoreAudio dependency) and manual CMake build.
+name: "CodeQL Advanced"
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+  schedule:
+    - cron: '29 6 * * 5'
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ (matrix.language == 'c-cpp' && 'macos-latest') || 'ubuntu-latest' }}
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - language: actions
+          build-mode: none
+        - language: c-cpp
+          build-mode: manual
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install dependencies (macOS)
+      if: matrix.language == 'c-cpp'
+      env:
+        HOMEBREW_NO_AUTO_UPDATE: "1"
+        HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      run: |
+        brew bundle --file Brewfile
+        # bison is keg-only (macOS ships 2.3, Piranha needs 3.2+).
+        echo "/opt/homebrew/opt/bison/bin" >> $GITHUB_PATH
+        echo "/usr/local/opt/bison/bin"    >> $GITHUB_PATH
+
+    - name: Configure (macOS)
+      if: matrix.language == 'c-cpp'
+      run: |
+        cmake -S . -B build \
+          -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build (macOS)
+      if: matrix.language == 'c-cpp'
+      run: cmake --build build -- -j$(sysctl -n hw.logicalcpu)
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: ${{ matrix.language }}
+        build-mode: ${{ matrix.build-mode }}
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:${{matrix.language}}"
