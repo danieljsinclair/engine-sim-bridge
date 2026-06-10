@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := all
-.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism test-golden test-deep presets clean-presets clean-test-fixtures
+.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism test-golden test-deep presets clean-presets clean-test-fixtures sonar-clean
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
@@ -19,6 +19,9 @@ CTEST_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 BUILD_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 CMAKE_BUILD_PARALLEL_FLAG := $(if $(strip $(BUILD_PARALLEL_LEVEL)),--parallel $(BUILD_PARALLEL_LEVEL),)
 BUILD_STAMP := $(BUILD_DIR)/.build-ready.stamp
+SONAR_STAMP := $(BUILD_DIR)/.sonar-scan.stamp
+SONAR_PROJECT_PROPERTIES := sonar-project.properties
+COMPILE_DB := $(BUILD_DIR)/compile_commands.json
 
 # Source inputs that affect the bridge build. This ensures the stamp is invalidated
 # when bridge or engine-sim sources change, so rebuilds happen when necessary.
@@ -78,7 +81,7 @@ remove-orphans:
 	@find . -path ./build -prune -o -name "_deps" -type d -print -exec rm -rf {} + 2>/dev/null || true
 
 # Clean build artifacts (cascades to engine-sim via cmake)
-clean: remove-orphans clean-presets clean-test-fixtures
+clean: remove-orphans clean-presets clean-test-fixtures sonar-clean
 	@if [ -d $(BUILD_DIR) ]; then cmake --build $(BUILD_DIR) --target clean >/dev/null 2>&1 || true; fi
 	@rm -f $(BUILD_DIR)/*.stamp
 	@rm -rf tmp
@@ -101,7 +104,7 @@ clean-test-fixtures:
 	@echo "Done."
 
 # Run the bridge suite in explicit tiers.
-test: build test-core test-deep
+test: sonar-scan test-core test-deep
 
 test-core: CTEST_SELECTOR := -E '$(BRIDGE_TEST_CORE_EXCLUDE)'
 test-core: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: core bridge suite (factory + preset regression coverage) ===
@@ -127,6 +130,22 @@ test-golden: SUMMARY_FAIL_MESSAGE := === [engine-sim-bridge] SUMMARY: FAIL (gold
 test-golden: $(GOLDEN_STAMP)
 
 test-deep: build test-isomorphism test-golden
+
+# ============================================================================
+# SonarQube scan - runs before tests as a quality gate
+# ============================================================================
+
+sonar-scan: $(SONAR_STAMP)
+
+$(SONAR_STAMP): $(BUILD_STAMP) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES)
+	@echo "=== [engine-sim-bridge] Running Sonar scan ==="
+	-sonar-scanner
+	@touch $@
+
+$(COMPILE_DB): $(BUILD_DIR)/CMakeCache.txt
+
+sonar-clean:
+	@rm -f $(SONAR_STAMP)
 
 check: test
 
@@ -223,7 +242,8 @@ help:
 	@echo "Targets:"
 	@echo "  make          - Build + test + presets (complete pipeline)"
 	@echo "  make build    - Compile everything (no tests)"
-	@echo "  make test     - Build, run core tests, then deep tests"
+	@echo "  make sonar-scan - Run SonarQube scan (only re-runs when build/inputs change)"
+	@echo "  make test     - Run sonar scan, core tests, then deep tests"
 	@echo "  make test-core - Run the always-on bridge suite"
 	@echo "  make test-isomorphism - Run file-based incremental isomorphism tests when inputs are newer"
 	@echo "  make test-golden - Run preset golden-audio regressions"
