@@ -46,6 +46,12 @@ jobs:
         echo "/opt/homebrew/opt/bison/bin" >> $GITHUB_PATH
         echo "/usr/local/opt/bison/bin"    >> $GITHUB_PATH
 
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: ${{ matrix.language }}
+        build-mode: ${{ matrix.build-mode }}
+
     - name: Configure (macOS)
       if: matrix.language == 'c-cpp'
       run: |
@@ -55,12 +61,6 @@ jobs:
     - name: Build (macOS)
       if: matrix.language == 'c-cpp'
       run: cmake --build build -- -j$(sysctl -n hw.logicalcpu)
-
-    - name: Initialize CodeQL
-      uses: github/codeql-action/init@v4
-      with:
-        languages: ${{ matrix.language }}
-        build-mode: ${{ matrix.build-mode }}
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4
