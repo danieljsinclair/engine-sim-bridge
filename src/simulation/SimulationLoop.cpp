@@ -2,9 +2,11 @@
 // Extracted from engine_sim_cli.cpp for SOLID SRP compliance
 // Phase E: Uses ISimulator* instead of EngineSimHandle/EngineSimAPI&
 // Phase F: Moved to engine-sim-bridge for reusability (GUI, iOS, headless)
+// Phase G: Refactored from free function to class with injected dependencies
 
 #include "simulation/SimulationLoop.h"
 #include "simulation/CrankingController.h"
+#include "simulation/PresentationStateBuilders.h"
 #include "session/ISimulatorSession.h"
 
 #include "simulator/ISimulator.h"
@@ -26,48 +28,6 @@
 #include <thread>
 #include <chrono>
 
-#define CRANKING_DEBUG false  // Enable detailed logging for cranking state transitions
-#if CRANKING_DEBUG
-#define IF_CRANKING_DEBUG(x) x
-#else
-#define IF_CRANKING_DEBUG(x)
-#endif
-
-// SimulationConfig — value type, compiler-generated special members
-
-// ============================================================================
-// PresentationContext - Bundles parameters for updatePresentation()
-// ============================================================================
-
-struct PresentationContext {
-    presentation::IPresentation* presentation;
-    const SimulationConfig* config;
-    double currentTime;
-    const EngineSimStats* stats;
-    double throttle;
-    bool ignition;
-    bool starterEngaged;
-    EnginePhase phase;
-    int underrunCount;
-    IAudioBuffer* audioBuffer;
-    telemetry::ITelemetryReader* telemetryReader;
-    const char* presetShortName;
-    int actualSimFrequency;
-    double brakeLevel;
-};
-
-// ============================================================================
-// CrankingStepResult - Data carrier for cranking decision output
-// ============================================================================
-
-struct CrankingStepResult {
-    TransitionDecision decision;
-    CrankingController::State crankingState;
-};
-
-// ============================================================================
-// Private Helper Functions - SRP Compliance
-// ============================================================================
 
 namespace {
 
@@ -77,9 +37,15 @@ static constexpr double FULL_THROTTLE = 1.0;                     // Maximum thro
 static constexpr double SECONDS_TO_MICROSECONDS = 1000000.0;
 static constexpr double SECONDS_TO_MILLISECONDS = 1000.0;
 
-input::EngineInput pollInput(input::IInputProvider* inputProvider, double currentTime, double updateInterval, bool isFirstTick) {
-    if (inputProvider) {
-        return inputProvider->OnUpdateSimulation(updateInterval);
+} // anonymous namespace — constants only
+
+// ============================================================================
+// SimulationLoop - Private methods (file scope, access members directly)
+// ============================================================================
+
+input::EngineInput SimulationLoop::pollInput(double currentTime, double updateInterval, bool isFirstTick) {
+    if (inputProvider_) {
+        return inputProvider_->OnUpdateSimulation(updateInterval);
     }
     input::EngineInput timed;
     timed.throttle = currentTime < THROTTLE_RAMP_DURATION_SECONDS
@@ -92,9 +58,32 @@ input::EngineInput pollInput(input::IInputProvider* inputProvider, double curren
     return timed;
 }
 
-int readUnderrunCount(telemetry::ITelemetryReader* reader) {
-    return reader->getAudioDiagnostics().underrunCount;
+void SimulationLoop::updatePresentation(
+                        const EngineSimStats& stats,
+                        const CrankingController::State& crankingState,
+                        const input::EngineInput& input,
+                        double tickTime) {
+
+    if (!presentation_) return;
+
+    telemetry::AudioTimingTelemetry timing;
+    if (telemetryReader_) {
+        timing = telemetryReader_->getAudioTiming();
+    }
+
+    presentation::EngineState state;
+    state.engine = presentation::builders::buildEngineState(stats, crankingState);
+    state.drivetrain = presentation::builders::buildDrivetrainState(stats);
+    state.controls = presentation::builders::buildControlState(input, crankingState);
+    state.audio = presentation::builders::buildAudioState(timing, telemetryReader_, audioBuffer_, config_, tickTime, simulator_);
+    state.presetShortName = simulator_.getName() ? simulator_.getName() : "";
+    presentation_->ShowEngineState(state);
 }
+
+// ============================================================================
+// File-local helpers — pure functions and internal types
+// ============================================================================
+namespace {
 
 // Timing control for 60Hz loop pacing using sleep_until for accuracy
 struct LoopTimer {
@@ -155,9 +144,32 @@ void applyGearChange(ISimulator& simulator, int gearDelta, ILogging* logger) {
     }
 }
 
-void applyDecision(ICombustionEngine* engine, const TransitionDecision& decision) {
-    if (!engine) return;
-    engine->applyTransition(decision);
+void applyDecision(ICombustionEngine* combustionEngine, const TransitionDecision& decision) {
+    if (!combustionEngine) return;
+    combustionEngine->applyTransition(decision);
+}
+
+} // anonymous namespace — file-local helpers
+
+// ============================================================================
+// SimulationLoop - Private methods (file scope, access members directly)
+// ============================================================================
+
+CrankingController::State SimulationLoop::applyCrankingDecision(
+                                                ICombustionEngine* combustionEngine,
+                                                const input::EngineInput& engineInput) {
+
+    auto crankingDecision = TransitionDecision{EnginePhase::Running, false, engineInput.throttle, false};
+
+    if (combustionEngine) {
+        auto starterDecision = crankingController_.engageStarter(*combustionEngine, engineInput.starterButton, engineInput.ignition);
+        applyDecision(combustionEngine, starterDecision);
+
+        crankingDecision = crankingController_.step(*combustionEngine, engineInput.throttle, engineInput.ignition);
+        applyDecision(combustionEngine, crankingDecision);
+    }
+
+    return CrankingController::State{crankingDecision.effectiveThrottle, combustionEngine && crankingDecision.starterMotor, crankingDecision.targetPhase};
 }
 
 void applyDynoControl(ISimulator& simulator, double scale, double& lastScale) {
@@ -167,12 +179,12 @@ void applyDynoControl(ISimulator& simulator, double scale, double& lastScale) {
     lastScale = scale;
 }
 
-void applyVehicleControls(
-    ISimulator& simulator, ICombustionEngine* combustionEngine,
+void SimulationLoop::applyVehicleControls(
+    ICombustionEngine* combustionEngine,
     const input::EngineInput& input, const CrankingController::State& crankingState,
-    double& lastDynoTorqueScale, ILogging* logger)
-{
-    simulator.setThrottle(crankingState.startingThrottle);
+    double& lastDynoTorqueScale) {
+
+    simulator_.setThrottle(crankingState.startingThrottle);
 
     if (combustionEngine) {
         combustionEngine->setIgnition(input.ignition);
@@ -180,126 +192,47 @@ void applyVehicleControls(
 
     // Apply gear changes: twin gearAbsolute takes priority over keyboard gearDelta
     if (input.gearAbsolute >= 0) {
-        simulator.setGear(input.gearAbsolute);
+        simulator_.setGear(input.gearAbsolute);
     } else {
-        applyGearChange(simulator, input.gearDelta, logger);
+        applyGearChange(simulator_, input.gearDelta, logger_);
     }
 
     // Vehicle controls (gear, dyno) — dyno only when engine running
     if (!crankingState.starterEngaged) {
         // HACK: Should put the clutch in here really
-        applyDynoControl(simulator, input.dynoTorqueScale, lastDynoTorqueScale);
+        applyDynoControl(simulator_, input.dynoTorqueScale, lastDynoTorqueScale);
     } else {
-        logger->info(LogMask::BRIDGE, "Cranking: starter engaged, dyno disabled - consider using the clutch instead");
+        logger_->info(LogMask::BRIDGE, "Cranking: starter engaged, dyno disabled - consider using the clutch instead");
     }
 
     // Twin clutch control (direct pressure, overrides applyGearChange's hardwired clutch)
     if (input.clutchPressure >= 0.0) {
-        simulator.setClutchPressure(input.clutchPressure);
+        simulator_.setClutchPressure(input.clutchPressure);
     }
 
     // Brake
-    simulator.setBrakePressure(input.brakeLevel);
-
-    // QUESTION: This is superceded by CrankingController now, right?
-    // // Twin starter motor control — only when twin explicitly sets it
-    // // Default input.starterMotor is false; don't override warmup starter logic
-    // if (input.gearAbsolute >= 0) {
-    //     simulator.setStarterMotor(input.starterMotor);
-    // }
-
+    simulator_.setBrakePressure(input.brakeLevel);
 }
 
-void updatePresentationFromContext(const PresentationContext& ctx) {
-    if (!ctx.presentation) return;
+void SimulationLoop::writeTelemetry(double currentTime, double throttle, bool ignition, bool starterEngaged) {
+    if (!telemetryWriter_) return;
 
-    // Read audio timing diagnostics from telemetry (strategies push to telemetry after each render)
-    telemetry::AudioTimingTelemetry timing;
-    if (ctx.telemetryReader) {
-        timing = ctx.telemetryReader->getAudioTiming();
-    }
-
-    presentation::EngineState state;
-    state.timestamp = ctx.currentTime;
-    state.rpm = ctx.stats->currentRPM;
-    state.throttle = ctx.throttle;
-    state.load = ctx.stats->currentLoad;
-    state.speedMph = ctx.stats->speedMph();
-    state.underrunCount = ctx.underrunCount;
-    state.audioMode = ctx.audioBuffer->getModeString();
-    state.ignition = ctx.ignition;
-    state.starterMotorEngaged = ctx.starterEngaged;
-    state.enginePhase = ctx.phase;
-    state.exhaustFlow = ctx.stats->exhaustFlow;
-    state.gear = ctx.stats->gear;
-    state.gearSelector = ctx.stats->gearSelector;
-    state.gearAutoMode = ctx.stats->gearAutoMode;
-    state.dynoTorque = ctx.stats->dynoTorque;
-    state.dynoTargetRPM = ctx.stats->dynoTargetRPM;
-    state.renderMs = timing.renderMs;
-    state.headroomMs = timing.headroomMs;
-    state.budgetPct = timing.budgetPct;
-    state.framesRequested = timing.framesRequested;
-    state.framesRendered = timing.framesRendered;
-    state.callbackRateHz = timing.callbackRateHz;
-    state.generatingRateFps = timing.generatingRateFps;
-    state.trendPct = timing.trendPct;
-    state.sampleRate = ctx.config->sampleRate();
-    state.vehicleSpeedKmh = ctx.stats->vehicleSpeedKmh;
-    state.engineTorqueNm = ctx.stats->engineTorqueNm;
-    state.drivetrainTorqueNm = ctx.stats->drivetrainTorqueNm;
-    state.simulationFrequency = ctx.actualSimFrequency;
-    state.presetShortName = ctx.presetShortName ? ctx.presetShortName : "";
-    state.brakeLevel = ctx.brakeLevel;
-
-    ctx.presentation->ShowEngineState(state);
-}
-
-void updatePresentation(presentation::IPresentation* presentation, const SimulationConfig& config,
-                        IAudioBuffer& audioBuffer, ISimulator& simulator, const EngineSimStats& stats,
-                        const CrankingStepResult& crankingStepResult, const input::EngineInput& engineInput,
-                        double currentTime,
-                        telemetry::ITelemetryReader* telemetryReader) {
-    PresentationContext ctx = {
-        .presentation = presentation,
-        .config = &config,
-        .currentTime = currentTime,
-        .stats = &stats,
-        .throttle = crankingStepResult.crankingState.startingThrottle,
-        .ignition = engineInput.ignition,
-        .starterEngaged = crankingStepResult.crankingState.starterEngaged,
-        .phase = simulator.getEnginePhase(),
-        .underrunCount = readUnderrunCount(telemetryReader),
-        .audioBuffer = &audioBuffer,
-        .telemetryReader = telemetryReader,
-        .presetShortName = simulator.getName(),
-        .actualSimFrequency = simulator.getSimulationFrequency(),
-        .brakeLevel = engineInput.brakeLevel
-    };
-    updatePresentationFromContext(ctx);
-}
-
-void writeTelemetry(telemetry::ITelemetryWriter* telemetryWriter,
-                    double currentTime,
-                    double throttle,
-                    bool ignition,
-                    bool starterEngaged) {
-    // Push vehicle inputs (loop owns throttle/ignition, simulator doesn't)
     telemetry::VehicleInputsTelemetry inputs;
     inputs.throttlePosition = throttle;
     inputs.ignitionOn = ignition;
     inputs.starterMotorEngaged = starterEngaged;
-    telemetryWriter->writeVehicleInputs(inputs);
+    telemetryWriter_->writeVehicleInputs(inputs);
 
     // Push simulator metrics
     telemetry::SimulatorMetricsTelemetry metrics;
     metrics.timestamp = currentTime;
-    telemetryWriter->writeSimulatorMetrics(metrics);
-
-    // Note: EngineStateTelemetry and FramePerformanceTelemetry are pushed
-    // by BridgeSimulator::update() -- SRP/ISP compliance
-    // Note: AudioDiagnostics and AudioTiming are pushed by strategies
+    telemetryWriter_->writeSimulatorMetrics(metrics);
 }
+
+// ============================================================================
+// File-local helpers (continued) + SimulatorSession
+// ============================================================================
+namespace {
 
 // Initialize the simulator: create with audio config.
 // Script loading is handled by SimulatorFactory before this is called.
@@ -332,6 +265,7 @@ void cleanupSimulation(IAudioHardwareProvider* hardwareProvider, ISimulator& sim
 // SimulatorSession - Concrete session managing audio hardware + simulator lifecycle
 // Owns audio hardware for session lifetime. Reuses runSimulationLoop() for the main tick loop.
 // Hot-swap is triggered by initSimulation(existingSession) — the session swaps its internal simulator pointer.
+// Composes SimulationLoop for the main tick execution.
 // ============================================================================
 
 class SimulatorSession : public ISimulatorSession {
@@ -379,12 +313,14 @@ public:
             }
         }
 
-        // Delegate to existing loop — returns EXIT_BUT_CONTINUE_NEXT on 'P' press
-        int exitCode = runSimulationLoop(
+        // Create loop with injected dependencies — no parameter plumbing
+        SimulationLoop loop(
             *simulator_, config_, *audioBuffer_, crankingController_,
             stopRequested_,
             inputProvider_, presentation_,
             telemetryWriter_, telemetryReader_, logger_);
+
+        int exitCode = loop.run();
 
         // Stop audio only on final exit, not on preset cycle
         if (exitCode != EXIT_BUT_CONTINUE_NEXT) {
@@ -494,40 +430,13 @@ private:
     bool closed_{false};
 };
 
-
-// ============================================================================
-// Extracted loop helpers — keep the main loop body a thin orchestrator
-// ============================================================================
-
-CrankingStepResult applyCrankingDecision(ISimulator& simulator, ICombustionEngine* combustion, const input::EngineInput& input, CrankingController& crankingController, ILogging* logger) {
-    if (combustion) {
-        auto starterDecision = crankingController.engageStarter(*combustion, input.starterButton, input.ignition);
-        applyDecision(combustion, starterDecision);
-    }
-    auto crankingDecision = combustion
-        ? crankingController.step(*combustion, input.throttle, input.ignition)
-        : TransitionDecision{EnginePhase::Running, false, input.throttle, false};
-    if (combustion) {
-        applyDecision(combustion, crankingDecision);
-    }
-    return CrankingStepResult{crankingDecision, CrankingController::State{crankingDecision.effectiveThrottle, combustion && crankingDecision.starterMotor, crankingDecision.targetPhase}};
-}
-
-EngineSimStats applyGearControlsToEngineStats(ISimulator& simulator, const input::EngineInput& input) {
-    // Get standard engine sim data and overlay input-provider gear state onto stats for display
-    EngineSimStats stats = simulator.getStats();
-    stats.gearSelector = input.gearSelector;
-    stats.gearAutoMode = input.gearAutoMode;
-    return stats;
-}
-
 } // anonymous namespace
 
 // ============================================================================
-// Unified Main Loop Implementation
+// SimulationLoop - Implementation
 // ============================================================================
 
-int runSimulationLoop(
+SimulationLoop::SimulationLoop(
     ISimulator& simulator,
     const SimulationConfig& config,
     IAudioBuffer& audioBuffer,
@@ -538,59 +447,66 @@ int runSimulationLoop(
     telemetry::ITelemetryWriter* telemetryWriter,
     telemetry::ITelemetryReader* telemetryReader,
     ILogging* logger)
-{
+        : simulator_(simulator)
+        , config_(config)
+        , audioBuffer_(audioBuffer)
+        , crankingController_(crankingController)
+        , stopRequested_(stopRequested)
+        , inputProvider_(inputProvider)
+        , presentation_(presentation)
+        , telemetryWriter_(telemetryWriter)
+        , telemetryReader_(telemetryReader)
+        , logger_(logger)
+    {}
+
+int SimulationLoop::run() {
     double currentTime = 0.0;
-    LoopTimer timer(config.updateInterval());
+    LoopTimer timer(config_.updateInterval());
 
-    logger->info(LogMask::BRIDGE, "runSimulationLoop starting simulation loop with %s", config.simulatorLabel.c_str());
+    logger_->info(LogMask::BRIDGE, "SimulationLoop starting with %s", config_.simulatorLabel.c_str());
 
-    // Track first tick to trigger auto-start in non-interactive mode
+    // Track for the loop lifetime - first tick to trigger auto-start in non-interactive mode
     bool isFirstTick = true;
     input::EngineInput engineInput;
-
-    auto* combustion = dynamic_cast<ICombustionEngine*>(&simulator);
 
     // Initialise and track these mutating values for the loop lifetime
     double lastDynoTorqueScale = -1.0;
     EngineSimStats previousStats = {};
-    if (inputProvider) inputProvider->provideFeedback(previousStats); // NOTE: input is presently optional for direct control, eg. testing or non-interactive CLI mode. I'm not entirely happy with this and wonder if we should assert there's always an input provider but I can see the argument for allowing one to be optional
- 
-    // MAIN LOOP
+    if (inputProvider_) inputProvider_->provideFeedback(previousStats);
+
+    auto* combustionEngine = dynamic_cast<ICombustionEngine*>(&simulator_);
     do {
-        // Non-interactive timeout: stop the loop when duration expires
-        if (config.duration > 0.0 && currentTime >= config.duration) break;
+        if (config_.duration > 0.0 && currentTime >= config_.duration) break;
 
-        auto crankingStepResult = applyCrankingDecision(simulator, combustion, engineInput, crankingController, logger);
+        CrankingController::State crankingState = applyCrankingDecision(combustionEngine, engineInput);
 
-        applyVehicleControls(simulator, combustion, engineInput, crankingStepResult.crankingState, lastDynoTorqueScale, logger);
-        audioBuffer.updateSimulation(&simulator, config.updateInterval() * SECONDS_TO_MILLISECONDS);
-        EngineSimStats stats = applyGearControlsToEngineStats(simulator, engineInput); // Get standard engine sim data and overlay input-provider gear state onto stats for display
+        applyVehicleControls(combustionEngine, engineInput, crankingState, lastDynoTorqueScale);
 
-        audioBuffer.fillBufferFromEngine(&simulator, config.framesPerUpdate());
+        audioBuffer_.updateSimulation(&simulator_, config_.updateInterval() * SECONDS_TO_MILLISECONDS);
+        audioBuffer_.fillBufferFromEngine(&simulator_, config_.framesPerUpdate());
 
-        writeTelemetry(telemetryWriter, currentTime, crankingStepResult.crankingState.startingThrottle, engineInput.ignition, crankingStepResult.crankingState.starterEngaged);
+        writeTelemetry(currentTime, crankingState.startingThrottle, engineInput.ignition, crankingState.starterEngaged);
 
-        currentTime += config.updateInterval();
-        updatePresentation(presentation, config, audioBuffer, simulator, stats, crankingStepResult, engineInput, currentTime, telemetryReader);
+        EngineSimStats stats = simulator_.getStats();
+        currentTime += config_.updateInterval();
+        updatePresentation(stats, crankingState, engineInput, currentTime);
 
-
-
-        // Timing control - QUESTION: should/can pollInput go before waitUntilNextTick or can waitUntilNextTick go at the bottom before the loop while, o rjust before input.preseCycle
+        // Loop control: sleep until next tick, poll input, track previous stats for edge detection in input providers, check stop flag
         timer.waitUntilNextTick();
-        engineInput = pollInput(inputProvider, currentTime, config.updateInterval(), isFirstTick);
+        engineInput = pollInput(currentTime, config_.updateInterval(), isFirstTick);
         isFirstTick = false;
         previousStats = stats;
 
         if (engineInput.presetCycle) {
             return EXIT_BUT_CONTINUE_NEXT;
         }
-    } while (!stopRequested.load(std::memory_order_acquire));
+    } while (!stopRequested_.load(std::memory_order_acquire));
 
     return 0;
 }
 
 // ============================================================================
-// Main Simulation Entry Point - Factory that creates a session
+// Session factory - GLOBAL scope
 // ============================================================================
 
 std::unique_ptr<ISimulatorSession> createSession(
@@ -648,4 +564,4 @@ std::unique_ptr<ISimulatorSession> createSession(
         inputProvider, presentation,
         telemetryWriter, telemetryReader,
         logger);
-}
+}// GLOBAL scope — session factory, no access to SimulationLoop members

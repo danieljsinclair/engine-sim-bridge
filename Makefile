@@ -22,6 +22,7 @@ BUILD_STAMP := $(BUILD_DIR)/.build-ready.stamp
 SONAR_STAMP := $(BUILD_DIR)/.sonar-scan.stamp
 SONAR_PROJECT_PROPERTIES := sonar-project.properties
 COMPILE_DB := $(BUILD_DIR)/compile_commands.json
+SONAR_TOKEN ?= $(or $(SONAR_TOKEN_ES),$(SONAR_TOKEN))
 
 # Source inputs that affect the bridge build. This ensures the stamp is invalidated
 # when bridge or engine-sim sources change, so rebuilds happen when necessary.
@@ -139,7 +140,7 @@ sonar-scan: $(SONAR_STAMP)
 
 $(SONAR_STAMP): $(BUILD_STAMP) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES)
 	@echo "=== [engine-sim-bridge] Running Sonar scan ==="
-	-sonar-scanner
+	-SONAR_TOKEN="$(or $(SONAR_TOKEN_ES),$(SONAR_TOKEN))" sonar-scanner
 	@touch $@
 
 $(COMPILE_DB): $(BUILD_DIR)/CMakeCache.txt

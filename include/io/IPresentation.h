@@ -15,45 +15,58 @@
 namespace presentation {
 
 // ============================================================================
-// EngineState - Data to display
+// EngineState - Componentised display data, each sub-struct from one source
 // ============================================================================
 
 struct EngineState {
-    double timestamp;
-    double rpm;
-    double throttle;
-    double load;
-    double speedMph;
-    int underrunCount;
-    std::string audioMode;
-    bool ignition;
-    bool starterMotorEngaged;
-    EnginePhase enginePhase = EnginePhase::Stopped;
-    std::string presetShortName;  // Short name of current preset (for display)
-    double exhaustFlow;  // m^3/s
-    int gear = 0;
-    int gearSelector = 0;       // GearSelector value
-    bool gearAutoMode = false;  // true=auto(ZF), false=manual
-    double dynoTorque = 0.0;      // ft*lbs (0 when dyno disabled)
-    double dynoTargetRPM = 0.0;   // 0 when dyno disabled
+    // Engine physics + operational state
+    struct Engine {
+        double rpm = 0.0;
+        double load = 0.0;
+        double exhaustFlow = 0.0;     // m^3/s
+        double engineTorqueNm = 0.0;
+        double drivetrainTorqueNm = 0.0;
+        bool starterEngaged = false;   // Starter motor physically engaged with engine
+        EnginePhase phase = EnginePhase::Stopped;
+    } engine;
 
-    // Audio timing diagnostics (from strategy)
-    double renderMs = 0.0;
-    double headroomMs = 0.0;
-    double budgetPct = 0.0;
-    int framesRequested = 0;
-    int framesRendered = 0;
-    double callbackRateHz = 0.0;
-    double generatingRateFps = 0.0;
-    double trendPct = 0.0;
-    int sampleRate = 0;  // Set by SimulationLoop from upstream provider
+    // Mechanical transmission state
+    struct Drivetrain {
+        double speedMph = 0.0;
+        double vehicleSpeedKmh = 0.0;
+        int gear = 0;
+        double dynoTorque = 0.0;
+        double dynoTargetRPM = 0.0;
+    } drivetrain;
 
-    // Vehicle telemetry
-    double vehicleSpeedKmh = 0.0;
-    double engineTorqueNm = 0.0;
-    double drivetrainTorqueNm = 0.0;
-    int simulationFrequency = 0;  // Actual physics Hz from the loaded engine
-    double brakeLevel = 0.0;       // 0.0 = no brake, 1.0 = full brake
+    // User control inputs (what the driver is commanding)
+    struct Controls {
+        double throttle = 0.0;         // Effective (cranking-aware)
+        bool ignition = false;
+        double brakeLevel = 0.0;
+        int gearSelector = 0;
+        bool gearAutoMode = false;
+    } controls;
+
+    // Audio + timing diagnostics (observability only)
+    struct Audio {
+        double timestamp = 0.0;
+        int simulationFrequency = 0;
+        int underrunCount = 0;
+        std::string audioMode;
+        double renderMs = 0.0;
+        double headroomMs = 0.0;
+        double budgetPct = 0.0;
+        int framesRequested = 0;
+        int framesRendered = 0;
+        double callbackRateHz = 0.0;
+        double generatingRateFps = 0.0;
+        double trendPct = 0.0;
+        int sampleRate = 0;
+    } audio;
+
+    // Cross-cutting
+    std::string presetShortName;
 };
 
 // ============================================================================
