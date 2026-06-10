@@ -41,11 +41,16 @@ jobs:
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
       - name: Analyze with SonarCloud
-        uses: SonarSource/sonarcloud-github-action@4006f663ecaf1f8093e8e4abb9227f6041f52216
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        with:
-          args:
-            -Dsonar.projectKey=danieljsinclair_engine-sim-bridge
-            -Dsonar.organization=danieljsinclair
-          projectBaseDir: .
+        run: |
+          sonar-scanner \
+            -Dsonar.projectKey=danieljsinclair_engine-sim-bridge \
+            -Dsonar.organization=danieljsinclair \
+            -Dsonar.sources=src \
+            -Dsonar.tests=test \
+            -Dsonar.sourceEncoding=UTF-8 \
+            -Dsonar.cfamily.compile-commands=build/compile_commands.json \
+            -Dsonar.exclusions=engine-sim/**,build/**,preset/**,es/**,tmp/**,.github/** \
+            -Dsonar.coverage.exclusions=test/**,engine-sim/**,tools/** \
+            -Dsonar.cfamily.threads=4
