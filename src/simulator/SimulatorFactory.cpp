@@ -235,20 +235,18 @@ std::vector<std::string> SimulatorFactory::discoverPresets(const std::string& pr
 // Returns true if dyno was configured, false otherwise.
 // ============================================================================
 
-namespace {
-    bool configureLoadTorque(ISimulator* simulator, double loadFraction, ILogging* logger) {
-        if (loadFraction <= 0) return false;  // OK: no load to configure
+bool SimulatorFactory::configureLoadTorque(ISimulator* simulator, double loadFraction, ILogging* logger) {
+    if (loadFraction <= 0) return false;  // OK: no load to configure
 
-        auto* bridgeSim = dynamic_cast<BridgeSimulator*>(simulator);
-        const bool configured = bridgeSim->configureDynoLoad(loadFraction);
+    auto* bridgeSim = dynamic_cast<BridgeSimulator*>(simulator);
+    const bool configured = bridgeSim->configureDynoLoad(loadFraction);
 
-        if (configured && logger) {
-            logger->info(LogMask::BRIDGE, "Load: %d%% (%d ft*lbs max)",
-                         static_cast<int>(loadFraction * 100),
-                         static_cast<int>(loadFraction * EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS));
-        }
-        return configured;
+    if (configured && logger) {
+        logger->info(LogMask::BRIDGE, "Load: %d%% (%d ft*lbs max)",
+                     static_cast<int>(loadFraction * 100),
+                     static_cast<int>(loadFraction * EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS));
     }
+    return configured;
 }
 
 // ============================================================================

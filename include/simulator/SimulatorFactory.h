@@ -68,6 +68,12 @@ public:
     static std::vector<std::string> discoverPresets(const std::string& currentPresetPath);
 
     /**
+     * Configure dyno load torque on an existing simulator.
+     * Callers can compose create() + configureLoadTorque() instead of createAndConfigure().
+     */
+    static bool configureLoadTorque(ISimulator* simulator, double loadFraction, ILogging* logger = nullptr);
+
+    /**
      * Create and configure simulator with optional dyno load torque.
      * Combines create() + configureLoadTorque() for factory convenience.
      */

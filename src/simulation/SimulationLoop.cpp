@@ -57,6 +57,15 @@ struct PresentationContext {
 };
 
 // ============================================================================
+// CrankingStepResult - Data carrier for cranking decision output
+// ============================================================================
+
+struct CrankingStepResult {
+    TransitionDecision decision;
+    CrankingController::State crankingState;
+};
+
+// ============================================================================
 // Private Helper Functions - SRP Compliance
 // ============================================================================
 
@@ -201,7 +210,7 @@ void applyVehicleControls(
 
 }
 
-void updatePresentation(const PresentationContext& ctx) {
+void updatePresentationFromContext(const PresentationContext& ctx) {
     if (!ctx.presentation) return;
 
     // Read audio timing diagnostics from telemetry (strategies push to telemetry after each render)
@@ -244,6 +253,30 @@ void updatePresentation(const PresentationContext& ctx) {
     state.brakeLevel = ctx.brakeLevel;
 
     ctx.presentation->ShowEngineState(state);
+}
+
+void updatePresentation(presentation::IPresentation* presentation, const SimulationConfig& config,
+                        IAudioBuffer& audioBuffer, ISimulator& simulator, const EngineSimStats& stats,
+                        const CrankingStepResult& crankingStepResult, const input::EngineInput& engineInput,
+                        double currentTime,
+                        telemetry::ITelemetryReader* telemetryReader) {
+    PresentationContext ctx = {
+        .presentation = presentation,
+        .config = &config,
+        .currentTime = currentTime,
+        .stats = &stats,
+        .throttle = crankingStepResult.crankingState.startingThrottle,
+        .ignition = engineInput.ignition,
+        .starterEngaged = crankingStepResult.crankingState.starterEngaged,
+        .phase = simulator.getEnginePhase(),
+        .underrunCount = readUnderrunCount(telemetryReader),
+        .audioBuffer = &audioBuffer,
+        .telemetryReader = telemetryReader,
+        .presetShortName = simulator.getName(),
+        .actualSimFrequency = simulator.getSimulationFrequency(),
+        .brakeLevel = engineInput.brakeLevel
+    };
+    updatePresentationFromContext(ctx);
 }
 
 void writeTelemetry(telemetry::ITelemetryWriter* telemetryWriter,
@@ -461,6 +494,33 @@ private:
     bool closed_{false};
 };
 
+
+// ============================================================================
+// Extracted loop helpers — keep the main loop body a thin orchestrator
+// ============================================================================
+
+CrankingStepResult applyCrankingDecision(ISimulator& simulator, ICombustionEngine* combustion, const input::EngineInput& input, CrankingController& crankingController, ILogging* logger) {
+    if (combustion) {
+        auto starterDecision = crankingController.engageStarter(*combustion, input.starterButton, input.ignition);
+        applyDecision(combustion, starterDecision);
+    }
+    auto crankingDecision = combustion
+        ? crankingController.step(*combustion, input.throttle, input.ignition)
+        : TransitionDecision{EnginePhase::Running, false, input.throttle, false};
+    if (combustion) {
+        applyDecision(combustion, crankingDecision);
+    }
+    return CrankingStepResult{crankingDecision, CrankingController::State{crankingDecision.effectiveThrottle, combustion && crankingDecision.starterMotor, crankingDecision.targetPhase}};
+}
+
+EngineSimStats applyGearControlsToEngineStats(ISimulator& simulator, const input::EngineInput& input) {
+    // Get standard engine sim data and overlay input-provider gear state onto stats for display
+    EngineSimStats stats = simulator.getStats();
+    stats.gearSelector = input.gearSelector;
+    stats.gearAutoMode = input.gearAutoMode;
+    return stats;
+}
+
 } // anonymous namespace
 
 // ============================================================================
@@ -486,7 +546,7 @@ int runSimulationLoop(
 
     // Track first tick to trigger auto-start in non-interactive mode
     bool isFirstTick = true;
-    input::EngineInput input;
+    input::EngineInput engineInput;
 
     auto* combustion = dynamic_cast<ICombustionEngine*>(&simulator);
 
@@ -500,56 +560,28 @@ int runSimulationLoop(
         // Non-interactive timeout: stop the loop when duration expires
         if (config.duration > 0.0 && currentTime >= config.duration) break;
 
-        if (combustion) {
-            auto starterDecision = crankingController.engageStarter(*combustion, input.starterButton, input.ignition);
-            applyDecision(combustion, starterDecision);
-        }
-        auto crankingDecision = combustion
-            ? crankingController.step(*combustion, input.throttle, input.ignition)
-            : TransitionDecision{EnginePhase::Running, false, input.throttle, false};
-        if (combustion) {
-            applyDecision(combustion, crankingDecision);
-        }
-        auto crankingState = CrankingController::State{crankingDecision.effectiveThrottle, combustion && crankingDecision.starterMotor, crankingDecision.targetPhase};
+        auto crankingStepResult = applyCrankingDecision(simulator, combustion, engineInput, crankingController, logger);
 
-        applyVehicleControls(simulator, combustion, input, crankingState, lastDynoTorqueScale, logger);
+        applyVehicleControls(simulator, combustion, engineInput, crankingStepResult.crankingState, lastDynoTorqueScale, logger);
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * SECONDS_TO_MILLISECONDS);
-
-        // Get standard engine sim data and overlay input-provider gear state onto stats for display
-        EngineSimStats stats = simulator.getStats();
-        stats.gearSelector = input.gearSelector;
-        stats.gearAutoMode = input.gearAutoMode;
+        EngineSimStats stats = applyGearControlsToEngineStats(simulator, engineInput); // Get standard engine sim data and overlay input-provider gear state onto stats for display
 
         audioBuffer.fillBufferFromEngine(&simulator, config.framesPerUpdate());
 
-        writeTelemetry(telemetryWriter, currentTime, crankingState.startingThrottle, input.ignition, crankingState.starterEngaged);
+        writeTelemetry(telemetryWriter, currentTime, crankingStepResult.crankingState.startingThrottle, engineInput.ignition, crankingStepResult.crankingState.starterEngaged);
 
         currentTime += config.updateInterval();
-        PresentationContext presCtx{
-            presentation,
-            &config,
-            currentTime,
-            &stats,
-            crankingState.startingThrottle,
-            input.ignition,
-            crankingState.starterEngaged,
-            crankingState.phase,
-            readUnderrunCount(telemetryReader),
-            &audioBuffer,
-            telemetryReader,
-            simulator.getName(),
-            simulator.getSimulationFrequency(),
-            input.brakeLevel
-        };
-        updatePresentation(presCtx);
+        updatePresentation(presentation, config, audioBuffer, simulator, stats, crankingStepResult, engineInput, currentTime, telemetryReader);
+
+
 
         // Timing control - QUESTION: should/can pollInput go before waitUntilNextTick or can waitUntilNextTick go at the bottom before the loop while, o rjust before input.preseCycle
         timer.waitUntilNextTick();
-        input = pollInput(inputProvider, currentTime, config.updateInterval(), isFirstTick);
+        engineInput = pollInput(inputProvider, currentTime, config.updateInterval(), isFirstTick);
         isFirstTick = false;
         previousStats = stats;
 
-        if (input.presetCycle) {
+        if (engineInput.presetCycle) {
             return EXIT_BUT_CONTINUE_NEXT;
         }
     } while (!stopRequested.load(std::memory_order_acquire));
