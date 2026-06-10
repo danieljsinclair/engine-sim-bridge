@@ -12,6 +12,9 @@ class ILogging;
 
 namespace input {
 
+// Forward declaration
+class IDemoSpeedEnhancer;
+
 class EngineInputTarget : public IKeyActionTarget {
 public:
     explicit EngineInputTarget(ILogging* logger = nullptr);
@@ -19,6 +22,7 @@ public:
     void quit() override;
     void setThrottle(double level) override;
     void adjustThrottle(double delta) override;
+    void setThrottleMomentary(double level) override;
     void shiftUp() override;
     void shiftDown() override;
     void toggleIgnition() override;
@@ -27,12 +31,17 @@ public:
     void adjustDynoTorque(double delta) override;
     void releaseDynoTorque() override;
     void setBrake(double level) override;
+    void adjustSpeed(double delta) override;
+
+    // Set the speed enhancer (DemoInputProvider) for --connect-demo mode
+    // The enhancer receives the base EngineInput and enhances it with speed data
+    void setSpeedEnhancer(IDemoSpeedEnhancer* enhancer);
 
     // Build the EngineInput struct from current state.
     // Resets one-shot flags (gearDelta, starter, presetCycle).
     EngineInput buildInput();
 
-    EngineInput buildEngineInput(double dt) override { (void)dt; return buildInput(); }
+    EngineInput buildEngineInput(double dt) override;
 
     bool quitRequested() const { return quitRequested_; }
 
@@ -47,7 +56,11 @@ private:
     bool presetCycle_;
     bool quitRequested_;
     bool throttleTouched_;  // true if set/adjusted this frame
+    double latchedThrottle_;  // Baseline set by W/Z/R/Space
+    bool momentaryActive_;   // True when a 0-9 key is being held
+    double roadSpeedKmh_ = 0.0;  // Virtual ICE Twin: target road speed (km/h)
     ILogging* logger_;
+    IDemoSpeedEnhancer* speedEnhancer_ = nullptr;  // Optional speed enhancer for demo mode
 };
 
 } // namespace input

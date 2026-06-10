@@ -49,6 +49,7 @@ struct SimulationConfig {
     double targetLoad = -1.0;   // -1 = no dyno, 0.0-1.0 = load torque fraction
     const char* outputWav = nullptr;
     int preFillMs = EngineSimDefaults::DEFAULT_PREFILL_MS;
+    bool autoGearbox = false;    // Automatic gearbox mode (--auto), default is manual
 
     // Optional display label for logging (e.g. ANSI-colored by CLI). Empty = auto-derive.
     std::string simulatorLabel;

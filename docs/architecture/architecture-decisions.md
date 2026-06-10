@@ -82,3 +82,32 @@ The twin must translate real EV telemetry into engine-sim physics inputs:
 - `d` — increase dyno torque
 - `c` — release dyno (free-revving)
 - `]`/`[` — shift up/down (auto-locks clutch when gear > 0)
+
+---
+
+## Mode Consolidation Decision
+
+**Decision**: ONE unified mode — no split between standard and demo modes.
+
+- `--connect-demo` swaps CAN bus data source only; all other logic remains identical
+- Keyboard always routes through `EngineInputTarget` regardless of mode
+- `IDemoSpeedEnhancer` interface: enhancer receives base `EngineInput`, returns it with only gear/clutch fields modified
+- Throttle, ignition, starter, brake, and speed all come from keyboard — NEVER overwritten by enhancer
+- `DemoInputProvider` runs `DemoVehiclePhysics` for road speed computation, feeds twin for gear selection
+
+**Rationale**: Eliminates duplicate code paths, reduces testing burden, and ensures consistent behavior across modes.
+
+---
+
+## Speed Control Keys
+
+**Keyboard mappings for speed control in demo mode**:
+
+- `,` (comma): Decelerate 2 km/h per frame (hold to ramp down)
+- `.` (period): Accelerate 2 km/h per frame (hold to ramp up)
+
+**Implementation details**:
+- Uses `isKeyActive` pattern (same as existing `W`/`Z` throttle ramp)
+- Speed clamped to [0, 300] km/h range
+- `roadSpeedKmh` field added to `EngineInput` struct
+- Speed changes accumulate while key held, snap to zero on release
