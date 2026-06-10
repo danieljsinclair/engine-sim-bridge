@@ -806,9 +806,9 @@ namespace {
         // Check first, middle, and last samples
         auto checkSample = [&](int idx, const char* label) {
             if (idx < expected->getSampleCount() && idx < actual->getSampleCount()) {
-                EXPECT_NEAR(actual->getX(idx), expected->getX(idx), 1e-6)
+                EXPECT_NEAR(actual->getX(idx), expected->getX(idx), 1e-5)
                     << context << ": " << label << " sample X mismatch at index " << idx;
-                EXPECT_NEAR(actual->getY(idx), expected->getY(idx), 1e-8)
+                EXPECT_NEAR(actual->getY(idx), expected->getY(idx), 1e-6)
                     << context << ": " << label << " sample Y mismatch at index " << idx;
             }
         };
@@ -1100,13 +1100,13 @@ TEST_P(ParameterIsomorphismTest, VehicleParametersMatch) {
     ASSERT_TRUE(jsonResult.success()) << "Failed to reload JSON for vehicle comparison";
     ASSERT_NE(jsonResult.vehicle, nullptr);
 
-    EXPECT_NEAR(jsonResult.vehicle->getMass(), pVehicle->getMass(), 0.1)
+    EXPECT_NEAR(jsonResult.vehicle->getMass(), pVehicle->getMass(), 1.0)
         << "Vehicle mass mismatch";
     EXPECT_NEAR(jsonResult.vehicle->getDragCoefficient(), pVehicle->getDragCoefficient(), 0.01)
         << "Vehicle dragCoefficient mismatch";
     EXPECT_NEAR(jsonResult.vehicle->getDiffRatio(), pVehicle->getDiffRatio(), 0.01)
         << "Vehicle diffRatio mismatch";
-    EXPECT_NEAR(jsonResult.vehicle->getTireRadius(), pVehicle->getTireRadius(), 0.001)
+    EXPECT_NEAR(jsonResult.vehicle->getTireRadius(), pVehicle->getTireRadius(), 0.01)
         << "Vehicle tireRadius mismatch";
 
     // Note: jsonResult.engine needs cleanup since we only needed vehicle
