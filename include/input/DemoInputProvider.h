@@ -3,6 +3,7 @@
 
 #include "io/IInputProvider.h"
 #include "input/IDemoControls.h"
+#include "input/IDemoSpeedEnhancer.h"
 #include "twin/IGearboxLogger.h"
 #include "simulator/EngineSimTypes.h"
 #include "io/UpstreamSignal.h"
@@ -21,7 +22,7 @@ namespace input {
 
 class DemoThrottleSource;
 
-class DemoInputProvider : public IInputProvider, public IDemoControls {
+class DemoInputProvider : public IInputProvider, public IDemoControls, public IDemoSpeedEnhancer {
 public:
     DemoInputProvider(
         std::unique_ptr<IThrottleSource> throttleSource,
@@ -55,6 +56,9 @@ public:
     bool isIgnitionOn() const override;
     void requestExit() override;
     void setBrake(double level) override;
+
+    // IDemoSpeedEnhancer — enhance base EngineInput with speed data
+    EngineInput enhanceInput(const EngineInput& baseInput, double dt) override;
 
     // Gearbox diagnostic logging
     void setGearboxLogger(twin::IGearboxLogger* logger);

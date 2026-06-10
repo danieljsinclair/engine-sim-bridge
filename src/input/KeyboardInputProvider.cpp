@@ -44,14 +44,16 @@ void KeyboardInputProvider::processKeys(double dt) {
         target_->adjustThrottle(-0.05);
     }
 
-    // Discrete throttle: edge-triggered (1-9 = 10%-90%, 0 = 100%)
+    // Momentary throttle: level-triggered (keyDown) (1-9 = 10%-90%, 0 = 100%)
+    // Uses isKeyDown (not isKeyActive) so setThrottleMomentary fires EVERY FRAME
+    // while the key is held, preventing snap-back between OS repeat events.
     for (int k = '1'; k <= '9'; ++k) {
-        if (keyHold_.isKeyPressed(k)) {
-            target_->setThrottle(static_cast<double>(k - '0') / 10.0);
+        if (keyHold_.isKeyDown(k)) {
+            target_->setThrottleMomentary(static_cast<double>(k - '0') / 10.0);
         }
     }
-    if (keyHold_.isKeyPressed('0')) {
-        target_->setThrottle(1.0);
+    if (keyHold_.isKeyDown('0')) {
+        target_->setThrottleMomentary(1.0);
     }
 
     // Space: zero throttle (edge-triggered)
@@ -99,6 +101,14 @@ void KeyboardInputProvider::processKeys(double dt) {
         target_->setBrake(1.0);
     } else if (keyHold_.isKeyReleased('b')) {
         target_->setBrake(0.0);
+    }
+
+    // Speed control: active (hold to ramp)
+    if (keyHold_.isKeyActive(',')) {
+        target_->adjustSpeed(-2.0);
+    }
+    if (keyHold_.isKeyActive('.')) {
+        target_->adjustSpeed(2.0);
     }
 }
 

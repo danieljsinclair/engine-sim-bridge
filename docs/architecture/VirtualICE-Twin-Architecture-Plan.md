@@ -676,6 +676,87 @@ The critic MUST explicitly sign off in the commit workflow. If the critic reject
 
 ---
 
+## Gearbox Bug Analysis
+
+Six bugs identified in `AutomaticGearbox` implementation:
+
+| Bug | Severity | Description | Fix Required |
+|-----|----------|-------------|--------------|
+| #1 | CRITICAL | Kickdown blocks redline safety at WOT — kickdown logic runs before redline safety check | Move redline safety before kickdown in process() |
+| #2 | CRITICAL | Redline safety condition backwards at line 109 — `speedKmh <= upshiftSpeed` should always fire at redline regardless of speed | Remove speed threshold check from redline safety |
+| #3 | MODERATE | `rpmFeedback_` defaults to 0.0 — redline safety disabled if `setTwinContext()` never called | Compute RPM internally as fallback or validate context is set |
+| #4 | MODERATE | `DemoVehiclePhysics` applies constant 4000N force regardless of gear ratio | Scale force with gear ratio for realistic acceleration |
+| #5 | MINOR | Tip-in/tip-out blocks upshift during transient (single-frame delay) | Allow upshift during tip-in transient after brief lockout |
+| #6 | MINOR | SHIFTING state freezes interval timer, creating ~2.35s dead zone between consecutive shifts | Unfreeze timer during SHIFTING or use separate shift lockout |
+
+**Priority fixes**: Remove speed threshold from redline safety, move redline safety before kickdown, compute RPM internally with fallback.
+
+---
+
+## Vehicle Drivetrain Research
+
+Eight vehicle presets analyzed for automatic gearbox calibration:
+
+| Vehicle | Gears | Diff Ratio | Tire Radius (m) | Redline RPM | 1st Gear Ratio | Top Gear Ratio | Ratio Spread |
+|---------|-------|------------|-----------------|-------------|---------------|----------------|--------------|
+| AMG C63 M156 | 7 | 2.82 | 0.357 | 7250 | 4.34 | 0.73 | 5.95x |
+| Ferrari F136 | 6 | 3.42 | 0.254 | 9000 | 3.23 | 0.80 | 4.04x |
+| GM LS V8 | 6 | 3.42 | 0.254 | 6500 | 2.97 | 0.57 | 5.21x |
+| Toyota 2JZ | 6 | 3.15 | 0.254 | 6000 | 5.25 | 1.00 | 5.25x |
+| Subaru EJ25 | 6 | 3.90 | 0.254 | 6500 | 3.636 | 0.756 | 4.81x |
+| Lexus LFA V10 | 6 | 3.42 | 0.254 | 9000 | 3.23 | 0.80 | 4.04x |
+| Merlin V12 | 6 | 2.30 | 0.254 | 3000 | 1.30 | 0.65 | 2.00x |
+
+**Notable findings**:
+- Ferrari F136 and Lexus LFA share identical gear ratios
+- Merlin V12 uses aircraft-style ratios (all ratios ≤ 1.3)
+- AMG C63 is the only 7-speed and has the largest tire (0.357m vs typical 0.254m)
+- C63 has the widest ratio spread (5.95x) among automotive presets
+
+**AMG C63 gear speed limits** (priority vehicle for twin validation):
+
+| Gear | Min Speed (km/h) | Max Speed (km/h) |
+|------|-------------------|-------------------|
+| 1st | 7.7 | 79.1 |
+| 2nd | 11.6 | 118.9 |
+| 3rd | 17.4 | 178.9 |
+| 4th | 24.4 | 250.7 |
+| 5th | 33.4 | 343.5 |
+| 6th | 40.7 | 418.9 |
+| 7th | 45.7 | 470.5 |
+
+These limits derive from redline RPM (7250) through the gear ratio formula: `speedKmh = (RPM / 60) * (2 * PI * tireRadius) / (gearRatio * diffRatio) * 3.6`.
+
+---
+
+## Speed→RPM Physics Research
+
+Three approaches analyzed for matching engine RPM to vehicle road speed:
+
+### Approach A (Dyno-based): Velocity-tracking spring-damper on crankshaft
+- **Status**: Already exists in engine-sim as dyno constraint
+- **Issue**: Tracks crankshaft speed, not vehicle speed — requires conversion via gear ratio
+- **Verdict**: Not recommended — dyno is for testing, not driving simulation
+
+### Approach B (Recommended): Vehicle mass `v_theta` injection
+- **Pattern proven by hot-swap**: `captureDrivetrainState()` / `restoreDrivetrainState()` already demonstrate safe state injection
+- **Key formula**: `v_theta = sqrt(mass / I) * speed_ms` where `I` = vehicle mass body's current moment of inertia
+- **Mechanism**: `v_theta` changes with gear via `Transmission::changeGear()` which recalculates `I`
+- **Hybrid variant**: Coarse `v_theta` injection + dyno fine-tuning for responsive speed matching
+- **Missing piece**: New component that takes upstream `speedKmh`, converts to target `v_theta`, writes it each physics step
+
+### Approach C (Not recommended): Direct crankshaft velocity control
+- **Issue**: Destroys authentic sound — bypasses natural engine response
+- **Verdict**: Do not use
+
+### RPM formula for gear selection
+```
+engineRPM = (speedKmh / 3.6) / (2 * PI * tireRadius) * 60 * gearRatio * diffRatio
+```
+Used by gearbox for shift decisions, not fed to physics (RPM emerges naturally).
+
+---
+
 ## Open Questions for User
 
 1. **RESOLVED — ISimulator vs ITwinControl**: Phase 1 extends `EngineInput` with `gearAbsolute`, `clutchPressure`, and `vehicleSpeedTargetKmh` fields. Consistent with existing `gearDelta`/`dynoTorqueScale` pattern. ITwinControl deferred until a second twin-type provider emerges.

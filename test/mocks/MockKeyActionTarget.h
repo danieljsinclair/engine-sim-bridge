@@ -22,6 +22,8 @@ public:
     int shiftDownCount = 0;
     bool ignitionToggled = false;
     bool dynoReleased = false;
+    double lastSpeedDelta = 0.0;
+    int speedAdjustCount = 0;
 
     void quit() override {
         quitCalled = true;
@@ -76,6 +78,17 @@ public:
     void setBrake(double level) override {
         lastBrakeLevel = level;
         calls.push_back("setBrake(" + std::to_string(level) + ")");
+    }
+
+    void setThrottleMomentary(double level) override {
+        lastThrottleLevel = level;
+        calls.push_back("setThrottleMomentary(" + std::to_string(level) + ")");
+    }
+
+    void adjustSpeed(double delta) override {
+        lastSpeedDelta = delta;
+        speedAdjustCount++;
+        calls.push_back("adjustSpeed(" + std::to_string(delta) + ")");
     }
 };
 
