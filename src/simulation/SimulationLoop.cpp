@@ -36,24 +36,12 @@
 // SimulationConfig — value type, compiler-generated special members
 
 // ============================================================================
-// PresentationContext - Bundles parameters for updatePresentation()
+// CrankingStepResult - Data carrier for cranking decision output
 // ============================================================================
 
-struct PresentationContext {
-    presentation::IPresentation* presentation;
-    const SimulationConfig* config;
-    double currentTime;
-    const EngineSimStats* stats;
-    double throttle;
-    bool ignition;
-    bool starterEngaged;
-    EnginePhase phase;
-    int underrunCount;
-    IAudioBuffer* audioBuffer;
-    telemetry::ITelemetryReader* telemetryReader;
-    const char* presetShortName;
-    int actualSimFrequency;
-    double brakeLevel;
+struct CrankingStepResult {
+    TransitionDecision decision;
+    CrankingController::State crankingState;
 };
 
 // ============================================================================
@@ -199,51 +187,6 @@ void applyVehicleControls(
     //     simulator.setStarterMotor(input.starterMotor);
     // }
 
-}
-
-void updatePresentation(const PresentationContext& ctx) {
-    if (!ctx.presentation) return;
-
-    // Read audio timing diagnostics from telemetry (strategies push to telemetry after each render)
-    telemetry::AudioTimingTelemetry timing;
-    if (ctx.telemetryReader) {
-        timing = ctx.telemetryReader->getAudioTiming();
-    }
-
-    presentation::EngineState state;
-    state.timestamp = ctx.currentTime;
-    state.rpm = ctx.stats->currentRPM;
-    state.throttle = ctx.throttle;
-    state.load = ctx.stats->currentLoad;
-    state.speedMph = ctx.stats->speedMph();
-    state.underrunCount = ctx.underrunCount;
-    state.audioMode = ctx.audioBuffer->getModeString();
-    state.ignition = ctx.ignition;
-    state.starterMotorEngaged = ctx.starterEngaged;
-    state.enginePhase = ctx.phase;
-    state.exhaustFlow = ctx.stats->exhaustFlow;
-    state.gear = ctx.stats->gear;
-    state.gearSelector = ctx.stats->gearSelector;
-    state.gearAutoMode = ctx.stats->gearAutoMode;
-    state.dynoTorque = ctx.stats->dynoTorque;
-    state.dynoTargetRPM = ctx.stats->dynoTargetRPM;
-    state.renderMs = timing.renderMs;
-    state.headroomMs = timing.headroomMs;
-    state.budgetPct = timing.budgetPct;
-    state.framesRequested = timing.framesRequested;
-    state.framesRendered = timing.framesRendered;
-    state.callbackRateHz = timing.callbackRateHz;
-    state.generatingRateFps = timing.generatingRateFps;
-    state.trendPct = timing.trendPct;
-    state.sampleRate = ctx.config->sampleRate();
-    state.vehicleSpeedKmh = ctx.stats->vehicleSpeedKmh;
-    state.engineTorqueNm = ctx.stats->engineTorqueNm;
-    state.drivetrainTorqueNm = ctx.stats->drivetrainTorqueNm;
-    state.simulationFrequency = ctx.actualSimFrequency;
-    state.presetShortName = ctx.presetShortName ? ctx.presetShortName : "";
-    state.brakeLevel = ctx.brakeLevel;
-
-    ctx.presentation->ShowEngineState(state);
 }
 
 void writeTelemetry(telemetry::ITelemetryWriter* telemetryWriter,
@@ -515,35 +458,65 @@ int runSimulationLoop(
         applyVehicleControls(simulator, combustion, input, crankingState, lastDynoTorqueScale, logger);
         audioBuffer.updateSimulation(&simulator, config.updateInterval() * SECONDS_TO_MILLISECONDS);
 
-        // Get standard engine sim data and overlay input-provider gear state onto stats for display
         EngineSimStats stats = simulator.getStats();
-        stats.gearSelector = input.gearSelector;
-        stats.gearAutoMode = input.gearAutoMode;
 
         audioBuffer.fillBufferFromEngine(&simulator, config.framesPerUpdate());
 
         writeTelemetry(telemetryWriter, currentTime, crankingState.startingThrottle, input.ignition, crankingState.starterEngaged);
 
         currentTime += config.updateInterval();
-        PresentationContext presCtx{
-            presentation,
-            &config,
-            currentTime,
-            &stats,
-            crankingState.startingThrottle,
-            input.ignition,
-            crankingState.starterEngaged,
-            crankingState.phase,
-            readUnderrunCount(telemetryReader),
-            &audioBuffer,
-            telemetryReader,
-            simulator.getName(),
-            simulator.getSimulationFrequency(),
-            input.brakeLevel
-        };
-        updatePresentation(presCtx);
 
-        // Timing control - QUESTION: should/can pollInput go before waitUntilNextTick or can waitUntilNextTick go at the bottom before the loop while, o rjust before input.preseCycle
+        // Build presentation state inline — each field from its correct source
+        if (presentation) {
+            telemetry::AudioTimingTelemetry timing;
+            if (telemetryReader) {
+                timing = telemetryReader->getAudioTiming();
+            }
+
+            presentation::EngineState state;
+            state.timestamp = currentTime;
+            state.phase = crankingState.phase;
+            state.simulationFrequency = simulator.getSimulationFrequency();
+            state.presetShortName = simulator.getName() ? simulator.getName() : "";
+
+            // Engine physics — from simulator stats
+            state.engine.rpm = stats.currentRPM;
+            state.engine.load = stats.currentLoad;
+            state.engine.exhaustFlow = stats.exhaustFlow;
+            state.engine.engineTorqueNm = stats.engineTorqueNm;
+            state.engine.drivetrainTorqueNm = stats.drivetrainTorqueNm;
+
+            // Drivetrain — mechanical state + cranking operational state
+            state.drivetrain.speedMph = stats.speedMph();
+            state.drivetrain.vehicleSpeedKmh = stats.vehicleSpeedKmh;
+            state.drivetrain.gear = stats.gear;
+            state.drivetrain.gearSelector = input.gearSelector;
+            state.drivetrain.gearAutoMode = input.gearAutoMode;
+            state.drivetrain.dynoTorque = stats.dynoTorque;
+            state.drivetrain.dynoTargetRPM = stats.dynoTargetRPM;
+            state.drivetrain.throttle = crankingState.startingThrottle;
+            state.drivetrain.starterEngaged = crankingState.starterEngaged;
+
+            // Controls — user input only (from input provider)
+            state.controls.ignition = input.ignition;
+            state.controls.brakeLevel = input.brakeLevel;
+
+            // Audio — from audio buffer + telemetry (observability only)
+            state.audio.underrunCount = readUnderrunCount(telemetryReader);
+            state.audio.audioMode = audioBuffer.getModeString();
+            state.audio.renderMs = timing.renderMs;
+            state.audio.headroomMs = timing.headroomMs;
+            state.audio.budgetPct = timing.budgetPct;
+            state.audio.framesRequested = timing.framesRequested;
+            state.audio.framesRendered = timing.framesRendered;
+            state.audio.callbackRateHz = timing.callbackRateHz;
+            state.audio.generatingRateFps = timing.generatingRateFps;
+            state.audio.trendPct = timing.trendPct;
+            state.audio.sampleRate = config.sampleRate();
+
+            presentation->ShowEngineState(state);
+        }
+
         timer.waitUntilNextTick();
         input = pollInput(inputProvider, currentTime, config.updateInterval(), isFirstTick);
         isFirstTick = false;
