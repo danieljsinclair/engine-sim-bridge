@@ -3,14 +3,13 @@
 
 #include "simulation/CrankingController.h"
 #include "simulator/ICombustionEngine.h"
-#include "common/ILogging.h"
 
 // ============================================================================
 // Decision methods - return TransitionDecision instead of mutating engine
 // ============================================================================
 
 TransitionDecision CrankingController::engageStarter(
-    ICombustionEngine& engine, bool startStopButton) {
+    ICombustionEngine& engine, bool startStopButton, bool inputIgnition) {
     TransitionDecision decision{engine.getEnginePhase(), false, 0.0, false};
 
     if (!startStopButton) {
@@ -31,10 +30,16 @@ TransitionDecision CrankingController::engageStarter(
             decision.isTransition = true;
             break;
 
+        case EnginePhase::Stopping:
         case EnginePhase::Rollover:
-            decision.starterMotor = true;
-            decision.targetPhase = EnginePhase::Cranking;
-            decision.isTransition = true;
+            if (engineCanCatch(engine.getStats(), inputIgnition)) {
+                decision.targetPhase = EnginePhase::Running;
+                decision.isTransition = true;
+            } else {
+                decision.starterMotor = true;
+                decision.targetPhase = EnginePhase::Cranking;
+                decision.isTransition = true;
+            }
             break;
 
         default:
@@ -65,7 +70,10 @@ TransitionDecision CrankingController::step(
             break;
 
         case EnginePhase::Stopping:
-            if (stats.currentRPM < STOPPED_RPM) {
+            if (engineCanCatch(stats, inputIgnition)) {
+                decision.targetPhase = EnginePhase::Rollover;
+                decision.isTransition = true;
+            } else if (stats.currentRPM < MIN_CATCH_RPM) {
                 decision.targetPhase = EnginePhase::Stopped;
                 decision.isTransition = true;
             }
@@ -77,10 +85,13 @@ TransitionDecision CrankingController::step(
                 if (ticks_ == BASELINE_TICKS) {
                     exhaustFlowBaseline_ = exhaustFlowSum_ / BASELINE_TICKS;
                 }
+                decision.starterMotor = true;
             } else if (engineCaught(stats, inputIgnition)) {
                 decision.starterMotor = false;
                 decision.targetPhase = EnginePhase::Running;
                 decision.isTransition = true;
+            } else {
+                decision.starterMotor = true;
             }
             decision.effectiveThrottle = CRANKING_THROTTLE;
             break;

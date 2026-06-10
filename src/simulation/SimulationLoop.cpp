@@ -392,7 +392,7 @@ public:
                 applyDecision(combustion, rolloverDecision);
                 logger->info(LogMask::BRIDGE, "Hot-swap → Rollover (gear=%d, vtheta=%.1f)", snapshot.gear, snapshot.vehicleMassVtheta);
             } else {
-                auto decision = crankingController_.engageStarter(*combustion, true);
+                auto decision = crankingController_.engageStarter(*combustion, true, true);
                 applyDecision(combustion, decision);
                 logger->info(LogMask::BRIDGE, "Hot-swap → Cranking (neutral, starter engaged)");
             }
@@ -501,7 +501,7 @@ int runSimulationLoop(
         if (config.duration > 0.0 && currentTime >= config.duration) break;
 
         if (combustion) {
-            auto starterDecision = crankingController.engageStarter(*combustion, input.starterButton);
+            auto starterDecision = crankingController.engageStarter(*combustion, input.starterButton, input.ignition);
             applyDecision(combustion, starterDecision);
         }
         auto crankingDecision = combustion

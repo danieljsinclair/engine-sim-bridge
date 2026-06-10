@@ -50,7 +50,7 @@ TEST(CrankingControllerTest, EngageStarterFromStopped_ReturnsCrankingDecision) {
     CrankingController controller;
     StubEngine engine;
 
-    auto decision = controller.engageStarter(engine, true);
+    auto decision = controller.engageStarter(engine, true, true);
 
     EXPECT_EQ(decision.targetPhase, EnginePhase::Cranking);
     EXPECT_TRUE(decision.starterMotor);
@@ -61,7 +61,7 @@ TEST(CrankingControllerTest, EngageStarterFromStopped_IgnoresButtonFalse) {
     CrankingController controller;
     StubEngine engine;
 
-    auto decision = controller.engageStarter(engine, false);
+    auto decision = controller.engageStarter(engine, false, true);
 
     EXPECT_EQ(decision.targetPhase, EnginePhase::Stopped);
     EXPECT_FALSE(decision.starterMotor);
@@ -77,7 +77,7 @@ TEST(CrankingControllerTest, EngageStarterWhileCranking_ReturnsStoppedDecision) 
     StubEngine engine;
     engine.phase_ = EnginePhase::Cranking;
 
-    auto decision = controller.engageStarter(engine, true);
+    auto decision = controller.engageStarter(engine, true, true);
 
     EXPECT_EQ(decision.targetPhase, EnginePhase::Stopped);
     EXPECT_FALSE(decision.starterMotor);
@@ -214,7 +214,7 @@ TEST(CrankingControllerTest, HotSwapWhileCranking_ReEngagesStarterOnNewEngine) {
     newEngine.phase_ = EnginePhase::Stopped;
 
     // Re-engage starter on new engine
-    auto decision = controller.engageStarter(newEngine, true);
+    auto decision = controller.engageStarter(newEngine, true, true);
 
     EXPECT_EQ(decision.targetPhase, EnginePhase::Cranking);
     EXPECT_TRUE(decision.starterMotor);
@@ -242,7 +242,7 @@ TEST(CrankingControllerTest, HotSwapWhileRunning_AutoCranksNewEngine) {
     StubEngine newEngine;
     newEngine.phase_ = EnginePhase::Stopped;
 
-    auto decision = controller.engageStarter(newEngine, true);
+    auto decision = controller.engageStarter(newEngine, true, true);
 
     EXPECT_EQ(decision.targetPhase, EnginePhase::Cranking);
     EXPECT_TRUE(decision.starterMotor);
@@ -259,7 +259,7 @@ TEST(CrankingControllerTest, HotSwapWhileStopped_NewEngineStaysStopped) {
     StubEngine newEngine;
     newEngine.phase_ = EnginePhase::Stopped;
 
-    auto decision = controller.engageStarter(newEngine, false);
+    auto decision = controller.engageStarter(newEngine, false, true);
 
     EXPECT_EQ(decision.targetPhase, EnginePhase::Stopped);
     EXPECT_FALSE(decision.starterMotor);
@@ -381,7 +381,7 @@ TEST(CrankingControllerTest, EngageStarterFromRollover_ReturnsCrankingDecision) 
 
     engine.phase_ = EnginePhase::Rollover;
 
-    auto decision = controller.engageStarter(engine, true);
+    auto decision = controller.engageStarter(engine, true, true);
 
     EXPECT_EQ(decision.targetPhase, EnginePhase::Cranking);
     EXPECT_TRUE(decision.starterMotor);
@@ -409,7 +409,7 @@ TEST(CrankingControllerTest, EngageStarter_ButtonFalse_ReturnsNoTransition) {
     CrankingController controller;
     StubEngine engine;
 
-    auto decision = controller.engageStarter(engine, false);
+    auto decision = controller.engageStarter(engine, false, true);
 
     EXPECT_EQ(decision.targetPhase, EnginePhase::Stopped);
     EXPECT_FALSE(decision.starterMotor);
@@ -421,7 +421,7 @@ TEST(CrankingControllerTest, EngageStarter_FromCranking_ReturnsStoppedDecision) 
     StubEngine engine;
     engine.phase_ = EnginePhase::Cranking;
 
-    auto decision = controller.engageStarter(engine, true);
+    auto decision = controller.engageStarter(engine, true, true);
 
     EXPECT_EQ(decision.targetPhase, EnginePhase::Stopped);
     EXPECT_FALSE(decision.starterMotor);
