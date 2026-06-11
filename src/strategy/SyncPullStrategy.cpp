@@ -207,16 +207,28 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
         }
     }
 
+    fillRemainingSilence(dst, framesRendered, framesToGenerate, remainingFrames);
+    applyCrossfade(dst, framesRendered);
+    resetFrameRender(framesToGenerate, framesRendered, dst, callbackStart);
+    updateTelemetry();
+
+    return true;
+}
+
+void SyncPullStrategy::fillRemainingSilence(float* dst, int framesRendered, int framesToGenerate, int remainingFrames) {
     // Fill remaining buffer with silence on partial render to prevent crackles
     if (framesRendered < framesToGenerate) {
-        // NOTE: Should never happen in practice - could probaly just throw an exception here
+        // NOTE: Should never happen in practice - could probably just throw an exception here
         logger_->warning(LogMask::AUDIO,
             "SyncPullStrategy::render: rendered %d/%d frames, filling remaining %d with silence",
             framesRendered, framesToGenerate, remainingFrames);
         float* remaining = dst + (framesRendered * 2);
         EngineSimAudio::fillSilence(remaining, framesToGenerate - framesRendered);
     }
+}
 
+
+void SyncPullStrategy::applyCrossfade(float* dst, int framesRendered) {
     // Apply crossfade if hot-swap is in progress
     if (crossfadeSamplesRemaining_ > 0 && framesRendered > 0) {
         int samplesToCrossfade = std::min(framesRendered * 2, crossfadeSamplesRemaining_);
@@ -241,6 +253,9 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
         }
     }
 
+}
+
+void SyncPullStrategy::resetFrameRender(int framesToGenerate, int framesRendered, float* dst, std::chrono::high_resolution_clock::time_point callbackStart) {
     // Track last sample values for next crossfade (update after crossfade)
     if (framesRendered > 0) {
         lastLeftSample_ = dst[(framesRendered - 1) * 2];
@@ -259,6 +274,9 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
         lastThroughputTime_ = now;
     }
 
+}
+
+void SyncPullStrategy::updateTelemetry() {
     // Push timing diagnostics to telemetry
     auto snap = diagnostics_.getSnapshot();
     telemetry::AudioTimingTelemetry timing;
@@ -271,8 +289,6 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
     timing.generatingRateFps = snap.generatingRateFps;
     timing.trendPct = snap.trendPct;
     telemetry_->writeAudioTiming(timing);
-
-    return true;
 }
 
 bool SyncPullStrategy::AddFrames(

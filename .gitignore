@@ -47,3 +47,6 @@ build-test/
 
 # Generated JSON presets (rebuilt by 'make presets')
 /preset/
+
+# sonar
+.scannerwork/
