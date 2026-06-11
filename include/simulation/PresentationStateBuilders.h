@@ -34,11 +34,11 @@ EngineState::Controls buildControlState(
 // Build audio/timing diagnostics from telemetry + audio buffer + config
 EngineState::Audio buildAudioState(
     const telemetry::AudioTimingTelemetry& timing,
-    telemetry::ITelemetryReader* telemetryReader,
-    IAudioBuffer& audioBuffer,
+    const telemetry::ITelemetryReader* telemetryReader,
+    const IAudioBuffer& audioBuffer,
     const struct SimulationConfig& config,
     double currentTime,
-    ISimulator& simulator);
+    const ISimulator& simulator);
 
 } // namespace builders
 } // namespace presentation

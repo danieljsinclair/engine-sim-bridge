@@ -59,7 +59,7 @@ SimulatorInit createSineWaveSimulator(const ISimulatorConfig& config) {
     return {std::move(sineSim), "SineWave", EnginePhase::Running};
 }
 
-void applyLoadedEngineSettings(Simulator* simulator, Engine* engine) {
+void applyLoadedEngineSettings(Simulator* simulator, const Engine* engine) {
     simulator->setSimulationFrequency(engine->getSimulationFrequency());
 
     Synthesizer::AudioParameters audioParams = simulator->synthesizer().getAudioParameters();

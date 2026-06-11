@@ -54,8 +54,7 @@ bool CoreAudioHardwareProvider::initialize(const AudioStreamFormat& format) {
     }
 
     // Initialize AudioUnit (required before AudioOutputUnitStart)
-    OSStatus initStatus = AudioUnitInitialize(audioUnit);
-    if (initStatus != noErr) {
+    if (OSStatus initStatus = AudioUnitInitialize(audioUnit); initStatus != noErr) {
         logCoreAudioError("AudioUnitInitialize", initStatus, nullptr);
         return false;
     }
@@ -104,8 +103,7 @@ bool CoreAudioHardwareProvider::startPlayback() {
 
     logger_->debug(LogMask::AUDIO, "Starting AudioUnit playback");
 
-    OSStatus status = AudioOutputUnitStart(audioUnit);
-    if (status != noErr) {
+    if (OSStatus status = AudioOutputUnitStart(audioUnit); status != noErr) {
         logCoreAudioError("AudioOutputUnitStart", status, nullptr);
         return false;
     }
@@ -215,9 +213,7 @@ bool CoreAudioHardwareProvider::setupAudioUnit() {
         return false;
     }
 
-    OSStatus status = AudioComponentInstanceNew(component, &audioUnit);
-
-    if (status != noErr || !audioUnit) {
+    if (OSStatus status = AudioComponentInstanceNew(component, &audioUnit); status != noErr || !audioUnit) {
         logCoreAudioError("AudioComponentInstanceNew", status,
                          "Failed to create AudioUnit - system audio may be unavailable");
         return false;
@@ -302,16 +298,14 @@ bool CoreAudioHardwareProvider::configureAudioFormat(const AudioStreamFormat& fo
     streamFormat.mChannelsPerFrame = format.channels;
 
     // Set format on AudioUnit
-    OSStatus status = AudioUnitSetProperty(
-        audioUnit,
-        kAudioUnitProperty_StreamFormat,
-        kAudioUnitScope_Input,
-        0,  // kAudioUnitElement_Output
-        &streamFormat,
-        sizeof(streamFormat)
-    );
-
-    if (status != noErr) {
+    if (OSStatus status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioUnitProperty_StreamFormat,
+            kAudioUnitScope_Input,
+            0,  // kAudioUnitElement_Output
+            &streamFormat,
+            sizeof(streamFormat)
+        ); status != noErr) {
         logCoreAudioError("AudioUnitSetProperty (format)", status, "44.1kHz stereo float not supported");
         return false;
     }
@@ -329,16 +323,14 @@ bool CoreAudioHardwareProvider::registerCallbackWithAudioUnit() {
     callbackStruct.inputProc = &coreAudioCallbackWrapper;
     callbackStruct.inputProcRefCon = this;  // Pass 'this' to static callback wrapper
 
-    OSStatus status = AudioUnitSetProperty(
-        audioUnit,
-        kAudioUnitProperty_SetRenderCallback,
-        kAudioUnitScope_Input,
-        0,  // kAudioUnitElement_Output
-        &callbackStruct,
-        sizeof(callbackStruct)
-    );
-
-    if (status != noErr) {
+    if (OSStatus status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioUnitProperty_SetRenderCallback,
+            kAudioUnitScope_Input,
+            0,  // kAudioUnitElement_Output
+            &callbackStruct,
+            sizeof(callbackStruct)
+        ); status != noErr) {
         logCoreAudioError("AudioUnitSetProperty (callback)", status);
         return false;
     }
@@ -355,7 +347,7 @@ OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
     AudioBufferList* ioData
 ) {
     // Extract the CoreAudioHardwareProvider instance from refCon
-    CoreAudioHardwareProvider* provider = static_cast<CoreAudioHardwareProvider*>(refCon);
+    const CoreAudioHardwareProvider* provider = static_cast<const CoreAudioHardwareProvider*>(refCon);
 
     if (!provider || !provider->audioCallback_) {
         return noErr;  // Should not happen if properly initialized

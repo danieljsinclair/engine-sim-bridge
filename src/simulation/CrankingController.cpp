@@ -9,7 +9,7 @@
 // ============================================================================
 
 TransitionDecision CrankingController::engageStarter(
-    ICombustionEngine& engine, bool startStopButton, bool inputIgnition) {
+    const ICombustionEngine& engine, bool startStopButton, bool inputIgnition) {
     TransitionDecision decision{engine.getEnginePhase(), false, 0.0, false};
 
     if (!startStopButton) {
@@ -50,7 +50,7 @@ TransitionDecision CrankingController::engageStarter(
 }
 
 TransitionDecision CrankingController::step(
-    ICombustionEngine& engine, double userThrottle, bool inputIgnition) {
+    const ICombustionEngine& engine, double userThrottle, bool inputIgnition) {
     EnginePhase phase = engine.getEnginePhase();
     EngineSimStats stats = engine.getStats();
     double effectiveThrottle = userThrottle;

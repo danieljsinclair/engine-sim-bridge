@@ -18,11 +18,11 @@ using json::JsonValue;
 // engine-sim root as the base directory. Paths like "../../es/sound-library/..."
 // are CWD-relative from the engine-sim root (the CWD when the preset compiler
 // ran). weakly_canonical resolves symlinks and normalizes the path.
-static void resolveImpulseResponsePaths(Engine* engine, const std::filesystem::path& assetBase) {
+static void resolveImpulseResponsePaths(const Engine* engine, const std::filesystem::path& assetBase) {
     if (!engine || assetBase.empty()) return;
 
     for (int i = 0; i < engine->getExhaustSystemCount(); i++) {
-        ExhaustSystem* es = engine->getExhaustSystem(i);
+        const ExhaustSystem* es = engine->getExhaustSystem(i);
         if (!es) continue;
 
         ImpulseResponse* ir = es->getImpulseResponse();

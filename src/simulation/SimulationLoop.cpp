@@ -104,8 +104,7 @@ struct LoopTimer {
 // Named audio render callback -- bridges AudioBufferView to strategy->render()
 int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer) {
     if (!strategy->isPlaying()) {
-        float* dst = buffer.asFloat();
-        if (dst) {
+        if (float* dst = buffer.asFloat()) {
             size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
             std::memset(dst, 0, totalSamples * sizeof(float));
         }
@@ -340,7 +339,7 @@ public:
 
     void transferDrivetrainState(ISimulator& newSimulator, ISimulator& oldSimulator, ILogging* logger) {
         // Transfer drivetrain state from old simulator to new
-        auto* oldBridge = dynamic_cast<BridgeSimulator*>(&oldSimulator);
+        const auto* oldBridge = dynamic_cast<const BridgeSimulator*>(&oldSimulator);
         auto* newBridge = dynamic_cast<BridgeSimulator*>(&newSimulator);
 
         if (oldBridge && newBridge) {
@@ -524,8 +523,7 @@ std::unique_ptr<ISimulatorSession> createSession(
     // Hot-swap path: caller passed an existing session — swap the simulator within it
     if (existingSession) {
         ASSERT(simulator, "simulator must be provided for hot-swap");
-        auto* session = static_cast<SimulatorSession*>(existingSession.get());
-        if (!session || !session->handoverSession(scriptPath, std::move(simulator))) {
+        if (auto* session = static_cast<SimulatorSession*>(existingSession.get()); !session || !session->handoverSession(scriptPath, std::move(simulator))) {
             throw SimulatorException("Failed to swap preset within existing session: " + scriptPath);
         }
         return existingSession;

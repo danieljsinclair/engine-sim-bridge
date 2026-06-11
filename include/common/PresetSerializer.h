@@ -24,20 +24,20 @@ namespace PresetSerializer {
 
 // Individual component serializers
 void serializeCrankshaft(JsonWriter& j, Crankshaft* cs);
-void serializeConnectingRod(JsonWriter& j, ConnectingRod* rod);
-void serializeExhaustSystem(JsonWriter& j, ExhaustSystem* es);
-void serializeIntake(JsonWriter& j, Intake* intake);
-void serializeCamshaft(JsonWriter& j, Camshaft* cam, int cylinderCount);
+void serializeConnectingRod(JsonWriter& j, const ConnectingRod* rod);
+void serializeExhaustSystem(JsonWriter& j, const ExhaustSystem* es);
+void serializeIntake(JsonWriter& j, const Intake* intake);
+void serializeCamshaft(JsonWriter& j, const Camshaft* cam, int cylinderCount);
 void serializeCylinderHead(JsonWriter& j, CylinderHead* head, int cylinderCount);
-void serializeCylinderBank(JsonWriter& j, CylinderBank* bank, Engine* engine);
+void serializeCylinderBank(JsonWriter& j, const CylinderBank* bank, const Engine* engine);
 void serializeCombustionChamber(JsonWriter& j, CombustionChamber* chamber);
 void serializeEngine(JsonWriter& j, Engine* engine);
-void serializeVehicle(JsonWriter& j, Vehicle* vehicle);
-void serializeTransmission(JsonWriter& j, Transmission* trans);
+void serializeVehicle(JsonWriter& j, const Vehicle* vehicle);
+void serializeTransmission(JsonWriter& j, const Transmission* trans);
 
 // Convenience: serialize complete engine preset to JSON string
 // Returns JSON string with engine, vehicle, and transmission (if provided)
-std::string serializeEngineToJson(Engine* engine, Vehicle* vehicle = nullptr, Transmission* transmission = nullptr);
+std::string serializeEngineToJson(Engine* engine, const Vehicle* vehicle = nullptr, const Transmission* transmission = nullptr);
 
 } // namespace PresetSerializer
 

@@ -43,9 +43,9 @@ namespace presentation {
         }
 
         EngineState::Audio buildAudioState(const telemetry::AudioTimingTelemetry& timing,
-                                        telemetry::ITelemetryReader* telemetryReader,
-                                        IAudioBuffer& audioBuffer, const SimulationConfig& config,
-                                        double currentTime, ISimulator& simulator) {
+                                        const telemetry::ITelemetryReader* telemetryReader,
+                                        const IAudioBuffer& audioBuffer, const SimulationConfig& config,
+                                        double currentTime, const ISimulator& simulator) {
             EngineState::Audio audio;
             audio.timestamp = currentTime;
             audio.simulationFrequency = simulator.getSimulationFrequency();

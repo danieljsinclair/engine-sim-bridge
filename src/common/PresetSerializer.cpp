@@ -55,7 +55,7 @@ void serializeCrankshaft(JsonWriter& j, Crankshaft* cs) {
     j.endObject();
 }
 
-void serializeConnectingRod(JsonWriter& j, ConnectingRod* rod) {
+void serializeConnectingRod(JsonWriter& j, const ConnectingRod* rod) {
     j.beginObject();
     j.kv("mass", rod->getMass());
     j.kv("momentOfInertia", rod->getMomentOfInertia());
@@ -66,7 +66,7 @@ void serializeConnectingRod(JsonWriter& j, ConnectingRod* rod) {
     j.endObject();
 }
 
-void serializeExhaustSystem(JsonWriter& j, ExhaustSystem* es) {
+void serializeExhaustSystem(JsonWriter& j, const ExhaustSystem* es) {
     j.beginObject();
     j.kv("length", es->getLength());
     j.kv("collectorCrossSectionArea", es->getCollectorCrossSectionArea());
@@ -78,8 +78,7 @@ void serializeExhaustSystem(JsonWriter& j, ExhaustSystem* es) {
 
     // Impulse response reference (filename for WAV lookup).
     // Normalize the path to portable relative form before serializing.
-    auto* ir = es->getImpulseResponse();
-    if (ir) {
+    if (const auto* ir = es->getImpulseResponse()) {
         std::string normalizedPath = normalizeImpulseResponsePath(ir->getFilename());
         j.kv("impulseResponseFilename", normalizedPath.c_str());
         j.kv("impulseResponseVolume", ir->getVolume());
@@ -88,7 +87,7 @@ void serializeExhaustSystem(JsonWriter& j, ExhaustSystem* es) {
     j.endObject();
 }
 
-void serializeIntake(JsonWriter& j, Intake* intake) {
+void serializeIntake(JsonWriter& j, const Intake* intake) {
     j.beginObject();
     j.kv("runnerFlowRate", intake->getRunnerFlowRate());
     j.kv("runnerLength", intake->getRunnerLength());
@@ -102,7 +101,7 @@ void serializeIntake(JsonWriter& j, Intake* intake) {
     j.endObject();
 }
 
-void serializeCamshaft(JsonWriter& j, Camshaft* cam, int cylinderCount) {
+void serializeCamshaft(JsonWriter& j, const Camshaft* cam, int cylinderCount) {
     j.beginObject();
     j.kv("advance", cam->getAdvance());
     j.kv("baseRadius", cam->getBaseRadius());
@@ -163,7 +162,7 @@ void serializeCylinderHead(JsonWriter& j, CylinderHead* head, int cylinderCount)
     j.endObject();
 }
 
-void serializeCylinderBank(JsonWriter& j, CylinderBank* bank, Engine* engine) {
+void serializeCylinderBank(JsonWriter& j, const CylinderBank* bank, const Engine* engine) {
     int cylCount = bank->getCylinderCount();
     j.beginObject();
     j.kv("angle", bank->getAngle());
@@ -181,8 +180,7 @@ void serializeCylinderBank(JsonWriter& j, CylinderBank* bank, Engine* engine) {
     for (int i = 0; i < cylCount; i++) {
         j.beginObject();
 
-        Piston* piston = engine->getPiston(bank->getIndex() * cylCount + i);
-        if (piston) {
+        if (const Piston* piston = engine->getPiston(bank->getIndex() * cylCount + i)) {
             j.kv("pistonMass", piston->getMass());
             j.kv("compressionHeight", piston->getCompressionHeight());
             j.kv("wristPinPosition", piston->getWristPinLocation());
@@ -191,8 +189,7 @@ void serializeCylinderBank(JsonWriter& j, CylinderBank* bank, Engine* engine) {
             j.kv("cylinderIndex", piston->getCylinderIndex());
         }
 
-        ConnectingRod* rod = engine->getConnectingRod(bank->getIndex() * cylCount + i);
-        if (rod) {
+        if (const ConnectingRod* rod = engine->getConnectingRod(bank->getIndex() * cylCount + i)) {
             j.key("connectingRod");
             serializeConnectingRod(j, rod);
             j.kv("rodJournalIndex", rod->getJournal());
@@ -203,8 +200,7 @@ void serializeCylinderBank(JsonWriter& j, CylinderBank* bank, Engine* engine) {
     j.endArray();
 
     // Cylinder head
-    CylinderHead* head = engine->getHead(bank->getIndex());
-    if (head) {
+    if (CylinderHead* head = engine->getHead(bank->getIndex())) {
         j.key("cylinderHead");
         serializeCylinderHead(j, head, cylCount);
     }
@@ -294,8 +290,7 @@ void serializeEngine(JsonWriter& j, Engine* engine) {
     j.endArray();
 
     // Fuel
-    auto* fuel = engine->getFuel();
-    if (fuel) {
+    if (const auto* fuel = engine->getFuel()) {
         j.key("fuel");
         j.beginObject();
         j.kv("maxBurningEfficiency", fuel->getMaxBurningEfficiency());
@@ -320,8 +315,7 @@ void serializeEngine(JsonWriter& j, Engine* engine) {
     j.endArray();
 
     // Ignition module
-    auto* ignition = engine->getIgnitionModule();
-    if (ignition) {
+    if (const auto* ignition = engine->getIgnitionModule()) {
         j.key("ignitionModule");
         j.beginObject();
         j.kv("revLimit", ignition->getRevLimit());
@@ -339,7 +333,7 @@ void serializeEngine(JsonWriter& j, Engine* engine) {
     j.endObject();
 }
 
-void serializeVehicle(JsonWriter& j, Vehicle* vehicle) {
+void serializeVehicle(JsonWriter& j, const Vehicle* vehicle) {
     j.beginObject();
     j.kv("mass", vehicle->getMass());
     j.kv("dragCoefficient", vehicle->getDragCoefficient());
@@ -351,7 +345,7 @@ void serializeVehicle(JsonWriter& j, Vehicle* vehicle) {
     j.endObject();
 }
 
-void serializeTransmission(JsonWriter& j, Transmission* trans) {
+void serializeTransmission(JsonWriter& j, const Transmission* trans) {
     j.beginObject();
     j.kv("gearCount", trans->getGearCount());
     j.kv("currentGear", trans->getGear());
@@ -368,7 +362,7 @@ void serializeTransmission(JsonWriter& j, Transmission* trans) {
     j.endObject();
 }
 
-std::string serializeEngineToJson(Engine* engine, Vehicle* vehicle, Transmission* transmission) {
+std::string serializeEngineToJson(Engine* engine, const Vehicle* vehicle, const Transmission* transmission) {
     JsonWriter j;
     j.beginObject();
 

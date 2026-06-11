@@ -30,7 +30,7 @@ static std::string buildFullPath(const std::string& assetBasePath, const std::st
 
 bool loadImpulseResponses(
     Simulator* simulator,
-    Engine* engine,
+    const Engine* engine,
     const std::string& assetBasePath,
     ILogging* logger)
 {
@@ -40,10 +40,10 @@ bool loadImpulseResponses(
 
     const int exhaustCount = engine->getExhaustSystemCount();
     for (int i = 0; i < exhaustCount; ++i) {
-        ExhaustSystem* exhaust = engine->getExhaustSystem(i);
+        const ExhaustSystem* exhaust = engine->getExhaustSystem(i);
         if (!exhaust) continue;
 
-        ImpulseResponse* impulse = exhaust->getImpulseResponse();
+        const ImpulseResponse* impulse = exhaust->getImpulseResponse();
         if (!impulse) continue;
 
         std::string filename = impulse->getFilename();

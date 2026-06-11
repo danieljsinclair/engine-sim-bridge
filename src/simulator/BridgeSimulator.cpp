@@ -285,14 +285,14 @@ void BridgeSimulator::applyTransition(const TransitionDecision& decision) {
 BridgeSimulator::DrivetrainSnapshot BridgeSimulator::captureDrivetrainState() const {
     DrivetrainSnapshot snapshot;
 
-    auto* body = m_simulator->getVehicleMassBody();
+    const auto* body = m_simulator->getVehicleMassBody();
     if (body) {
         snapshot.vehicleMassVtheta = body->v_theta;
         snapshot.vehicleMassI = body->I;
         snapshot.vehicleMassM = body->m;
     }
 
-    auto* trans = m_simulator->getTransmission();
+    const auto* trans = m_simulator->getTransmission();
     if (trans) {
         snapshot.gear = trans->getGear();
     }

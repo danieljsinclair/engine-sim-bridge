@@ -72,7 +72,7 @@ void cleanupPhysics(
 void initializeConvolutionFilters(Simulator* simulator) {
     if (!simulator) return;
 
-    Engine* engine = simulator->getEngine();
+    const Engine* engine = simulator->getEngine();
     if (!engine) return;
 
     const int exhaustCount = engine->getExhaustSystemCount();

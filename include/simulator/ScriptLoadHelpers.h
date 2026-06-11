@@ -166,7 +166,7 @@ inline Transmission* createDefaultTransmission() {
  */
 bool loadImpulseResponses(
     Simulator* simulator,
-    Engine* engine,
+    const Engine* engine,
     const std::string& assetBasePath,
     ILogging* logger);
 

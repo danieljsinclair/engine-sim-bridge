@@ -106,7 +106,7 @@ void EngineDeserializer::validateRequiredSections(const JsonValue& json, const E
     }
 }
 
-void EngineDeserializer::deserializeCrankshafts(const JsonValue& json, Engine* engine, const std::string& ctx) {
+void EngineDeserializer::deserializeCrankshafts(const JsonValue& json, const Engine* engine, const std::string& ctx) {
     const JsonValue& arr = json["crankshafts"];
     for (size_t i = 0; i < arr.size() &&
          i < static_cast<size_t>(engine->getCrankshaftCount()); i++) {
@@ -116,7 +116,7 @@ void EngineDeserializer::deserializeCrankshafts(const JsonValue& json, Engine* e
     }
 }
 
-void EngineDeserializer::deserializeExhaustSystems(const JsonValue& json, Engine* engine, const std::string& ctx) {
+void EngineDeserializer::deserializeExhaustSystems(const JsonValue& json, const Engine* engine, const std::string& ctx) {
     const JsonValue& arr = json["exhaustSystems"];
     if (!arr.isArray()) return;
     for (size_t i = 0; i < arr.size() &&
@@ -127,7 +127,7 @@ void EngineDeserializer::deserializeExhaustSystems(const JsonValue& json, Engine
     }
 }
 
-void EngineDeserializer::deserializeIntakes(const JsonValue& json, Engine* engine, const std::string& ctx) {
+void EngineDeserializer::deserializeIntakes(const JsonValue& json, const Engine* engine, const std::string& ctx) {
     const JsonValue& arr = json["intakes"];
     if (!arr.isArray()) return;
     for (size_t i = 0; i < arr.size() &&
@@ -139,7 +139,7 @@ void EngineDeserializer::deserializeIntakes(const JsonValue& json, Engine* engin
 }
 
 void EngineDeserializer::deserializeCylinders(const JsonValue& bankJson, CylinderBank* bank,
-        Engine* engine, Crankshaft* mainCrank, int bankIdx,
+        const Engine* engine, Crankshaft* mainCrank, int bankIdx,
         int globalCylIdx, int cylCount, const std::string& ctx, size_t bankIndex) {
     const JsonValue& cylinders = bankJson["cylinders"];
     if (!cylinders.isArray()) return;
