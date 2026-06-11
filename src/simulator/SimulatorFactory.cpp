@@ -108,15 +108,15 @@ LoadedSimulation loadPresetSimulation(const std::string& scriptPath, const std::
 }
 
 LoadedSimulation loadScriptSimulation(const std::string& scriptPath, const std::string& assetBasePath) {
-    std::string normalizedPath = ScriptLoadHelpers::normalizeScriptPath(scriptPath);
-    std::string resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath, assetBasePath);
+    std::filesystem::path normalizedPath = ScriptLoadHelpers::normalizeScriptPath(scriptPath);
+    std::string resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath.string(), assetBasePath);
 
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
     const auto simDir = script_compile_helpers::findEngineSimRoot(normalizedPath, resolvedAssetPath);
     const es_script::Compiler::Output output = script_execution_helpers::compileScript(normalizedPath, simDir);
 
     if (!output.engine) {
-        throw SimulatorException("Script did not create an engine: " + normalizedPath);
+        throw SimulatorException("Script did not create an engine: " + normalizedPath.string());
     }
 
     LoadedSimulation loaded;

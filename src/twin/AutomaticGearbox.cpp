@@ -238,7 +238,8 @@ double AutomaticGearbox::getShiftSpeed(int fromGear, int toGear, double throttle
     size_t numLevels;
     bool useProfileLevels = !profile_.shiftTableThrottleLevels.empty();
 
-    double levelLow, levelHigh;
+    double levelLow;
+    double levelHigh;
     size_t lowerIndex = 0;
     size_t upperIndex = 0;
 
