@@ -1,8 +1,8 @@
 #include "preset/TransmissionDeserializer.h"
 
 #include "transmission.h"
+#include "common/PresetExceptions.h"
 
-#include <stdexcept>
 #include <vector>
 #include <memory>
 
@@ -12,12 +12,12 @@ Transmission* TransmissionDeserializer::deserialize(const JsonValue& json, const
     const std::string ctx = context.empty() ? "transmission" : context;
 
     if (!json.has("gearCount")) {
-        throw std::runtime_error("Missing required field 'gearCount' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'gearCount' in " + ctx);
     }
 
     auto gearCount = json["gearCount"].asInt();
     if (gearCount <= 0) {
-        throw std::runtime_error("Invalid 'gearCount' in " + ctx);
+        throw PresetDeserializationException("Invalid 'gearCount' in " + ctx);
     }
 
     // Read gear ratios array
@@ -28,15 +28,15 @@ Transmission* TransmissionDeserializer::deserialize(const JsonValue& json, const
             gearRatios.push_back(ratiosJson[i].asNumber());
         }
     } else {
-        throw std::runtime_error("Missing required field 'gearRatios' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'gearRatios' in " + ctx);
     }
 
     if (static_cast<int>(gearRatios.size()) != gearCount) {
-        throw std::runtime_error("gearRatios count does not match gearCount in " + ctx);
+        throw PresetDeserializationException("gearRatios count does not match gearCount in " + ctx);
     }
 
     if (!json.has("maxClutchTorque")) {
-        throw std::runtime_error("Missing required field 'maxClutchTorque' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'maxClutchTorque' in " + ctx);
     }
     auto maxClutchTorque = json["maxClutchTorque"].asNumber();
 

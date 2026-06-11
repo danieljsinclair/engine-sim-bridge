@@ -1,8 +1,7 @@
 #include "preset/CrankshaftDeserializer.h"
 
 #include "crankshaft.h"
-
-#include <stdexcept>
+#include "common/PresetExceptions.h"
 
 using json::JsonValue;
 
@@ -11,7 +10,7 @@ void CrankshaftDeserializer::deserialize(const JsonValue& json, Crankshaft* cs, 
 
     auto require = [&](const char* field) {
         if (!json.has(field)) {
-            throw std::runtime_error(std::string("Missing required field '") + field + "' in " + ctx);
+            throw PresetDeserializationException(std::string("Missing required field '") + field + "' in " + ctx);
         }
     };
 

@@ -8,8 +8,8 @@
 #include "engine.h"
 #include "preset/CamshaftDeserializer.h"
 #include "preset/FunctionDeserializer.h"
+#include "common/PresetExceptions.h"
 
-#include <stdexcept>
 #include <memory>
 
 using json::JsonValue;
@@ -18,7 +18,7 @@ namespace {
     double getRequiredField(const JsonValue& json, const std::string& key,
                             const std::string& ctx) {
         if (!json.has(key)) {
-            throw std::runtime_error("Missing required field '" + key + "' in " + ctx);
+            throw PresetDeserializationException("Missing required field '" + key + "' in " + ctx);
         }
         return json[key].asNumber();
     }
@@ -26,7 +26,7 @@ namespace {
     bool getRequiredBoolField(const JsonValue& json, const std::string& key,
                               const std::string& ctx) {
         if (!json.has(key)) {
-            throw std::runtime_error("Missing required field '" + key + "' in " + ctx);
+            throw PresetDeserializationException("Missing required field '" + key + "' in " + ctx);
         }
         return json[key].asBool();
     }
@@ -57,7 +57,7 @@ namespace {
 
         if (valvetrainType == "vtec") {
             if (!json.has("vtecMinRpm")) {
-                throw std::runtime_error(
+                throw PresetDeserializationException(
                     "Missing required field 'vtecMinRpm' for vtec valvetrain in " + ctx);
             }
             auto vtec = std::make_unique<VtecValvetrain>();
@@ -127,12 +127,12 @@ void CylinderHeadDeserializer::deserialize(const JsonValue& json, CylinderHead* 
     Valvetrain* valvetrain = createValvetrain(json, intakeCam, exhaustCam, engine, ctx);
 
     if (!json.has("intakePortFlow")) {
-        throw std::runtime_error("Missing required field 'intakePortFlow' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'intakePortFlow' in " + ctx);
     }
     Function* intakePortFlow = FunctionDeserializer::deserialize(
         json["intakePortFlow"], ctx + ".intakePortFlow");
     if (!json.has("exhaustPortFlow")) {
-        throw std::runtime_error("Missing required field 'exhaustPortFlow' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'exhaustPortFlow' in " + ctx);
     }
     Function* exhaustPortFlow = FunctionDeserializer::deserialize(
         json["exhaustPortFlow"], ctx + ".exhaustPortFlow");

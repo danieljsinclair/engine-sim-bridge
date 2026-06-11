@@ -9,6 +9,7 @@
 #include <vector>
 #include <cstring>
 #include <common/Verification.h>
+#include "common/PresetExceptions.h"
 #include "simulator/BridgeSimulator.h"
 
 BridgeSimulator::BridgeSimulator(std::unique_ptr<Simulator> simulator, const std::string& name)
@@ -61,8 +62,8 @@ void BridgeSimulator::update(double deltaTime) {
 }
 
 bool BridgeSimulator::renderOnDemand(float* buffer, int32_t frames, int32_t* written) {
-    if (!buffer) throw std::runtime_error("BridgeSimulator::renderOnDemand() called with null buffer");
-    if (frames <= 0) throw std::runtime_error("BridgeSimulator::renderOnDemand() called with invalid frame count");
+    if (!buffer) throw SimulatorException("BridgeSimulator::renderOnDemand() called with null buffer");
+    if (frames <= 0) throw SimulatorException("BridgeSimulator::renderOnDemand() called with invalid frame count");
 
     const double dt = static_cast<double>(frames) / engineConfig_.sampleRate;
     advanceFixedSteps(m_simulator.get(), engineConfig_.simulationFrequency, dt, false);
@@ -259,7 +260,7 @@ double BridgeSimulator::getEngineRpm() const {
 }
 
 void BridgeSimulator::setDynoTorqueScale(double scale) {
-    if (scale < 0.0) throw std::runtime_error("Dyno scale must be non-negative");
+    if (scale < 0.0) throw SimulatorException("Dyno scale must be non-negative");
     if (!m_simulator->m_dyno.m_enabled) return;  // OK: no-op when dyno disabled
     m_simulator->m_dyno.m_maxTorque = units::torque(EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS, units::ft_lb) * scale;
 }
@@ -331,7 +332,7 @@ std::vector<uint8_t> BridgeSimulator::saveState() const {
 }
 
 void BridgeSimulator::restoreState(const std::vector<uint8_t>& data) {
-    if (data.size() < sizeof(DrivetrainSnapshot)) throw std::runtime_error("Invalid snapshot data size");
+    if (data.size() < sizeof(DrivetrainSnapshot)) throw SimulatorException("Invalid snapshot data size");
 
     DrivetrainSnapshot snapshot;
     std::memcpy(&snapshot, data.data(), sizeof(DrivetrainSnapshot));

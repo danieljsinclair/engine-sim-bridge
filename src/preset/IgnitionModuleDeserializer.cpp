@@ -2,8 +2,7 @@
 
 #include "ignition_module.h"
 #include "preset/FunctionDeserializer.h"
-
-#include <stdexcept>
+#include "common/PresetExceptions.h"
 
 using json::JsonValue;
 
@@ -20,19 +19,19 @@ void IgnitionModuleDeserializer::deserialize(const JsonValue& json, IgnitionModu
     if (json.has("revLimit")) {
         params.revLimit = json["revLimit"].asNumber();
     } else {
-        throw std::runtime_error("Missing required field 'revLimit' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'revLimit' in " + ctx);
     }
 
     // Limiter duration: read from JSON, no hardcoded default
     if (json.has("limiterDuration")) {
         params.limiterDuration = json["limiterDuration"].asNumber();
     } else {
-        throw std::runtime_error("Missing required field 'limiterDuration' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'limiterDuration' in " + ctx);
     }
 
     // Timing curve function
     if (!json.has("timingCurve")) {
-        throw std::runtime_error("Missing required field 'timingCurve' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'timingCurve' in " + ctx);
     }
     params.timingCurve = FunctionDeserializer::deserialize(
         json["timingCurve"], ctx + ".timingCurve");
@@ -46,6 +45,6 @@ void IgnitionModuleDeserializer::deserialize(const JsonValue& json, IgnitionModu
             ignition->setFiringOrder(static_cast<int>(i), fo[i].asNumber());
         }
     } else {
-        throw std::runtime_error("Missing required field 'firingOrder' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'firingOrder' in " + ctx);
     }
 }

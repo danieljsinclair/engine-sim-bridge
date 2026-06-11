@@ -21,8 +21,9 @@
 
 #include "engine-sim/include/simulator.h"
 
+#include "common/PresetExceptions.h"
+
 #include <memory>
-#include <stdexcept>
 #include <algorithm>
 #include <filesystem>
 
@@ -84,7 +85,7 @@ std::unique_ptr<Simulator> buildPistonEngineSimulator(
 
     if (!ScriptLoadHelpers::loadImpulseResponses(pistonSim.get(), loaded.engine, loaded.resolvedAssetPath, logger)) {
         pistonSim->destroy();
-        throw std::runtime_error("Failed to load impulse responses (asset base: " + loaded.resolvedAssetPath + ")");
+        throw SimulatorException("Failed to load impulse responses (asset base: " + loaded.resolvedAssetPath + ")");
     }
 
     return pistonSim;
@@ -93,7 +94,7 @@ std::unique_ptr<Simulator> buildPistonEngineSimulator(
 LoadedSimulation loadPresetSimulation(const std::string& scriptPath, const std::string& assetBasePath) {
     PresetLoadResult result = PresetEngineFactory::loadFromFile(scriptPath);
     if (!result.success()) {
-        throw std::runtime_error("Failed to load preset: " + scriptPath + " — " + result.error);
+        throw SimulatorException("Failed to load preset: " + scriptPath + " — " + result.error);
     }
 
     LoadedSimulation loaded;
@@ -115,7 +116,7 @@ LoadedSimulation loadScriptSimulation(const std::string& scriptPath, const std::
     const es_script::Compiler::Output output = script_execution_helpers::compileScript(normalizedPath, simDir);
 
     if (!output.engine) {
-        throw std::runtime_error("Script did not create an engine: " + normalizedPath);
+        throw SimulatorException("Script did not create an engine: " + normalizedPath);
     }
 
     LoadedSimulation loaded;
@@ -125,7 +126,7 @@ LoadedSimulation loadScriptSimulation(const std::string& scriptPath, const std::
     loaded.resolvedAssetPath = resolvedAssetPath;
     return loaded;
 #else
-    throw std::runtime_error("Script loading not available (Piranha support disabled)");
+    throw SimulatorException("Script loading not available (Piranha support disabled)");
 #endif
 }
 
@@ -198,7 +199,7 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
             break;
 
         default:
-            throw std::runtime_error("Unknown simulator type in SimulatorFactory::create()");
+            throw SimulatorException("Unknown simulator type in SimulatorFactory::create()");
     }
 
     auto bridgeSim = std::make_unique<BridgeSimulator>(std::move(simInit.simulator), simInit.name);

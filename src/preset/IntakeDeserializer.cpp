@@ -3,8 +3,7 @@
 #include "intake.h"
 #include "gas_system.h"
 #include "units.h"
-
-#include <stdexcept>
+#include "common/PresetExceptions.h"
 
 using json::JsonValue;
 
@@ -15,31 +14,31 @@ void IntakeDeserializer::deserialize(const JsonValue& json, Intake* intake,
     Intake::Parameters params;
 
     if (!json.has("plenumCrossSectionArea")) {
-        throw std::runtime_error("Missing required field 'plenumCrossSectionArea' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'plenumCrossSectionArea' in " + ctx);
     }
     params.CrossSectionArea = json["plenumCrossSectionArea"].asNumber();
 
     if (!json.has("runnerFlowRate")) {
-        throw std::runtime_error("Missing required field 'runnerFlowRate' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'runnerFlowRate' in " + ctx);
     }
     params.RunnerFlowRate = json["runnerFlowRate"].asNumber();
 
     if (!json.has("runnerLength")) {
-        throw std::runtime_error("Missing required field 'runnerLength' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'runnerLength' in " + ctx);
     }
     params.RunnerLength = json["runnerLength"].asNumber();
     if (!json.has("velocityDecay")) {
-        throw std::runtime_error("Missing required field 'velocityDecay' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'velocityDecay' in " + ctx);
     }
     params.VelocityDecay = json["velocityDecay"].asNumber();
 
     if (!json.has("idleThrottlePlatePosition")) {
-        throw std::runtime_error("Missing required field 'idleThrottlePlatePosition' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'idleThrottlePlatePosition' in " + ctx);
     }
     params.IdleThrottlePlatePosition = json["idleThrottlePlatePosition"].asNumber();
 
     if (!json.has("idleFlowK") && !json.has("idleFlowRate")) {
-        throw std::runtime_error("Missing required field 'idleFlowK' (or 'idleFlowRate') in " + ctx);
+        throw PresetDeserializationException("Missing required field 'idleFlowK' (or 'idleFlowRate') in " + ctx);
     }
     params.IdleFlowK = json.has("idleFlowK")
         ? json["idleFlowK"].asNumber()
@@ -51,19 +50,19 @@ void IntakeDeserializer::deserialize(const JsonValue& json, Intake* intake,
     } else if (json.has("intakeFlowRate")) {
         params.InputFlowK = json["intakeFlowRate"].asNumber();
     } else {
-        throw std::runtime_error(
+        throw PresetDeserializationException(
             "Missing required field 'inputFlowK' (or 'intakeFlowRate') in " + ctx);
     }
 
     // Plenum volume
     if (!json.has("plenumVolume")) {
-        throw std::runtime_error("Missing required field 'plenumVolume' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'plenumVolume' in " + ctx);
     }
     params.volume = json["plenumVolume"].asNumber();
 
     // molecularAfr: required field
     if (!json.has("molecularAfr")) {
-        throw std::runtime_error("Missing required field 'molecularAfr' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'molecularAfr' in " + ctx);
     }
     params.MolecularAfr = json["molecularAfr"].asNumber();
 

@@ -22,9 +22,9 @@
 #include "common/ILogging.h"
 #include "telemetry/ITelemetryProvider.h"
 #include "common/Verification.h"
+#include "common/PresetExceptions.h"
 
 #include <cstring>
-#include <stdexcept>
 #include <thread>
 #include <chrono>
 
@@ -130,7 +130,7 @@ std::unique_ptr<IAudioHardwareProvider> createHardwareProvider(
     format.sampleRate = sampleRate;
 
     if (!provider->initialize(format)) {
-        throw std::runtime_error("Failed to initialize audio hardware");
+        throw SimulatorException("Failed to initialize audio hardware");
     }
 
     return provider;
@@ -249,7 +249,7 @@ void initializeSimulator(
     logger->info(LogMask::BRIDGE, "Loading simulator: %s", label.c_str());
 
     if (!simulator.create(*engineConfig, logger, telemetryWriter)) {
-        throw std::runtime_error("Failed to create simulator: " + simulator.getLastError());
+        throw SimulatorException("Failed to create simulator: " + simulator.getLastError());
     }
 }
 
@@ -298,12 +298,12 @@ public:
     }
 
     int run() override {
-        if (closed_) throw std::runtime_error("Session is closed");
+        if (closed_) throw SimulatorException("Session is closed");
 
         // Start audio only if not already playing (hot-swap keeps audio running)
         if (!audioBuffer_->isPlaying()) {
             if (!audioBuffer_->startPlayback(simulator_.get())) {
-                throw std::runtime_error("Failed to start audio playback");
+                throw SimulatorException("Failed to start audio playback");
             }
             hardwareProvider_->setVolume(config_.volume);
             audioBuffer_->prepareBuffer();
@@ -526,7 +526,7 @@ std::unique_ptr<ISimulatorSession> createSession(
         ASSERT(simulator, "simulator must be provided for hot-swap");
         auto* session = static_cast<SimulatorSession*>(existingSession.get());
         if (!session || !session->handoverSession(scriptPath, std::move(simulator))) {
-            throw std::runtime_error("Failed to swap preset within existing session: " + scriptPath);
+            throw SimulatorException("Failed to swap preset within existing session: " + scriptPath);
         }
         return existingSession;
     }
