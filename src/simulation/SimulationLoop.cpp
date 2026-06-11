@@ -32,10 +32,10 @@
 namespace {
 
 // Timed input simulation constants
-static constexpr double THROTTLE_RAMP_DURATION_SECONDS = 0.5;  // Time to ramp from 0 to 1
-static constexpr double FULL_THROTTLE = 1.0;                     // Maximum throttle value
-static constexpr double SECONDS_TO_MICROSECONDS = 1000000.0;
-static constexpr double SECONDS_TO_MILLISECONDS = 1000.0;
+constexpr double THROTTLE_RAMP_DURATION_SECONDS = 0.5;  // Time to ramp from 0 to 1
+constexpr double FULL_THROTTLE = 1.0;                     // Maximum throttle value
+constexpr double SECONDS_TO_MICROSECONDS = 1000000.0;
+constexpr double SECONDS_TO_MILLISECONDS = 1000.0;
 
 } // anonymous namespace — constants only
 

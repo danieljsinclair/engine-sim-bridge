@@ -148,7 +148,7 @@ void CoreAudioHardwareProvider::setVolume(double volume) {
         kHALOutputParam_Volume,
         kAudioUnitScope_Global,
         0,  // kAudioUnitElement_Output
-        clampedVolume,
+        static_cast<AudioUnitParameterValue>(clampedVolume),
         0   // AudioUnitElement inBufferOffset
     );
 

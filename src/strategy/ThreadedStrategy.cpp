@@ -69,7 +69,7 @@ void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFr
     if (leadFrames > maxLeadFrames * 2) {
         logger_->warning(LogMask::AUDIO,
                       "ThreadedStrategy: Lead drift detected (%.0fms > 200ms), resetting to target",
-                      leadFrames * 1000.0 / sampleRate);
+                      static_cast<double>(leadFrames) * 1000.0 / sampleRate);
         // Reset buffer by draining excess
         auto framesToDiscard = static_cast<int>(leadFrames - maxLeadFrames);
         std::vector<float> discard(framesToDiscard * 2);
@@ -109,7 +109,7 @@ void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFr
         }
     }
     else {
-        logger_->warning(LogMask::AUDIO, "ThreadedStrategy: Skipping buffer fill to prevent overflow (lead=%.0fms > target=%.0fms)", leadFrames * 1000.0 / sampleRate, targetLeadFrames * 1000.0 / sampleRate);
+        logger_->warning(LogMask::AUDIO, "ThreadedStrategy: Skipping buffer fill to prevent overflow (lead=%.0fms > target=%.0fms)", static_cast<double>(leadFrames) * 1000.0 / sampleRate, static_cast<double>(targetLeadFrames) * 1000.0 / sampleRate);
     }
 }
 

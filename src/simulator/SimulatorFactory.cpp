@@ -60,7 +60,7 @@ SimulatorInit createSineWaveSimulator(const ISimulatorConfig& config) {
 }
 
 void applyLoadedEngineSettings(Simulator* simulator, const Engine* engine) {
-    simulator->setSimulationFrequency(engine->getSimulationFrequency());
+    simulator->setSimulationFrequency(static_cast<int>(engine->getSimulationFrequency()));
 
     Synthesizer::AudioParameters audioParams = simulator->synthesizer().getAudioParameters();
     audioParams.inputSampleNoise = static_cast<float>(engine->getInitialJitter());
