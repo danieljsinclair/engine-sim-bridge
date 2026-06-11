@@ -45,7 +45,7 @@ Camshaft* CamshaftDeserializer::deserialize(const JsonValue& json, Crankshaft* c
 
     // JSON stores CRANK angles. setLobeCenterline() divides by 2 internally.
     // Pass the raw JSON value directly.
-    for (size_t i = 0; i < lobes.size(); i++) {
+    for (auto i = 0u; i < lobes.size(); i++) {
         cam->setLobeCenterline(static_cast<int>(i), lobes[i].asNumber());
     }
 

@@ -74,13 +74,13 @@ size_t CircularBuffer::write(const float* samples, size_t frameCount) {
         size_t firstSegment = static_cast<size_t>(bufferCapacity_ - writePtr);
 
         // First segment: from current position to end of buffer
-        for (size_t i = 0; i < firstSegment; i++) {
+        for (auto i = 0u; i < firstSegment; i++) {
             buffer_[(writePtr + i) * 2] = samples[i * 2];
             buffer_[(writePtr + i) * 2 + 1] = samples[i * 2 + 1];
         }
 
         // Second segment: from beginning of buffer
-        size_t secondSegment = toWrite - firstSegment;
+        auto secondSegment = toWrite - firstSegment;
         for (size_t i = 0; i < secondSegment; i++) {
             buffer_[i * 2] = samples[(firstSegment + i) * 2];
             buffer_[i * 2 + 1] = samples[(firstSegment + i) * 2 + 1];
@@ -88,7 +88,7 @@ size_t CircularBuffer::write(const float* samples, size_t frameCount) {
     }
 
     // Commit write with wrap-around
-    int newWritePtr = static_cast<int>((writePtr + toWrite) % bufferCapacity_);
+    auto newWritePtr = static_cast<int>((writePtr + toWrite) % bufferCapacity_);
     writePointer_.store(newWritePtr);
 
     return toWrite;
@@ -120,13 +120,13 @@ size_t CircularBuffer::read(float* output, size_t frameCount) {
         size_t firstSegment = static_cast<size_t>(bufferCapacity_ - readPtr);
 
         // First segment: from current position to end of buffer
-        for (size_t i = 0; i < firstSegment; i++) {
+        for (auto i = 0u; i < firstSegment; i++) {
             output[i * 2] = buffer_[(readPtr + i) * 2];
             output[i * 2 + 1] = buffer_[(readPtr + i) * 2 + 1];
         }
 
         // Second segment: from beginning of buffer
-        size_t secondSegment = toRead - firstSegment;
+        auto secondSegment = toRead - firstSegment;
         for (size_t i = 0; i < secondSegment; i++) {
             output[(firstSegment + i) * 2] = buffer_[i * 2];
             output[(firstSegment + i) * 2 + 1] = buffer_[i * 2 + 1];
@@ -134,7 +134,7 @@ size_t CircularBuffer::read(float* output, size_t frameCount) {
     }
 
     // Update read pointer with wrap-around
-    int newReadPtr = static_cast<int>((readPtr + toRead) % bufferCapacity_);
+    auto newReadPtr = static_cast<int>((readPtr + toRead) % bufferCapacity_);
     readPointer_.store(newReadPtr);
 
     return toRead;
@@ -159,13 +159,13 @@ size_t CircularBuffer::readFromPosition(float* output, size_t frameCount, int po
         size_t firstSegment = static_cast<size_t>(bufferCapacity_ - position);
 
         // First segment: from current position to end of buffer
-        for (size_t i = 0; i < firstSegment; i++) {
+        for (auto i = 0u; i < firstSegment; i++) {
             output[i * 2] = buffer_[(position + static_cast<int>(i)) * 2];
             output[i * 2 + 1] = buffer_[(position + static_cast<int>(i)) * 2 + 1];
         }
 
         // Second segment: from beginning of buffer
-        size_t secondSegment = toRead - firstSegment;
+        auto secondSegment = toRead - firstSegment;
         for (size_t i = 0; i < secondSegment; i++) {
             output[(firstSegment + i) * 2] = buffer_[i * 2];
             output[(firstSegment + i) * 2 + 1] = buffer_[i * 2 + 1];

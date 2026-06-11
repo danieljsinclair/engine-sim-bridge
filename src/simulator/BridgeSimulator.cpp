@@ -200,7 +200,7 @@ int BridgeSimulator::setGear(int gear) {
     int newGear = 0x7FFFFFFF;
     if (m_simulator->getTransmission()) {
         // Translate bridge convention (BridgeGear) to engine-sim convention (EngineSimGear)
-        int engineSimGear = static_cast<int>(bridge::toEngineSim(static_cast<bridge::BridgeGear>(gear)));
+        auto engineSimGear = static_cast<int>(bridge::toEngineSim(static_cast<bridge::BridgeGear>(gear)));
         m_simulator->getTransmission()->changeGear(engineSimGear);
         newGear = engineSimGear;
     }

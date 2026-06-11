@@ -59,7 +59,7 @@ void ExhaustSystemDeserializer::deserialize(const JsonValue& json, ExhaustSystem
         if (!json.has("impulseResponseVolume")) {
             throw std::runtime_error("Missing required field 'impulseResponseVolume' when 'impulseResponseFilename' present in " + ctx);
         }
-        double irVolume = json["impulseResponseVolume"].asNumber();
+        auto irVolume = json["impulseResponseVolume"].asNumber();
 
         auto ir = std::make_unique<ImpulseResponse>();
         ir->initialize(irFilename, irVolume);

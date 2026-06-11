@@ -212,7 +212,7 @@ SimulatorType SimulatorFactory::getDefaultType() {
 
 std::vector<std::string> SimulatorFactory::discoverPresets(const std::string& presetPath) {
     std::vector<std::string> presets;
-    std::filesystem::path presetDir = std::filesystem::path(presetPath);
+    auto presetDir = std::filesystem::path(presetPath);
 
     if (!std::filesystem::exists(presetDir)) {
         return presets;

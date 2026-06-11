@@ -57,21 +57,21 @@ void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFr
 
     // Calculate current lead distance based on total frames written vs read
     int64_t leadFrames = totalFramesWritten_ - totalFramesRead_;
-    int sampleRate = audioState_.sampleRate;
+    auto sampleRate = audioState_.sampleRate;
 
     // Target lead: derived from configured synth latency
     // Maximum lead: 2x target (prevents buffer from growing too large)
-    int targetLeadFrames = static_cast<int>(sampleRate * synthLatency_);
-    int maxLeadFrames = targetLeadFrames * 2;
+    auto targetLeadFrames = static_cast<int>(sampleRate * synthLatency_);
+    auto maxLeadFrames = targetLeadFrames * 2;
 
     // Self-correction: if lead has drifted too far, reset buffer
-    int bufferSize = static_cast<int>(circularBuffer_.capacity());
+    auto bufferSize = static_cast<int>(circularBuffer_.capacity());
     if (leadFrames > maxLeadFrames * 2) {
         logger_->warning(LogMask::AUDIO,
                       "ThreadedStrategy: Lead drift detected (%.0fms > 200ms), resetting to target",
                       leadFrames * 1000.0 / sampleRate);
         // Reset buffer by draining excess
-        int framesToDiscard = static_cast<int>(leadFrames - maxLeadFrames);
+        auto framesToDiscard = static_cast<int>(leadFrames - maxLeadFrames);
         std::vector<float> discard(framesToDiscard * 2);
         circularBuffer_.read(discard.data(), framesToDiscard);
         totalFramesRead_ += framesToDiscard;
@@ -124,7 +124,7 @@ bool ThreadedStrategy::initialize(const AudioBufferConfig& config, int sampleRat
     synthLatency_ = config.synthLatency;
 
     // Initialize circular buffer with appropriate capacity
-    int bufferCapacity = static_cast<int>(sampleRate * EngineSimDefaults::BUFFER_DURATION_SECONDS);
+    auto bufferCapacity = static_cast<int>(sampleRate * EngineSimDefaults::BUFFER_DURATION_SECONDS);
 
     if (!circularBuffer_.initialize(bufferCapacity)) {
         logger_->error(LogMask::AUDIO, "ThreadedStrategy::initialize: Failed to initialize circular buffer");
@@ -149,8 +149,8 @@ void ThreadedStrategy::prepareBuffer() {
     totalFramesRead_ = 0;
 
     // Pre-fill circular buffer with silence for smooth playback start
-    int preFillFrames = static_cast<int>(audioState_.sampleRate * synthLatency_);
-    int capacity = static_cast<int>(circularBuffer_.capacity());
+    auto preFillFrames = static_cast<int>(audioState_.sampleRate * synthLatency_);
+    auto capacity = static_cast<int>(circularBuffer_.capacity());
     preFillFrames = std::min(preFillFrames, capacity);
 
     std::vector<float> silence(preFillFrames * 2);

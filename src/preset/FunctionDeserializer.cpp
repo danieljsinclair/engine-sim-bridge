@@ -28,8 +28,8 @@ Function* FunctionDeserializer::deserialize(const JsonValue& fnJson, const std::
             (context.empty() ? "" : " in " + context));
     }
 
-    double filterRadius = fnJson["filterRadius"].asNumber();
-    int n = static_cast<int>(samplesJson.size());
+    auto filterRadius = fnJson["filterRadius"].asNumber();
+    auto n = static_cast<int>(samplesJson.size());
 
     auto fn = std::make_unique<Function>();
     fn->initialize(n + 2, filterRadius);

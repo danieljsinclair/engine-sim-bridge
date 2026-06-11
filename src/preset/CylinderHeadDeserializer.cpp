@@ -90,7 +90,7 @@ namespace {
         } else if (engine->getIntakeCount() > 0) {
             head->setAllIntakes(engine->getIntake(0));
         }
-        for (int ci = 0; ci < cylCount; ci++) {
+        for (auto ci = 0; ci < cylCount; ci++) {
             if (engine->getExhaustSystemCount() > bankIndex) {
                 head->setExhaustSystem(ci, engine->getExhaustSystem(bankIndex));
             } else if (engine->getExhaustSystemCount() > 0) {
@@ -105,7 +105,7 @@ namespace {
         if (!headCyls.isArray()) {
             return;
         }
-        for (size_t ci = 0; ci < headCyls.size(); ci++) {
+        for (auto ci = 0u; ci < headCyls.size(); ci++) {
             const JsonValue& hc = headCyls[ci];
             std::string cylCtx = ctx + ".cylinders[" + std::to_string(ci) + "]";
             head->setSoundAttenuation(static_cast<int>(ci),

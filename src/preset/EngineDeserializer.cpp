@@ -209,7 +209,7 @@ void EngineDeserializer::deserializeCylinderBanks(const JsonValue& json, Engine*
          bi < static_cast<size_t>(engine->getCylinderBankCount()); bi++) {
         const JsonValue& bankJson = banksJson[bi];
         CylinderBank* bank = engine->getCylinderBank(static_cast<int>(bi));
-        int bankIdx = static_cast<int>(bi);
+        auto bankIdx = static_cast<int>(bi);
 
         CylinderBankDeserializer::deserialize(
             bankJson, bank, mainCrank, bankIdx,

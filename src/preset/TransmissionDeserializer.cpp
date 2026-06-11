@@ -15,7 +15,7 @@ Transmission* TransmissionDeserializer::deserialize(const JsonValue& json, const
         throw std::runtime_error("Missing required field 'gearCount' in " + ctx);
     }
 
-    int gearCount = json["gearCount"].asInt();
+    auto gearCount = json["gearCount"].asInt();
     if (gearCount <= 0) {
         throw std::runtime_error("Invalid 'gearCount' in " + ctx);
     }
@@ -24,7 +24,7 @@ Transmission* TransmissionDeserializer::deserialize(const JsonValue& json, const
     std::vector<double> gearRatios;
     if (json.has("gearRatios") && json["gearRatios"].isArray()) {
         const JsonValue& ratiosJson = json["gearRatios"];
-        for (size_t i = 0; i < ratiosJson.size(); i++) {
+        for (auto i = 0u; i < ratiosJson.size(); i++) {
             gearRatios.push_back(ratiosJson[i].asNumber());
         }
     } else {
@@ -38,7 +38,7 @@ Transmission* TransmissionDeserializer::deserialize(const JsonValue& json, const
     if (!json.has("maxClutchTorque")) {
         throw std::runtime_error("Missing required field 'maxClutchTorque' in " + ctx);
     }
-    double maxClutchTorque = json["maxClutchTorque"].asNumber();
+    auto maxClutchTorque = json["maxClutchTorque"].asNumber();
 
     Transmission::Parameters params;
     params.GearCount = gearCount;

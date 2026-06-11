@@ -34,7 +34,7 @@ std::unique_ptr<Function> generateHarmonicCamLobe(double durationAt50Thou, doubl
     auto fn = std::make_unique<Function>();
     fn->initialize(steps * 2 + 1, step);
 
-    for (int i = 0; i < steps; ++i) {
+    for (auto i = 0; i < steps; ++i) {
         if (i == 0) {
             fn->addSample(0.0, lift);
         } else {
@@ -53,7 +53,7 @@ std::unique_ptr<Function> generateHarmonicCamLobe(double durationAt50Thou, doubl
 std::unique_ptr<Function> createMeanPistonSpeedToTurbulence() {
     auto fn = std::make_unique<Function>();
     fn->initialize(30, 1);
-    for (int i = 0; i < 30; ++i) {
+    for (auto i = 0; i < 30; ++i) {
         fn->addSample(static_cast<double>(i), static_cast<double>(i) * 0.5);
     }
     return fn;
@@ -94,9 +94,9 @@ std::unique_ptr<Function> createLsTurbulenceToFlameSpeedRatio() {
 std::unique_ptr<Function> createFlowFunction(const double lifts[], const double flows[], int count) {
     auto fn = std::make_unique<Function>();
     fn->initialize(count, 50 * units::distance(1, units::thou));
-    for (int i = 0; i < count; ++i) {
-        double liftM = lifts[i] * units::distance(1, units::thou);
-        double flowK = GasSystem::k_28inH2O(flows[i]);
+    for (auto i = 0; i < count; ++i) {
+        auto liftM = lifts[i] * units::distance(1, units::thou);
+        auto flowK = GasSystem::k_28inH2O(flows[i]);
         fn->addSample(liftM, flowK);
     }
     return fn;
@@ -112,7 +112,7 @@ void initCombustionChambers(Engine* engine) {
     ccP.StartingTemperature = units::celcius(25.0);
     ccP.MeanPistonSpeedToTurbulence = mpsToTurb.release();
 
-    for (int i = 0; i < engine->getCylinderCount(); ++i) {
+    for (auto i = 0; i < engine->getCylinderCount(); ++i) {
         ccP.Piston = engine->getPiston(i);
         ccP.Head = engine->getHead(ccP.Piston->getCylinderBank()->getIndex());
         engine->getChamber(i)->initialize(ccP);
