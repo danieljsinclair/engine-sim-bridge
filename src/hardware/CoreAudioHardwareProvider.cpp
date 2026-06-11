@@ -22,7 +22,7 @@ CoreAudioHardwareProvider::CoreAudioHardwareProvider(ILogging* logger)
       currentVolume(1.0),
       underrunCount(0),
       overrunCount(0),
-      defaultLogger_(logger ? nullptr : new ConsoleLogger()),
+      defaultLogger_(logger ? nullptr : std::make_unique<ConsoleLogger>()),
       logger_(logger ? logger : defaultLogger_.get()),
       audioCallback_(nullptr) {
 }

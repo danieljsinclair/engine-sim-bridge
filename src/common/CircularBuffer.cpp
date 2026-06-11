@@ -22,12 +22,12 @@ bool CircularBuffer::initialize(size_t frameCapacity) {
     cleanup();
 
     bufferCapacity_ = frameCapacity;
-    buffer_ = new float[frameCapacity * 2];  // Stereo = 2 channels
+    buffer_ = std::make_unique<float[]>(frameCapacity * 2);  // Stereo = 2 channels
     if (!buffer_) {
         return false;
     }
 
-    std::memset(buffer_, 0, frameCapacity * 2 * sizeof(float));
+    std::memset(buffer_.get(), 0, frameCapacity * 2 * sizeof(float));
     writePointer_.store(0);
     readPointer_.store(0);
 
@@ -35,10 +35,7 @@ bool CircularBuffer::initialize(size_t frameCapacity) {
 }
 
 void CircularBuffer::cleanup() {
-    if (buffer_) {
-        delete[] buffer_;
-        buffer_ = nullptr;
-    }
+    buffer_.reset();
     bufferCapacity_ = 0;
     writePointer_.store(0);
     readPointer_.store(0);
@@ -201,7 +198,7 @@ void CircularBuffer::reset() {
 
 void CircularBuffer::clear() {
     if (buffer_) {
-        std::memset(buffer_, 0, bufferCapacity_ * 2 * sizeof(float));
+        std::memset(buffer_.get(), 0, bufferCapacity_ * 2 * sizeof(float));
     }
     reset();
 }

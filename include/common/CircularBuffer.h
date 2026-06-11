@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 
 // ============================================================================
 // CircularBuffer - Thread-safe ring buffer for audio streaming
@@ -60,13 +61,13 @@ public:
     int getReadPointer() const { return readPointer_.load(); }
 
     // Get raw buffer pointer for direct access
-    float* getBuffer() { return buffer_; }
+    float* getBuffer() { return buffer_.get(); }
 
     // Check if buffer is initialized
     bool isInitialized() const { return buffer_ != nullptr; }
 
 private:
-    float* buffer_;                    // Stereo interleaved buffer
+    std::unique_ptr<float[]> buffer_;  // Stereo interleaved buffer
     size_t bufferCapacity_;            // Capacity in frames
     std::atomic<int> writePointer_;    // Write position
     std::atomic<int> readPointer_;     // Read position

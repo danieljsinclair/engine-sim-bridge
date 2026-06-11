@@ -1,0 +1,7 @@
+organization=danieljsinclair
+projectKey=danieljsinclair_engine-sim-bridge
+serverUrl=https://sonarcloud.io
+serverVersion=8.0.0.90233
+dashboardUrl=https://sonarcloud.io/dashboard?id=danieljsinclair_engine-sim-bridge
+ceTaskId=AZ60dJqMXhyB2wJjAB-L
+ceTaskUrl=https://sonarcloud.io/api/ce/task?id=AZ60dJqMXhyB2wJjAB-L
