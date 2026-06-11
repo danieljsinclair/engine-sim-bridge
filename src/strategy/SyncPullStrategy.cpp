@@ -14,15 +14,16 @@
 #include "telemetry/NullTelemetryWriter.h"
 
 #include <cstring>
+#include <memory>
 
 // ============================================================================
 // SyncPullStrategy Implementation
 // ============================================================================
 
 SyncPullStrategy::SyncPullStrategy(ILogging* logger, telemetry::ITelemetryWriter* telemetry)
-    : defaultLogger_(logger ? nullptr : new ConsoleLogger())
+    : defaultLogger_(logger ? nullptr : std::make_unique<ConsoleLogger>())
     , logger_(logger ? logger : defaultLogger_.get())
-    , defaultTelemetry_(telemetry ? nullptr : new NullTelemetryWriter())
+    , defaultTelemetry_(telemetry ? nullptr : std::make_unique<NullTelemetryWriter>())
     , telemetry_(telemetry ? telemetry : defaultTelemetry_.get())
 {
     ASSERT(logger_, "SyncPullStrategy: logger must not be null");
