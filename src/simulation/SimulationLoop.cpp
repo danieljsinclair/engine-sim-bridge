@@ -543,7 +543,7 @@ std::unique_ptr<ISimulatorSession> createSession(SessionConfig cfg)
     strategyConfig.synthLatency = config.engineConfig.targetSynthesizerLatency;
     cfg.audioBuffer->initialize(strategyConfig, config.sampleRate());
 
-    auto callback = [audioBuffer = cfg.audioBuffer](AudioBufferView& buffer) -> int {
+    auto callback = [audioBuffer = cfg.audioBuffer](AudioBufferView& buffer) {
         return audioRenderCallback(audioBuffer, buffer);
     };
     auto hardwareProvider = createHardwareProvider(config.sampleRate(), callback, cfg.logger);
