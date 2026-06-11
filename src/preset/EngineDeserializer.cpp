@@ -324,26 +324,22 @@ Engine* EngineDeserializer::deserialize(const JsonValue& json, const std::string
     engine->initialize(params);
     throttle.release(); // Engine owns it now
 
-    try {
-        deserializeCrankshafts(json, engine.get(), ctx);
-        deserializeExhaustSystems(json, engine.get(), ctx);
-        deserializeIntakes(json, engine.get(), ctx);
-        deserializeCylinderBanks(json, engine.get(), ctx);
+    deserializeCrankshafts(json, engine.get(), ctx);
+    deserializeExhaustSystems(json, engine.get(), ctx);
+    deserializeIntakes(json, engine.get(), ctx);
+    deserializeCylinderBanks(json, engine.get(), ctx);
 
-        if (json.has("fuel")) {
-            FuelDeserializer::deserialize(json["fuel"], engine->getFuel(), ctx + ".fuel");
-        }
-
-        if (json.has("ignitionModule")) {
-            IgnitionModuleDeserializer::deserialize(
-                json["ignitionModule"], engine->getIgnitionModule(),
-                engine->getCrankshaft(0), engine->getCylinderCount(), ctx + ".ignitionModule");
-        }
-
-        initializeCombustionChambers(json, engine.get(), ctx);
-    } catch (...) {
-        throw;
+    if (json.has("fuel")) {
+        FuelDeserializer::deserialize(json["fuel"], engine->getFuel(), ctx + ".fuel");
     }
+
+    if (json.has("ignitionModule")) {
+        IgnitionModuleDeserializer::deserialize(
+            json["ignitionModule"], engine->getIgnitionModule(),
+            engine->getCrankshaft(0), engine->getCylinderCount(), ctx + ".ignitionModule");
+    }
+
+    initializeCombustionChambers(json, engine.get(), ctx);
 
     return engine.release();
 }

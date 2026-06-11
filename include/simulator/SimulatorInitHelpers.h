@@ -7,6 +7,7 @@
 #define ENGINE_SIM_BRIDGE_SIMULATOR_INIT_HELPERS_H
 
 #include <cstddef>
+#include <vector>
 
 // Forward declarations (avoid pulling full engine-sim headers here)
 class Engine;
@@ -32,7 +33,7 @@ struct PhysicsWiringParams {
     atg_scs::RigidBodySystem* system = nullptr;
     Dynamometer* dyno = nullptr;
     StarterMotor* starterMotor = nullptr;
-    double** outStagingBuffer = nullptr;
+    std::vector<double>* outStagingBuffer = nullptr;
     int stagingCount = 0;
 };
 
@@ -49,7 +50,7 @@ void wirePhysics(const PhysicsWiringParams& params);
 /// @param stagingBuffer    Ref to staging buffer pointer (will be deleted and nulled)
 void cleanupPhysics(
     atg_scs::RigidBodySystem*& system,
-    double*& stagingBuffer);
+    std::vector<double>* stagingBuffer);
 
 /// Initialize convolution filters with unit impulses to prevent null pointer crashes.
 /// Required when loading presets (no WAV impulse response files) because ConvolutionFilter::f()

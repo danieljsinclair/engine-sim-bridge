@@ -9,6 +9,7 @@
 #include "simulator.h"
 
 #include <memory>
+#include <vector>
 
 class SineSimulator : public Simulator {
 public:
@@ -33,7 +34,7 @@ private:
 
     double m_phase = 0.0;
     double m_sineValue = 0.0;
-    double* m_exhaustFlowStagingBuffer = nullptr;
+    std::vector<double> m_exhaustFlowStagingBuffer;
 
     static constexpr double TWO_PI = 2.0 * M_PI;
 };

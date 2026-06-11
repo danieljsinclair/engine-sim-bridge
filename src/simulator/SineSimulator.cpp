@@ -71,7 +71,7 @@ void SineSimulator::destroy() {
     // handles audio thread lifecycle before calling the inner simulator's destroy().
 
     // Shared system/staging cleanup — DRY via SimulatorInitHelpers
-    SimulatorInitHelpers::cleanupPhysics(m_system, m_exhaustFlowStagingBuffer);
+    SimulatorInitHelpers::cleanupPhysics(m_system, &m_exhaustFlowStagingBuffer);
 
     // SineSimulator owns engine/vehicle/transmission (created in loadSimulation when not injected)
     if (m_sineEngine)        { m_sineEngine->destroy(); m_sineEngine.reset(); }
@@ -101,5 +101,5 @@ void SineSimulator::writeToSynthesizer() {
     }
 
     m_exhaustFlowStagingBuffer[0] = m_sineValue;
-    synthesizer().writeInput(m_exhaustFlowStagingBuffer);
+    synthesizer().writeInput(m_exhaustFlowStagingBuffer.data());
 }

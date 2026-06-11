@@ -346,7 +346,7 @@ OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
     AudioBufferList* ioData
 ) {
     // Extract the CoreAudioHardwareProvider instance from refCon
-    CoreAudioHardwareProvider* provider = static_cast<CoreAudioHardwareProvider*>(refCon);
+    auto* provider = static_cast<CoreAudioHardwareProvider*>(refCon);
 
     if (!provider || !provider->audioCallback_) {
         return noErr;  // Should not happen if properly initialized

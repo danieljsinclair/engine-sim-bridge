@@ -42,12 +42,12 @@ void wirePhysics(const PhysicsWiringParams& p)
     p.system->addConstraint(p.starterMotor);
 
     // Exhaust flow staging buffer — mirrors PistonEngineSimulator::placeAndInitialize()
-    *p.outStagingBuffer = std::make_unique<double[]>(p.stagingCount).release();
+    p.outStagingBuffer->resize(p.stagingCount);
 }
 
 void cleanupPhysics(
     atg_scs::RigidBodySystem*& system,
-    double*& stagingBuffer)
+    std::vector<double>* stagingBuffer)
 {
     if (system != nullptr) {
         system->reset();
@@ -56,8 +56,7 @@ void cleanupPhysics(
     }
 
     if (stagingBuffer != nullptr) {
-        std::unique_ptr<double[]> bufferDeleter(stagingBuffer);
-        stagingBuffer = nullptr;
+        stagingBuffer->clear();
     }
 }
 
