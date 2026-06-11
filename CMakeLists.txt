@@ -14,6 +14,22 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
+if(ENABLE_COVERAGE)
+    add_compile_options(--coverage -g)
+    add_link_options(--coverage)
+endif()
+
+# When coverage is enabled, always build as static to work around gcov limitations
+# with shared libraries on macOS (gcov doesn't write .gcda files for shared libs)
+if(ENABLE_COVERAGE)
+    set(LIB_TYPE STATIC)
+elseif(IOS OR ESP_PLATFORM)
+    set(LIB_TYPE STATIC)
+else()
+    set(LIB_TYPE SHARED)
+endif()
+
 # Find engine-sim (expected as a submodule at ./engine-sim)
 # Use ENGINE_SIM_PATH if set by parent project for override
 if(NOT DEFINED ENGINE_SIM_PATH)
@@ -159,14 +175,10 @@ else()
     )
 endif()
 
-# iOS builds produce a static library for linking into Xcode project
-# macOS builds produce a shared library (.dylib) for the CLI app
-# ESP32 builds produce a static library for linking into ESP-IDF component
-if(IOS OR ESP_PLATFORM)
-    add_library(engine-sim-bridge STATIC ${BRIDGE_SOURCES})
-else()
-    add_library(engine-sim-bridge SHARED ${BRIDGE_SOURCES})
-endif()
+# Build library type determined by coverage mode and platform
+# Coverage requires static library to work around gcov limitations on macOS
+# iOS/ESP32 always build as static, macOS normally builds as shared
+add_library(engine-sim-bridge ${LIB_TYPE} ${BRIDGE_SOURCES})
 
 # Platform-specific audio libraries
 if(IOS)

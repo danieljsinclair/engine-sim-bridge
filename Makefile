@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := all
-.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism test-golden test-deep presets clean-presets clean-test-fixtures sonar-clean
+.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism test-golden test-deep presets clean-presets clean-test-fixtures sonar-scan sonar-clean coverage-clean sonar-clean coverage-clean
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
@@ -82,10 +82,11 @@ remove-orphans:
 	@find . -path ./build -prune -o -name "_deps" -type d -print -exec rm -rf {} + 2>/dev/null || true
 
 # Clean build artifacts (cascades to engine-sim via cmake)
-clean: remove-orphans clean-presets clean-test-fixtures sonar-clean
+clean: remove-orphans clean-presets clean-test-fixtures sonar-clean coverage-clean
 	@if [ -d $(BUILD_DIR) ]; then cmake --build $(BUILD_DIR) --target clean >/dev/null 2>&1 || true; fi
 	@rm -f $(BUILD_DIR)/*.stamp
 	@rm -rf tmp
+	@rm -rf .scannerwork
 
 # Remove only stamp files so tests can be rerun without full clean.
 clean-test:
@@ -96,6 +97,7 @@ scrub: clean
 	@echo "Scrubbing bridge build..."
 	@rm -rf $(BUILD_DIR) preset tmp
 	@$(MAKE) remove-orphans
+	@rm -rf .scannerwork
 
 # Remove runtime-generated preset fixtures so next test run regenerates them.
 # Needed if .mr source scripts change.
@@ -243,8 +245,8 @@ help:
 	@echo "Targets:"
 	@echo "  make          - Build + test + presets (complete pipeline)"
 	@echo "  make build    - Compile everything (no tests)"
-	@echo "  make sonar-scan - Run SonarQube scan (only re-runs when build/inputs change)"
-	@echo "  make test     - Run sonar scan, core tests, then deep tests"
+	@echo "  make sonar-scan - Run SonarQube scan with coverage (only re-runs when build/inputs change)
+	@echo "  make test     - Build, run core tests, then deep tests"
 	@echo "  make test-core - Run the always-on bridge suite"
 	@echo "  make test-isomorphism - Run file-based incremental isomorphism tests when inputs are newer"
 	@echo "  make test-golden - Run preset golden-audio regressions"
@@ -258,3 +260,49 @@ help:
 	@echo "  1. Add engine name to CANDIDATE_ENGINES in this Makefile"
 	@echo "  2. Place the .mr script in es/"
 	@echo "  3. Run 'make presets'"
+
+# Sonar scanner cleanup
+sonar-clean:
+	@rm -rf .scannerwork
+
+# Coverage cleanup
+coverage-clean:
+	@rm -f *.gcno *.gcda *.gcov coverage-report.xml
+
+# ============================================================================
+# SonarQube scan - runs with coverage for quality analysis
+# ============================================================================
+
+SONAR_STAMP := $(BUILD_DIR)/.sonar-scan.stamp
+SONAR_PROJECT_PROPERTIES := sonar-project.properties
+COVERAGE_REPORT := $(BUILD_DIR)/coverage-report.xml
+COMPILE_DB := $(BUILD_DIR)/compile_commands.json
+SONAR_TOKEN ?= $(or $(SONAR_TOKEN_ES),$(SONAR_TOKEN))
+
+sonar-scan: $(SONAR_STAMP)
+
+$(COVERAGE_REPORT): $(BUILD_STAMP)
+	@echo "=== [engine-sim-bridge] Generating coverage report ==="
+	@cd $(BUILD_DIR) && cmake \
+		-DCMAKE_BUILD_TYPE=Debug \
+		-DBUILD_PRESET_ENGINE_TESTS=ON \
+		-DBUILD_IOS_ADAPTER_TESTS=ON \
+		-DBUILD_PHASE0_SPIKES=OFF \
+		-DENABLE_COVERAGE=ON \
+		..
+	@cmake --build $(BUILD_DIR) $(CMAKE_BUILD_PARALLEL_FLAG)
+	@cd $(BUILD_DIR) && GCOV_PREFIX=$(abspath .) GCOV_PREFIX_STRIP=0 ctest --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)' || true
+	@gcovr --sonarqube --output $(abspath $(COVERAGE_REPORT)) --root $(abspath .) --object-directory $(abspath $(BUILD_DIR)) --gcov-ignore-errors=all --gcov-ignore-parse-errors=suspicious_hits.warn_once_per_file --exclude 'build/_deps/*' --exclude 'build/engine-sim/dependencies/*'
+
+$(SONAR_STAMP): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES)
+	@echo "=== [engine-sim-bridge] Running Sonar scan ==="
+	-SONAR_TOKEN="$(or $(SONAR_TOKEN_ES),$(SONAR_TOKEN))" sonar-scanner
+	@touch $@
+
+$(COMPILE_DB): $(BUILD_DIR)/CMakeCache.txt
+
+sonar-clean:
+	@rm -f $(SONAR_STAMP)
+
+coverage-clean:
+	@rm -f $(COVERAGE_REPORT)

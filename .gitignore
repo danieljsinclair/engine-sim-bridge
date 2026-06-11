@@ -47,3 +47,13 @@ build-test/
 
 # Generated JSON presets (rebuilt by 'make presets')
 /preset/
+
+# Sonar scanner working directory
+.scannerwork/
+codeql-db/
+
+# Coverage artifacts
+*.gcno
+*.gcda
+*.gcov
+coverage-report.xml
