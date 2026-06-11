@@ -392,7 +392,12 @@ if(BUILD_BRIDGE_TESTS)
         if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
             gtest_discover_tests(
                 preset_engine_tests
-                DISCOVERY_MODE PRE_TEST
+                # NO_PRETTY_VALUES: these suites are value-parameterized over a
+                # per-process temp path (preset_test_<pid>_*.json). Without this
+                # flag, gtest_discover_tests appends the volatile GetParam() value
+                # (including embedded quotes and a PID) to each registered test
+                # name, producing non-deterministic, quote-laden identifiers.
+                NO_PRETTY_VALUES
                 EXTRA_ARGS --gtest_color=yes
             )
         endif()
@@ -426,7 +431,9 @@ if(BUILD_BRIDGE_TESTS)
         if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
             gtest_discover_tests(
                 preset_isomorphism_tests
-                DISCOVERY_MODE PRE_TEST
+                # NO_PRETTY_VALUES: see note on preset_engine_tests. These suites
+                # are value-parameterized over per-process temp preset paths.
+                NO_PRETTY_VALUES
                 EXTRA_ARGS --gtest_color=yes
             )
         endif()
