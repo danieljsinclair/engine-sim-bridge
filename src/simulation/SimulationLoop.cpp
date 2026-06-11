@@ -191,8 +191,10 @@ void SimulationLoop::applyVehicleControls(
     // Apply gear changes: twin gearAbsolute takes priority over keyboard gearDelta
     if (input.gearAbsolute >= 0) {
         simulator_.setGear(input.gearAbsolute);
-    } else if (logger_) {
-        applyGearChange(simulator_, input.gearDelta, logger_);
+    } else {
+        if (logger_) {
+            applyGearChange(simulator_, input.gearDelta, logger_);
+        }
     }
 
     // Vehicle controls (gear, dyno) — dyno only when engine running
