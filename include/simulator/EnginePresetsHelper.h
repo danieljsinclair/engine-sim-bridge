@@ -12,25 +12,27 @@
 #include "engine.h"
 #include "function.h"
 
+#include <memory>
+
 namespace EnginePresetsHelper {
 
 // Create a meanPistonSpeedToTurbulence function
 // Models turbulence increasing linearly with mean piston speed
-Function* createMeanPistonSpeedToTurbulence();
+std::unique_ptr<Function> createMeanPistonSpeedToTurbulence();
 
 // Create a default turbulenceToFlameSpeedRatio function
 // Maps turbulence to flame speed multiplier for combustion calculations
 // Required for combustion: Fuel::flameSpeed() dereferences this pointer
-Function* createDefaultTurbulenceToFlameSpeedRatio();
+std::unique_ptr<Function> createDefaultTurbulenceToFlameSpeedRatio();
 
 // Create a GM LS-specific turbulenceToFlameSpeedRatio function
 // Different curve for GM LS engines (higher values at high turbulence)
-Function* createLsTurbulenceToFlameSpeedRatio();
+std::unique_ptr<Function> createLsTurbulenceToFlameSpeedRatio();
 
 // Create a port flow function from lift/flow arrays
 // lift values are in thousandths of an inch, flow values in CFM
 // Converted internally to meters and k_28inH2O flow constants
-Function* createFlowFunction(const double lifts[], const double flows[], int count);
+std::unique_ptr<Function> createFlowFunction(const double lifts[], const double flows[], int count);
 
 // Initialize combustion chambers for an engine
 // Sets up all combustion chambers with common parameters

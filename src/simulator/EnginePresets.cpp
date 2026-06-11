@@ -15,6 +15,7 @@
 #include "units.h"
 
 #include <cmath>
+#include <memory>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -22,7 +23,7 @@
 
 namespace EnginePresetsHelper {
 
-Function* generateHarmonicCamLobe(double durationAt50Thou, double gamma,
+std::unique_ptr<Function> generateHarmonicCamLobe(double durationAt50Thou, double gamma,
                                    double lift, int steps) {
     const double angle = durationAt50Thou / 4.0;
     const double s = std::pow(2.0 * units::distance(50, units::thou) / lift, 1.0 / gamma) - 1.0;
@@ -30,7 +31,7 @@ Function* generateHarmonicCamLobe(double durationAt50Thou, double gamma,
     const double extents = M_PI / k;
     const double step = extents / (steps - 5.0);
 
-    Function* fn = new Function();
+    auto fn = std::make_unique<Function>();
     fn->initialize(steps * 2 + 1, step);
 
     for (int i = 0; i < steps; ++i) {
@@ -49,8 +50,8 @@ Function* generateHarmonicCamLobe(double durationAt50Thou, double gamma,
     return fn;
 }
 
-Function* createMeanPistonSpeedToTurbulence() {
-    Function* fn = new Function();
+std::unique_ptr<Function> createMeanPistonSpeedToTurbulence() {
+    auto fn = std::make_unique<Function>();
     fn->initialize(30, 1);
     for (int i = 0; i < 30; ++i) {
         fn->addSample(static_cast<double>(i), static_cast<double>(i) * 0.5);
@@ -58,8 +59,8 @@ Function* createMeanPistonSpeedToTurbulence() {
     return fn;
 }
 
-Function* createDefaultTurbulenceToFlameSpeedRatio() {
-    Function* fn = new Function();
+std::unique_ptr<Function> createDefaultTurbulenceToFlameSpeedRatio() {
+    auto fn = std::make_unique<Function>();
     fn->initialize(10, 5);
     fn->addSample(0.0, 3.0);
     fn->addSample(5.0, 7.5);
@@ -74,8 +75,8 @@ Function* createDefaultTurbulenceToFlameSpeedRatio() {
     return fn;
 }
 
-Function* createLsTurbulenceToFlameSpeedRatio() {
-    Function* fn = new Function();
+std::unique_ptr<Function> createLsTurbulenceToFlameSpeedRatio() {
+    auto fn = std::make_unique<Function>();
     fn->initialize(10, 5);
     fn->addSample(0.0, 3.0);
     fn->addSample(5.0, 7.5);
@@ -90,8 +91,8 @@ Function* createLsTurbulenceToFlameSpeedRatio() {
     return fn;
 }
 
-Function* createFlowFunction(const double lifts[], const double flows[], int count) {
-    Function* fn = new Function();
+std::unique_ptr<Function> createFlowFunction(const double lifts[], const double flows[], int count) {
+    auto fn = std::make_unique<Function>();
     fn->initialize(count, 50 * units::distance(1, units::thou));
     for (int i = 0; i < count; ++i) {
         double liftM = lifts[i] * units::distance(1, units::thou);
@@ -102,14 +103,14 @@ Function* createFlowFunction(const double lifts[], const double flows[], int cou
 }
 
 void initCombustionChambers(Engine* engine) {
-    Function* mpsToTurb = createMeanPistonSpeedToTurbulence();
+    auto mpsToTurb = createMeanPistonSpeedToTurbulence();
 
     CombustionChamber::Parameters ccP = {};
     ccP.CrankcasePressure = units::pressure(1.0, units::atm);
     ccP.Fuel = engine->getFuel();
     ccP.StartingPressure = units::pressure(1.0, units::atm);
     ccP.StartingTemperature = units::celcius(25.0);
-    ccP.MeanPistonSpeedToTurbulence = mpsToTurb;
+    ccP.MeanPistonSpeedToTurbulence = mpsToTurb.release();
 
     for (int i = 0; i < engine->getCylinderCount(); ++i) {
         ccP.Piston = engine->getPiston(i);

@@ -8,6 +8,8 @@
 
 #include "simulator.h"
 
+#include <memory>
+
 class SineSimulator : public Simulator {
 public:
     SineSimulator() = default;
@@ -25,6 +27,10 @@ protected:
     void writeToSynthesizer() override;
 
 private:
+    std::unique_ptr<Engine> m_sineEngine;
+    std::unique_ptr<Vehicle> m_sineVehicle;
+    std::unique_ptr<Transmission> m_sineTransmission;
+
     double m_phase = 0.0;
     double m_sineValue = 0.0;
     double* m_exhaustFlowStagingBuffer = nullptr;

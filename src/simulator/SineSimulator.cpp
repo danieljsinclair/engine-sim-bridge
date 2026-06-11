@@ -17,12 +17,17 @@ SineSimulator::~SineSimulator() {
 }
 
 void SineSimulator::loadSimulation(Engine* engine, Vehicle* vehicle, Transmission* transmission) {
-    if (!engine) engine = new SineEngine();
-    if (!vehicle) vehicle = new SineVehicle();
-    if (!transmission) transmission = new SineTransmission();
+    if (!engine) m_sineEngine = std::make_unique<SineEngine>();
+    if (!vehicle) m_sineVehicle = std::make_unique<SineVehicle>();
+    if (!transmission) m_sineTransmission = std::make_unique<SineTransmission>();
+
+    // Use smart pointer get() if owned locally, otherwise use the raw pointer argument
+    Engine* activeEngine = m_sineEngine ? m_sineEngine.get() : engine;
+    Vehicle* activeVehicle = m_sineVehicle ? m_sineVehicle.get() : vehicle;
+    Transmission* activeTransmission = m_sineTransmission ? m_sineTransmission.get() : transmission;
 
     // Store pointers in base class — same as PistonEngineSimulator line 34
-    Simulator::loadSimulation(engine, vehicle, transmission);
+    Simulator::loadSimulation(activeEngine, activeVehicle, activeTransmission);
 
     // Initialize synthesizer — base loadSimulation() doesn't call it.
     // PistonEngineSimulator gets it via placeAndInitialize(); we call directly.
@@ -47,11 +52,11 @@ void SineSimulator::loadSimulation(Engine* engine, Vehicle* vehicle, Transmissio
 
     // Shared physics wiring — DRY via SimulatorInitHelpers
     SimulatorInitHelpers::wirePhysics(
-        engine, transmission, vehicle,
+        activeEngine, activeTransmission, activeVehicle,
         m_vehicleMass, m_system,
         m_dyno, m_starterMotor,
         m_exhaustFlowStagingBuffer,
-        engine->getExhaustSystemCount());
+        activeEngine->getExhaustSystemCount());
 }
 
 void SineSimulator::destroy() {
@@ -62,10 +67,10 @@ void SineSimulator::destroy() {
     // Shared system/staging cleanup — DRY via SimulatorInitHelpers
     SimulatorInitHelpers::cleanupPhysics(m_system, m_exhaustFlowStagingBuffer);
 
-    // SineSimulator owns engine/vehicle/transmission (injected by factory in create())
-    if (m_engine)        { m_engine->destroy(); delete m_engine;        m_engine = nullptr; }
-    if (m_vehicle)       { delete m_vehicle;                            m_vehicle = nullptr; }
-    if (m_transmission)  { delete m_transmission;                       m_transmission = nullptr; }
+    // SineSimulator owns engine/vehicle/transmission (created in loadSimulation when not injected)
+    if (m_sineEngine)        { m_sineEngine->destroy(); m_sineEngine.reset(); }
+    if (m_sineVehicle)       { m_sineVehicle.reset(); }
+    if (m_sineTransmission)  { m_sineTransmission.reset(); }
 
     Simulator::destroy();
 }

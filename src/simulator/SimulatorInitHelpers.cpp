@@ -8,6 +8,8 @@
 #include "simulator.h"
 #include "engine.h"
 #include "synthesizer.h"
+
+#include <memory>
 // simulator.h transitively includes: engine.h, transmission.h, vehicle.h,
 // dynamometer.h, starter_motor.h, scs.h (RigidBody, RigidBodySystem, etc.)
 
@@ -48,7 +50,7 @@ void wirePhysics(
     system->addConstraint(&starterMotor);
 
     // Exhaust flow staging buffer — mirrors PistonEngineSimulator::placeAndInitialize()
-    outStagingBuffer = new double[stagingCount];
+    outStagingBuffer = std::make_unique<double[]>(stagingCount).release();
 }
 
 void cleanupPhysics(
@@ -57,12 +59,12 @@ void cleanupPhysics(
 {
     if (system != nullptr) {
         system->reset();
-        delete system;
+        std::unique_ptr<atg_scs::RigidBodySystem> systemDeleter(system);
         system = nullptr;
     }
 
     if (stagingBuffer != nullptr) {
-        delete[] stagingBuffer;
+        std::unique_ptr<double[]> bufferDeleter(stagingBuffer);
         stagingBuffer = nullptr;
     }
 }

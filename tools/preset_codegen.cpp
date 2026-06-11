@@ -515,7 +515,7 @@ std::string emitGeneratedSource(const CodegenArgs& args, const es_script::Compil
 
     Fuel* fuel = engine->getFuel();
     if (fuel) {
-        e.line("Function* turbulenceFn = EnginePresetsHelper::createDefaultTurbulenceToFlameSpeedRatio();");
+        e.line("auto turbulenceFn = EnginePresetsHelper::createDefaultTurbulenceToFlameSpeedRatio();");
         e.line("Fuel::Parameters fuelParams = {};");
         e.line("fuelParams.maxBurningEfficiency = %s;", fmtDouble(fuel->getMaxBurningEfficiency()).c_str());
         e.line("fuelParams.burningEfficiencyRandomness = %s;", fmtDouble(fuel->getBurningEfficiencyRandomness()).c_str());
@@ -523,7 +523,7 @@ std::string emitGeneratedSource(const CodegenArgs& args, const es_script::Compil
         e.line("fuelParams.maxTurbulenceEffect = %s;", fmtDouble(fuel->getMaxTurbulenceEffect()).c_str());
         e.line("fuelParams.maxDilutionEffect = %s;", fmtDouble(fuel->getMaxDilutionEffect()).c_str());
         e.line("fuelParams.molecularAfr = %s;", fmtDouble(fuel->getMolecularAfr()).c_str());
-        e.line("fuelParams.turbulenceToFlameSpeedRatio = turbulenceFn;");
+        e.line("fuelParams.turbulenceToFlameSpeedRatio = turbulenceFn.release();");
         e.line("engine->getFuel()->initialize(fuelParams);");
         e.line("");
     }
@@ -555,13 +555,13 @@ std::string emitGeneratedSource(const CodegenArgs& args, const es_script::Compil
     }
     e.line("");
 
-    e.line("Function* turbFn = EnginePresetsHelper::createMeanPistonSpeedToTurbulence();");
+    e.line("auto turbFn = EnginePresetsHelper::createMeanPistonSpeedToTurbulence();");
     e.line("CombustionChamber::Parameters ccParams = {};");
     e.line("ccParams.CrankcasePressure = units::pressure(1.0, units::atm);");
     e.line("ccParams.Fuel = engine->getFuel();");
     e.line("ccParams.StartingPressure = units::pressure(1.0, units::atm);");
     e.line("ccParams.StartingTemperature = units::celcius(25.0);");
-    e.line("ccParams.MeanPistonSpeedToTurbulence = turbFn;");
+    e.line("ccParams.MeanPistonSpeedToTurbulence = turbFn.release();");
     e.line("for (int i = 0; i < engine->getCylinderCount(); i++) {");
     e.line("    ccParams.Piston = engine->getPiston(i);");
     e.line("    ccParams.Head = engine->getHead(ccParams.Piston->getCylinderBank()->getIndex());");
