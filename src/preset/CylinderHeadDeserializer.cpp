@@ -10,6 +10,7 @@
 #include "preset/FunctionDeserializer.h"
 
 #include <stdexcept>
+#include <memory>
 
 using json::JsonValue;
 
@@ -44,7 +45,7 @@ void CylinderHeadDeserializer::deserialize(const JsonValue& json, CylinderHead* 
         if (!json.has("vtecMinRpm")) {
             throw std::runtime_error("Missing required field 'vtecMinRpm' for vtec valvetrain in " + ctx);
         }
-        VtecValvetrain* vtec = new VtecValvetrain();
+        auto vtec = std::make_unique<VtecValvetrain>();
         VtecValvetrain::Parameters vtParams;
         vtParams.intakeCamshaft = intakeCam;
         vtParams.exhaustCamshaft = exhaustCam;
@@ -56,14 +57,14 @@ void CylinderHeadDeserializer::deserialize(const JsonValue& json, CylinderHead* 
         vtParams.manifoldVacuum = 0;
         vtParams.minThrottlePosition = 0;
         vtec->initialize(vtParams);
-        valvetrain = vtec;
+        valvetrain = vtec.release();
     } else {
-        StandardValvetrain* stdVt = new StandardValvetrain();
+        auto stdVt = std::make_unique<StandardValvetrain>();
         StandardValvetrain::Parameters vtParams;
         vtParams.intakeCamshaft = intakeCam;
         vtParams.exhaustCamshaft = exhaustCam;
         stdVt->initialize(vtParams);
-        valvetrain = stdVt;
+        valvetrain = stdVt.release();
     }
 
     // Port flow functions (required)

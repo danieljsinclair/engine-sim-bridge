@@ -3,6 +3,7 @@
 #include "vehicle.h"
 
 #include <stdexcept>
+#include <memory>
 
 using json::JsonValue;
 
@@ -41,7 +42,7 @@ Vehicle* VehicleDeserializer::deserialize(const JsonValue& json, const std::stri
     }
     params.rollingResistance = json["rollingResistance"].asNumber();
 
-    Vehicle* vehicle = new Vehicle();
+    auto vehicle = std::make_unique<Vehicle>();
     vehicle->initialize(params);
-    return vehicle;
+    return vehicle.release();
 }

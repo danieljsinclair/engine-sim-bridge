@@ -312,15 +312,15 @@ Engine* EngineDeserializer::deserialize(const JsonValue& json, const std::string
     params.throttle = throttle.get();
     validateRequiredSections(json, params, ctx);
 
-    Engine* engine = new Engine();
+    auto engine = std::make_unique<Engine>();
     engine->initialize(params);
     throttle.release(); // Engine owns it now
 
     try {
-        deserializeCrankshafts(json, engine, ctx);
-        deserializeExhaustSystems(json, engine, ctx);
-        deserializeIntakes(json, engine, ctx);
-        deserializeCylinderBanks(json, engine, ctx);
+        deserializeCrankshafts(json, engine.get(), ctx);
+        deserializeExhaustSystems(json, engine.get(), ctx);
+        deserializeIntakes(json, engine.get(), ctx);
+        deserializeCylinderBanks(json, engine.get(), ctx);
 
         if (json.has("fuel")) {
             FuelDeserializer::deserialize(json["fuel"], engine->getFuel(), ctx + ".fuel");
@@ -332,11 +332,10 @@ Engine* EngineDeserializer::deserialize(const JsonValue& json, const std::string
                 engine->getCrankshaft(0), engine->getCylinderCount(), ctx + ".ignitionModule");
         }
 
-        initializeCombustionChambers(json, engine, ctx);
+        initializeCombustionChambers(json, engine.get(), ctx);
     } catch (...) {
-        delete engine;
         throw;
     }
 
-    return engine;
+    return engine.release();
 }

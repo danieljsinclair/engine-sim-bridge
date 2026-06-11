@@ -4,6 +4,7 @@
 #include "preset/FunctionDeserializer.h"
 
 #include <stdexcept>
+#include <memory>
 
 using json::JsonValue;
 
@@ -39,7 +40,7 @@ Camshaft* CamshaftDeserializer::deserialize(const JsonValue& json, Crankshaft* c
     params.crankshaft = crankshaft;
     params.lobeProfile = lobeProfile;
 
-    Camshaft* cam = new Camshaft();
+    auto cam = std::make_unique<Camshaft>();
     cam->initialize(params);
 
     // JSON stores CRANK angles. setLobeCenterline() divides by 2 internally.
@@ -48,5 +49,5 @@ Camshaft* CamshaftDeserializer::deserialize(const JsonValue& json, Crankshaft* c
         cam->setLobeCenterline(static_cast<int>(i), lobes[i].asNumber());
     }
 
-    return cam;
+    return cam.release();
 }

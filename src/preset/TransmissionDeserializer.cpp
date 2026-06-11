@@ -4,6 +4,7 @@
 
 #include <stdexcept>
 #include <vector>
+#include <memory>
 
 using json::JsonValue;
 
@@ -44,7 +45,7 @@ Transmission* TransmissionDeserializer::deserialize(const JsonValue& json, const
     params.GearRatios = gearRatios.data();
     params.MaxClutchTorque = maxClutchTorque;
 
-    Transmission* trans = new Transmission();
+    auto trans = std::make_unique<Transmission>();
     trans->initialize(params);
 
     // clutchPressure is safe to set here -- it's a simple scalar with no dependencies.
@@ -58,5 +59,5 @@ Transmission* TransmissionDeserializer::deserialize(const JsonValue& json, const
     // SimulatorFactory applies it after PistonEngineSimulator::loadSimulation()
     // wires the vehicle via addToSystem().
 
-    return trans;
+    return trans.release();
 }

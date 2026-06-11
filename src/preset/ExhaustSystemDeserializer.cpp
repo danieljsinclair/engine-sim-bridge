@@ -5,6 +5,7 @@
 #include "common/PathNormalizer.h"
 
 #include <stdexcept>
+#include <memory>
 
 using json::JsonValue;
 
@@ -60,9 +61,9 @@ void ExhaustSystemDeserializer::deserialize(const JsonValue& json, ExhaustSystem
         }
         double irVolume = json["impulseResponseVolume"].asNumber();
 
-        ImpulseResponse* ir = new ImpulseResponse();
+        auto ir = std::make_unique<ImpulseResponse>();
         ir->initialize(irFilename, irVolume);
-        params.impulseResponse = ir;
+        params.impulseResponse = ir.release();
     }
 
     es->initialize(params);

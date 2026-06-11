@@ -1,5 +1,7 @@
 #include "preset/FunctionDeserializer.h"
 
+#include <memory>
+
 using json::JsonValue;
 
 std::string FunctionDeserializer::fieldError(const std::string& field, const std::string& context) {
@@ -29,7 +31,7 @@ Function* FunctionDeserializer::deserialize(const JsonValue& fnJson, const std::
     double filterRadius = fnJson["filterRadius"].asNumber();
     int n = static_cast<int>(samplesJson.size());
 
-    Function* fn = new Function;
+    auto fn = std::make_unique<Function>();
     fn->initialize(n + 2, filterRadius);
 
     if (fnJson.has("inputScale")) {
@@ -47,5 +49,5 @@ Function* FunctionDeserializer::deserialize(const JsonValue& fnJson, const std::
         }
     }
 
-    return fn;
+    return fn.release();
 }
