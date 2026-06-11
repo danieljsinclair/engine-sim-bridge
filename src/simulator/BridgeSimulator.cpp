@@ -131,7 +131,6 @@ void BridgeSimulator::getDynoStats(EngineSimStats& stats) const {
 void BridgeSimulator::getVehicleStats(EngineSimStats& stats) const {
     ASSERT(m_simulator, "BridgeSimulator::getStats() called but m_simulator is null");
     if (m_simulator->getVehicle()) {
-        // Vehicle::getSpeed() returns m/s
         stats.vehicleSpeedKmh = m_simulator->getVehicle()->getSpeed() * EngineSimDefaults::MS_TO_KMH;
     }
 }

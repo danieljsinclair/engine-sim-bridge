@@ -87,12 +87,11 @@ namespace {
 
 // Timing control for 60Hz loop pacing using sleep_until for accuracy
 struct LoopTimer {
-    std::chrono::steady_clock::time_point nextWakeTime;
+    std::chrono::steady_clock::time_point nextWakeTime = std::chrono::steady_clock::now();
     std::chrono::microseconds intervalUs;
 
     explicit LoopTimer(double intervalSeconds)
-        : nextWakeTime(std::chrono::steady_clock::now())
-        , intervalUs(static_cast<long long>(intervalSeconds * SECONDS_TO_MICROSECONDS))
+        : intervalUs(static_cast<long long>(intervalSeconds * SECONDS_TO_MICROSECONDS))
     {}
 
     void waitUntilNextTick() {

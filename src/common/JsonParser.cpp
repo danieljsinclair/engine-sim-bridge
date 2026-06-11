@@ -62,7 +62,7 @@ JsonValue JsonValue::makeObject() { JsonValue r; r.type_ = JsonType::Object; ret
 
 void JsonValue::pushBack(JsonValue v) {
     if (type_ == JsonType::Array) {
-        arrVal_.push_back(std::move(v));
+        arrVal_.push_back(v);
     }
 }
 
@@ -72,7 +72,7 @@ void JsonValue::pushBack(JsonValue v) {
 
 class Parser {
 public:
-    explicit Parser(const std::string& input) : input_(input), pos_(0) {}
+    explicit Parser(const std::string& input) : input_(input) {}
 
     JsonValue parse() {
         skipWhitespace();
@@ -83,7 +83,7 @@ public:
 
 private:
     const std::string& input_;
-    size_t pos_;
+    size_t pos_ = 0;
 
     char peek() const {
         return pos_ < input_.size() ? input_[pos_] : '\0';
@@ -153,7 +153,7 @@ private:
         expect(':');
         skipWhitespace();
         JsonValue value = parseValue();
-        obj.objectRef()[keyVal.asString()] = std::move(value);
+        obj.objectRef()[keyVal.asString()] = value;
     }
 
     JsonValue parseArray() {
