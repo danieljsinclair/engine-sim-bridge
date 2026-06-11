@@ -100,10 +100,13 @@ TransitionDecision CrankingController::step(
             if (engineCanCatch(stats, inputIgnition)) {
                 decision.targetPhase = EnginePhase::Running;
                 decision.isTransition = true;
-            } else if (stats.currentRPM < STOPPED_RPM && ++ticks_ > ROLLOVER_FALLBACK_TICKS) {
-                decision.starterMotor = true;
-                decision.targetPhase = EnginePhase::Cranking;
-                decision.isTransition = true;
+            } else {
+                ++ticks_;
+                if (stats.currentRPM < STOPPED_RPM && ticks_ > ROLLOVER_FALLBACK_TICKS) {
+                    decision.starterMotor = true;
+                    decision.targetPhase = EnginePhase::Cranking;
+                    decision.isTransition = true;
+                }
             }
             break;
 
