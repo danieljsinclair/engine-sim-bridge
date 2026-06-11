@@ -6,8 +6,7 @@
 #include "simulator/ISimulator.h"
 #include "strategy/IAudioBuffer.h"
 
-namespace presentation {
-    namespace builders {
+namespace presentation::builders {
 
         EngineState::Engine buildEngineState(const EngineSimStats& stats, const CrankingController::State& cranking) {
             EngineState::Engine engine;
@@ -63,5 +62,4 @@ namespace presentation {
             return audio;
         }
 
-    } // namespace builders
-} // namespace presentation
+} // namespace presentation::builders

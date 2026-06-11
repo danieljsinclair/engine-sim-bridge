@@ -1,4 +1,5 @@
 #include "input/KeyHoldBridge.h"
+#include <algorithm>
 
 namespace input {
 
@@ -28,10 +29,8 @@ bool KeyHoldBridge::isKeyActive(int key) const {
 }
 
 bool KeyHoldBridge::isKeyActiveAny(std::initializer_list<int> keys) const {
-    for (int key : keys) {
-        if (isKeyActive(key)) return true;
-    }
-    return false;
+    return std::any_of(keys.begin(), keys.end(),
+        [this](int key) { return isKeyActive(key); });
 }
 
 } // namespace input
