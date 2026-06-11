@@ -17,7 +17,7 @@ BridgeSimulator::BridgeSimulator(std::unique_ptr<Simulator> simulator, const std
 {}
 
 BridgeSimulator::~BridgeSimulator() {
-    destroy();
+    this->destroy();
 }
 
 // ============================================================================

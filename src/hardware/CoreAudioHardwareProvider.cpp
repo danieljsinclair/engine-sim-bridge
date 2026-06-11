@@ -28,7 +28,7 @@ CoreAudioHardwareProvider::CoreAudioHardwareProvider(ILogging* logger)
 }
 
 CoreAudioHardwareProvider::~CoreAudioHardwareProvider() {
-    cleanup();
+    this->cleanup();
 }
 
 bool CoreAudioHardwareProvider::initialize(const AudioStreamFormat& format) {

@@ -13,7 +13,7 @@
 #include <stdexcept>
 
 SineSimulator::~SineSimulator() {
-    destroy();
+    this->destroy();
 }
 
 void SineSimulator::loadSimulation(Engine* engine, Vehicle* vehicle, Transmission* transmission) {

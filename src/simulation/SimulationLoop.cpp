@@ -293,7 +293,7 @@ public:
 
     ~SimulatorSession() override {
         if (!closed_) {
-            close();
+            this->close();
         }
     }
 

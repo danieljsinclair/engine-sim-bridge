@@ -2,7 +2,7 @@
 #define KEY_HOLD_BRIDGE_H
 
 #include <unordered_map>
-#include <functional>
+#include <unordered_set>
 #include <initializer_list>
 
 namespace input {
@@ -26,7 +26,45 @@ public:
     // Reader returns key code, or -1 if no key available.
     // Called repeatedly until reader returns -1.
     // deltaTimeMs: time since last call, for timeout tracking
-    void drainInput(std::function<int()> reader, double deltaTimeMs);
+    template <typename Reader>
+    void drainInput(Reader reader, double deltaTimeMs) {
+        // Clear edge flags from last frame
+        for (auto& [k, state] : keys_) {
+            state.pressed = false;
+            state.released = false;
+            state.repeating = false;
+        }
+
+        // Drain all pending OS key events
+        std::unordered_set<int> seen;
+        int key;
+        while ((key = reader()) >= 0) {
+            auto& state = keys_[key];
+            if (!state.down) {
+                state.pressed = true;  // edge: up to down
+                state.seenRepeat = false;  // Reset repeat flag on new press
+            } else {
+                state.repeating = true;  // OS repeat event while key is held
+                state.seenRepeat = true;  // In repeat mode after first event
+            }
+            state.down = true;
+            state.timeSinceEvent = 0.0;
+            seen.insert(key);
+        }
+
+        // Age out held keys that received NO event this frame
+        for (auto& [k, state] : keys_) {
+            if (state.down && seen.find(k) == seen.end()) {
+                state.timeSinceEvent += deltaTimeMs;
+                // Use appropriate timeout based on whether we're in repeat mode
+                double timeout = state.seenRepeat ? REPEAT_TIMEOUT_MS : INITIAL_TIMEOUT_MS;
+                if (state.timeSinceEvent > timeout) {
+                    state.down = false;
+                    state.released = true;
+                }
+            }
+        }
+    }
 
     // True while key is held (sustained by OS key repeat)
     bool isKeyDown(int key) const;

@@ -17,7 +17,10 @@ KeyboardInputProvider::KeyboardInputProvider(
 KeyboardInputProvider::~KeyboardInputProvider() = default;
 
 bool KeyboardInputProvider::Initialize() { return true; }
-void KeyboardInputProvider::Shutdown() {}
+void KeyboardInputProvider::Shutdown() {
+	    // No-op: KeyboardInputProvider holds no resources requiring explicit cleanup.
+	    // IKeyboardInput lifetime is managed by the caller (CLI/GUI).
+	}
 bool KeyboardInputProvider::IsConnected() const { return true; }
 
 EngineInput KeyboardInputProvider::OnUpdateSimulation(double dt) {

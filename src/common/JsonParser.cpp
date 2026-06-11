@@ -71,7 +71,7 @@ void JsonValue::pushBack(JsonValue v) {
 
 class Parser {
 public:
-    Parser(const std::string& input) : input_(input), pos_(0) {}
+    explicit Parser(const std::string& input) : input_(input), pos_(0) {}
 
     JsonValue parse() {
         skipWhitespace();
