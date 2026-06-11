@@ -66,7 +66,7 @@ PresetLoadResult PresetEngineFactory::loadFromString(const std::string& jsonCont
     } catch (const PresetException& e) {
         result.error = std::string("Preset error: ") + e.what();
         return result;
-    } catch (const std::runtime_error& e) {
+    } catch (const std::exception& e) {
         result.error = std::string("JSON parse error: ") + e.what();
         return result;
     }
