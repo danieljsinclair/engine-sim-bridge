@@ -143,8 +143,8 @@ void serializeCylinderHead(JsonWriter& j, CylinderHead* head, int cylinderCount)
     j.endArray();
 
     // Camshafts
-    Camshaft* intakeCam = head->getIntakeCamshaft();
-    Camshaft* exhaustCam = head->getExhaustCamshaft();
+    const Camshaft* intakeCam = head->getIntakeCamshaft();
+    const Camshaft* exhaustCam = head->getExhaustCamshaft();
 
     if (intakeCam) {
         j.key("intakeCamshaft");
@@ -253,7 +253,7 @@ void serializeEngine(JsonWriter& j, Engine* engine) {
 
     // Throttle gamma (for DirectThrottleLinkage)
     auto* throttleObj = engine->getThrottleObject();
-    if (auto* direct = dynamic_cast<DirectThrottleLinkage*>(throttleObj)) {
+    if (const auto* direct = dynamic_cast<const DirectThrottleLinkage*>(throttleObj)) {
         j.kv("throttleGamma", direct->getGamma());
     }
 

@@ -349,7 +349,7 @@ public:
         return snapshot.gear >= 0 && std::abs(snapshot.vehicleMassVtheta) > 1.0;
     }
 
-    void transferDrivetrainState(ISimulator& newSimulator, ISimulator& oldSimulator, ILogging* logger) {
+    void transferDrivetrainState(ISimulator& newSimulator, const ISimulator& oldSimulator, ILogging* logger) {
         // Transfer drivetrain state from old simulator to new
         const auto* oldBridge = dynamic_cast<const BridgeSimulator*>(&oldSimulator);
         auto* newBridge = dynamic_cast<BridgeSimulator*>(&newSimulator);

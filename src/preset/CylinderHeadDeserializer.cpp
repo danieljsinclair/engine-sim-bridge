@@ -83,7 +83,7 @@ namespace {
         return stdVt.release();
     }
 
-    void wireIntakeAndExhaust(CylinderHead* head, Engine* engine,
+    void wireIntakeAndExhaust(CylinderHead* head, const Engine* engine,
                               int bankIndex, int cylCount) {
         if (engine->getIntakeCount() > bankIndex) {
             head->setAllIntakes(engine->getIntake(bankIndex));
