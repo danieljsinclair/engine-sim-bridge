@@ -70,6 +70,18 @@ struct EngineState {
 };
 
 // ============================================================================
+// Diagnostic Output Filter
+// Single bucket selecting which optional per-frame debug lines are printed.
+// Open/Closed: adding a category = adding a field here + a CLI flag that sets
+// it. No call-site signatures change. Injected by const ref via PresentationConfig.
+// ============================================================================
+
+struct DiagnosticOutputFilter {
+    bool frames = false;   // audio frame/buffer timing line (req=/got=/took=/room=)
+    bool freq   = false;   // update-call frequency line (calls=/need/kfps)
+};
+
+// ============================================================================
 // Presentation Configuration
 // ============================================================================
 
@@ -78,6 +90,10 @@ struct PresentationConfig {
     double duration = 0.0;  // 0 = infinite
     bool showProgress = true;
     bool showDiagnostics = true;
+
+    // Selective debug categories. Source of truth for which optional diagnostic
+    // lines get printed; defaults to all-off so the console stays quiet.
+    DiagnosticOutputFilter diagnostics;
 };
 
 // ============================================================================

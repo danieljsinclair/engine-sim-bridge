@@ -5,6 +5,7 @@
 
 #include "simulator/BridgeSimulator.h"
 #include "simulator/GearConventions.h"
+#include "twin/SpeedRpmConversion.h"
 
 #include <vector>
 #include <cstring>
@@ -197,11 +198,19 @@ void BridgeSimulator::setStarterMotor(bool on) {
 }
 
 int BridgeSimulator::setGear(int gear) {
+    // Default overload: compute clutch automatically
+    // Forward gears (>=1) get clutch 1.0, neutral (0) gets clutch 0.0
+    double clutchPressure = (gear >= 1) ? 1.0 : 0.0;
+    return setGear(gear, clutchPressure);
+}
+
+int BridgeSimulator::setGear(int gear, double clutchPressure) {
     int newGear = 0x7FFFFFFF;
     if (m_simulator->getTransmission()) {
         // Translate bridge convention (BridgeGear) to engine-sim convention (EngineSimGear)
         int engineSimGear = static_cast<int>(bridge::toEngineSim(static_cast<bridge::BridgeGear>(gear)));
         m_simulator->getTransmission()->changeGear(engineSimGear);
+        m_simulator->getTransmission()->setClutchPressure(clutchPressure);
         newGear = engineSimGear;
     }
     return newGear;
@@ -221,6 +230,8 @@ int BridgeSimulator::getGear() const {
 // ============================================================================
 
 bool BridgeSimulator::changeGear(int gearDelta) {
+    // Default overload: compute clutch automatically after gear change
+    // Forward gears (>=1) get clutch 1.0, neutral (0) gets clutch 0.0
     if (gearDelta == 0) return false;  // OK: no change requested
 
     auto* trans = m_simulator->getTransmission();
@@ -229,15 +240,58 @@ bool BridgeSimulator::changeGear(int gearDelta) {
         return false;
     }
 
-    int currentGear = trans->getGear();
-    int newGear = currentGear + gearDelta;
+    // Get current gear in bridge convention
+    int currentEngineSimGear = trans->getGear();
+    int currentBridgeGear = static_cast<int>(bridge::toBridge(currentEngineSimGear));
+
+    // Compute new gear in bridge convention
+    int newBridgeGear = currentBridgeGear + gearDelta;
     int gearCount = trans->getGearCount();
 
-    newGear = std::max(newGear, -1);  // Clamp at -1 (neutral)
-    newGear = std::min(newGear, gearCount - 1);  // Clamp at max gear
+    // Clamp in bridge convention: neutral (0) to max forward gear (gearCount)
+    // Bridge convention: 0=neutral, 1..gearCount=forward gears
+    newBridgeGear = std::max(newBridgeGear, 0);  // Clamp at neutral
+    newBridgeGear = std::min(newBridgeGear, gearCount);  // Clamp at max gear
 
-    trans->changeGear(newGear);
-    trans->setClutchPressure(newGear > 0 ? 1.0 : 0.0);
+    // Translate back to engine-sim convention and apply
+    int newEngineSimGear = static_cast<int>(bridge::toEngineSim(static_cast<bridge::BridgeGear>(newBridgeGear)));
+    trans->changeGear(newEngineSimGear);
+
+    // Set clutch pressure: forward gears get 1.0, neutral gets 0.0
+    double clutchPressure = (newBridgeGear >= 1) ? 1.0 : 0.0;
+    trans->setClutchPressure(clutchPressure);
+
+    return true;
+}
+
+bool BridgeSimulator::changeGear(int gearDelta, double clutchPressure) {
+    if (gearDelta == 0) return false;  // OK: no change requested
+
+    auto* trans = m_simulator->getTransmission();
+    if (!trans) {
+        logger_->warning(LogMask::BRIDGE, "Cannot change gear: no transmission in simulator");
+        return false;
+    }
+
+    // Get current gear in bridge convention
+    int currentEngineSimGear = trans->getGear();
+    int currentBridgeGear = static_cast<int>(bridge::toBridge(currentEngineSimGear));
+
+    // Compute new gear in bridge convention
+    int newBridgeGear = currentBridgeGear + gearDelta;
+    int gearCount = trans->getGearCount();
+
+    // Clamp in bridge convention: neutral (0) to max forward gear (gearCount)
+    newBridgeGear = std::max(newBridgeGear, 0);  // Clamp at neutral
+    newBridgeGear = std::min(newBridgeGear, gearCount);  // Clamp at max gear
+
+    // Translate back to engine-sim convention and apply
+    int newEngineSimGear = static_cast<int>(bridge::toEngineSim(static_cast<bridge::BridgeGear>(newBridgeGear)));
+    trans->changeGear(newEngineSimGear);
+
+    // Apply explicit clutch pressure
+    trans->setClutchPressure(clutchPressure);
+
     return true;
 }
 
@@ -281,6 +335,47 @@ void BridgeSimulator::applyTransition(const TransitionDecision& decision) {
     m_simulator->m_starterMotor.m_enabled = decision.starterMotor;
 }
 
+bool BridgeSimulator::setSpeedTrackingTarget(double speedKmh) {
+    auto* trans = m_simulator->getTransmission();
+    if (!trans) {
+        m_simulator->m_dyno.m_enabled = false;
+        return false;
+    }
+
+    // Fail if in neutral (gear -1 in engine-sim convention)
+    int gear = trans->getGear();
+    if (gear < 0) {
+        // Disable dyno when in neutral (neutral-at-standstill behavior)
+        m_simulator->m_dyno.m_enabled = false;
+        return false;
+    }
+
+    auto* vehicle = m_simulator->getVehicle();
+    if (!vehicle) {
+        m_simulator->m_dyno.m_enabled = false;
+        return false;
+    }
+
+    // Read vehicle parameters
+    double tireRadius = vehicle->getTireRadius();
+    double diffRatio = vehicle->getDiffRatio();
+    double gearRatio = trans->getGearRatio();
+
+    // Compute target RPM using the pure function (no redline clamp for tracking)
+    double targetRpm = twin::computeTargetRpm(speedKmh, gearRatio, tireRadius, diffRatio, 0.0);
+
+    // Convert RPM to rad/s for dyno
+    const double radPerRpm = 3.14159265358979323846 / 30.0;
+    double targetRadPerSec = targetRpm * radPerRpm;
+
+    // Configure dyno in hold mode (speed-tracking constraint)
+    m_simulator->m_dyno.m_enabled = true;
+    m_simulator->m_dyno.m_hold = true;
+    m_simulator->m_dyno.m_rotationSpeed = targetRadPerSec;
+
+    return true;
+}
+
 BridgeSimulator::DrivetrainSnapshot BridgeSimulator::captureDrivetrainState() const {
     DrivetrainSnapshot snapshot;
 
@@ -313,7 +408,9 @@ void BridgeSimulator::restoreDrivetrainState(const DrivetrainSnapshot& snapshot)
     auto* trans = m_simulator->getTransmission();
     if (trans && snapshot.gear >= 0) {
         trans->changeGear(snapshot.gear);
-        trans->setClutchPressure(snapshot.gear > 0 ? 1.0 : 0.0);
+        // In engine-sim convention, gear >= 0 are forward gears (0=first, 1=second, etc.)
+        // All forward gears should have clutch engaged
+        trans->setClutchPressure(1.0);
     }
 
     // Phase is NOT restored — it's operational state, not drivetrain physics.

@@ -49,7 +49,14 @@ public:
     void setThrottle(double position) override;
     void setIgnition(bool on) override;
     void setStarterMotor(bool on) override;
+
+    // Gear setting with automatic clutch pressure (default overload)
+    // Forward gears (>=1) get clutch 1.0, neutral (0) gets clutch 0.0
     int setGear(int gear) override;
+
+    // Full version: set gear AND apply explicit clutch pressure
+    int setGear(int gear, double clutchPressure);
+
     int getGear() const override;
     void setClutchPressure(double pressure) override;
     void setBrakePressure(double pressure) override;
@@ -71,13 +78,26 @@ public:
     };
     DrivetrainSnapshot captureDrivetrainState() const;
     void restoreDrivetrainState(const DrivetrainSnapshot& snapshot);
+
+    // Change gear by delta with automatic clutch pressure (default overload)
+    // Forward gears (>=1) get clutch 1.0, neutral (0) gets clutch 0.0
     bool changeGear(int gearDelta) override;
+
+    // Full version: change gear by delta AND apply explicit clutch pressure
+    bool changeGear(int gearDelta, double clutchPressure);
+
     void setDynoTorqueScale(double scale) override;
 
     // Configure dyno in load torque mode (brake-only).
     // loadFraction: 0.0-1.0 fraction of DYNO_MAX_TORQUE_FT_LBS.
     // Returns true if configured, false if loadFraction <= 0.
     bool configureDynoLoad(double loadFraction);
+
+    // Set speed tracking target: configures dyno to hold engine RPM
+    // to match the road speed in the current gear.
+    // speedKmh: Target road speed in km/h.
+    // Returns true if in gear and dyno configured, false if in neutral.
+    bool setSpeedTrackingTarget(double speedKmh);
 
     // Set display name directly
     void setName(const std::string& name) { name_ = name; }

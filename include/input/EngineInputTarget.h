@@ -58,7 +58,11 @@ private:
     bool throttleTouched_;  // true if set/adjusted this frame
     double latchedThrottle_;  // Baseline set by W/Z/R/Space
     bool momentaryActive_;   // True when a 0-9 key is being held
-    double roadSpeedKmh_ = 0.0;  // Virtual ICE Twin: target road speed (km/h)
+    // Negative sentinel = "no speed commanded". See EngineInput::roadSpeedKmh:
+    // the loop's setSpeedTrackingTarget gate is >= 0.0, so a 0.0 default would
+    // hold the engine at 0 RPM and stall it in gear. adjustSpeed() clamps to
+    // [0, 300], so any user input immediately moves into the active range.
+    double roadSpeedKmh_ = -1.0;  // Virtual ICE Twin: target road speed (km/h)
     ILogging* logger_;
     IDemoSpeedEnhancer* speedEnhancer_ = nullptr;  // Optional speed enhancer for demo mode
 };

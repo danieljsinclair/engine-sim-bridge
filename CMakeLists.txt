@@ -335,6 +335,14 @@ if(BUILD_BRIDGE_TESTS)
         test/BridgeUnitTests.cpp
         test/CrankingControllerTests.cpp
         test/simulator/BrakeConstraintTest.cpp
+        test/simulator/SpeedTrackingTest.cpp
+        test/simulator/NeutralAtStandstillTest.cpp
+        test/simulation/SpeedTrackingIntegrationTest.cpp
+        test/GearClutchBugTest.cpp
+        test/GearRefactorTest.cpp
+        test/SineWaveRegressionTests.cpp
+        test/twin/SpeedRpmConversionTest.cpp
+        test/twin/RedlineClampAndUpshiftTest.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -597,6 +605,26 @@ if(BUILD_BRIDGE_TESTS)
     target_compile_options(keyboard_consolidation_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
     if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME keyboard_consolidation_tests COMMAND keyboard_consolidation_tests --gtest_color=yes)
+    endif()
+
+    # Runtime bugs integration tests - reproduces LIVE integration-path bugs
+    # that pass in isolation but fail end-to-end (keyboard -> EngineInput ->
+    # SimulationLoop gate -> BridgeSimulator dyno).
+    add_executable(runtime_bugs_integration_tests
+        test/simulation/RuntimeBugsIntegrationTest.cpp
+    )
+    target_include_directories(runtime_bugs_integration_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(runtime_bugs_integration_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(runtime_bugs_integration_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME runtime_bugs_integration_tests COMMAND runtime_bugs_integration_tests --gtest_color=yes)
     endif()
 
     # Twin scenario tests - Phase 1 acceptance criteria tests

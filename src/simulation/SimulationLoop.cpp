@@ -201,6 +201,15 @@ void SimulationLoop::applyVehicleControls(
     if (!crankingState.starterEngaged) {
         // HACK: Should put the clutch in here really
         applyDynoControl(simulator_, input.dynoTorqueScale, lastDynoTorqueScale);
+
+        // Speed tracking: set dyno to match road speed in current gear.
+        // Only when in gear (not neutral) - setSpeedTrackingTarget handles this check.
+        // setSpeedTrackingTarget is a BridgeSimulator-specific API, so downcast the engine.
+        if (input.roadSpeedKmh >= 0.0) {
+            if (auto* bridgeSim = dynamic_cast<BridgeSimulator*>(combustionEngine)) {
+                bridgeSim->setSpeedTrackingTarget(input.roadSpeedKmh);
+            }
+        }
     } else {
         logger_->info(LogMask::BRIDGE, "Cranking: starter engaged, dyno disabled - consider using the clutch instead");
     }

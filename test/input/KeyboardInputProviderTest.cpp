@@ -615,16 +615,27 @@ TEST_F(EngineInputTargetTest, MomentaryThrottle_HeldMultipleFrames_ThenDecaysToB
 }
 
 // ============================================================================
-// Tests 41-45: Speed control state
+// Tests 41-46: Speed control state
 // ============================================================================
 
+TEST_F(EngineInputTargetTest, DefaultRoadSpeed_IsUncommandedSentinel) {
+    // The default must signal "no speed commanded" so the simulation loop does
+    // not force the dyno to hold the engine at 0 RPM (which stalls it in gear).
+    EngineInput input = target->buildInput();
+    EXPECT_LT(input.roadSpeedKmh, 0.0)
+        << "Uncommanded roadSpeedKmh must be negative; got " << input.roadSpeedKmh;
+}
+
 TEST_F(EngineInputTargetTest, AdjustSpeedUp_IncreasesByDelta) {
+    // Establish a 0 km/h baseline from the uncommanded sentinel first.
+    target->adjustSpeed(0.0);
     target->adjustSpeed(10.0);
     EngineInput input = target->buildInput();
     EXPECT_DOUBLE_EQ(input.roadSpeedKmh, 10.0);
 }
 
 TEST_F(EngineInputTargetTest, AdjustSpeedDown_DecreasesByDelta) {
+    target->adjustSpeed(0.0);
     target->adjustSpeed(50.0);
     target->adjustSpeed(-10.0);
     EngineInput input = target->buildInput();
@@ -632,6 +643,7 @@ TEST_F(EngineInputTargetTest, AdjustSpeedDown_DecreasesByDelta) {
 }
 
 TEST_F(EngineInputTargetTest, AdjustSpeed_ClampsToZero) {
+    target->adjustSpeed(0.0);
     target->adjustSpeed(50.0);
     target->adjustSpeed(-100.0);  // Try to go below zero
     EngineInput input = target->buildInput();
@@ -639,6 +651,7 @@ TEST_F(EngineInputTargetTest, AdjustSpeed_ClampsToZero) {
 }
 
 TEST_F(EngineInputTargetTest, AdjustSpeed_ClampsToMax) {
+    target->adjustSpeed(0.0);
     target->adjustSpeed(200.0);
     target->adjustSpeed(150.0);  // Try to exceed 300 km/h
     EngineInput input = target->buildInput();
@@ -646,6 +659,7 @@ TEST_F(EngineInputTargetTest, AdjustSpeed_ClampsToMax) {
 }
 
 TEST_F(EngineInputTargetTest, BuildInput_IncludesRoadSpeed) {
+    target->adjustSpeed(0.0);
     target->adjustSpeed(100.0);
     EngineInput input = target->buildInput();
     EXPECT_DOUBLE_EQ(input.roadSpeedKmh, 100.0);
