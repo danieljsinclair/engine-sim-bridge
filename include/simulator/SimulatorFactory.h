@@ -57,7 +57,7 @@ public:
         const std::string& assetBasePath,
         const ISimulatorConfig& config,
         ILogging* logger = nullptr,
-        telemetry::ITelemetryWriter* telemetryWriter = nullptr);
+        telemetry::ITelemetryWriter* /*telemetryWriter*/ = nullptr);
 
     static SimulatorType getDefaultType();
 

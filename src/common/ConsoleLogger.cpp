@@ -5,7 +5,7 @@
 #include <cstdarg>
 #include <cstdio>
 
-const char* ConsoleLogger::levelToString(uint32_t level) {
+const char* ConsoleLogger::levelToString(uint32_t level) const {
     if (level == LogMask::DBG)   return "DEBUG";
     if (level == LogMask::INFO)  return "INFO";
     if (level == LogMask::WARN)  return "WARN";
@@ -13,11 +13,11 @@ const char* ConsoleLogger::levelToString(uint32_t level) {
     return "UNKNOWN";
 }
 
-FILE* ConsoleLogger::getStream(uint32_t level) {
+FILE* ConsoleLogger::getStream(uint32_t level) const {
     return (level == LogMask::DBG   || level == LogMask::INFO) ? stdout : stderr;
 }
 
-bool ConsoleLogger::shouldLog(uint32_t mask) {
+bool ConsoleLogger::shouldLog(uint32_t mask) const {
     uint32_t category = mask & 0x0000FFFF;
     uint32_t level = mask & 0xFFFF0000;
     return ((category & mask_) || (mask_ & LogMask::ALL_CATS)) &&

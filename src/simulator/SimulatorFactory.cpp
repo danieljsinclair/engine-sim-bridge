@@ -186,7 +186,7 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
     const std::string& assetBasePath,
     const ISimulatorConfig& config,
     ILogging* logger,
-    telemetry::ITelemetryWriter* telemetryWriter)
+    telemetry::ITelemetryWriter* /*telemetryWriter*/)
 {
     SimulatorInit simInit;
     switch (type) {

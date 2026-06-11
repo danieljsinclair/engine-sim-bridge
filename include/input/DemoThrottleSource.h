@@ -20,7 +20,7 @@ public:
 
     // State control — called by the consumer (CLI, OBD driver, iOS app)
     void setThrottleLevel(double level);   // 0.0–1.0, resets hold counter
-    void requestExit();                    // no-op in new lifecycle
+    void requestExit() const;             // no-op in new lifecycle
 
 private:
     double lastThrottle_ = 0.0;

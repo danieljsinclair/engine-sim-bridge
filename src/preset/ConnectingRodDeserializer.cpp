@@ -8,7 +8,7 @@ using json::JsonValue;
 
 void ConnectingRodDeserializer::deserialize(const JsonValue& json, ConnectingRod* rod,
                                              Crankshaft* crankshaft, Piston* piston,
-                                             int defaultJournal, const std::string& context) {
+                                             int /*defaultJournal*/, const std::string& context) {
     const std::string ctx = context.empty() ? "connectingRod" : context;
 
     ConnectingRod::Parameters params;

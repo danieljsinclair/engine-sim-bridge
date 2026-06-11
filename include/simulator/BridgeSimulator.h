@@ -91,7 +91,7 @@ private:
     EnginePhase enginePhase_ = EnginePhase::Stopped;
 
     static void advanceFixedSteps(Simulator* sim, int simulationFrequency, double dt, bool ceil);
-    void drainSynthesizerBuffer(Simulator* sim);
+    void drainSynthesizerBuffer(Simulator* sim) const;
 
     int16_t* ensureAudioConversionBufferSize(size_t requiredSize);
 

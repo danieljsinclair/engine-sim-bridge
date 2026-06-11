@@ -395,7 +395,7 @@ void BridgeSimulator::advanceFixedSteps(Simulator* sim, int simulationFrequency,
     sim->endFrame();
 }
 
-void BridgeSimulator::drainSynthesizerBuffer(Simulator* sim) {
+void BridgeSimulator::drainSynthesizerBuffer(Simulator* sim) const {
     std::vector<int16_t> drainBuffer(engineConfig_.maxChunkFrames);
     while (sim->readAudioOutput(engineConfig_.maxChunkFrames, drainBuffer.data()) > 0) {
         // Drain all pre-fill

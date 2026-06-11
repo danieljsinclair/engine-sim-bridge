@@ -9,7 +9,7 @@ class Crankshaft;
 class CylinderBankDeserializer {
 public:
     static void deserialize(const json::JsonValue& json, CylinderBank* bank,
-                             Crankshaft* crankshaft, int bankIndex,
+                             Crankshaft* crankshaft, int /*bankIndex*/,
                              const std::string& context = "");
 };
 

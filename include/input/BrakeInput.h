@@ -10,7 +10,7 @@ public:
     BrakeInput() = default;
 
     void setLevel(double level);   // 0.0-1.0
-    double pollLevel();            // returns current level (unchanged until setLevel called)
+    double pollLevel() const;      // returns current level (unchanged until setLevel called)
 
 private:
     double level_ = 0.0;

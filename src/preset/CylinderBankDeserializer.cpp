@@ -9,7 +9,7 @@
 using json::JsonValue;
 
 void CylinderBankDeserializer::deserialize(const JsonValue& json, CylinderBank* bank,
-                                            Crankshaft* crankshaft, int bankIndex,
+                                            Crankshaft* crankshaft, int /*bankIndex*/,
                                             const std::string& context) {
     const std::string ctx = context.empty() ? "cylinderBank" : context;
 

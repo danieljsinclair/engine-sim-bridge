@@ -84,7 +84,7 @@ private:
     const std::string& input_;
     size_t pos_;
 
-    char peek() {
+    char peek() const {
         return pos_ < input_.size() ? input_[pos_] : '\0';
     }
 

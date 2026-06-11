@@ -77,9 +77,9 @@ public:
 
 private:
     uint32_t mask_;
-    const char* levelToString(uint32_t level);
-    FILE* getStream(uint32_t level);
-    bool shouldLog(uint32_t mask);
+    const char* levelToString(uint32_t level) const;
+    FILE* getStream(uint32_t level) const;
+    bool shouldLog(uint32_t mask) const;
     void vlog(uint32_t mask, const char* format, va_list args);
 };
 

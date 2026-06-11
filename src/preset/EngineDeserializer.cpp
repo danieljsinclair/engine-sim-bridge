@@ -139,7 +139,7 @@ void EngineDeserializer::deserializeIntakes(const JsonValue& json, const Engine*
 }
 
 void EngineDeserializer::deserializeCylinders(const JsonValue& bankJson, CylinderBank* bank,
-        const Engine* engine, Crankshaft* mainCrank, int bankIdx,
+        const Engine* engine, Crankshaft* mainCrank, int /*bankIdx*/,
         int globalCylIdx, int cylCount, const std::string& ctx, size_t bankIndex) {
     const JsonValue& cylinders = bankJson["cylinders"];
     if (!cylinders.isArray()) return;

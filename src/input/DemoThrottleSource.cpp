@@ -11,7 +11,7 @@ void DemoThrottleSource::setThrottleLevel(double level) {
     framesSinceSet_ = 0;
 }
 
-void DemoThrottleSource::requestExit() {
+void DemoThrottleSource::requestExit() const {
     // Exit is now handled by session->stop() in the simulation loop
     // This method remains for API compatibility but is a no-op
 }
