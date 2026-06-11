@@ -32,7 +32,7 @@ void ConsoleLogger::log(uint32_t mask, const char* format, ...) {
 }
 
 // Internal method that takes va_list
-void ConsoleLogger::vlog(uint32_t mask, const char* format, va_list args) {
+void ConsoleLogger::vlog(uint32_t mask, const char* format, va_list args) const {
     if (!shouldLog(mask)) return;
 
     uint32_t level = mask & 0xFFFF0000;

@@ -191,7 +191,7 @@ void SimulationLoop::applyVehicleControls(
     // Apply gear changes: twin gearAbsolute takes priority over keyboard gearDelta
     if (input.gearAbsolute >= 0) {
         simulator_.setGear(input.gearAbsolute);
-    } else {
+    } else if (logger_) {
         applyGearChange(simulator_, input.gearDelta, logger_);
     }
 
@@ -199,7 +199,7 @@ void SimulationLoop::applyVehicleControls(
     if (!crankingState.starterEngaged) {
         // HACK: Should put the clutch in here really
         applyDynoControl(simulator_, input.dynoTorqueScale, lastDynoTorqueScale);
-    } else {
+    } else if (logger_) {
         logger_->info(LogMask::BRIDGE, "Cranking: starter engaged, dyno disabled - consider using the clutch instead");
     }
 

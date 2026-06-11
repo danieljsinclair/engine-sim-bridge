@@ -1,4 +1,5 @@
 #include "input/VirtualIceInputProvider.h"
+#include "common/PresetExceptions.h"
 
 namespace input {
 
@@ -23,10 +24,16 @@ bool VirtualIceInputProvider::Initialize() {
         }
         isInitialized_ = true;
         return true;
+    } catch (const PresetException& e) {
+        lastError_ = std::string("Failed to create twin (preset error): ") + e.what();
+        return false;
+    } catch (const SimulatorException& e) {
+        lastError_ = std::string("Failed to create twin (simulator error): ") + e.what();
+        return false;
     } catch (const std::bad_alloc& e) {
         lastError_ = std::string("Failed to create twin (out of memory): ") + e.what();
         return false;
-    } catch (const std::runtime_error& e) {
+    } catch (const std::exception& e) {
         lastError_ = std::string("Failed to create twin: ") + e.what();
         return false;
     }

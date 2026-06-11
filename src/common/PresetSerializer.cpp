@@ -252,7 +252,7 @@ void serializeEngine(JsonWriter& j, Engine* engine) {
     j.kv("initialJitter", engine->getInitialJitter());
 
     // Throttle gamma (for DirectThrottleLinkage)
-    auto* throttleObj = engine->getThrottleObject();
+    const auto* throttleObj = engine->getThrottleObject();
     if (const auto* direct = dynamic_cast<const DirectThrottleLinkage*>(throttleObj)) {
         j.kv("throttleGamma", direct->getGamma());
     }

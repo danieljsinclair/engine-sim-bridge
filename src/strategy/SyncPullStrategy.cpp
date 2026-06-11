@@ -266,7 +266,7 @@ void SyncPullStrategy::applyCrossfade(float* dst, int framesRendered) {
 
 }
 
-void SyncPullStrategy::resetFrameRender(int framesToGenerate, int framesRendered, float* dst, std::chrono::high_resolution_clock::time_point callbackStart) {
+void SyncPullStrategy::resetFrameRender(int framesToGenerate, int framesRendered, const float* dst, std::chrono::high_resolution_clock::time_point callbackStart) {
     // Track last sample values for next crossfade (update after crossfade)
     if (framesRendered > 0) {
         lastLeftSample_ = dst[(framesRendered - 1) * 2];

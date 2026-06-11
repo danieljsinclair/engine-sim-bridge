@@ -60,7 +60,7 @@ JsonValue JsonValue::makeString(std::string_view v) { JsonValue r; r.type_ = Jso
 JsonValue JsonValue::makeArray() { JsonValue r; r.type_ = JsonType::Array; return r; }
 JsonValue JsonValue::makeObject() { JsonValue r; r.type_ = JsonType::Object; return r; }
 
-void JsonValue::pushBack(JsonValue v) {
+void JsonValue::pushBack(const JsonValue& v) {
     if (type_ == JsonType::Array) {
         arrVal_.push_back(v);
     }

@@ -85,7 +85,7 @@ public:
     // Mutable access for building
     Array& arrayRef() { return arrVal_; }
     Object& objectRef() { return objVal_; }
-    void pushBack(JsonValue v);
+    void pushBack(const JsonValue& v);
 
 private:
     JsonType type_;
