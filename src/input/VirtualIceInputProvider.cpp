@@ -26,7 +26,7 @@ bool VirtualIceInputProvider::Initialize() {
     } catch (const std::bad_alloc& e) {
         lastError_ = std::string("Failed to create twin (out of memory): ") + e.what();
         return false;
-    } catch (const std::exception& e) {
+    } catch (const std::runtime_error& e) {
         lastError_ = std::string("Failed to create twin: ") + e.what();
         return false;
     }
