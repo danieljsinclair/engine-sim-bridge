@@ -27,7 +27,7 @@ public:
     // Called repeatedly until reader returns -1.
     // deltaTimeMs: time since last call, for timeout tracking
     template <typename Reader>
-    void drainInput(Reader reader, double deltaTimeMs) {
+    void drainInput(const Reader& reader, double deltaTimeMs) {
         // Clear edge flags from last frame
         for (auto& [k, state] : keys_) {
             state.pressed = false;
