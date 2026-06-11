@@ -168,8 +168,7 @@ bool ThreadedStrategy::startPlayback(ISimulator* simulator) {
         return false;
     }
 
-    bool result = simulator->start();
-    if (!result) {
+    if (bool result = simulator->start(); !result) {
         logger_->error(LogMask::AUDIO, "ThreadedStrategy::startPlayback: Failed to start audio thread");
         return false;
     }
@@ -335,8 +334,7 @@ void ThreadedStrategy::publishAudioDiagnostics(int underrunCount, double bufferH
 void ThreadedStrategy::publishAudioTiming() {
     // Update throughput rates once per second
     auto now = std::chrono::steady_clock::now();
-    double elapsedSec = std::chrono::duration<double>(now - lastThroughputTime_).count();
-    if (elapsedSec >= 1.0) {
+    if (double elapsedSec = std::chrono::duration<double>(now - lastThroughputTime_).count(); elapsedSec >= 1.0) {
         diagnostics_.updateThroughput(elapsedSec);
         lastThroughputTime_ = now;
     }

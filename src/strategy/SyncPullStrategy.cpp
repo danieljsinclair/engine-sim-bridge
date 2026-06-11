@@ -254,8 +254,7 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
 
     // Update throughput rates once per second
     auto now = std::chrono::steady_clock::now();
-    double elapsedSec = std::chrono::duration<double>(now - lastThroughputTime_).count();
-    if (elapsedSec >= 1.0) {
+    if (double elapsedSec = std::chrono::duration<double>(now - lastThroughputTime_).count(); elapsedSec >= 1.0) {
         diagnostics_.updateThroughput(elapsedSec);
         lastThroughputTime_ = now;
     }

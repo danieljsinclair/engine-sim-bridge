@@ -65,9 +65,8 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             const double CRANK_IDLE_RPM_THRESHOLD = 500.0;
             const double CRANK_FALLBACK_DURATION_S = 3.0;
             bool rpmCaught = engineRpmFeedback_ > CRANK_IDLE_RPM_THRESHOLD;
-            bool timerExpired = (engineRpmFeedback_ == 0.0) && (crankingTimerS_ >= CRANK_FALLBACK_DURATION_S);
 
-            if (rpmCaught || timerExpired) {
+            if (bool timerExpired = (engineRpmFeedback_ == 0.0) && (crankingTimerS_ >= CRANK_FALLBACK_DURATION_S); rpmCaught || timerExpired) {
                 state_ = TwinState::IDLE;
                 output.starterMotor = false;
             }

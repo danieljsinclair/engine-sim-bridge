@@ -122,8 +122,7 @@ void CoreAudioHardwareProvider::stopPlayback() {
     if (isPlaying) {
         logger_->debug(LogMask::AUDIO, "Stopping AudioUnit playback");
 
-        OSStatus status = AudioOutputUnitStop(audioUnit);
-        if (status != noErr) {
+        if (OSStatus status = AudioOutputUnitStop(audioUnit); status != noErr) {
             logCoreAudioError("AudioOutputUnitStop", status, nullptr);
         }
 

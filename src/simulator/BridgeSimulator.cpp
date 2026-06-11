@@ -285,15 +285,13 @@ void BridgeSimulator::applyTransition(const TransitionDecision& decision) {
 BridgeSimulator::DrivetrainSnapshot BridgeSimulator::captureDrivetrainState() const {
     DrivetrainSnapshot snapshot;
 
-    const auto* body = m_simulator->getVehicleMassBody();
-    if (body) {
+    if (const auto* body = m_simulator->getVehicleMassBody(); body) {
         snapshot.vehicleMassVtheta = body->v_theta;
         snapshot.vehicleMassI = body->I;
         snapshot.vehicleMassM = body->m;
     }
 
-    const auto* trans = m_simulator->getTransmission();
-    if (trans) {
+    if (const auto* trans = m_simulator->getTransmission(); trans) {
         snapshot.gear = trans->getGear();
     }
 
@@ -303,16 +301,14 @@ BridgeSimulator::DrivetrainSnapshot BridgeSimulator::captureDrivetrainState() co
 }
 
 void BridgeSimulator::restoreDrivetrainState(const DrivetrainSnapshot& snapshot) {
-    auto* body = m_simulator->getVehicleMassBody();
-    if (body) {
+    if (auto* body = m_simulator->getVehicleMassBody(); body) {
         body->v_theta = snapshot.vehicleMassVtheta;
         body->I = snapshot.vehicleMassI;
         body->m = snapshot.vehicleMassM;
     }
 
     // Restore gear and engage clutch so drivetrain spins the new engine
-    auto* trans = m_simulator->getTransmission();
-    if (trans && snapshot.gear >= 0) {
+    if (auto* trans = m_simulator->getTransmission(); trans && snapshot.gear >= 0) {
         trans->changeGear(snapshot.gear);
         trans->setClutchPressure(snapshot.gear > 0 ? 1.0 : 0.0);
     }

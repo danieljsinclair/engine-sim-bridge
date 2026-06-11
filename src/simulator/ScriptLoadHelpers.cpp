@@ -17,8 +17,7 @@ static std::string buildFullPath(const std::string& assetBasePath, const std::st
     if (filename[0] == '/' || (filename.length() > 1 && filename[1] == ':')) {
         return filename;
     }
-    size_t firstSlash = filename.find('/');
-    if (firstSlash != std::string::npos) {
+    if (size_t firstSlash = filename.find('/'); firstSlash != std::string::npos) {
         size_t lastSlash = assetBasePath.find_last_of('/');
         std::string lastComponent = assetBasePath.substr(lastSlash + 1);
         if (filename.find(lastComponent + "/") == 0) {

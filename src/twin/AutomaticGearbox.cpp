@@ -94,10 +94,8 @@ bool AutomaticGearbox::evaluateKickdown(double throttleFraction, double speedKmh
 
 void AutomaticGearbox::evaluateUpshift(double speedKmh, double smoothedThrottle, double rawThrottle) {
     // Redline safety: bypasses normal interval — engine approaching rev limiter
-    bool redlineUpshift = rpmFeedback_ > 0 && rpmFeedback_ > profile_.redlineRpm * 0.95;
-    if (redlineUpshift && currentGear_ < static_cast<int>(profile_.gearRatios.size())) {
-        double upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle);
-        if (upshiftSpeed <= 0 || speedKmh <= upshiftSpeed) {
+    if (bool redlineUpshift = rpmFeedback_ > 0 && rpmFeedback_ > profile_.redlineRpm * 0.95; redlineUpshift && currentGear_ < static_cast<int>(profile_.gearRatios.size())) {
+        if (double upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle); upshiftSpeed <= 0 || speedKmh <= upshiftSpeed) {
             executeShift(1);
             return;
         }
@@ -120,8 +118,7 @@ void AutomaticGearbox::evaluateUpshift(double speedKmh, double smoothedThrottle,
     }
 
     while (currentGear_ < static_cast<int>(profile_.gearRatios.size())) {
-        double upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle);
-        if (upshiftSpeed > 0 && speedKmh > upshiftSpeed) {
+        if (double upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle); upshiftSpeed > 0 && speedKmh > upshiftSpeed) {
             executeShift(1);
         } else {
             break;
@@ -137,14 +134,12 @@ void AutomaticGearbox::evaluateDownshift(double speedKmh, double smoothedThrottl
     double downInterval = profile_.downshiftMinIntervalS > 0.0
         ? profile_.downshiftMinIntervalS
         : profile_.minShiftIntervalS;
-    bool canDownshift = lastShiftDirection_ != -1 || timeSinceLastShiftS_ >= downInterval;
-    if (!canDownshift) {
+    if (bool canDownshift = lastShiftDirection_ != -1 || timeSinceLastShiftS_ >= downInterval; !canDownshift) {
         return;
     }
 
     while (currentGear_ > 1) {
-        double downshiftSpeed = getDownshiftSpeed(currentGear_ - 1, currentGear_, smoothedThrottle);
-        if (speedKmh < downshiftSpeed) {
+        if (double downshiftSpeed = getDownshiftSpeed(currentGear_ - 1, currentGear_, smoothedThrottle); speedKmh < downshiftSpeed) {
             executeShift(-1);
         } else {
             break;
@@ -373,8 +368,7 @@ int AutomaticGearbox::findSafeGear(double speedKmh, int maxDownshifts) const {
 
     // Try gears from current-1 down to 1
     for (int gear = currentGear_ - 1; gear >= std::max(1, currentGear_ - maxDownshifts); --gear) {
-        double rpm = getEngineRpm(speedKmh, gear);
-        if (rpm <= profile_.redlineRpm * 0.9) {
+        if (double rpm = getEngineRpm(speedKmh, gear); rpm <= profile_.redlineRpm * 0.9) {
             return gear;
         }
     }
