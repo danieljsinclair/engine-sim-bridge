@@ -50,6 +50,14 @@ private:
     double rpmFeedback_ = 0.0;
     uint64_t frame_ = 0;
 
+    void updateThrottleState(double dt, double throttleFraction);
+    void updateTipInState(double dt, double throttleFraction, double throttleDelta);
+    bool evaluateKickdown(double throttleFraction, double speedKmh, double dt);
+    void evaluateUpshift(double speedKmh, double smoothedThrottle, double rawThrottle);
+    void evaluateDownshift(double speedKmh, double smoothedThrottle);
+    void executeShift(int direction);
+    void logState(double dt, double speedKmh, double throttleFraction);
+
     double getShiftSpeed(int fromGear, int toGear, double throttle) const;
     double getDownshiftSpeed(int fromGear, int toGear, double throttle) const;
     double getEngineRpm(double speedKmh, int gear) const;

@@ -121,6 +121,29 @@ void SyncPullStrategy::updateSimulation(ISimulator* /* simulator */, double /* d
     // Sync-pull mode updates simulation during render callback
 }
 
+bool SyncPullStrategy::retryRender(float* dst, int offset, int framesNeeded,
+                                    int& framesWritten, int maxRetries) {
+    int retryCount = 0;
+    while (retryCount < maxRetries && !shuttingDown_.load()) {
+        simulator_->update(1.0 / sampleRate_);
+        bool result = simulator_->renderOnDemand(
+            dst + (offset * 2),
+            framesNeeded,
+            &framesWritten
+        );
+
+        if (!result) {
+            return false;
+        }
+
+        if (framesWritten > 0) {
+            return true;
+        }
+        retryCount++;
+    }
+    return true;
+}
+
 bool SyncPullStrategy::render(AudioBufferView& buffer) {
     float* dst = buffer.asFloat();
     if (!dst) {
@@ -138,7 +161,6 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
 
     int framesToGenerate = buffer.frameCount;
     int framesRendered = 0;
-
     int remainingFrames = framesToGenerate;
 
     while (remainingFrames > 0 && framesRendered < framesToGenerate && !shuttingDown_.load()) {
@@ -158,38 +180,25 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
         framesRendered += framesWritten;
         remainingFrames -= framesWritten;
 
-        // Partial render: advance simulation and retry up to MAX_RETRIES
         if (framesWritten > 0 && framesWritten < remainingFrames + framesWritten) {
             // Successfully got some frames but not all -- continue loop naturally
             continue;
         }
 
         if (framesWritten == 0 && remainingFrames > 0) {
-            // No frames produced: advance simulation and retry
-            int retryCount = 0;
-            while (retryCount < MAX_RETRIES && !shuttingDown_.load()) {
-                simulator_->update(1.0 / sampleRate_);
-                result = simulator_->renderOnDemand(
-                    dst + (framesRendered * 2),
-                    remainingFrames,
-                    &framesWritten
-                );
+            int32_t retryFrames = 0;
+            bool retryOk = retryRender(dst, framesRendered, remainingFrames, retryFrames, MAX_RETRIES);
 
-                if (!result) {
-                    logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed during retry, filling silence");
-                    EngineSimAudio::fillSilence(dst, framesToGenerate);
-                    return true;
-                }
-
-                if (framesWritten > 0) {
-                    framesRendered += framesWritten;
-                    remainingFrames -= framesWritten;
-                    break;
-                }
-                retryCount++;
+            if (!retryOk) {
+                logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed during retry, filling silence");
+                EngineSimAudio::fillSilence(dst, framesToGenerate);
+                return true;
             }
 
-            if (framesWritten == 0 && remainingFrames > 0) {
+            if (retryFrames > 0) {
+                framesRendered += retryFrames;
+                remainingFrames -= retryFrames;
+            } else {
                 logger_->warning(LogMask::AUDIO,
                     "SyncPullStrategy::render: exhausted %d retries, filling silence for %d frames",
                     MAX_RETRIES, remainingFrames);

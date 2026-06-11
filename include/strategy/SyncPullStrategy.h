@@ -86,6 +86,10 @@ private:
     // Throughput timing
     std::chrono::steady_clock::time_point lastThroughputTime_;
 
+    // Retry render: advance simulation and retry up to maxRetries times
+    bool retryRender(float* dst, int offset, int framesNeeded,
+                     int& framesWritten, int maxRetries);
+
     // Crossfade state for hot-swap (prevents clicks/pops)
     float lastLeftSample_ = 0.0f;
     float lastRightSample_ = 0.0f;

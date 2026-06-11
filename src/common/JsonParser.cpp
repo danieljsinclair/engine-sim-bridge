@@ -176,34 +176,38 @@ private:
         return result;
     }
 
+    void parseEscapeChar(std::string& result) {
+        pos_++;
+        if (pos_ >= input_.size()) throw std::runtime_error("Unterminated string escape");
+        switch (input_[pos_]) {
+            case '"':  result += '"'; break;
+            case '\\': result += '\\'; break;
+            case '/':  result += '/'; break;
+            case 'b':  result += '\b'; break;
+            case 'f':  result += '\f'; break;
+            case 'n':  result += '\n'; break;
+            case 'r':  result += '\r'; break;
+            case 't':  result += '\t'; break;
+            case 'u': {
+                // Skip 4 hex digits (basic Unicode escape)
+                pos_++;
+                // Just skip \\uXXXX for now -- preset strings are ASCII
+                for (int i = 0; i < 4 && pos_ < input_.size(); i++) pos_++;
+                result += '?'; // Placeholder
+                break;
+            }
+            default:
+                result += input_[pos_];
+                break;
+        }
+    }
+
     JsonValue parseString() {
         expect('"');
         std::string result;
         while (pos_ < input_.size() && input_[pos_] != '"') {
             if (input_[pos_] == '\\') {
-                pos_++;
-                if (pos_ >= input_.size()) throw std::runtime_error("Unterminated string escape");
-                switch (input_[pos_]) {
-                    case '"':  result += '"'; break;
-                    case '\\': result += '\\'; break;
-                    case '/':  result += '/'; break;
-                    case 'b':  result += '\b'; break;
-                    case 'f':  result += '\f'; break;
-                    case 'n':  result += '\n'; break;
-                    case 'r':  result += '\r'; break;
-                    case 't':  result += '\t'; break;
-                    case 'u': {
-                        // Skip 4 hex digits (basic Unicode escape)
-                        pos_++;
-                        // Just skip \uXXXX for now -- preset strings are ASCII
-                        for (int i = 0; i < 4 && pos_ < input_.size(); i++) pos_++;
-                        result += '?'; // Placeholder
-                        break;
-                    }
-                    default:
-                        result += input_[pos_];
-                        break;
-                }
+                parseEscapeChar(result);
             } else {
                 result += input_[pos_];
             }

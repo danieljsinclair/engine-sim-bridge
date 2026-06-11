@@ -35,6 +35,11 @@ public:
 
 private:
     void processKeys(double dt);
+    bool processQuitAndThrottle(double dt);
+    void processGearAndIgnition();
+    void processDynoAndBrake();
+    void processSpeedControl();
+    void processMomentaryThrottle();
 
     std::unique_ptr<IKeyboardInput> keyboard_;
     IKeyActionTarget* target_;

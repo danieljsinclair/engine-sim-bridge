@@ -95,8 +95,11 @@ private:
     bool configureAudioFormat(const AudioStreamFormat& format);
     bool registerCallbackWithAudioUnit();
 
+    // Type alias for CoreAudio callback refCon to give semantic meaning to void*
+    using AudioRefCon = void*;
+
     static OSStatus coreAudioCallbackWrapper(
-        void* refCon,
+        AudioRefCon refCon,
         AudioUnitRenderActionFlags* actionFlags,
         const AudioTimeStamp* timeStamp,
         UInt32 busNumber,

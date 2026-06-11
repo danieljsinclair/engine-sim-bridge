@@ -347,7 +347,7 @@ bool CoreAudioHardwareProvider::registerCallbackWithAudioUnit() {
 }
 
 OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
-    void* refCon,
+    AudioRefCon refCon,
     AudioUnitRenderActionFlags* actionFlags,
     const AudioTimeStamp* timeStamp,
     UInt32 busNumber,
