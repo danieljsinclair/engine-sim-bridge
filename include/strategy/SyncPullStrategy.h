@@ -91,6 +91,7 @@ private:
                      int& framesWritten, int maxRetries);
 
     // render helpers
+    int renderChunked(float* dst, int framesToGenerate);
     bool attemptRender(float* dst, int offset, int framesNeeded, int32_t& framesWritten);
     void applyCrossfade(float* dst, int framesRendered);
     void fillRemainingSilence(float* dst, int framesRendered, int framesToGenerate, int remainingFrames);

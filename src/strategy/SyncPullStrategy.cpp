@@ -175,9 +175,19 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
 
     auto callbackStart = std::chrono::high_resolution_clock::now();
 
-    constexpr int MAX_RETRIES = 3;
-
     int framesToGenerate = buffer.frameCount;
+    int framesRendered = renderChunked(dst, framesToGenerate);
+
+    fillRemainingSilence(dst, framesRendered, framesToGenerate, framesToGenerate - framesRendered);
+    applyCrossfade(dst, framesRendered);
+    resetFrameRender(framesToGenerate, framesRendered, dst, callbackStart);
+    updateTelemetry();
+
+    return true;
+}
+
+int SyncPullStrategy::renderChunked(float* dst, int framesToGenerate) {
+    constexpr int MAX_RETRIES = 3;
     int framesRendered = 0;
     int remainingFrames = framesToGenerate;
 
@@ -185,26 +195,24 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
         int32_t framesWritten = 0;
         if (!attemptRender(dst, framesRendered, remainingFrames, framesWritten)) {
             EngineSimAudio::fillSilence(dst, framesToGenerate);
-            return true;
+            return framesRendered;
         }
 
         framesRendered += framesWritten;
         remainingFrames -= framesWritten;
 
-        bool gotPartial = (framesWritten > 0 && remainingFrames > 0);
-        if (gotPartial) {
+        if (framesWritten > 0 && remainingFrames > 0) {
             continue;
         }
 
-        bool needsRetry = (framesWritten == 0 && remainingFrames > 0);
-        if (needsRetry) {
+        if (framesWritten == 0 && remainingFrames > 0) {
             int32_t retryFrames = 0;
             bool retryOk = retryRender(dst, framesRendered, remainingFrames, retryFrames, MAX_RETRIES);
 
             if (!retryOk) {
                 logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed during retry, filling silence");
                 EngineSimAudio::fillSilence(dst, framesToGenerate);
-                return true;
+                return framesRendered;
             }
 
             if (retryFrames > 0) {
@@ -219,12 +227,7 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
         }
     }
 
-    fillRemainingSilence(dst, framesRendered, framesToGenerate, remainingFrames);
-    applyCrossfade(dst, framesRendered);
-    resetFrameRender(framesToGenerate, framesRendered, dst, callbackStart);
-    updateTelemetry();
-
-    return true;
+    return framesRendered;
 }
 
 void SyncPullStrategy::fillRemainingSilence(float* dst, int framesRendered, int framesToGenerate, int remainingFrames) {
