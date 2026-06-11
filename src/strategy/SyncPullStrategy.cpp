@@ -144,6 +144,24 @@ bool SyncPullStrategy::retryRender(float* dst, int offset, int framesNeeded,
     return true;
 }
 
+// ============================================================================
+// Render Helpers
+// ============================================================================
+
+bool SyncPullStrategy::attemptRender(float* dst, int offset, int framesNeeded,
+                                      int32_t& framesWritten) {
+    bool result = simulator_->renderOnDemand(
+        dst + (offset * 2),
+        framesNeeded,
+        &framesWritten
+    );
+
+    if (!result) {
+        logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed, filling silence");
+    }
+    return result;
+}
+
 bool SyncPullStrategy::render(AudioBufferView& buffer) {
     float* dst = buffer.asFloat();
     if (!dst) {
@@ -165,14 +183,7 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
 
     while (remainingFrames > 0 && framesRendered < framesToGenerate && !shuttingDown_.load()) {
         int32_t framesWritten = 0;
-        bool result = simulator_->renderOnDemand(
-            dst + (framesRendered * 2),
-            remainingFrames,
-            &framesWritten
-        );
-
-        if (!result) {
-            logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed, filling silence");
+        if (!attemptRender(dst, framesRendered, remainingFrames, framesWritten)) {
             EngineSimAudio::fillSilence(dst, framesToGenerate);
             return true;
         }
@@ -180,12 +191,13 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
         framesRendered += framesWritten;
         remainingFrames -= framesWritten;
 
-        if (framesWritten > 0 && framesWritten < remainingFrames + framesWritten) {
-            // Successfully got some frames but not all -- continue loop naturally
+        bool gotPartial = (framesWritten > 0 && remainingFrames > 0);
+        if (gotPartial) {
             continue;
         }
 
-        if (framesWritten == 0 && remainingFrames > 0) {
+        bool needsRetry = (framesWritten == 0 && remainingFrames > 0);
+        if (needsRetry) {
             int32_t retryFrames = 0;
             bool retryOk = retryRender(dst, framesRendered, remainingFrames, retryFrames, MAX_RETRIES);
 
