@@ -10,7 +10,7 @@
 #include <string>
 
 PresetLoadResult PresetDeserializer::deserialize(const json::JsonValue& root,
-                                                   const std::string& sourceName) {
+                                                   std::string_view sourceName) {
     PresetLoadResult result;
 
     // Preset name

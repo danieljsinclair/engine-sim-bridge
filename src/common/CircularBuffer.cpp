@@ -45,7 +45,7 @@ size_t CircularBuffer::calculateDistance(int write, int read) const {
     if (write >= read) {
         return static_cast<size_t>(write - read);
     }
-    return static_cast<size_t>(bufferCapacity_ - read + write);
+    return bufferCapacity_ - read + write;
 }
 
 size_t CircularBuffer::write(const float* samples, size_t frameCount) {
@@ -71,10 +71,10 @@ size_t CircularBuffer::write(const float* samples, size_t frameCount) {
         }
     } else {
         // Complex case: write spans buffer boundary
-        size_t firstSegment = static_cast<size_t>(bufferCapacity_ - writePtr);
+        size_t firstSegment = bufferCapacity_ - writePtr;
 
         // First segment: from current position to end of buffer
-        for (auto i = 0u; i < firstSegment; i++) {
+        for (size_t i = 0; i < firstSegment; i++) {
             buffer_[(writePtr + i) * 2] = samples[i * 2];
             buffer_[(writePtr + i) * 2 + 1] = samples[i * 2 + 1];
         }
@@ -117,10 +117,10 @@ size_t CircularBuffer::read(float* output, size_t frameCount) {
         }
     } else {
         // Complex case: read spans buffer boundary
-        size_t firstSegment = static_cast<size_t>(bufferCapacity_ - readPtr);
+        size_t firstSegment = bufferCapacity_ - readPtr;
 
         // First segment: from current position to end of buffer
-        for (auto i = 0u; i < firstSegment; i++) {
+        for (size_t i = 0; i < firstSegment; i++) {
             output[i * 2] = buffer_[(readPtr + i) * 2];
             output[i * 2 + 1] = buffer_[(readPtr + i) * 2 + 1];
         }
@@ -145,7 +145,7 @@ size_t CircularBuffer::readFromPosition(float* output, size_t frameCount, int po
         return 0;
     }
 
-    size_t toRead = std::min(frameCount, static_cast<size_t>(bufferCapacity_));
+    size_t toRead = std::min(frameCount, bufferCapacity_);
 
     // Handle wrap-around read from specific position
     if (position + static_cast<int>(toRead) <= static_cast<int>(bufferCapacity_)) {
@@ -156,10 +156,10 @@ size_t CircularBuffer::readFromPosition(float* output, size_t frameCount, int po
         }
     } else {
         // Complex case: read spans buffer boundary
-        size_t firstSegment = static_cast<size_t>(bufferCapacity_ - position);
+        size_t firstSegment = bufferCapacity_ - position;
 
         // First segment: from current position to end of buffer
-        for (auto i = 0u; i < firstSegment; i++) {
+        for (size_t i = 0; i < firstSegment; i++) {
             output[i * 2] = buffer_[(position + static_cast<int>(i)) * 2];
             output[i * 2 + 1] = buffer_[(position + static_cast<int>(i)) * 2 + 1];
         }

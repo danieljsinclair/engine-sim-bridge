@@ -11,6 +11,7 @@
 #define JSON_PARSER_H
 
 #include <string>
+#include <string_view>
 #include <vector>
 #include <map>
 #include <stdexcept>
@@ -77,7 +78,7 @@ public:
     static JsonValue makeNull();
     static JsonValue makeBool(bool v);
     static JsonValue makeNumber(double v);
-    static JsonValue makeString(const std::string& v);
+    static JsonValue makeString(std::string_view v);
     static JsonValue makeArray();
     static JsonValue makeObject();
 

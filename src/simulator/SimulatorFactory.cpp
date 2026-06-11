@@ -26,9 +26,10 @@
 #include <memory>
 #include <algorithm>
 #include <filesystem>
+#include <string_view>
 
 static void initSimulator(Simulator* sim, const ISimulatorConfig& config);
-static bool endsWith(const std::string& str, const std::string& suffix);
+static bool endsWith(std::string_view str, std::string_view suffix);
 
 namespace {
 
@@ -170,7 +171,7 @@ static void initSimulator(Simulator* sim, const ISimulatorConfig& config) {
     sim->setTargetSynthesizerLatency(config.targetSynthesizerLatency);
 }
 
-static bool endsWith(const std::string& str, const std::string& suffix) {
+static bool endsWith(std::string_view str, std::string_view suffix) {
     if (suffix.size() > str.size()) return false;
     return std::equal(suffix.rbegin(), suffix.rend(), str.rbegin(),
         [](char a, char b) { return tolower(a) == tolower(b); });

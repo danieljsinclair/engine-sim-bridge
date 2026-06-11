@@ -55,7 +55,7 @@ size_t JsonValue::size() const {
 JsonValue JsonValue::makeNull() { JsonValue v; v.type_ = JsonType::Null; return v; }
 JsonValue JsonValue::makeBool(bool v) { JsonValue r; r.type_ = JsonType::Bool; r.boolVal_ = v; return r; }
 JsonValue JsonValue::makeNumber(double v) { JsonValue r; r.type_ = JsonType::Number; r.numVal_ = v; return r; }
-JsonValue JsonValue::makeString(const std::string& v) { JsonValue r; r.type_ = JsonType::String; r.strVal_ = v; return r; }
+JsonValue JsonValue::makeString(std::string_view v) { JsonValue r; r.type_ = JsonType::String; r.strVal_ = v; return r; }
 JsonValue JsonValue::makeArray() { JsonValue r; r.type_ = JsonType::Array; return r; }
 JsonValue JsonValue::makeObject() { JsonValue r; r.type_ = JsonType::Object; return r; }
 
