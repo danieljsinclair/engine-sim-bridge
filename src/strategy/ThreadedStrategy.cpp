@@ -279,9 +279,8 @@ bool ThreadedStrategy::AddFrames(
         return false;
     }
 
-    size_t framesWritten = circularBuffer_.write(buffer, frameCount);
-
-    if (framesWritten != static_cast<size_t>(frameCount)) {
+    if (size_t framesWritten = circularBuffer_.write(buffer, frameCount);
+        framesWritten != static_cast<size_t>(frameCount)) {
         logger_->warning(LogMask::AUDIO, "ThreadedStrategy::AddFrames: Only wrote %zu/%d frames",
                       framesWritten, frameCount);
     }

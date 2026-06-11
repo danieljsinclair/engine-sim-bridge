@@ -76,10 +76,10 @@ bool AutomaticGearbox::evaluateKickdown(double throttleFraction, double speedKmh
         return false;
     }
 
-    double downInterval = profile_.downshiftMinIntervalS > 0.0
-        ? profile_.downshiftMinIntervalS
-        : profile_.minShiftIntervalS;
-    if (lastShiftDirection_ != -1 || timeSinceLastShiftS_ >= downInterval) {
+    if (double downInterval = profile_.downshiftMinIntervalS > 0.0
+            ? profile_.downshiftMinIntervalS
+            : profile_.minShiftIntervalS;
+        lastShiftDirection_ != -1 || timeSinceLastShiftS_ >= downInterval) {
         currentGear_ = safeGear;
         targetGear_ = safeGear;
         requestsShift_ = true;
@@ -111,10 +111,9 @@ void AutomaticGearbox::evaluateUpshift(double speedKmh, double smoothedThrottle,
     double upInterval = profile_.upshiftMinIntervalS > 0.0
         ? profile_.upshiftMinIntervalS
         : profile_.minShiftIntervalS;
-    bool canUpshift = !engineBrakingActive && !tipBlocksUpshift_ &&
-        (lastShiftDirection_ != 1 || timeSinceLastShiftS_ >= upInterval);
-
-    if (!canUpshift || requestsShift_) {
+    if (bool canUpshift = !engineBrakingActive && !tipBlocksUpshift_ &&
+            (lastShiftDirection_ != 1 || timeSinceLastShiftS_ >= upInterval);
+        !canUpshift || requestsShift_) {
         return;
     }
 

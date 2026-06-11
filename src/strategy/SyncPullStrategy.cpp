@@ -126,13 +126,11 @@ bool SyncPullStrategy::retryRender(float* dst, int offset, int framesNeeded,
     int retryCount = 0;
     while (retryCount < maxRetries && !shuttingDown_.load()) {
         simulator_->update(1.0 / sampleRate_);
-        bool result = simulator_->renderOnDemand(
-            dst + (offset * 2),
-            framesNeeded,
-            &framesWritten
-        );
-
-        if (!result) {
+        if (auto result = simulator_->renderOnDemand(
+                dst + (offset * 2),
+                framesNeeded,
+                &framesWritten
+            ); !result) {
             return false;
         }
 
@@ -207,9 +205,7 @@ int SyncPullStrategy::renderChunked(float* dst, int framesToGenerate) {
 
         if (framesWritten == 0 && remainingFrames > 0) {
             int32_t retryFrames = 0;
-            bool retryOk = retryRender(dst, framesRendered, remainingFrames, retryFrames, MAX_RETRIES);
-
-            if (!retryOk) {
+            if (bool retryOk = retryRender(dst, framesRendered, remainingFrames, retryFrames, MAX_RETRIES); !retryOk) {
                 logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed during retry, filling silence");
                 EngineSimAudio::fillSilence(dst, framesToGenerate);
                 return framesRendered;
