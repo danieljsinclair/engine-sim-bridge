@@ -5,6 +5,7 @@
 #include "preset/TransmissionDeserializer.h"
 
 #include "common/JsonParser.h"
+#include "common/PresetExceptions.h"
 
 #include <string>
 
@@ -35,7 +36,7 @@ PresetLoadResult PresetDeserializer::deserialize(const json::JsonValue& root,
     if (root.has("vehicle") && root["vehicle"].isObject()) {
         try {
             result.vehicle = VehicleDeserializer::deserialize(root["vehicle"], "vehicle");
-        } catch (const std::exception& e) {
+        } catch (const PresetException& e) {
             result.error = std::string("Vehicle deserialization failed: ") + e.what();
             return result;
         }
@@ -58,7 +59,7 @@ PresetLoadResult PresetDeserializer::deserialize(const json::JsonValue& root,
             if (transJson.has("clutchPressure")) {
                 result.initialClutchPressure = transJson["clutchPressure"].asNumber();
             }
-        } catch (const std::exception& e) {
+        } catch (const PresetException& e) {
             result.error = std::string("Transmission deserialization failed: ") + e.what();
             return result;
         }

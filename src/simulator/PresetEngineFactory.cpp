@@ -3,6 +3,7 @@
 #include "simulator/PresetEngineFactory.h"
 #include "preset/PresetDeserializer.h"
 #include "common/JsonParser.h"
+#include "common/PresetExceptions.h"
 
 #include "engine.h"
 #include "exhaust_system.h"
@@ -62,7 +63,10 @@ PresetLoadResult PresetEngineFactory::loadFromString(const std::string& jsonCont
     try {
         JsonValue root = json::parse(jsonContent);
         result = PresetDeserializer::deserialize(root, sourceName);
-    } catch (const std::exception& e) {
+    } catch (const PresetException& e) {
+        result.error = std::string("Preset error: ") + e.what();
+        return result;
+    } catch (const std::runtime_error& e) {
         result.error = std::string("JSON parse error: ") + e.what();
         return result;
     }

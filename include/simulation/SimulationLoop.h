@@ -10,6 +10,7 @@
 #include "simulator/EngineSimTypes.h"
 #include "simulation/CrankingController.h"
 #include "io/IInputProvider.h"
+#include "session/ISimulatorSession.h"
 #include <atomic>
 #include <string>
 #include <memory>
@@ -61,23 +62,30 @@ struct SimulationConfig {
 };
 
 // ============================================================================
+// SimulationDependencies - Groups infrastructure dependencies for simulation.
+// ============================================================================
+
+struct SimulationDependencies {
+    ISimulator* simulator = nullptr;
+    const SimulationConfig* config = nullptr;
+    IAudioBuffer* audioBuffer = nullptr;
+    CrankingController* crankingController = nullptr;
+    const std::atomic<bool>* stopRequested = nullptr;
+    input::IInputProvider* inputProvider = nullptr;
+    presentation::IPresentation* presentation = nullptr;
+    telemetry::ITelemetryWriter* telemetryWriter = nullptr;
+    telemetry::ITelemetryReader* telemetryReader = nullptr;
+    ILogging* logger = nullptr;
+};
+
+// ============================================================================
 // SimulationLoop - Main tick loop with injected dependencies
 // Dependencies are set once at construction; run() needs no parameters.
 // ============================================================================
 
 class SimulationLoop {
-public: 
-  SimulationLoop(
-    ISimulator& simulator,
-    const SimulationConfig& config,
-    IAudioBuffer& audioBuffer,
-    CrankingController& crankingController,
-    const std::atomic<bool>& stopRequested,
-    input::IInputProvider* inputProvider,
-    presentation::IPresentation* presentation,
-    telemetry::ITelemetryWriter* telemetryWriter,
-    telemetry::ITelemetryReader* telemetryReader,
-    ILogging* logger);
+public:
+    explicit SimulationLoop(const SimulationDependencies& deps);
 
     // Run the loop until stopRequested or duration expires.
     // Returns EXIT_BUT_CONTINUE_NEXT on preset cycle, 0 on normal exit.
@@ -127,16 +135,22 @@ private:
 // Throws std::runtime_error on initialization failure (fail-fast).
 // ============================================================================
 
-std::unique_ptr<ISimulatorSession> createSession(
-    const SimulationConfig& config,
-    const std::string& scriptPath,
-    std::unique_ptr<ISimulator> simulator,
-    IAudioBuffer* audioBuffer,
-    std::unique_ptr<ISimulatorSession> existingSession = nullptr,
-    input::IInputProvider* inputProvider = nullptr,
-    presentation::IPresentation* presentation = nullptr,
-    telemetry::ITelemetryWriter* telemetryWriter = nullptr,
-    telemetry::ITelemetryReader* telemetryReader = nullptr,
-    ILogging* logger = nullptr);
+struct SessionConfig {
+    const SimulationConfig& config;
+    const std::string& scriptPath;
+    std::unique_ptr<ISimulator> simulator = nullptr;
+    IAudioBuffer* audioBuffer = nullptr;
+    std::unique_ptr<ISimulatorSession> existingSession = nullptr;
+    input::IInputProvider* inputProvider = nullptr;
+    presentation::IPresentation* presentation = nullptr;
+    telemetry::ITelemetryWriter* telemetryWriter = nullptr;
+    telemetry::ITelemetryReader* telemetryReader = nullptr;
+    ILogging* logger = nullptr;
+
+    SessionConfig(const SimulationConfig& cfg, const std::string& path)
+        : config(cfg), scriptPath(path) {}
+};
+
+std::unique_ptr<ISimulatorSession> createSession(const SessionConfig& config);
 
 #endif // SIMULATION_LOOP_H

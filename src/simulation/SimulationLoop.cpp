@@ -267,22 +267,27 @@ void cleanupSimulation(IAudioHardwareProvider* hardwareProvider, ISimulator& sim
 // Composes SimulationLoop for the main tick execution.
 // ============================================================================
 
+/// Session-owned resources — groups the unique ownership arguments for session creation.
+struct SessionResources {
+    SimulationConfig config;
+    std::unique_ptr<ISimulator> simulator;
+    std::unique_ptr<IAudioHardwareProvider> hardwareProvider;
+};
+
 class SimulatorSession : public ISimulatorSession {
 public:
     SimulatorSession(
-        const SimulationConfig& config,
-        std::unique_ptr<ISimulator> simulator,
+        SessionResources resources,
         IAudioBuffer* audioBuffer,
-        std::unique_ptr<IAudioHardwareProvider> hardwareProvider,
         input::IInputProvider* inputProvider,
         presentation::IPresentation* presentation,
         telemetry::ITelemetryWriter* telemetryWriter,
         telemetry::ITelemetryReader* telemetryReader,
         ILogging* logger)
-        : config_(config)
-        , simulator_(std::move(simulator))
+        : config_(std::move(resources.config))
+        , simulator_(std::move(resources.simulator))
         , audioBuffer_(audioBuffer)
-        , hardwareProvider_(std::move(hardwareProvider))
+        , hardwareProvider_(std::move(resources.hardwareProvider))
         , inputProvider_(inputProvider)
         , presentation_(presentation)
         , telemetryWriter_(telemetryWriter)
@@ -313,11 +318,18 @@ public:
         }
 
         // Create loop with injected dependencies — no parameter plumbing
-        SimulationLoop loop(
-            *simulator_, config_, *audioBuffer_, crankingController_,
-            stopRequested_,
-            inputProvider_, presentation_,
-            telemetryWriter_, telemetryReader_, logger_);
+        SimulationDependencies loopDeps;
+        loopDeps.simulator = simulator_.get();
+        loopDeps.config = &config_;
+        loopDeps.audioBuffer = audioBuffer_;
+        loopDeps.crankingController = &crankingController_;
+        loopDeps.stopRequested = &stopRequested_;
+        loopDeps.inputProvider = inputProvider_;
+        loopDeps.presentation = presentation_;
+        loopDeps.telemetryWriter = telemetryWriter_;
+        loopDeps.telemetryReader = telemetryReader_;
+        loopDeps.logger = logger_;
+        SimulationLoop loop(loopDeps);
 
         int exitCode = loop.run();
 
@@ -435,27 +447,17 @@ private:
 // SimulationLoop - Implementation
 // ============================================================================
 
-SimulationLoop::SimulationLoop(
-    ISimulator& simulator,
-    const SimulationConfig& config,
-    IAudioBuffer& audioBuffer,
-    CrankingController& crankingController,
-    const std::atomic<bool>& stopRequested,
-    input::IInputProvider* inputProvider,
-    presentation::IPresentation* presentation,
-    telemetry::ITelemetryWriter* telemetryWriter,
-    telemetry::ITelemetryReader* telemetryReader,
-    ILogging* logger)
-        : simulator_(simulator)
-        , config_(config)
-        , audioBuffer_(audioBuffer)
-        , crankingController_(crankingController)
-        , stopRequested_(stopRequested)
-        , inputProvider_(inputProvider)
-        , presentation_(presentation)
-        , telemetryWriter_(telemetryWriter)
-        , telemetryReader_(telemetryReader)
-        , logger_(logger)
+SimulationLoop::SimulationLoop(const SimulationDependencies& deps)
+        : simulator_(*deps.simulator)
+        , config_(*deps.config)
+        , audioBuffer_(*deps.audioBuffer)
+        , crankingController_(*deps.crankingController)
+        , stopRequested_(*deps.stopRequested)
+        , inputProvider_(deps.inputProvider)
+        , presentation_(deps.presentation)
+        , telemetryWriter_(deps.telemetryWriter)
+        , telemetryReader_(deps.telemetryReader)
+        , logger_(deps.logger)
     {}
 
 int SimulationLoop::run() {
@@ -508,36 +510,30 @@ int SimulationLoop::run() {
 // Session factory - GLOBAL scope
 // ============================================================================
 
-std::unique_ptr<ISimulatorSession> createSession(
-    const SimulationConfig& config,
-    const std::string& scriptPath,
-    std::unique_ptr<ISimulator> simulator,
-    IAudioBuffer* audioBuffer,
-    std::unique_ptr<ISimulatorSession> existingSession,
-    input::IInputProvider* inputProvider,
-    presentation::IPresentation* presentation,
-    telemetry::ITelemetryWriter* telemetryWriter,
-    telemetry::ITelemetryReader* telemetryReader,
-    ILogging* logger)
+std::unique_ptr<ISimulatorSession> createSession(SessionConfig cfg)
 {
+    const SimulationConfig& config = cfg.config;
+    const std::string& scriptPath = cfg.scriptPath;
+
     // Hot-swap path: caller passed an existing session — swap the simulator within it
-    if (existingSession) {
-        ASSERT(simulator, "simulator must be provided for hot-swap");
-        if (auto* session = static_cast<SimulatorSession*>(existingSession.get()); !session || !session->handoverSession(scriptPath, std::move(simulator))) {
+    if (cfg.existingSession) {
+        ASSERT(cfg.simulator, "simulator must be provided for hot-swap");
+        auto localSession = std::move(cfg.existingSession);
+        if (auto* session = static_cast<SimulatorSession*>(localSession.get()); !session || !session->handoverSession(scriptPath, std::move(cfg.simulator))) {
             throw SimulatorException("Failed to swap preset within existing session: " + scriptPath);
         }
-        return existingSession;
+        return localSession;
     }
 
     // First-run path: create a new session with audio hardware
-    ASSERT(simulator, "simulator must be provided");
-    ASSERT(audioBuffer, "audioBuffer must be provided");
+    ASSERT(cfg.simulator, "simulator must be provided");
+    ASSERT(cfg.audioBuffer, "audioBuffer must be provided");
     ASSERT(config.engineConfig.sampleRate > 0, "config.sampleRate must be set");
     ASSERT(config.updateInterval() > 0.0, "config.updateInterval must be set");
     ASSERT(config.framesPerUpdate() > 0, "config.framesPerUpdate must be set");
 
     // Initialize the simulator
-    initializeSimulator(*simulator, config, logger, telemetryWriter, &config.engineConfig);
+    initializeSimulator(*cfg.simulator, config, cfg.logger, cfg.telemetryWriter, &config.engineConfig);
     SimulationConfig sessionConfig = config;
     sessionConfig.configPath = scriptPath;
 
@@ -545,21 +541,24 @@ std::unique_ptr<ISimulatorSession> createSession(
     AudioBufferConfig strategyConfig;
     strategyConfig.channels = EngineSimAudio::STEREO;
     strategyConfig.synthLatency = config.engineConfig.targetSynthesizerLatency;
-    audioBuffer->initialize(strategyConfig, config.sampleRate());
+    cfg.audioBuffer->initialize(strategyConfig, config.sampleRate());
 
-    auto callback = [audioBuffer](AudioBufferView& buffer) -> int {
+    auto callback = [audioBuffer = cfg.audioBuffer](AudioBufferView& buffer) -> int {
         return audioRenderCallback(audioBuffer, buffer);
     };
-    auto hardwareProvider = createHardwareProvider(config.sampleRate(), callback, logger);
+    auto hardwareProvider = createHardwareProvider(config.sampleRate(), callback, cfg.logger);
 
-    logger->info(LogMask::AUDIO, "Audio initialized: strategy=%s, sr=%d", audioBuffer->getName(), config.sampleRate());
+    cfg.logger->info(LogMask::AUDIO, "Audio initialized: strategy=%s, sr=%d", cfg.audioBuffer->getName(), config.sampleRate());
+
+    SessionResources resources;
+    resources.config = std::move(sessionConfig);
+    resources.simulator = std::move(cfg.simulator);
+    resources.hardwareProvider = std::move(hardwareProvider);
 
     return std::make_unique<SimulatorSession>(
-        sessionConfig,
-        std::move(simulator),
-        audioBuffer,
-        std::move(hardwareProvider),
-        inputProvider, presentation,
-        telemetryWriter, telemetryReader,
-        logger);
+        std::move(resources),
+        cfg.audioBuffer,
+        cfg.inputProvider, cfg.presentation,
+        cfg.telemetryWriter, cfg.telemetryReader,
+        cfg.logger);
 }// GLOBAL scope — session factory, no access to SimulationLoop members

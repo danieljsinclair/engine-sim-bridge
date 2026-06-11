@@ -138,37 +138,35 @@ void EngineDeserializer::deserializeIntakes(const JsonValue& json, const Engine*
     }
 }
 
-void EngineDeserializer::deserializeCylinders(const JsonValue& bankJson, CylinderBank* bank,
-        const Engine* engine, Crankshaft* mainCrank, int /*bankIdx*/,
-        int globalCylIdx, int cylCount, const std::string& ctx, size_t bankIndex) {
-    const JsonValue& cylinders = bankJson["cylinders"];
+void EngineDeserializer::deserializeCylinders(const CylinderDeserializationParams& p) {
+    const JsonValue& cylinders = (*p.bankJson)["cylinders"];
     if (!cylinders.isArray()) return;
 
     for (size_t ci = 0; ci < cylinders.size() &&
-         ci < static_cast<size_t>(cylCount); ci++) {
+         ci < static_cast<size_t>(p.cylCount); ci++) {
         const JsonValue& cylJson = cylinders[ci];
-        int pidx = globalCylIdx + static_cast<int>(ci);
-        if (pidx >= engine->getCylinderCount()) break;
+        int pidx = p.globalCylIdx + static_cast<int>(ci);
+        if (pidx >= p.engine->getCylinderCount()) break;
 
-        ConnectingRod* rod = engine->getConnectingRod(pidx);
+        ConnectingRod* rod = p.engine->getConnectingRod(pidx);
         int journalIdx = cylJson.has("rodJournalIndex")
             ? cylJson["rodJournalIndex"].asInt() : pidx;
 
         if (cylJson.has("connectingRod")) {
             ConnectingRodDeserializer::deserialize(
-                cylJson["connectingRod"], rod, mainCrank,
-                engine->getPiston(pidx), journalIdx,
-                ctx + ".cylinderBanks[" + std::to_string(bankIndex) +
+                cylJson["connectingRod"], rod, p.mainCrank,
+                p.engine->getPiston(pidx), journalIdx,
+                *p.ctx + ".cylinderBanks[" + std::to_string(p.bankIndex) +
                 "].cylinders[" + std::to_string(ci) + "].connectingRod");
         }
 
-        Piston* piston = engine->getPiston(pidx);
+        Piston* piston = p.engine->getPiston(pidx);
         Piston::Parameters pParams;
-        pParams.Bank = bank;
+        pParams.Bank = p.bank;
         pParams.Rod = rod;
         pParams.CylinderIndex = static_cast<int>(ci);
 
-        const std::string cylCtx = ctx + ".cylinderBanks[" + std::to_string(bankIndex) +
+        const std::string cylCtx = *p.ctx + ".cylinderBanks[" + std::to_string(p.bankIndex) +
                                    "].cylinders[" + std::to_string(ci) + "]";
 
         if (!cylJson.has("blowbyK")) {
@@ -216,7 +214,17 @@ void EngineDeserializer::deserializeCylinderBanks(const JsonValue& json, Engine*
             ctx + ".cylinderBanks[" + std::to_string(bi) + "]");
 
         int cylCount = bank->getCylinderCount();
-        deserializeCylinders(bankJson, bank, engine, mainCrank, bankIdx, globalCylIdx, cylCount, ctx, bi);
+        CylinderDeserializationParams cylParams;
+        cylParams.bankJson = &bankJson;
+        cylParams.bank = bank;
+        cylParams.engine = engine;
+        cylParams.mainCrank = mainCrank;
+        cylParams.bankIdx = bankIdx;
+        cylParams.globalCylIdx = globalCylIdx;
+        cylParams.cylCount = cylCount;
+        cylParams.ctx = &ctx;
+        cylParams.bankIndex = bi;
+        deserializeCylinders(cylParams);
 
         if (bankJson.has("cylinderHead")) {
             CylinderHeadDeserializer::deserialize(

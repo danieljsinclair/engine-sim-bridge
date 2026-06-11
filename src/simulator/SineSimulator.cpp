@@ -9,6 +9,7 @@
 #include "simulator/SimulatorInitHelpers.h"
 #include "simulator/EngineSimTypes.h"
 #include "synthesizer.h"
+#include <array>
 #include <cmath>
 #include <stdexcept>
 
@@ -36,8 +37,8 @@ void SineSimulator::loadSimulation(Engine* engine, Vehicle* vehicle, Transmissio
     // Unit impulse response required to prevent null deref:
     // ConvolutionFilter::f() dereferences m_shiftRegister which is nullptr without this init,
     // even though convolution=0.0f below disables convolution processing.
-    static const int16_t kUnitImpulse[1] = { INT16_MAX };
-    synthesizer().initializeImpulseResponse(kUnitImpulse, 1, 1.0f, 0);
+    static const std::array<int16_t, 1> kUnitImpulse = { INT16_MAX };
+    synthesizer().initializeImpulseResponse(kUnitImpulse.data(), 1, 1.0f, 0);
 
     // Disable all noise and convolution — override defaults (airNoise=1.0,
     // inputSampleNoise=0.5, dF_F_mix=0.01, convolution=1.0f) that add unwanted
@@ -51,12 +52,17 @@ void SineSimulator::loadSimulation(Engine* engine, Vehicle* vehicle, Transmissio
     synthesizer().setAudioParameters(p);
 
     // Shared physics wiring — DRY via SimulatorInitHelpers
-    SimulatorInitHelpers::wirePhysics(
-        activeEngine, activeTransmission, activeVehicle,
-        m_vehicleMass, m_system,
-        m_dyno, m_starterMotor,
-        m_exhaustFlowStagingBuffer,
-        activeEngine->getExhaustSystemCount());
+    SimulatorInitHelpers::PhysicsWiringParams wiringParams;
+    wiringParams.engine = activeEngine;
+    wiringParams.transmission = activeTransmission;
+    wiringParams.vehicle = activeVehicle;
+    wiringParams.vehicleMass = &m_vehicleMass;
+    wiringParams.system = m_system;
+    wiringParams.dyno = &m_dyno;
+    wiringParams.starterMotor = &m_starterMotor;
+    wiringParams.outStagingBuffer = &m_exhaustFlowStagingBuffer;
+    wiringParams.stagingCount = activeEngine->getExhaustSystemCount();
+    SimulatorInitHelpers::wirePhysics(wiringParams);
 }
 
 void SineSimulator::destroy() {

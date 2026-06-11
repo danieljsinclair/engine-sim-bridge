@@ -5,6 +5,7 @@
 
 #include "simulator/PresetEngineFactory.h"
 #include "simulator/simulator.h"
+#include <array>
 #include <cstdint>
 
 // Apply preset-specific fix: generate unit impulse responses during preset load
@@ -22,12 +23,12 @@ void applyPresetEngineFactoryUnitImpulseFix(PistonEngineSimulator* pistonSim) {
 
     // Unit impulse: [INT16_MAX] represents a single sample at full scale
     // This creates an identity transform in the convolution filter (like SineSimulator does)
-    static const int16_t kUnitImpulse[1] = { INT16_MAX };
+    static const std::array<int16_t, 1> kUnitImpulse = { INT16_MAX };
 
     // Initialize each exhaust system's convolution filter with unit impulse
     for (int i = 0; i < exhaustCount; ++i) {
         pistonSim->synthesizer().initializeImpulseResponse(
-            kUnitImpulse,
+            kUnitImpulse.data(),
             1,                       // 1 sample
             1.0f,                     // full volume
             i                           // exhaust index
