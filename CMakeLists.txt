@@ -9,6 +9,12 @@ endif()
 
 project(engine-sim-bridge VERSION 1.0.0 LANGUAGES C CXX)
 
+option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
+if(ENABLE_COVERAGE)
+    add_compile_options(--coverage -g)
+    add_link_options(--coverage)
+endif()
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_CXX_STANDARD 17)
