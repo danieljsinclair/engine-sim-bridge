@@ -77,7 +77,7 @@ void SimulationLoop::updatePresentation(
     state.controls = presentation::builders::buildControlState(input, crankingState);
     state.audio = presentation::builders::buildAudioState(timing, telemetryReader_, audioBuffer_, config_, tickTime, simulator_);
     state.presetShortName = simulator_.getName() ? simulator_.getName() : "";
-    presentation_->ShowEngineState(state);
+    presentation_->ShowSimulatorStates(state);
 }
 
 // ============================================================================

@@ -46,6 +46,10 @@ struct EngineState {
         double brakeLevel = 0.0;
         int gearSelector = 0;
         bool gearAutoMode = false;
+        // Commanded road-speed target (km/h) from the ','/'.' keys. Negative
+        // sentinel = "no speed commanded". Surfaced so it is visible in neutral
+        // where the vehicle speed readout otherwise shows physics only.
+        double commandedSpeedKmh = -1.0;
     } controls;
 
     // Audio + timing diagnostics (observability only)
@@ -116,7 +120,7 @@ public:
     // Output Methods
     // ========================================================================
 
-    virtual void ShowEngineState(const EngineState& state) = 0;
+    virtual void ShowSimulatorStates(const EngineState& state) = 0;
     virtual void ShowMessage(const std::string& message) = 0;
     virtual void ShowError(const std::string& error) = 0;
     virtual void ShowProgress(double currentTime, double duration) = 0;

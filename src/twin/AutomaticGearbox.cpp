@@ -11,7 +11,43 @@ AutomaticGearbox::AutomaticGearbox(const IceVehicleProfile& profile)
     : profile_(profile) {
 }
 
+bool AutomaticGearbox::isShifterInDrive() const {
+    return selector_ == bridge::GearSelector::DRIVE;
+}
+
 void AutomaticGearbox::update(double dt, double speedKmh, double throttleFraction) {
+    // Legacy entry point: no torque signal, default selector already set.
+    drivetrainTorqueNm_ = 0.0;
+    runShiftLogic(dt, speedKmh, throttleFraction);
+}
+
+void AutomaticGearbox::update(double dt, double speedKmh, double throttleFraction,
+                              double drivetrainTorqueNm) {
+    drivetrainTorqueNm_ = drivetrainTorqueNm;
+
+    // AC6: clutch-out positions hold the gear and never request a shift.
+    if (!isShifterInDrive()) {
+        // Keep throttle-smoothing/timers consistent so re-engaging DRIVE is
+        // well-behaved, but emit no shift decision.
+        throttleFraction = std::clamp(throttleFraction, 0.0, 1.0);
+        timeSinceLastShiftS_ += dt;
+        double tau = profile_.throttleSmoothingTauMs / 1000.0;
+        double alpha = dt / (tau + dt);
+        if (smoothedThrottle_ < 0.0) smoothedThrottle_ = throttleFraction;
+        else smoothedThrottle_ += alpha * (throttleFraction - smoothedThrottle_);
+        previousThrottle_ = throttleFraction;
+        requestsShift_ = false;
+        targetGear_ = currentGear_;
+        kickdownActive_ = false;
+        tipBlocksUpshift_ = false;
+        hadPreviousThrottle_ = true;
+        return;
+    }
+
+    runShiftLogic(dt, speedKmh, throttleFraction);
+}
+
+void AutomaticGearbox::runShiftLogic(double dt, double speedKmh, double throttleFraction) {
     throttleFraction = std::clamp(throttleFraction, 0.0, 1.0);
     timeSinceLastShiftS_ += dt;
 
@@ -85,6 +121,38 @@ void AutomaticGearbox::update(double dt, double speedKmh, double throttleFractio
                 throttleDeltaHistory_ = 0.0;
                 throttleDeltaTimeS_ = 0.0;
                 return;
+            }
+        }
+    }
+
+    // Torque-driven downshift (Virtual ICE Twin spec, AC4): sustained high
+    // drivetrain torque (load) pulls a downshift even without a throttle spike
+    // — the earliest auto boxes worked on torque alone. Require a few
+    // consecutive frames above the high-load band so transient spikes don't
+    // trigger a shift, and gate by the downshift interval for hysteresis.
+    if (currentGear_ > 1) {
+        if (drivetrainTorqueNm_ >= highLoadTorqueThresholdNm_) {
+            ++torqueLoadBandStableFrames_;
+        } else if (drivetrainTorqueNm_ <= lowLoadTorqueThresholdNm_) {
+            torqueLoadBandStableFrames_ = 0;
+        }
+        // Sustained high load: demand a lower gear if engine speed allows it.
+        if (torqueLoadBandStableFrames_ >= 3 && !requestsShift_) {
+            int safeGear = findSafeGear(speedKmh, currentGear_ - 1);
+            if (safeGear < currentGear_) {
+                double downInterval = profile_.downshiftMinIntervalS > 0.0
+                    ? profile_.downshiftMinIntervalS
+                    : profile_.minShiftIntervalS;
+                if (lastShiftDirection_ != -1 || timeSinceLastShiftS_ >= downInterval) {
+                    currentGear_ = safeGear;
+                    targetGear_ = safeGear;
+                    requestsShift_ = true;
+                    hasShiftedBefore_ = true;
+                    lastShiftDirection_ = -1;
+                    timeSinceLastShiftS_ = 0.0;
+                    torqueLoadBandStableFrames_ = 0;
+                    return;
+                }
             }
         }
     }

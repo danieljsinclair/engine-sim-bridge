@@ -343,6 +343,7 @@ if(BUILD_BRIDGE_TESTS)
         test/SineWaveRegressionTests.cpp
         test/twin/SpeedRpmConversionTest.cpp
         test/twin/RedlineClampAndUpshiftTest.cpp
+        test/simulation/CommandedSpeedDisplayTest.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -504,6 +505,7 @@ if(BUILD_BRIDGE_TESTS)
     # Twin gearbox tests - tests for AutomaticGearbox
     add_executable(twin_gearbox_tests
         test/twin/AutomaticGearboxTest.cpp
+        test/twin/AutoGearboxShiftLogicTest.cpp
     )
     target_include_directories(twin_gearbox_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
