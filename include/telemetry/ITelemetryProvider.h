@@ -129,47 +129,47 @@ public:
 
 private:
     // Per-concern atomic sub-structs mirror the ISP structs.
-    // RelaxedAtomic wraps std::atomic with memory_order_relaxed to avoid
-    // unnecessary memory barriers on ARM for diagnostic counters.
+    // RelaxedDouble/Int/Bool use memory_order_relaxed internally
+    // (implementation in .cpp) to avoid unnecessary barriers on ARM.
     struct AtomicEngineState {
-        RelaxedAtomic<double> currentRPM{0.0};
-        RelaxedAtomic<double> currentLoad{0.0};
-        RelaxedAtomic<double> exhaustFlow{0.0};
-        RelaxedAtomic<double> manifoldPressure{0.0};
-        RelaxedAtomic<int32_t> activeChannels{0};
-        RelaxedAtomic<int32_t> gear{0};
-        RelaxedAtomic<double> speedMph{0.0};
-        RelaxedAtomic<int> enginePhase{0};
+        RelaxedDouble currentRPM{0.0};
+        RelaxedDouble currentLoad{0.0};
+        RelaxedDouble exhaustFlow{0.0};
+        RelaxedDouble manifoldPressure{0.0};
+        RelaxedInt activeChannels{0};
+        RelaxedInt gear{0};
+        RelaxedDouble speedMph{0.0};
+        RelaxedInt enginePhase{0};
     };
 
     struct AtomicFramePerformance {
-        RelaxedAtomic<double> processingTimeMs{0.0};
+        RelaxedDouble processingTimeMs{0.0};
     };
 
     struct AtomicAudioDiagnostics {
-        RelaxedAtomic<int32_t> underrunCount{0};
-        RelaxedAtomic<double> bufferHealthPct{0.0};
+        RelaxedInt underrunCount{0};
+        RelaxedDouble bufferHealthPct{0.0};
     };
 
     struct AtomicAudioTiming {
-        RelaxedAtomic<double> renderMs{0.0};
-        RelaxedAtomic<double> headroomMs{0.0};
-        RelaxedAtomic<double> budgetPct{0.0};
-        RelaxedAtomic<int32_t> framesRequested{0};
-        RelaxedAtomic<int32_t> framesRendered{0};
-        RelaxedAtomic<double> callbackRateHz{0.0};
-        RelaxedAtomic<double> generatingRateFps{0.0};
-        RelaxedAtomic<double> trendPct{0.0};
+        RelaxedDouble renderMs{0.0};
+        RelaxedDouble headroomMs{0.0};
+        RelaxedDouble budgetPct{0.0};
+        RelaxedInt framesRequested{0};
+        RelaxedInt framesRendered{0};
+        RelaxedDouble callbackRateHz{0.0};
+        RelaxedDouble generatingRateFps{0.0};
+        RelaxedDouble trendPct{0.0};
     };
 
     struct AtomicVehicleInputs {
-        RelaxedAtomic<double> throttlePosition{0.0};
-        RelaxedAtomic<bool> ignitionOn{false};
-        RelaxedAtomic<bool> starterMotorEngaged{false};
+        RelaxedDouble throttlePosition{0.0};
+        RelaxedBool ignitionOn{false};
+        RelaxedBool starterMotorEngaged{false};
     };
 
     struct AtomicSimulatorMetrics {
-        RelaxedAtomic<double> timestamp{0.0};
+        RelaxedDouble timestamp{0.0};
     };
 
     AtomicEngineState engineState_;

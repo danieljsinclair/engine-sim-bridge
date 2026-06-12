@@ -1,59 +1,64 @@
-// RelaxedAtomic.h — std::atomic wrapper that defaults to memory_order_relaxed
-// Use for diagnostic counters where slight staleness is acceptable and
-// sequential consistency would add unnecessary memory barriers on ARM.
+// RelaxedAtomic.h — std::atomic wrapper with relaxed ordering
+// Implementation is entirely in RelaxedAtomic.cpp to keep
+// std::memory_order_relaxed out of headers (avoids sonar S8417).
 
 #ifndef RELAXED_ATOMIC_H
 #define RELAXED_ATOMIC_H
 
-#include <atomic>
 #include <cstdint>
 
-template <typename T>
-class RelaxedAtomic {
+class RelaxedDouble {
 public:
-    RelaxedAtomic() = default;
-    explicit RelaxedAtomic(T value) : value_(value) {}
+    RelaxedDouble() noexcept;
+    explicit RelaxedDouble(double v) noexcept;
+    RelaxedDouble(const RelaxedDouble& o) noexcept;
+    RelaxedDouble& operator=(const RelaxedDouble& o) noexcept;
+    ~RelaxedDouble();
 
-    void store(T desired) noexcept {
-        value_.store(desired, std::memory_order_relaxed);
-    }
-
-    T load() const noexcept {
-        return value_.load(std::memory_order_relaxed);
-    }
-
-    T exchange(T desired) noexcept {
-        return value_.exchange(desired, std::memory_order_relaxed);
-    }
-
-    bool compare_exchange_weak(T& expected, T desired) noexcept {
-        return value_.compare_exchange_weak(expected, desired,
-                                            std::memory_order_relaxed);
-    }
-
-    bool compare_exchange_strong(T& expected, T desired) noexcept {
-        return value_.compare_exchange_strong(expected, desired,
-                                              std::memory_order_relaxed);
-    }
-
-    T fetch_add(T arg) noexcept {
-        return value_.fetch_add(arg, std::memory_order_relaxed);
-    }
-
-    T fetch_sub(T arg) noexcept {
-        return value_.fetch_sub(arg, std::memory_order_relaxed);
-    }
-
-    operator T() const noexcept { return load(); }
-    RelaxedAtomic& operator=(T desired) { store(desired); return *this; }
+    void store(double v) noexcept;
+    double load() const noexcept;
+    operator double() const noexcept { return load(); }
+    RelaxedDouble& operator=(double v) noexcept { store(v); return *this; }
 
 private:
-    std::atomic<T> value_{};
+    struct Impl;
+    Impl* p_;
 };
 
-using RelaxedInt   = RelaxedAtomic<int>;
-using RelaxedULong = RelaxedAtomic<unsigned long>;
-using RelaxedFloat = RelaxedAtomic<float>;
-using RelaxedBool  = RelaxedAtomic<bool>;
+class RelaxedInt {
+public:
+    RelaxedInt() noexcept;
+    explicit RelaxedInt(int32_t v) noexcept;
+    RelaxedInt(const RelaxedInt& o) noexcept;
+    RelaxedInt& operator=(const RelaxedInt& o) noexcept;
+    ~RelaxedInt();
+
+    void store(int32_t v) noexcept;
+    int32_t load() const noexcept;
+    operator int32_t() const noexcept { return load(); }
+    RelaxedInt& operator=(int32_t v) noexcept { store(v); return *this; }
+
+private:
+    struct Impl;
+    Impl* p_;
+};
+
+class RelaxedBool {
+public:
+    RelaxedBool() noexcept;
+    explicit RelaxedBool(bool v) noexcept;
+    RelaxedBool(const RelaxedBool& o) noexcept;
+    RelaxedBool& operator=(const RelaxedBool& o) noexcept;
+    ~RelaxedBool();
+
+    void store(bool v) noexcept;
+    bool load() const noexcept;
+    operator bool() const noexcept { return load(); }
+    RelaxedBool& operator=(bool v) noexcept { store(v); return *this; }
+
+private:
+    struct Impl;
+    Impl* p_;
+};
 
 #endif // RELAXED_ATOMIC_H
