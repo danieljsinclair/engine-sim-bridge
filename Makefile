@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := all
-.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism test-golden test-deep presets clean-presets clean-test-fixtures sonar-scan sonar-clean coverage-clean
+.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism test-deep presets clean-presets sonar-scan sonar-clean coverage-clean
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
@@ -12,9 +12,8 @@ BRIDGE_TEST_CMAKE_FLAGS := \
 	-DBUILD_IOS_ADAPTER_TESTS=ON \
 	-DBUILD_PHASE0_SPIKES=OFF
 BRIDGE_TEST_EXCLUDE := (_NOT_BUILT|_spike$$)
-BRIDGE_TEST_GOLDEN_MATCH := PresetGoldenFileTest
 BRIDGE_TEST_ISOMORPHISM_MATCH := (IsomorphismFixtures/EndToEndPresetTest\.PresetLoadsAndProducesValidEngine|IsomorphismPresets/ParameterIsomorphismTest|AllEngines/RoundTripIsomorphismTest)
-BRIDGE_TEST_CORE_EXCLUDE := $(BRIDGE_TEST_EXCLUDE)|($(BRIDGE_TEST_GOLDEN_MATCH)|$(BRIDGE_TEST_ISOMORPHISM_MATCH)|(EnginePresets/.*|Phase4FactoryPresets/.*|twin_foundation_tests))
+BRIDGE_TEST_CORE_EXCLUDE := $(BRIDGE_TEST_EXCLUDE)|($(BRIDGE_TEST_ISOMORPHISM_MATCH)|(EnginePresets/.*|Phase4FactoryPresets/.*|twin_foundation_tests))
 CTEST_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 BUILD_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 CMAKE_BUILD_PARALLEL_FLAG := $(if $(strip $(BUILD_PARALLEL_LEVEL)),--parallel $(BUILD_PARALLEL_LEVEL),)
@@ -30,7 +29,6 @@ SONAR_TOKEN ?= $(or $(SONAR_TOKEN_ES),$(SONAR_TOKEN))
 BUILD_INPUTS := $(shell find Makefile CMakeLists.txt src include test tools engine-sim -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' -o -name '*.h' -o -name '*.hh' -o -name '*.hpp' -o -name '*.cmake' \) | sort)
 
 ISOMORPHISM_STAMP := $(BUILD_DIR)/.test-isomorphism.stamp
-GOLDEN_STAMP := $(BUILD_DIR)/.test-golden.stamp
 
 define build_bridge_targets
 	cmake --build $(BUILD_DIR) $(CMAKE_BUILD_PARALLEL_FLAG)
@@ -126,14 +124,7 @@ test-isomorphism: SUMMARY_FAIL_MESSAGE := === [engine-sim-bridge] SUMMARY: FAIL 
 test-isomorphism: $(ISOMORPHISM_STAMP)
 	@:
 
-test-golden: CTEST_SELECTOR := -R '$(BRIDGE_TEST_GOLDEN_MATCH)'
-test-golden: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: golden-audio suite (preset vs Piranha reference) ===
-test-golden: SKIP_HINT_MESSAGE := === [engine-sim-bridge] HINT: skip this next time by running make test-core instead of make test or make test-deep. ===
-test-golden: SUMMARY_PASS_MESSAGE := === [engine-sim-bridge] SUMMARY: PASS (golden) ===
-test-golden: SUMMARY_FAIL_MESSAGE := === [engine-sim-bridge] SUMMARY: FAIL (golden) ===
-test-golden: $(GOLDEN_STAMP)
-
-test-deep: build test-isomorphism test-golden
+test-deep: build test-isomorphism
 
 # ============================================================================
 # SonarQube scan - runs before tests as a quality gate
@@ -207,15 +198,6 @@ ISOMORPHISM_INPUTS = \
 	tools/preset_compiler.cpp \
 	$(BUILD_DIR)/preset_isomorphism_tests
 
-GOLDEN_INPUTS = \
-	$(PRESET_JSONS) \
-	$(ISOMORPHISM_MR_INPUTS) \
-	$(ISOMORPHISM_CODE_INPUTS) \
-	CMakeLists.txt \
-	test/PresetEngineTests.cpp \
-	tools/preset_compiler.cpp \
-	$(BUILD_DIR)/preset_engine_tests
-
 $(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets
 	@mkdir -p $(dir $@)
 	@echo "$(BLOCK_START_MESSAGE)"; \
@@ -231,23 +213,6 @@ $(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets
 		$(call bridge_print_hint) \
 		exit 1; \
 	fi
-
-$(GOLDEN_STAMP): $(GOLDEN_INPUTS) | build presets
-	@mkdir -p $(dir $@)
-	@echo "$(BLOCK_START_MESSAGE)"; \
-	$(call bridge_print_hint) \
-	if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -R '$(BRIDGE_TEST_GOLDEN_MATCH)'; then \
-		echo "=== [engine-sim-bridge] SUMMARY: PASS (golden) ==="; \
-		$(call bridge_print_result,32,PASSED); \
-		$(call bridge_print_hint) \
-		touch $(abspath $@); \
-	else \
-		echo "=== [engine-sim-bridge] SUMMARY: FAIL (golden) ==="; \
-		$(call bridge_print_result,31,FAILED); \
-		$(call bridge_print_hint) \
-		exit 1; \
-	fi
-
 # Build the preset compiler if it doesn't exist (e.g. after scrub)
 $(PRESET_COMPILER):
 	+@$(MAKE) build
@@ -267,8 +232,7 @@ help:
 	@echo "  make test     - Run sonar scan with coverage, core tests, then deep tests"
 	@echo "  make test-core - Run the always-on bridge suite"
 	@echo "  make test-isomorphism - Run file-based incremental isomorphism tests when inputs are newer"
-	@echo "  make test-golden - Run preset golden-audio regressions"
-	@echo "  make test-deep - Run isomorphism + golden suites"
+	@echo "  make test-deep - Run isomorphism suite"
 	@echo "  make presets  - Compile .mr wrappers to JSON presets"
 	@echo "  make clean    - Clean build artifacts (fast rebuild)"
 	@echo "  make scrub    - Remove entire build directory (full clean)"
