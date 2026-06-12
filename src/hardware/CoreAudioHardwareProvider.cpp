@@ -345,8 +345,12 @@ OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
     UInt32 numberFrames,
     AudioBufferList* ioData
 ) {
+    // Immediately constify C API parameters we don't modify
+    // (CoreAudio callback typedef requires non-const for actionFlags)
+    const auto* const flags = actionFlags;
+
     // Extract the CoreAudioHardwareProvider instance from refCon
-    auto* provider = static_cast<CoreAudioHardwareProvider*>(refCon);
+    auto* const provider = static_cast<const CoreAudioHardwareProvider*>(refCon);
 
     if (!provider || !provider->audioCallback_) {
         return noErr;  // Should not happen if properly initialized
@@ -363,7 +367,7 @@ OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
     AudioBufferView buffer(audioData, static_cast<int>(numberFrames), channels);
 
     // Suppress CoreAudio parameters we don't use
-    (void)actionFlags;
+    (void)flags;
     (void)timeStamp;
     (void)busNumber;
 

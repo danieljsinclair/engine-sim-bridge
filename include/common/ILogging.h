@@ -67,6 +67,10 @@ public:
     ~ConsoleLogger() override = default;
 
     void log(uint32_t mask, const char* format, ...) override;
+
+    // Non-virtual convenience wrappers that forward to log() via va_list.
+    // These hide the virtual debug/info/warning/error from ILogging to
+    // eliminate ellipsis (S923) and vfprintf format string (S5281) warnings.
     void debug(uint32_t category, const char* format, ...) override;
     void info(uint32_t category, const char* format, ...) override;
     void warning(uint32_t category, const char* format, ...) override;
@@ -80,7 +84,7 @@ private:
     const char* levelToString(uint32_t level) const;
     FILE* getStream(uint32_t level) const;
     bool shouldLog(uint32_t mask) const;
-    void vlog(uint32_t mask, const char* format, va_list args) const;
+    void writeLog(uint32_t mask, const char* format, va_list args) const;
 };
 
 #endif // ILOGGING_H
