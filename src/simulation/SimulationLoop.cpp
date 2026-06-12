@@ -138,7 +138,9 @@ std::unique_ptr<IAudioHardwareProvider> createHardwareProvider(
 void applyGearChange(ISimulator& simulator, int gearDelta, ILogging* logger) {
 
     if (simulator.changeGear(gearDelta)) {
-        logger->info(LogMask::BRIDGE, "New gear: %+d", simulator.getGear());
+        if (logger) {
+            logger->info(LogMask::BRIDGE, "New gear: %+d", simulator.getGear());
+        }
     }
 }
 
@@ -192,9 +194,7 @@ void SimulationLoop::applyVehicleControls(
     if (input.gearAbsolute >= 0) {
         simulator_.setGear(input.gearAbsolute);
     } else {
-        if (logger_) {
-            applyGearChange(simulator_, input.gearDelta, logger_);
-        }
+        applyGearChange(simulator_, input.gearDelta, logger_);
     }
 
     // Vehicle controls (gear, dyno) — dyno only when engine running
