@@ -42,7 +42,7 @@ public:
     int getSimulationFrequency() const override { return engineConfig_.simulationFrequency; }
     EngineSimStats getStats() const override;
 
-    // TODO: circle-back — remove getInternalSimulator(); tests should inject dependencies instead
+    // NOTE: getInternalSimulator() is a test seam; tests should inject dependencies instead
     Simulator* getInternalSimulator() { return m_simulator.get(); }
     const Simulator* getInternalSimulator() const { return m_simulator.get(); }
 

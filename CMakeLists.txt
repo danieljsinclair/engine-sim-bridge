@@ -95,7 +95,6 @@ set(BRIDGE_SOURCES
     src/common/CircularBuffer.cpp
     src/common/JsonParser.cpp
     src/common/PresetSerializer.cpp
-    src/common/RelaxedAtomic.cpp
     # Preset engine factory (JSON-based, for preset compiler output)
     src/simulator/PresetEngineFactory.cpp
     # Preset deserializers (pure JSON -> engine object graph)
