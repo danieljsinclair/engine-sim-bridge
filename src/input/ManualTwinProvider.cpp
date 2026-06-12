@@ -9,7 +9,7 @@ ManualTwinProvider::ManualTwinProvider(std::unique_ptr<IThrottleSource> throttle
 }
 
 ManualTwinProvider::~ManualTwinProvider() {
-    this->Shutdown();
+    ManualTwinProvider::Shutdown();
 }
 
 bool ManualTwinProvider::Initialize() {

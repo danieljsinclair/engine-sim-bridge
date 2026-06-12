@@ -8,7 +8,7 @@ VirtualIceInputProvider::VirtualIceInputProvider(const twin::IceVehicleProfile& 
 }
 
 VirtualIceInputProvider::~VirtualIceInputProvider() {
-    this->Shutdown();
+    VirtualIceInputProvider::Shutdown();
 }
 
 bool VirtualIceInputProvider::Initialize() {

@@ -30,7 +30,7 @@ DemoInputProvider::DemoInputProvider(
 }
 
 DemoInputProvider::~DemoInputProvider() {
-    this->Shutdown();
+    DemoInputProvider::Shutdown();
 }
 
 bool DemoInputProvider::Initialize() {
