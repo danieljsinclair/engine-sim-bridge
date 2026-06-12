@@ -356,39 +356,6 @@ if(BUILD_BRIDGE_TESTS)
     # Preset engine tests - verifies C++ factory engines match Piranha scripts
     option(BUILD_PRESET_ENGINE_TESTS "Build preset engine tests" OFF)
     if(BUILD_PRESET_ENGINE_TESTS)
-        add_executable(preset_engine_tests
-            test/PresetEngineTests.cpp
-        )
-        target_include_directories(preset_engine_tests PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/include
-            ${ENGINE_SIM_PATH}/include
-        )
-        target_compile_definitions(preset_engine_tests PRIVATE
-            TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
-            TEST_ENGINE_SIM_ASSETS="${ENGINE_SIM_PATH}/assets"
-            TEST_ES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/es"
-            TEST_ENGINE_SIM_ROOT="${ENGINE_SIM_PATH}"
-        )
-        target_link_libraries(preset_engine_tests
-            PRIVATE
-                GTest::gtest_main
-                engine-sim-bridge
-        )
-        if(TARGET engine-sim-script-interpreter)
-            target_compile_definitions(preset_engine_tests PRIVATE
-                ENGINE_SIM_PIRANHA_ENABLED
-                TEST_PRESET_COMPILER_PATH="$<TARGET_FILE:engine-sim-preset-compiler>"
-            )
-            add_dependencies(preset_engine_tests engine-sim-preset-compiler)
-        endif()
-        if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-            gtest_discover_tests(
-                preset_engine_tests
-                DISCOVERY_MODE PRE_TEST
-                EXTRA_ARGS --gtest_color=yes
-            )
-        endif()
-
         # Isomorphism tests - proves .mr and JSON paths produce identical engines
         add_executable(preset_isomorphism_tests
             test/PresetIsomorphismTests.cpp
@@ -402,6 +369,7 @@ if(BUILD_BRIDGE_TESTS)
             TEST_ENGINE_SIM_ASSETS="${ENGINE_SIM_PATH}/assets"
             TEST_ENGINE_SIM_ROOT="${ENGINE_SIM_PATH}"
             TEST_PRESET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/preset"
+            TEST_ES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/es"
         )
         if(TARGET engine-sim-script-interpreter)
             target_compile_definitions(preset_isomorphism_tests PRIVATE
@@ -419,6 +387,7 @@ if(BUILD_BRIDGE_TESTS)
             gtest_discover_tests(
                 preset_isomorphism_tests
                 DISCOVERY_MODE PRE_TEST
+                DISCOVERY_TIMEOUT 30
                 EXTRA_ARGS --gtest_color=yes
             )
         endif()
