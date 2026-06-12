@@ -39,25 +39,54 @@ namespace LogMask {
     constexpr uint32_t ALL         = 0xFFFFFFFF;
 }
 
-// Abstract logging interface
+// Abstract logging interface.
+// Design: virtual _vlog() takes va_list for polymorphic dispatch.
+// Non-virtual log()/debug/info/warning/error use va_start/va_end to
+// forward to _vlog(). This eliminates C-style ellipsis (...) from both
+// the virtual interface and all implementations.
 class ILogging {
 public:
     virtual ~ILogging() = default;
 
-    // Raw log with full mask (category | level)
-    virtual void log(uint32_t mask, const char* format, ...) = 0;
-
-    // Convenience methods - level baked in, pass category
-    // debug(LogMask::AUDIO, "format", ...) -> log(AUDIO | DBG, ...)
-    virtual void debug(uint32_t category, const char* format, ...) = 0;
-    virtual void info(uint32_t category, const char* format, ...) = 0;
-    virtual void warning(uint32_t category, const char* format, ...) = 0;
-    virtual void error(uint32_t category, const char* format, ...) = 0;
+    // Public API — non-virtual, no ellipsis
+    void log(uint32_t mask, const char* format, ...) {
+        va_list args;
+        va_start(args, format);
+        _vlog(mask, format, args);
+        va_end(args);
+    }
+    void debug(uint32_t category, const char* format, ...) {
+        va_list args;
+        va_start(args, format);
+        _vlog(category | LogMask::DBG, format, args);
+        va_end(args);
+    }
+    void info(uint32_t category, const char* format, ...) {
+        va_list args;
+        va_start(args, format);
+        _vlog(category | LogMask::INFO, format, args);
+        va_end(args);
+    }
+    void warning(uint32_t category, const char* format, ...) {
+        va_list args;
+        va_start(args, format);
+        _vlog(category | LogMask::WARN, format, args);
+        va_end(args);
+    }
+    void error(uint32_t category, const char* format, ...) {
+        va_list args;
+        va_start(args, format);
+        _vlog(category | LogMask::ERROR, format, args);
+        va_end(args);
+    }
 
     // Set filter mask (can combine categories and levels)
-    // setMask(LogMask::AUDIO | LogMask::ERROR) -> only audio errors
     virtual void setMask(uint32_t mask) = 0;
     virtual uint32_t getMask() const = 0;
+
+protected:
+    // Virtual dispatch — takes va_list, no ellipsis
+    virtual void _vlog(uint32_t mask, const char* format, va_list args) = 0;
 };
 
 // Default console implementation
@@ -65,16 +94,6 @@ class ConsoleLogger : public ILogging {
 public:
     ConsoleLogger() : mask_(LogMask::ALL) {}
     ~ConsoleLogger() override = default;
-
-    void log(uint32_t mask, const char* format, ...) override;
-
-    // Non-virtual convenience wrappers that forward to log() via va_list.
-    // These hide the virtual debug/info/warning/error from ILogging to
-    // eliminate ellipsis (S923) and vfprintf format string (S5281) warnings.
-    void debug(uint32_t category, const char* format, ...) override;
-    void info(uint32_t category, const char* format, ...) override;
-    void warning(uint32_t category, const char* format, ...) override;
-    void error(uint32_t category, const char* format, ...) override;
 
     void setMask(uint32_t mask) override { mask_ = mask; }
     uint32_t getMask() const override { return mask_; }
@@ -85,6 +104,7 @@ private:
     FILE* getStream(uint32_t level) const;
     bool shouldLog(uint32_t mask) const;
     void writeLog(uint32_t mask, const char* format, va_list args) const;
+    void _vlog(uint32_t mask, const char* format, va_list args) override;
 };
 
 #endif // ILOGGING_H

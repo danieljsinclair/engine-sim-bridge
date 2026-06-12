@@ -25,15 +25,8 @@ bool ConsoleLogger::shouldLog(uint32_t mask) const {
            ((level & mask_) || (mask_ & LogMask::ALL_LEVELS));
 }
 
-void ConsoleLogger::log(uint32_t mask, const char* format, ...) {
-    va_list args;
-    va_start(args, format);
-    writeLog(mask, format, args);
-    va_end(args);
-}
-
-// Internal method that takes va_list — formats via vsnprintf to avoid
-// vfprintf non-literal format string warning (S5281)
+// Virtual dispatch target — formats via vsnprintf to avoid vfprintf
+// non-literal format string warning (S5281)
 void ConsoleLogger::writeLog(uint32_t mask, const char* format, va_list args) const {
     if (!shouldLog(mask)) return;
 
@@ -59,27 +52,6 @@ void ConsoleLogger::writeLog(uint32_t mask, const char* format, va_list args) co
     fflush(stream);
 }
 
-// Convenience methods - OR level with category
-void ConsoleLogger::debug(uint32_t category, const char* format, ...) {
-    va_list args; va_start(args, format);
-    writeLog(category | LogMask::DBG,   format, args);
-    va_end(args);
-}
-
-void ConsoleLogger::info(uint32_t category, const char* format, ...) {
-    va_list args; va_start(args, format);
-    writeLog(category | LogMask::INFO, format, args);
-    va_end(args);
-}
-
-void ConsoleLogger::warning(uint32_t category, const char* format, ...) {
-    va_list args; va_start(args, format);
-    writeLog(category | LogMask::WARN, format, args);
-    va_end(args);
-}
-
-void ConsoleLogger::error(uint32_t category, const char* format, ...) {
-    va_list args; va_start(args, format);
-    writeLog(category | LogMask::ERROR, format, args);
-    va_end(args);
+void ConsoleLogger::_vlog(uint32_t mask, const char* format, va_list args) {
+    writeLog(mask, format, args);
 }
