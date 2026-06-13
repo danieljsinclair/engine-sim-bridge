@@ -3,6 +3,7 @@
 import json, sys
 
 RED = '\033[31m'
+ORANGE = '\033[38;5;208m'
 YELLOW = '\033[33m'
 GREEN = '\033[32m'
 CYAN = '\033[36m'
@@ -12,22 +13,21 @@ RESET = '\033[0m'
 
 def severity_color(sev):
     """Return ANSI color code for a severity level."""
-    if sev in ('CRITICAL', 'MAJOR'):
-        return RED
-    elif sev == 'MINOR':
-        return YELLOW
-    else:
-        return CYAN
+    return total_issues_color({sev: 1})
 
 
 def total_issues_color(counts):
     """Return ANSI color code for total issues based on severity breakdown."""
-    if counts.get('CRITICAL', 0) > 0 or counts.get('MAJOR', 0) > 0:
+    if counts.get('CRITICAL', 0) > 0:
         return RED
+    elif counts.get('MAJOR', 0) > 0:
+        return ORANGE
     elif counts.get('MINOR', 0) > 0:
         return YELLOW
-    else:
-        return GREEN
+    elif counts.get('INFO', 0) > 0:
+        return CYAN
+
+    return GREEN
 
 
 def format_severity_line(sev, count):

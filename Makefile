@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := all
-.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism test-deep presets clean-presets sonar-scan sonar-clean coverage-clean coverage-run sonar-summary
+.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism test-deep presets clean-presets sonar-scan sonar-clean coverage-clean coverage-run sonar-summary test-nosonar
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
@@ -125,6 +125,10 @@ test-isomorphism: $(ISOMORPHISM_STAMP)
 	@:
 
 test-deep: build test-isomorphism
+
+# test-nosonar: full test gate (core + isomorphism) WITHOUT sonar/coverage
+test-nosonar: test-core test-deep
+test-quick: test-core
 
 # ============================================================================
 # SonarQube scan - runs before tests as a quality gate
@@ -263,6 +267,7 @@ help:
 	@echo "  make test-core - Run the always-on bridge suite"
 	@echo "  make test-isomorphism - Run file-based incremental isomorphism tests when inputs are newer"
 	@echo "  make test-deep - Run isomorphism suite"
+	@echo "  make test-nosonar - Run the full test gate (core + isomorphism) WITHOUT sonar/coverage"
 	@echo "  make presets  - Compile .mr wrappers to JSON presets"
 	@echo "  make clean    - Clean build artifacts (fast rebuild)"
 	@echo "  make scrub    - Remove entire build directory (full clean)"
