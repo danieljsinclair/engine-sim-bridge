@@ -10,6 +10,7 @@
 #include "input/IgnitionInput.h"
 #include "input/IDemoSpeedEnhancer.h"
 #include "twin/IceVehicleProfile.h"
+#include "simulator/GearConventions.h"
 #include "mocks/MockKeyboardInput.h"
 
 #include <gtest/gtest.h>
@@ -43,6 +44,8 @@ protected:
 
         // Wire demo provider as speed enhancer (same as CLIMain --connect-demo)
         target->setSpeedEnhancer(demoProvider.get());
+        // Route shift keys to the demo PRNDL selector (same as CLIMain --connect-demo)
+        target->setDemoControls(demoProvider.get());
 
         auto provider = std::make_unique<KeyboardInputProvider>(
             std::move(keyboard), target.get());
@@ -109,6 +112,42 @@ TEST_F(DemoChainIntegrationTest, ShiftUp_ProducesGearDelta) {
     EngineInput input = pressAndTick(']');
     // The enhancer may modify gearAbsolute, but gearDelta should be non-zero
     EXPECT_EQ(input.gearDelta, 1);
+}
+
+// ============================================================================
+// AC3: --connect-demo keyboard can drive the PRNDL selector into DRIVE.
+// In demo mode, ]/[ must advance the demo provider's GearSelectorInput
+// (P->R->N->D), not just bump a disconnected integer. The selector that
+// reaches EngineInput must become DRIVE after the N->D shift.
+// ============================================================================
+
+TEST_F(DemoChainIntegrationTest, ShiftKeys_DriveSelectorToDrive) {
+    // Provider starts in NEUTRAL. Press ] three times: N -> D is one step,
+    // but the PRNDL order is P/R/N/D, so from N a single shiftUp reaches D.
+    // We press enough times to guarantee reaching DRIVE regardless of start.
+    EngineInput input = tick();  // establish baseline at NEUTRAL
+    ASSERT_EQ(input.gearSelector, static_cast<int>(bridge::GearSelector::NEUTRAL));
+
+    input = pressAndTick(']');   // N -> D
+    EXPECT_EQ(input.gearSelector, static_cast<int>(bridge::GearSelector::DRIVE))
+        << "Demo keyboard ] must move the PRNDL selector into DRIVE";
+}
+
+TEST_F(DemoChainIntegrationTest, ShiftKeys_CanReverseBelowDrive) {
+    // From DRIVE, [ must step back toward NEUTRAL/REVERSE/PARK (PRNDL reachability)
+    pressAndTick(']');  // -> DRIVE
+    EngineInput input = pressAndTick('[');  // DRIVE -> NEUTRAL
+    EXPECT_EQ(input.gearSelector, static_cast<int>(bridge::GearSelector::NEUTRAL));
+}
+
+TEST_F(DemoChainIntegrationTest, ShiftKeys_CanReachPark) {
+    // From NEUTRAL, step all the way down to PARK (N -> R -> P).
+    // Shift keys are edge-triggered, so each press needs a release gap between
+    // them (a real keyboard can't fire two distinct edges without releasing).
+    pressAndTick('[');      // N -> R
+    tick();                 // release gap (no key)
+    EngineInput input = pressAndTick('[');  // R -> P
+    EXPECT_EQ(input.gearSelector, static_cast<int>(bridge::GearSelector::PARK));
 }
 
 // PROVE: no keys produces stable default EngineInput

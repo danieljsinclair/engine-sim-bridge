@@ -419,6 +419,21 @@ TEST_F(EngineInputTargetTest, ShiftUp_IncrementsGearSelectorAndSetsDelta) {
 }
 
 // ============================================================================
+// Manual gear counter clamps to the valid selector range (REVERSE=-1 .. EIGHTH=8)
+// so the display can never render a stray 'P' (PARK=-2) or '?' (>8).
+// ============================================================================
+
+TEST_F(EngineInputTargetTest, ShiftUp_ClampsAtEighthGear) {
+    for (int i = 0; i < 20; ++i) target->shiftUp();
+    EXPECT_EQ(target->buildInput().gearSelector, 8);
+}
+
+TEST_F(EngineInputTargetTest, ShiftDown_ClampsAtReverse) {
+    for (int i = 0; i < 20; ++i) target->shiftDown();
+    EXPECT_EQ(target->buildInput().gearSelector, -1);
+}
+
+// ============================================================================
 // Test 30: toggleIgnition flips state
 // ============================================================================
 
@@ -663,4 +678,43 @@ TEST_F(EngineInputTargetTest, BuildInput_IncludesRoadSpeed) {
     target->adjustSpeed(100.0);
     EngineInput input = target->buildInput();
     EXPECT_DOUBLE_EQ(input.roadSpeedKmh, 100.0);
+}
+
+// ============================================================================
+// Gearbox-mode propagation (AC1/AC2): --auto must engage the automatic box
+// and disable manual ]/[ shifting; default stays manual.
+// ============================================================================
+
+TEST_F(EngineInputTargetTest, DefaultMode_IsManual) {
+    // AC2: without --auto, mode is manual (M)
+    EngineInput input = target->buildInput();
+    EXPECT_FALSE(input.gearAutoMode);
+}
+
+TEST_F(EngineInputTargetTest, ManualMode_ShiftKeysChangeGear) {
+    // AC2: ]/[ shift in manual mode
+    target->shiftUp();
+    EngineInput input = target->buildInput();
+    EXPECT_EQ(input.gearDelta, 1);
+    EXPECT_NE(input.gearSelector, 0);
+}
+
+TEST_F(EngineInputTargetTest, AutoMode_ReportsGearAutoModeTrue) {
+    // AC1: with --auto, gearAutoMode is true (display char A)
+    target->setGearAutoMode(true);
+    EngineInput input = target->buildInput();
+    EXPECT_TRUE(input.gearAutoMode);
+}
+
+TEST_F(EngineInputTargetTest, AutoMode_ShiftKeysDoNotChangeGear) {
+    // AC1: in auto mode the box shifts itself; manual ]/[ must NOT change gear.
+    // gearDelta stays 0 and the gear selector/number is untouched.
+    target->setGearAutoMode(true);
+    target->shiftUp();
+    target->shiftDown();
+    EngineInput input = target->buildInput();
+    EXPECT_EQ(input.gearDelta, 0)
+        << "Manual shift keys must not request a gear change in auto mode";
+    EXPECT_EQ(input.gearSelector, 0)
+        << "Manual shift keys must not move the selector in auto mode";
 }
