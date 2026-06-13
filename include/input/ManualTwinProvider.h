@@ -29,6 +29,7 @@ public:
     void setStarterRequested(bool requested);
 
 private:
+    void doShutdown();
     std::unique_ptr<IThrottleSource> throttleSource_;
     ISimulator& simulator_;
     twin::ManualTwin twin_;

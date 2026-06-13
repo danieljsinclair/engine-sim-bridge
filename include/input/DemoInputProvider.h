@@ -64,6 +64,7 @@ public:
     void setGearboxLogger(twin::IGearboxLogger* logger);
 
 private:
+    void doShutdown();
     const twin::IceVehicleProfile profile_;
     std::unique_ptr<IThrottleSource> throttleSource_;
     std::unique_ptr<GearSelectorInput> gearSelector_;

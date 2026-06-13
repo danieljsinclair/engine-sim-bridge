@@ -30,7 +30,7 @@ DemoInputProvider::DemoInputProvider(
 }
 
 DemoInputProvider::~DemoInputProvider() {
-    DemoInputProvider::Shutdown();
+    doShutdown();
 }
 
 bool DemoInputProvider::Initialize() {
@@ -48,11 +48,15 @@ bool DemoInputProvider::Initialize() {
     return true;
 }
 
-void DemoInputProvider::Shutdown() {
+void DemoInputProvider::doShutdown() {
     if (initialized_) {
         twinProvider_.Shutdown();
         initialized_ = false;
     }
+}
+
+void DemoInputProvider::Shutdown() {
+    doShutdown();
 }
 
 bool DemoInputProvider::IsConnected() const {

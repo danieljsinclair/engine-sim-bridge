@@ -44,6 +44,7 @@ public:
     void setGearboxLogger(twin::IGearboxLogger* logger);
 
 private:
+    void doShutdown();
     const twin::IceVehicleProfile& profile_;
     std::unique_ptr<twin::VirtualIceTwin> twin_;
     std::string lastError_;

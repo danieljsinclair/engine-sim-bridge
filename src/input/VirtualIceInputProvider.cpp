@@ -8,7 +8,7 @@ VirtualIceInputProvider::VirtualIceInputProvider(const twin::IceVehicleProfile& 
 }
 
 VirtualIceInputProvider::~VirtualIceInputProvider() {
-    VirtualIceInputProvider::Shutdown();
+    doShutdown();
 }
 
 bool VirtualIceInputProvider::Initialize() {
@@ -36,9 +36,13 @@ bool VirtualIceInputProvider::Initialize() {
     }
 }
 
-void VirtualIceInputProvider::Shutdown() {
+void VirtualIceInputProvider::doShutdown() {
     twin_.reset();
     isInitialized_ = false;
+}
+
+void VirtualIceInputProvider::Shutdown() {
+    doShutdown();
 }
 
 bool VirtualIceInputProvider::IsConnected() const {
