@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := all
-.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism test-golden test-deep presets clean-presets clean-test-fixtures sonar-clean
+.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism             test-deep presets clean-presets          sonar-scan sonar-clean coverage-clean coverage-run sonar-summary test-nosonar
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
@@ -21,7 +21,8 @@ BUILD_STAMP := $(BUILD_DIR)/.build-ready.stamp
 SONAR_STAMP := $(BUILD_DIR)/.sonar-scan.stamp
 SONAR_PROJECT_PROPERTIES := sonar-project.properties
 COMPILE_DB := $(BUILD_DIR)/compile_commands.json
-SONAR_TOKEN ?= $(or $(SONAR_TOKEN_ES),$(SONAR_TOKEN))
+COVERAGE_REPORT := $(BUILD_DIR)/coverage.txt
+SONAR_TOKEN ?= ${SONAR_TOKEN_ES}
 
 # Source inputs that affect the bridge build. This ensures the stamp is invalidated
 # when bridge or engine-sim sources change, so rebuilds happen when necessary.
@@ -80,10 +81,11 @@ remove-orphans:
 	@find . -path ./build -prune -o -name "_deps" -type d -print -exec rm -rf {} + 2>/dev/null || true
 
 # Clean build artifacts (cascades to engine-sim via cmake)
-clean: remove-orphans clean-presets clean-test-fixtures sonar-clean
+clean: remove-orphans clean-presets clean-test-fixtures sonar-clean coverage-clean
 	@if [ -d $(BUILD_DIR) ]; then cmake --build $(BUILD_DIR) --target clean >/dev/null 2>&1 || true; fi
 	@rm -f $(BUILD_DIR)/*.stamp
 	@rm -rf tmp
+	@rm -rf .scannerwork
 
 # Remove only stamp files so tests can be rerun without full clean.
 clean-test:
@@ -94,6 +96,7 @@ scrub: clean
 	@echo "Scrubbing bridge build..."
 	@rm -rf $(BUILD_DIR) preset tmp
 	@$(MAKE) remove-orphans
+	@rm -rf .scannerwork
 
 # Remove runtime-generated preset fixtures so next test run regenerates them.
 # Needed if .mr source scripts change.
@@ -103,7 +106,7 @@ clean-test-fixtures:
 	@echo "Done."
 
 # Run the bridge suite in explicit tiers.
-test: sonar-scan test-core test-deep
+test: sonar-scan test-core test-deep sonar-summary
 
 test-core: CTEST_SELECTOR := -E '$(BRIDGE_TEST_CORE_EXCLUDE)'
 test-core: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: core bridge suite (factory + preset regression coverage) ===
@@ -123,21 +126,67 @@ test-isomorphism: $(ISOMORPHISM_STAMP)
 
 test-deep: build test-isomorphism
 
+# test-nosonar: full test gate (core + isomorphism) WITHOUT sonar/coverage
+test-nosonar: test-core test-deep
+test-quick: test-core
+
 # ============================================================================
 # SonarQube scan - runs before tests as a quality gate
 # ============================================================================
 
-sonar-scan: $(SONAR_STAMP)
+# LLVM coverage: build static with llvm-cov flags, export lcov
+# Uses xcrun (Xcode toolchain) with Homebrew LLVM fallback
+LLVM_COV := $(shell xcrun --find llvm-cov 2>/dev/null || which llvm-cov 2>/dev/null)
+LLVM_PROFDATA := $(shell xcrun --find llvm-profdata 2>/dev/null || which llvm-profdata 2>/dev/null)
 
-$(SONAR_STAMP): $(BUILD_STAMP) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES)
+# Coverage build: reconfigure + build with llvm-cov instrumentation
+# Does NOT run tests — tests are run separately via make coverage-run
+$(COVERAGE_REPORT): $(BUILD_STAMP)
+	@echo "=== [engine-sim-bridge] Configuring coverage build ==="
+	@cd $(BUILD_DIR) && cmake \
+		-DCMAKE_BUILD_TYPE=Debug \
+		-DCMAKE_CXX_FLAGS="-fprofile-instr-generate -fcoverage-mapping -g" \
+		-DCMAKE_EXE_LINKER_FLAGS="-fprofile-instr-generate" \
+		-DBUILD_PRESET_ENGINE_TESTS=ON \
+		-DBUILD_IOS_ADAPTER_TESTS=ON \
+		-DBUILD_PHASE0_SPIKES=OFF \
+		..
+	@echo "=== [engine-sim-bridge] Building with coverage instrumentation ==="
+	@cmake --build $(BUILD_DIR) $(CMAKE_BUILD_PARALLEL_FLAG)
+	@touch $@
+
+# coverage-run: run tests on coverage-instrumented build, merge profdata, export lcov
+coverage-run: $(COVERAGE_REPORT)
+	@LLVM_PROFDATA="$(LLVM_PROFDATA)" LLVM_COV="$(LLVM_COV)" \
+		bash scripts/run_coverage_tests.sh $(BUILD_DIR)
+
+sonar-scan: $(SONAR_STAMP) coverage-run
+
+SONAR_REPORT := $(BUILD_DIR)/sonar-report.json
+
+$(SONAR_STAMP): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(BUILD_STAMP)
+	@if [ -z "$${SONAR_TOKEN_ES}" ]; then \
+		echo "ERROR: SONAR_TOKEN_ES is not set. Run: source ~/.zshrc"; \
+		exit 1; \
+	fi
 	@echo "=== [engine-sim-bridge] Running Sonar scan ==="
-	-SONAR_TOKEN="$(or $(SONAR_TOKEN_ES),$(SONAR_TOKEN))" sonar-scanner
+	@SONAR_TOKEN="$${SONAR_TOKEN_ES}" sonar-scanner \
+	-Dsonar.token="$${SONAR_TOKEN_ES}"
+	@echo "=== [engine-sim-bridge] Caching SonarCloud issue report ==="
+	@TOKEN="$${SONAR_TOKEN_ES}"; \
+	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500" \
+		> $(SONAR_REPORT) 2>/dev/null || true
 	@touch $@
 
 $(COMPILE_DB): $(BUILD_DIR)/CMakeCache.txt
 
 sonar-clean:
 	@rm -f $(SONAR_STAMP)
+	@rm -rf .scannerwork
+
+coverage-clean:
+	@rm -f $(COVERAGE_REPORT) $(SONAR_REPORT) $(BUILD_DIR)/coverage.profdata $(BUILD_DIR)/lcov.info $(BUILD_DIR)/profraw/*.profraw
+	@rm -rf $(BUILD_DIR)/profraw
 
 check: test
 
@@ -151,6 +200,10 @@ check: test
 #
 # Single source of truth: CANDIDATE_ENGINES lists which scripts to compile.
 # ============================================================================
+
+# Sonar summary — display issues from cached SonarCloud report
+sonar-summary: $(SONAR_REPORT)
+	@python3 scripts/sonar_summary.py $(SONAR_REPORT)
 
 # Add/remove engines here — this is the ONLY list. Everything here is compiled, tested, and shipped.
 ENGINES := ferrari_f136 2jz C63_M156_V2 subaru_ej25 lfa_v10 v8_gm_ls 11_merlin_v12 06_subaru_ej25
@@ -208,11 +261,13 @@ help:
 	@echo "Targets:"
 	@echo "  make          - Build + test + presets (complete pipeline)"
 	@echo "  make build    - Compile everything (no tests)"
-	@echo "  make sonar-scan - Run SonarQube scan (only re-runs when build/inputs change)"
-	@echo "  make test     - Run sonar scan, core tests, then deep tests"
+	@echo "  make sonar-scan - Run SonarQube scan with coverage (only re-runs when build/inputs change)"
+	@echo "  make sonar-summary - Show SonarCloud issues summary"
+	@echo "  make test     - Run sonar scan with coverage, core tests, then deep tests"
 	@echo "  make test-core - Run the always-on bridge suite"
 	@echo "  make test-isomorphism - Run file-based incremental isomorphism tests when inputs are newer"
 	@echo "  make test-deep - Run isomorphism suite"
+	@echo "  make test-nosonar - Run the full test gate (core + isomorphism) WITHOUT sonar/coverage"
 	@echo "  make presets  - Compile .mr wrappers to JSON presets"
 	@echo "  make clean    - Clean build artifacts (fast rebuild)"
 	@echo "  make scrub    - Remove entire build directory (full clean)"
@@ -222,3 +277,4 @@ help:
 	@echo "  1. Add engine name to CANDIDATE_ENGINES in this Makefile"
 	@echo "  2. Place the .mr script in es/"
 	@echo "  3. Run 'make presets'"
+
