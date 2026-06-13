@@ -1,0 +1,13 @@
+{
+  "sonarlint.connectedMode.project": {
+    "connectionId": "danieljsinclair",
+    "projectKey": "danieljsinclair_engine-sim-app"
+  },
+
+  "coverage-gutters.showGutterCoverage": true,
+  "coverage-gutters.showLineCoverage": true,
+  "coverage-gutters.showRulerCoverage": true,
+  "coverage-gutters.coverageFileNames": [
+    "lcov.info"
+  ],
+}

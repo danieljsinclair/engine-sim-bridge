@@ -14,6 +14,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Bridge always builds as static library
+set(LIB_TYPE STATIC)
+
 # Find engine-sim (expected as a submodule at ./engine-sim)
 # Use ENGINE_SIM_PATH if set by parent project for override
 if(NOT DEFINED ENGINE_SIM_PATH)
@@ -159,14 +162,13 @@ else()
     )
 endif()
 
-# iOS builds produce a static library for linking into Xcode project
-# macOS builds produce a shared library (.dylib) for the CLI app
-# ESP32 builds produce a static library for linking into ESP-IDF component
-if(IOS OR ESP_PLATFORM)
-    add_library(engine-sim-bridge STATIC ${BRIDGE_SOURCES})
-else()
-    add_library(engine-sim-bridge SHARED ${BRIDGE_SOURCES})
+# Bridge is always static; coverage uses llvm-cov instrumentation
+option(ENABLE_COVERAGE "Enable llvm-cov coverage instrumentation" OFF)
+if(ENABLE_COVERAGE)
+    add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
+    add_link_options(-fprofile-instr-generate)
 endif()
+add_library(engine-sim-bridge ${LIB_TYPE} ${BRIDGE_SOURCES})
 
 # Platform-specific audio libraries
 if(IOS)
@@ -217,24 +219,6 @@ if(APPLE AND NOT IOS)
         INSTALL_NAME_DIR "@rpath"
     )
 
-    # Custom target that always runs to copy library files
-    add_custom_target(copy-engine-sim-bridge ALL
-        COMMAND ${CMAKE_COMMAND} -E remove -f
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.dylib
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.dylib
-            ${CMAKE_BINARY_DIR}/libenginesim.dylib
-        COMMAND ${CMAKE_COMMAND} -E copy
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.dylib
-        COMMAND ${CMAKE_COMMAND} -E copy
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.dylib
-        COMMAND ${CMAKE_COMMAND} -E copy
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
-            ${CMAKE_BINARY_DIR}/libenginesim.dylib
-        DEPENDS engine-sim-bridge
-        COMMENT "Copying libenginesim to build directories"
-    )
 endif()
 
 # Critical fix for iOS cross compilation:

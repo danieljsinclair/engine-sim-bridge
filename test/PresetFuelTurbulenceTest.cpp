@@ -9,10 +9,13 @@ TEST(FuelTurbulenceFunctionTest, IsCreatedAfterPresetLoad) {
     
     ASSERT_TRUE(result.success()) << "Preset should load successfully";
     ASSERT_NE(result.engine, nullptr) << "Engine must not be null";
-    
+
     // Cannot directly check Fuel::turbulenceToFlameSpeedRatio (no getter)
     // But we can verify indirectly by checking if combustion produces power
     // For now, just ensure the function was created by the factory
-    
+
     SUCCEED();  // Test passes if we get here (function exists in compiled code)
+
+    result.engine->destroy();
+    delete result.engine;
 }
