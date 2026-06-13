@@ -377,7 +377,7 @@ OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
     AudioBufferList* ioData
 ) {
     auto* const provider = static_cast<const CoreAudioHardwareProvider*>(refCon);
-    return coreAudioCallbackImpl(provider, actionFlags, timeStamp, busNumber, numberFrames, ioData);
+    return coreAudioCallbackImpl(provider, const_cast<const AudioUnitRenderActionFlags*>(actionFlags), timeStamp, busNumber, numberFrames, ioData);
 }
 
 const char* CoreAudioHardwareProvider::getStatusDescription(OSStatus status) {

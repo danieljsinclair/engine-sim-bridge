@@ -182,6 +182,7 @@ void SimulationLoop::applyVehicleControls(
     const input::EngineInput& input, const CrankingController::State& crankingState,
     double& lastDynoTorqueScale) {
 
+    ASSERT(&simulator_, "applyVehicleControls: null simulator");
     simulator_.setThrottle(crankingState.startingThrottle);
 
     if (combustionEngine != nullptr) {
