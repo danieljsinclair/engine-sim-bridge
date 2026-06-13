@@ -92,7 +92,7 @@ private:
 
     void doCleanup();
     static OSStatus coreAudioCallbackImpl(
-        CoreAudioHardwareProvider* provider,
+        const CoreAudioHardwareProvider* provider,
         const AudioUnitRenderActionFlags* actionFlags,
         const AudioTimeStamp* timeStamp,
         UInt32 busNumber,

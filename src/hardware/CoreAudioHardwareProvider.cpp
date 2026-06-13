@@ -65,7 +65,7 @@ bool CoreAudioHardwareProvider::initialize(const AudioStreamFormat& format) {
 
 void CoreAudioHardwareProvider::doCleanup() {
     if (audioUnit) {
-        stopPlayback();
+        CoreAudioHardwareProvider::stopPlayback();
 
         // Allow in-flight CoreAudio render callbacks to drain.
         // AudioOutputUnitStop is asynchronous -- the render thread may still
@@ -342,7 +342,7 @@ bool CoreAudioHardwareProvider::registerCallbackWithAudioUnit() {
 }
 
 OSStatus CoreAudioHardwareProvider::coreAudioCallbackImpl(
-    CoreAudioHardwareProvider* provider,
+    const CoreAudioHardwareProvider* provider,
     const AudioUnitRenderActionFlags* actionFlags,
     const AudioTimeStamp* timeStamp,
     UInt32 busNumber,
@@ -375,8 +375,8 @@ OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
     UInt32 numberFrames,
     AudioBufferList* ioData
 ) {
-    auto* const provider = static_cast<CoreAudioHardwareProvider*>(refCon);
-    return coreAudioCallbackImpl(provider, actionFlags, timeStamp, busNumber, numberFrames, ioData);
+    auto* const provider = static_cast<const CoreAudioHardwareProvider*>(refCon);
+    return coreAudioCallbackImpl(provider, const_cast<const AudioUnitRenderActionFlags*>(actionFlags), timeStamp, busNumber, numberFrames, ioData);
 }
 
 const char* CoreAudioHardwareProvider::getStatusDescription(OSStatus status) {
