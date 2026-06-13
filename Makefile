@@ -181,7 +181,7 @@ sonar-clean:
 	@rm -rf .scannerwork
 
 coverage-clean:
-	@rm -f $(COVERAGE_REPORT) $(SONAR_REPORT) $(BUILD_DIR)/coverage.profdata /tmp/coverage-raw.lcov $(BUILD_DIR)/profraw/*.profraw
+	@rm -f $(COVERAGE_REPORT) $(SONAR_REPORT) $(BUILD_DIR)/coverage.profdata $(BUILD_DIR)/lcov.info $(BUILD_DIR)/profraw/*.profraw
 	@rm -rf $(BUILD_DIR)/profraw
 
 check: test

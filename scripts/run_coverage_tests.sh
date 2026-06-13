@@ -40,5 +40,12 @@ $LLVM_COV show --show-branches=count \
     $OBJECT_ARGS \
     > "$BUILD_DIR/coverage.txt" 2>/dev/null || true
 
+echo "=== Generating lcov report (for coverage-gutters) ==="
+$LLVM_COV export -format=lcov \
+    -instr-profile "$BUILD_DIR/coverage.profdata" \
+    "$MAIN_BIN" \
+    $OBJECT_ARGS \
+    > "$BUILD_DIR/lcov.info" 2>/dev/null || true
+
 echo "=== Coverage report generated ==="
 wc -l "$BUILD_DIR/coverage.txt" | awk '{print "Lines:", $1}'
