@@ -4,6 +4,7 @@
 // Phase F: Moved to engine-sim-bridge submodule
 
 #include "hardware/CoreAudioHardwareProvider.h"
+#include "common/Verification.h"
 
 #include <cstring>
 #include <thread>
@@ -349,6 +350,13 @@ OSStatus CoreAudioHardwareProvider::coreAudioCallbackImpl(
     UInt32 numberFrames,
     AudioBufferList* ioData
 ) {
+    ASSERT(provider, "coreAudioCallbackImpl: null provider");
+    ASSERT(provider->audioCallback_, "coreAudioCallbackImpl: null callback");
+
+    (void)actionFlags;
+    (void)timeStamp;
+    (void)busNumber;
+
     float* audioData = ioData->mNumberBuffers > 0
         ? static_cast<float*>(ioData->mBuffers[0].mData)
         : nullptr;
@@ -357,13 +365,6 @@ OSStatus CoreAudioHardwareProvider::coreAudioCallbackImpl(
         : 2;
 
     AudioBufferView buffer(audioData, static_cast<int>(numberFrames), channels);
-
-    // Suppress CoreAudio parameters we don't use
-    (void)actionFlags;
-    (void)timeStamp;
-    (void)busNumber;
-
-    // Invoke the user-provided callback with platform-agnostic buffer
     return static_cast<OSStatus>(provider->audioCallback_(buffer));
 }
 
@@ -376,7 +377,7 @@ OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
     AudioBufferList* ioData
 ) {
     auto* const provider = static_cast<const CoreAudioHardwareProvider*>(refCon);
-    return coreAudioCallbackImpl(provider, const_cast<const AudioUnitRenderActionFlags*>(actionFlags), timeStamp, busNumber, numberFrames, ioData);
+    return coreAudioCallbackImpl(provider, actionFlags, timeStamp, busNumber, numberFrames, ioData);
 }
 
 const char* CoreAudioHardwareProvider::getStatusDescription(OSStatus status) {
