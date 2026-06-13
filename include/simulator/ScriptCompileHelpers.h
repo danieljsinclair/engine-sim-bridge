@@ -157,7 +157,7 @@ inline ScriptCompileTarget prepareScriptCompileTarget(
             return target;
         }
 
-        target.wrapperPath = target.assetsDir / ("_bridge_wrapper_" + std::to_string(getpid()) + ".mr");
+        target.wrapperPath = fs::temp_directory_path() / ("_bridge_wrapper_" + std::to_string(getpid()) + ".mr");
         std::ofstream wrapper(target.wrapperPath);
         if (!wrapper.is_open()) {
             throw std::runtime_error("Cannot create wrapper script: " + target.wrapperPath.string());
