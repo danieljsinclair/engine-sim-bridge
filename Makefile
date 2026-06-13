@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := all
-.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism test-deep presets clean-presets sonar-scan sonar-clean coverage-clean
+.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism test-deep presets clean-presets sonar-scan sonar-clean coverage-clean coverage-run sonar-summary
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
@@ -21,8 +21,8 @@ BUILD_STAMP := $(BUILD_DIR)/.build-ready.stamp
 SONAR_STAMP := $(BUILD_DIR)/.sonar-scan.stamp
 SONAR_PROJECT_PROPERTIES := sonar-project.properties
 COMPILE_DB := $(BUILD_DIR)/compile_commands.json
-COVERAGE_REPORT := $(BUILD_DIR)/coverage-report.xml
-SONAR_TOKEN ?= $(or $(SONAR_TOKEN_ES),$(SONAR_TOKEN))
+COVERAGE_REPORT := $(BUILD_DIR)/coverage.txt
+SONAR_TOKEN ?= ${SONAR_TOKEN_ES}
 
 # Source inputs that affect the bridge build. This ensures the stamp is invalidated
 # when bridge or engine-sim sources change, so rebuilds happen when necessary.
@@ -106,7 +106,7 @@ clean-test-fixtures:
 	@echo "Done."
 
 # Run the bridge suite in explicit tiers.
-test: sonar-scan test-core test-deep
+test: sonar-scan test-core test-deep sonar-summary
 
 test-core: CTEST_SELECTOR := -E '$(BRIDGE_TEST_CORE_EXCLUDE)'
 test-core: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: core bridge suite (factory + preset regression coverage) ===
@@ -130,34 +130,59 @@ test-deep: build test-isomorphism
 # SonarQube scan - runs before tests as a quality gate
 # ============================================================================
 
-# Coverage report for SonarQube — requires Debug build with --coverage
+# LLVM coverage: build static with llvm-cov flags, export lcov
+# Uses xcrun (Xcode toolchain) with Homebrew LLVM fallback
+LLVM_COV := $(shell xcrun --find llvm-cov 2>/dev/null || which llvm-cov 2>/dev/null)
+LLVM_PROFDATA := $(shell xcrun --find llvm-profdata 2>/dev/null || which llvm-profdata 2>/dev/null)
+
+# Coverage build: reconfigure + build with llvm-cov instrumentation
+# Does NOT run tests — tests are run separately via make coverage-run
 $(COVERAGE_REPORT): $(BUILD_STAMP)
-	@echo "=== [engine-sim-bridge] Generating coverage report ==="
+	@echo "=== [engine-sim-bridge] Configuring coverage build ==="
 	@cd $(BUILD_DIR) && cmake \
 		-DCMAKE_BUILD_TYPE=Debug \
+		-DCMAKE_CXX_FLAGS="-fprofile-instr-generate -fcoverage-mapping -g" \
+		-DCMAKE_EXE_LINKER_FLAGS="-fprofile-instr-generate" \
 		-DBUILD_PRESET_ENGINE_TESTS=ON \
 		-DBUILD_IOS_ADAPTER_TESTS=ON \
 		-DBUILD_PHASE0_SPIKES=OFF \
-		-DENABLE_COVERAGE=ON \
 		..
+	@echo "=== [engine-sim-bridge] Building with coverage instrumentation ==="
 	@cmake --build $(BUILD_DIR) $(CMAKE_BUILD_PARALLEL_FLAG)
-	@cd $(BUILD_DIR) && GCOV_PREFIX=$(abspath .) GCOV_PREFIX_STRIP=0 ctest --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)' || true
-	@gcovr --sonarqube --output $(abspath $(COVERAGE_REPORT)) --root $(abspath .) --object-directory $(abspath $(BUILD_DIR)) --gcov-ignore-errors=all --gcov-ignore-parse-errors=suspicious_hits.warn_once_per_file --exclude 'build/_deps/*' --exclude 'build/engine-sim/dependencies/*'
+	@touch $@
 
-sonar-scan: $(SONAR_STAMP)
+# coverage-run: run tests on coverage-instrumented build, merge profdata, export lcov
+coverage-run: $(COVERAGE_REPORT)
+	@LLVM_PROFDATA="$(LLVM_PROFDATA)" LLVM_COV="$(LLVM_COV)" \
+		bash scripts/run_coverage_tests.sh $(BUILD_DIR)
 
-$(SONAR_STAMP): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES)
+sonar-scan: $(SONAR_STAMP) coverage-run
+
+SONAR_REPORT := $(BUILD_DIR)/sonar-report.json
+
+$(SONAR_STAMP): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(BUILD_STAMP)
+	@if [ -z "$${SONAR_TOKEN_ES}" ]; then \
+		echo "ERROR: SONAR_TOKEN_ES is not set. Run: source ~/.zshrc"; \
+		exit 1; \
+	fi
 	@echo "=== [engine-sim-bridge] Running Sonar scan ==="
-	-SONAR_TOKEN="$(or $(SONAR_TOKEN_ES),$(SONAR_TOKEN))" sonar-scanner
+	@SONAR_TOKEN="$${SONAR_TOKEN_ES}" sonar-scanner \
+	-Dsonar.token="$${SONAR_TOKEN_ES}"
+	@echo "=== [engine-sim-bridge] Caching SonarCloud issue report ==="
+	@TOKEN="$${SONAR_TOKEN_ES}"; \
+	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500" \
+		> $(SONAR_REPORT) 2>/dev/null || true
 	@touch $@
 
 $(COMPILE_DB): $(BUILD_DIR)/CMakeCache.txt
 
 sonar-clean:
 	@rm -f $(SONAR_STAMP)
+	@rm -rf .scannerwork
 
 coverage-clean:
-	@rm -f $(COVERAGE_REPORT)
+	@rm -f $(COVERAGE_REPORT) $(SONAR_REPORT) $(BUILD_DIR)/coverage.profdata /tmp/coverage-raw.lcov $(BUILD_DIR)/profraw/*.profraw
+	@rm -rf $(BUILD_DIR)/profraw
 
 check: test
 
@@ -171,6 +196,10 @@ check: test
 #
 # Single source of truth: CANDIDATE_ENGINES lists which scripts to compile.
 # ============================================================================
+
+# Sonar summary — display issues from cached SonarCloud report
+sonar-summary: $(SONAR_REPORT)
+	@python3 scripts/sonar_summary.py $(SONAR_REPORT)
 
 # Add/remove engines here — this is the ONLY list. Everything here is compiled, tested, and shipped.
 ENGINES := ferrari_f136 2jz C63_M156_V2 subaru_ej25 lfa_v10 v8_gm_ls 11_merlin_v12 06_subaru_ej25
@@ -229,6 +258,7 @@ help:
 	@echo "  make          - Build + test + presets (complete pipeline)"
 	@echo "  make build    - Compile everything (no tests)"
 	@echo "  make sonar-scan - Run SonarQube scan with coverage (only re-runs when build/inputs change)"
+	@echo "  make sonar-summary - Show SonarCloud issues summary"
 	@echo "  make test     - Run sonar scan with coverage, core tests, then deep tests"
 	@echo "  make test-core - Run the always-on bridge suite"
 	@echo "  make test-isomorphism - Run file-based incremental isomorphism tests when inputs are newer"
@@ -243,48 +273,3 @@ help:
 	@echo "  2. Place the .mr script in es/"
 	@echo "  3. Run 'make presets'"
 
-# Sonar scanner cleanup
-sonar-clean:
-	@rm -rf .scannerwork
-
-# Coverage cleanup
-coverage-clean:
-	@rm -f *.gcno *.gcda *.gcov coverage-report.xml
-
-# ============================================================================
-# SonarQube scan - runs with coverage for quality analysis
-# ============================================================================
-
-SONAR_STAMP := $(BUILD_DIR)/.sonar-scan.stamp
-SONAR_PROJECT_PROPERTIES := sonar-project.properties
-COVERAGE_REPORT := $(BUILD_DIR)/coverage-report.xml
-COMPILE_DB := $(BUILD_DIR)/compile_commands.json
-SONAR_TOKEN ?= $(or $(SONAR_TOKEN_ES),$(SONAR_TOKEN))
-
-sonar-scan: $(SONAR_STAMP)
-
-$(COVERAGE_REPORT): $(BUILD_STAMP)
-	@echo "=== [engine-sim-bridge] Generating coverage report ==="
-	@cd $(BUILD_DIR) && cmake \
-		-DCMAKE_BUILD_TYPE=Debug \
-		-DBUILD_PRESET_ENGINE_TESTS=ON \
-		-DBUILD_IOS_ADAPTER_TESTS=ON \
-		-DBUILD_PHASE0_SPIKES=OFF \
-		-DENABLE_COVERAGE=ON \
-		..
-	@cmake --build $(BUILD_DIR) $(CMAKE_BUILD_PARALLEL_FLAG)
-	@cd $(BUILD_DIR) && GCOV_PREFIX=$(abspath .) GCOV_PREFIX_STRIP=0 ctest --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -E '$(BRIDGE_TEST_EXCLUDE)' || true
-	@gcovr --sonarqube --output $(abspath $(COVERAGE_REPORT)) --root $(abspath .) --object-directory $(abspath $(BUILD_DIR)) --gcov-ignore-errors=all --gcov-ignore-parse-errors=suspicious_hits.warn_once_per_file --exclude 'build/_deps/*' --exclude 'build/engine-sim/dependencies/*'
-
-$(SONAR_STAMP): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES)
-	@echo "=== [engine-sim-bridge] Running Sonar scan ==="
-	-SONAR_TOKEN="$(or $(SONAR_TOKEN_ES),$(SONAR_TOKEN))" sonar-scanner
-	@touch $@
-
-$(COMPILE_DB): $(BUILD_DIR)/CMakeCache.txt
-
-sonar-clean:
-	@rm -f $(SONAR_STAMP)
-
-coverage-clean:
-	@rm -f $(COVERAGE_REPORT)

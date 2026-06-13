@@ -9,32 +9,13 @@ endif()
 
 project(engine-sim-bridge VERSION 1.0.0 LANGUAGES C CXX)
 
-option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
-if(ENABLE_COVERAGE)
-    add_compile_options(--coverage -g)
-    add_link_options(--coverage)
-endif()
-
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
-if(ENABLE_COVERAGE)
-    add_compile_options(--coverage -g)
-    add_link_options(--coverage)
-endif()
-
-# When coverage is enabled, always build as static to work around gcov limitations
-# with shared libraries on macOS (gcov doesn't write .gcda files for shared libs)
-if(ENABLE_COVERAGE)
-    set(LIB_TYPE STATIC)
-elseif(IOS OR ESP_PLATFORM)
-    set(LIB_TYPE STATIC)
-else()
-    set(LIB_TYPE SHARED)
-endif()
+# Bridge always builds as static library
+set(LIB_TYPE STATIC)
 
 # Find engine-sim (expected as a submodule at ./engine-sim)
 # Use ENGINE_SIM_PATH if set by parent project for override
@@ -181,9 +162,12 @@ else()
     )
 endif()
 
-# Build library type determined by coverage mode and platform
-# Coverage requires static library to work around gcov limitations on macOS
-# iOS/ESP32 always build as static, macOS normally builds as shared
+# Bridge is always static; coverage uses llvm-cov instrumentation
+option(ENABLE_COVERAGE "Enable llvm-cov coverage instrumentation" OFF)
+if(ENABLE_COVERAGE)
+    add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
+    add_link_options(-fprofile-instr-generate)
+endif()
 add_library(engine-sim-bridge ${LIB_TYPE} ${BRIDGE_SOURCES})
 
 # Platform-specific audio libraries
@@ -235,24 +219,6 @@ if(APPLE AND NOT IOS)
         INSTALL_NAME_DIR "@rpath"
     )
 
-    # Custom target that always runs to copy library files
-    add_custom_target(copy-engine-sim-bridge ALL
-        COMMAND ${CMAKE_COMMAND} -E remove -f
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.dylib
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.dylib
-            ${CMAKE_BINARY_DIR}/libenginesim.dylib
-        COMMAND ${CMAKE_COMMAND} -E copy
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.dylib
-        COMMAND ${CMAKE_COMMAND} -E copy
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.dylib
-        COMMAND ${CMAKE_COMMAND} -E copy
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
-            ${CMAKE_BINARY_DIR}/libenginesim.dylib
-        DEPENDS engine-sim-bridge
-        COMMENT "Copying libenginesim to build directories"
-    )
 endif()
 
 # Critical fix for iOS cross compilation:

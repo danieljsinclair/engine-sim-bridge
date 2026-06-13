@@ -1,7 +1,6 @@
 # Build directories
 build/
-build-test/
-build*/
+build-*/
 spikes/
 
 # CMake
@@ -41,7 +40,6 @@ Thumbs.db
 *.tmp
 .cache/
 /**/Temporary/
-build-test/
 .claude/scheduled_tasks.lock
 .cache/
 
@@ -57,3 +55,5 @@ codeql-db/
 *.gcda
 *.gcov
 coverage-report.xml
+coverage.lcov
+*.profraw
