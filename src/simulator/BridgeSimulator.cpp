@@ -225,7 +225,7 @@ bool BridgeSimulator::changeGear(int gearDelta) {
 
     auto* trans = m_simulator->getTransmission();
     if (!trans) {
-        logger_->warning(LogMask::BRIDGE, "Cannot change gear: no transmission in simulator");
+        logger_->warning(LogMask::BRIDGE, __ilog_format("Cannot change gear: no transmission in simulator"));
         return false;
     }
 

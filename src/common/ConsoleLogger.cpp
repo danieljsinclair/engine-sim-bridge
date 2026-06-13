@@ -2,9 +2,7 @@
 // stdout for debug/info, stderr for warn/error
 
 #include "common/ILogging.h"
-#include <cstdarg>
 #include <cstdio>
-#include <vector>
 
 const char* ConsoleLogger::levelToString(uint32_t level) const {
     if (level == LogMask::DBG)   return "DEBUG";
@@ -25,33 +23,12 @@ bool ConsoleLogger::shouldLog(uint32_t mask) const {
            ((level & mask_) || (mask_ & LogMask::ALL_LEVELS));
 }
 
-// Virtual dispatch target — formats via vsnprintf to avoid vfprintf
-// non-literal format string warning (S5281)
-void ConsoleLogger::writeLog(uint32_t mask, const char* format, va_list args) const {
+void ConsoleLogger::_write(uint32_t mask, const std::string& msg) {
     if (!shouldLog(mask)) return;
 
     uint32_t level = mask & 0xFFFF0000;
     FILE* stream = getStream(level);
 
-    // Format the message into a buffer using va_list, then write with literal "%s"
-    va_list argsCopy;
-    va_copy(argsCopy, args);
-    int needed = vsnprintf(nullptr, 0, format, argsCopy);
-    va_end(argsCopy);
-
-    if (needed < 0) {
-        fprintf(stream, "[%s] (format error)\n", levelToString(level));
-        fflush(stream);
-        return;
-    }
-
-    std::vector<char> buf(static_cast<size_t>(needed) + 1);
-    vsnprintf(buf.data(), buf.size(), format, args);
-
-    fprintf(stream, "[%s] %s\n", levelToString(level), buf.data());
+    fprintf(stream, "[%s] %s\n", levelToString(level), msg.c_str());
     fflush(stream);
-}
-
-void ConsoleLogger::_vlog(uint32_t mask, const char* format, va_list args) {
-    writeLog(mask, format, args);
 }

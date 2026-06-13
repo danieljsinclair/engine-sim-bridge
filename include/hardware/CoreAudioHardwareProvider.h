@@ -90,6 +90,14 @@ private:
     // Private Helper Methods
     // ================================================================
 
+    void doCleanup();
+    static OSStatus coreAudioCallbackImpl(
+        CoreAudioHardwareProvider* provider,
+        const AudioUnitRenderActionFlags* actionFlags,
+        const AudioTimeStamp* timeStamp,
+        UInt32 busNumber,
+        UInt32 numberFrames,
+        AudioBufferList* ioData);
     bool setupAudioUnit();
     bool setDeviceSampleRate(Float64 targetRate);
     bool configureAudioFormat(const AudioStreamFormat& format);

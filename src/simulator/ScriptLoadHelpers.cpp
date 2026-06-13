@@ -60,14 +60,14 @@ bool loadImpulseResponses(
 
         if (!wavResult.valid) {
             if (logger) {
-                logger->error(LogMask::ASSET, "Failed to load required audio file: %s", fullPath.c_str());
-                logger->error(LogMask::ASSET, "(asset base: %s, from script: %s)", assetBasePath.c_str(), filename.c_str());
+                logger->error(LogMask::ASSET, __ilog_format("Failed to load required audio file: %s", fullPath.c_str()));
+                logger->error(LogMask::ASSET, __ilog_format("(asset base: %s, from script: %s)", assetBasePath.c_str(), filename.c_str()));
             }
             return false;
         }
 
         if (logger) {
-            logger->info(LogMask::ASSET, "Loaded impulse response: %s (%zu samples)", fullPath.c_str(), wavResult.getSampleCount());
+            logger->info(LogMask::ASSET, __ilog_format("Loaded impulse response: %s (%zu samples)", fullPath.c_str(), wavResult.getSampleCount()));
         }
 
         simulator->synthesizer().initializeImpulseResponse(

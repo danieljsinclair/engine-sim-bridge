@@ -68,14 +68,14 @@ bool SyncPullStrategy::initialize(const AudioBufferConfig& config, int sampleRat
     diagnostics_.setSampleRate(sampleRate);
 
     logger_->info(LogMask::AUDIO,
-                  "SyncPullStrategy initialized: sampleRate=%dHz, channels=%d",
-                  sampleRate, config.channels);
+                  __ilog_format("SyncPullStrategy initialized: sampleRate=%dHz, channels=%d",
+                  sampleRate, config.channels));
 
     return true;
 }
 
 void SyncPullStrategy::prepareBuffer() {
-    logger_->debug(LogMask::AUDIO, "SyncPullStrategy::prepareBuffer: No-op for sync-pull mode");
+    logger_->debug(LogMask::AUDIO, __ilog_format("SyncPullStrategy::prepareBuffer: No-op for sync-pull mode"));
 }
 
 bool SyncPullStrategy::startPlayback(ISimulator* simulator) {
@@ -89,7 +89,7 @@ bool SyncPullStrategy::startPlayback(ISimulator* simulator) {
     lastRightSample_ = 0.0f;
     crossfadeSamplesRemaining_ = 0;
 
-    logger_->info(LogMask::AUDIO, "SyncPullStrategy::startPlayback: On-demand rendering started");
+    logger_->info(LogMask::AUDIO, __ilog_format("SyncPullStrategy::startPlayback: On-demand rendering started"));
 
     return true;
 }
@@ -99,7 +99,7 @@ void SyncPullStrategy::stopPlayback(ISimulator* /* simulator */) {
     simulator_ = nullptr;
     audioState_.isPlaying.store(false);
 
-    logger_->info(LogMask::AUDIO, "SyncPullStrategy::stopPlayback: On-demand rendering stopped");
+    logger_->info(LogMask::AUDIO, __ilog_format("SyncPullStrategy::stopPlayback: On-demand rendering stopped"));
 }
 
 void SyncPullStrategy::swapSimulator(ISimulator* newSimulator) {
@@ -114,7 +114,7 @@ void SyncPullStrategy::swapSimulator(ISimulator* newSimulator) {
 }
 
 void SyncPullStrategy::resetBufferAfterWarmup() {
-    logger_->debug(LogMask::AUDIO, "SyncPullStrategy::resetBufferAfterWarmup: No-op for sync-pull mode");
+    logger_->debug(LogMask::AUDIO, __ilog_format("SyncPullStrategy::resetBufferAfterWarmup: No-op for sync-pull mode"));
 }
 
 void SyncPullStrategy::updateSimulation(ISimulator* /* simulator */, double /* deltaTimeMs */) {
@@ -155,7 +155,7 @@ bool SyncPullStrategy::attemptRender(float* dst, int offset, int framesNeeded,
     );
 
     if (!result) {
-        logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed, filling silence");
+        logger_->error(LogMask::AUDIO, __ilog_format("SyncPullStrategy::render: renderOnDemand failed, filling silence"));
     }
     return result;
 }
@@ -206,7 +206,7 @@ int SyncPullStrategy::renderChunked(float* dst, int framesToGenerate) {
         if (framesWritten == 0 && remainingFrames > 0) {
             int32_t retryFrames = 0;
             if (bool retryOk = retryRender(dst, framesRendered, remainingFrames, retryFrames, MAX_RETRIES); !retryOk) {
-                logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed during retry, filling silence");
+                logger_->error(LogMask::AUDIO, __ilog_format("SyncPullStrategy::render: renderOnDemand failed during retry, filling silence"));
                 EngineSimAudio::fillSilence(dst, framesToGenerate);
                 return framesRendered;
             }
@@ -216,8 +216,8 @@ int SyncPullStrategy::renderChunked(float* dst, int framesToGenerate) {
                 remainingFrames -= retryFrames;
             } else {
                 logger_->warning(LogMask::AUDIO,
-                    "SyncPullStrategy::render: exhausted %d retries, filling silence for %d frames",
-                    MAX_RETRIES, remainingFrames);
+                    __ilog_format("SyncPullStrategy::render: exhausted %d retries, filling silence for %d frames",
+                    MAX_RETRIES, remainingFrames));
                 break;
             }
         }
@@ -231,8 +231,8 @@ void SyncPullStrategy::fillRemainingSilence(float* dst, int framesRendered, int 
     if (framesRendered < framesToGenerate) {
         // NOTE: Should never happen in practice - could probably just throw an exception here
         logger_->warning(LogMask::AUDIO,
-            "SyncPullStrategy::render: rendered %d/%d frames, filling remaining %d with silence",
-            framesRendered, framesToGenerate, remainingFrames);
+            __ilog_format("SyncPullStrategy::render: rendered %d/%d frames, filling remaining %d with silence",
+            framesRendered, framesToGenerate, remainingFrames));
         float* remaining = dst + (framesRendered * 2);
         EngineSimAudio::fillSilence(remaining, framesToGenerate - framesRendered);
     }
@@ -306,12 +306,12 @@ bool SyncPullStrategy::AddFrames(
     float* /* buffer */,
     int /* frameCount */
 ) {
-    logger_->debug(LogMask::AUDIO, "SyncPullStrategy::AddFrames: No-op for sync-pull mode");
+    logger_->debug(LogMask::AUDIO, __ilog_format("SyncPullStrategy::AddFrames: No-op for sync-pull mode"));
     return true;
 }
 
 void SyncPullStrategy::reset() {
-    logger_->debug(LogMask::AUDIO, "SyncPullStrategy reset: No-op for sync-pull mode");
+    logger_->debug(LogMask::AUDIO, __ilog_format("SyncPullStrategy reset: No-op for sync-pull mode"));
 }
 
 std::string SyncPullStrategy::getModeString() const {

@@ -244,9 +244,9 @@ bool SimulatorFactory::configureLoadTorque(ISimulator* simulator, double loadFra
     const bool configured = bridgeSim->configureDynoLoad(loadFraction);
 
     if (configured && logger) {
-        logger->info(LogMask::BRIDGE, "Load: %d%% (%d ft*lbs max)",
+        logger->info(LogMask::BRIDGE, __ilog_format("Load: %d%% (%d ft*lbs max)",
                      static_cast<int>(loadFraction * 100),
-                     static_cast<int>(loadFraction * EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS));
+                     static_cast<int>(loadFraction * EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS)));
     }
     return configured;
 }

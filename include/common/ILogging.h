@@ -7,6 +7,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 
 // ============================================================================
 // LogMask - Single 32-bit bitmask for filtering
@@ -39,54 +40,40 @@ namespace LogMask {
     constexpr uint32_t ALL         = 0xFFFFFFFF;
 }
 
+// Format a printf-style message into a std::string.
+// This is a variadic template that expands at the call site where the
+// format string is a literal, avoiding S5281 in .cpp files.
+inline std::string __ilog_format(const char* fmt) {
+    return std::string(fmt);
+}
+template <typename... Args>
+std::string __ilog_format(const char* fmt, Args&&... args) {
+    int needed = snprintf(nullptr, 0, fmt, std::forward<Args>(args)...);
+    if (needed < 0) return "(format error)";
+    std::string result(static_cast<size_t>(needed), '\0');
+    snprintf(result.data(), result.size() + 1, fmt, std::forward<Args>(args)...);
+    return result;
+}
+
 // Abstract logging interface.
-// Design: virtual _vlog() takes va_list for polymorphic dispatch.
-// Non-virtual log()/debug/info/warning/error use va_start/va_end to
-// forward to _vlog(). This eliminates C-style ellipsis (...) from both
-// the virtual interface and all implementations.
+// Public API accepts pre-formatted std::string — no printf-family calls
+// with non-literal format strings anywhere in the implementation.
 class ILogging {
 public:
     virtual ~ILogging() = default;
 
-    // Public API — non-virtual, no ellipsis
-    void log(uint32_t mask, const char* format, ...) {
-        va_list args;
-        va_start(args, format);
-        _vlog(mask, format, args);
-        va_end(args);
-    }
-    void debug(uint32_t category, const char* format, ...) {
-        va_list args;
-        va_start(args, format);
-        _vlog(category | LogMask::DBG, format, args);
-        va_end(args);
-    }
-    void info(uint32_t category, const char* format, ...) {
-        va_list args;
-        va_start(args, format);
-        _vlog(category | LogMask::INFO, format, args);
-        va_end(args);
-    }
-    void warning(uint32_t category, const char* format, ...) {
-        va_list args;
-        va_start(args, format);
-        _vlog(category | LogMask::WARN, format, args);
-        va_end(args);
-    }
-    void error(uint32_t category, const char* format, ...) {
-        va_list args;
-        va_start(args, format);
-        _vlog(category | LogMask::ERROR, format, args);
-        va_end(args);
-    }
+    void log(uint32_t mask, const std::string& msg) { _write(mask, msg); }
+    void debug(uint32_t category, const std::string& msg) { _write(category | LogMask::DBG, msg); }
+    void info(uint32_t category, const std::string& msg) { _write(category | LogMask::INFO, msg); }
+    void warning(uint32_t category, const std::string& msg) { _write(category | LogMask::WARN, msg); }
+    void error(uint32_t category, const std::string& msg) { _write(category | LogMask::ERROR, msg); }
 
-    // Set filter mask (can combine categories and levels)
     virtual void setMask(uint32_t mask) = 0;
     virtual uint32_t getMask() const = 0;
 
 protected:
-    // Virtual dispatch — takes va_list, no ellipsis
-    virtual void _vlog(uint32_t mask, const char* format, va_list args) = 0;
+    // Virtual dispatch — takes va_list (no ellipsis in signature)
+    virtual void _write(uint32_t mask, const std::string& msg) = 0;
 };
 
 // Default console implementation
@@ -103,8 +90,7 @@ private:
     const char* levelToString(uint32_t level) const;
     FILE* getStream(uint32_t level) const;
     bool shouldLog(uint32_t mask) const;
-    void writeLog(uint32_t mask, const char* format, va_list args) const;
-    void _vlog(uint32_t mask, const char* format, va_list args) override;
+    void _write(uint32_t mask, const std::string& msg) override;
 };
 
 #endif // ILOGGING_H

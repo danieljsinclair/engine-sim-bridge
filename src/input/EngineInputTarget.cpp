@@ -54,11 +54,11 @@ void EngineInputTarget::cyclePreset() { presetCycle_ = true; }
 void EngineInputTarget::adjustDynoTorque(double delta) {
     if (dynoTorqueScale_ < 0.0) dynoTorqueScale_ = 0.0;
     dynoTorqueScale_ = std::clamp(dynoTorqueScale_ + delta, 0.0, 1.0);
-    if (logger_) logger_->info(LogMask::BRIDGE, "Dyno torque: %.2f", dynoTorqueScale_);
+    if (logger_) logger_->info(LogMask::BRIDGE, __ilog_format("Dyno torque: %.2f", dynoTorqueScale_));
 }
 void EngineInputTarget::releaseDynoTorque() {
     dynoTorqueScale_ = 0.0;
-    if (logger_) logger_->info(LogMask::BRIDGE, "Dyno torque released");
+    if (logger_) logger_->info(LogMask::BRIDGE, __ilog_format("Dyno torque released"));
 }
 void EngineInputTarget::setBrake(double level) { brakeLevel_ = level; }
 void EngineInputTarget::adjustSpeed(double delta) {
