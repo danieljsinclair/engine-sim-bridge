@@ -182,7 +182,7 @@ void SimulationLoop::applyVehicleControls(
     const input::EngineInput& input, const CrankingController::State& crankingState,
     double& lastDynoTorqueScale) {
 
-    simulator_.setThrottle(crankingState.startingThrottle);
+    simulator_.setThrottle(crankingState.startingThrottle); // NOSONAR S2259 — simulator_ is a reference member, always non-null
 
     if (combustionEngine != nullptr) {
         combustionEngine->setIgnition(input.ignition);

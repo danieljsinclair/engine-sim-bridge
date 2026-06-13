@@ -11,6 +11,7 @@
 #include <chrono>
 #include <AudioUnit/AudioComponent.h>
 #include <AudioUnit/AudioUnit.h>
+#include <include/common/PresetExceptions.h>
 
 // ================================================================
 // CoreAudioHardwareProvider Implementation
@@ -319,13 +320,13 @@ bool CoreAudioHardwareProvider::configureAudioFormat(const AudioStreamFormat& fo
 
 bool CoreAudioHardwareProvider::registerCallbackWithAudioUnit() {
     if (!audioUnit || !audioCallback_) {
-        return false;
+        throw SimulatorException("Cannot register callback - AudioUnit not initialized or callback not set");
     }
 
     // Set up callback structure
     AURenderCallbackStruct callbackStruct;
     callbackStruct.inputProc = &coreAudioCallbackWrapper;
-    callbackStruct.inputProcRefCon = this;  // Pass 'this' to static callback wrapper
+    callbackStruct.inputProcRefCon = this;
 
     if (OSStatus status = AudioUnitSetProperty(
             audioUnit,
@@ -370,14 +371,14 @@ OSStatus CoreAudioHardwareProvider::coreAudioCallbackImpl(
 
 OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
     AudioRefCon refCon,
-    AudioUnitRenderActionFlags* actionFlags,
+    AudioUnitRenderActionFlags* actionFlags, // NOSONAR S995 — must match CoreAudio AURenderCallback typedef
     const AudioTimeStamp* timeStamp,
     UInt32 busNumber,
     UInt32 numberFrames,
     AudioBufferList* ioData
 ) {
     auto* const provider = static_cast<const CoreAudioHardwareProvider*>(refCon);
-    return coreAudioCallbackImpl(provider, const_cast<const AudioUnitRenderActionFlags*>(actionFlags), timeStamp, busNumber, numberFrames, ioData);
+    return coreAudioCallbackImpl(provider, actionFlags, timeStamp, busNumber, numberFrames, ioData);
 }
 
 const char* CoreAudioHardwareProvider::getStatusDescription(OSStatus status) {
