@@ -168,15 +168,11 @@ inline ScriptCompileTarget prepareScriptCompileTarget(
         wrapper << "main()\n";
         target.compileTarget = target.wrapperPath;
     } else {
-        // create path if it doesn't exist yet
-        if (!fs::exists(target.assetsDir)) {
-            fs::create_directories(target.assetsDir);
-        }
-        target.tempScriptPath = target.assetsDir /
+        // Script is outside assets/. Copy to a temp directory (not assets/) so we
+        // never pollute the source tree, then compile from there.
+        target.tempScriptPath = fs::temp_directory_path() /
             ("_bridge_tmp_" + absScriptPath.stem().string() + "_" + std::to_string(getpid()) + ".mr");
-        std::cout << "Copying script from " << absScriptPath << " to: " << target.tempScriptPath << std::endl;
         fs::copy_file(absScriptPath, target.tempScriptPath, fs::copy_options::overwrite_existing);
-        target.relativeImport = target.tempScriptPath.filename().generic_string();
         target.compileTarget = target.tempScriptPath;
     }
 
