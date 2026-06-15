@@ -9,11 +9,20 @@ LLVM_PROFDATA="${LLVM_PROFDATA:-$(xcrun --find llvm-profdata 2>/dev/null || whic
 
 mkdir -p "$PROFRAW_DIR"
 
+# Track failures without aborting early: every binary runs so all profraw is
+# collected, but we exit non-zero at the end if any binary failed.
+FAILED_COUNT=0
+FAILED_BINS=""
+
 echo "=== Running tests with coverage instrumentation ==="
 for test_bin in "$BUILD_DIR"/*test*; do
     if [ -x "$test_bin" ] && [ -f "$test_bin" ]; then
         echo "  Running: $(basename $test_bin)"
-        LLVM_PROFILE_FILE="$PROFRAW_DIR/coverage-%p.profraw" "$test_bin" || true
+        if ! LLVM_PROFILE_FILE="$PROFRAW_DIR/coverage-%p.profraw" "$test_bin"; then
+            echo "  FAILED: $(basename $test_bin) (exit non-zero) — continuing to collect remaining coverage"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            FAILED_BINS="$FAILED_BINS $(basename $test_bin)"
+        fi
     fi
 done
 
@@ -49,3 +58,11 @@ $LLVM_COV export -format=lcov \
 
 echo "=== Coverage report generated ==="
 wc -l "$BUILD_DIR/coverage.txt" | awk '{print "Lines:", $1}'
+
+# Honesty gate: if any test binary failed during the run loop above, surface it
+# now (after coverage artefacts have been collected) and exit non-zero. The
+# merge/export steps above completed successfully under `set -e`.
+if [ "$FAILED_COUNT" -gt 0 ]; then
+    echo "=== FAILED: $FAILED_COUNT test binary(ies) during coverage run:$FAILED_BINS ===" >&2
+    exit 1
+fi

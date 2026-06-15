@@ -53,11 +53,56 @@ def count_by_severity(issues):
     return counts
 
 
+def count_by_impact(issues):
+    """Return dict of software quality -> impact severity -> count."""
+    counts = {}
+    for i in issues:
+        for impact in i.get('impacts', []):
+            quality = impact.get('softwareQuality', 'UNKNOWN')
+            severity = impact.get('severity', 'UNKNOWN')
+            counts.setdefault(quality, {})[severity] = counts.setdefault(quality, {}).get(severity, 0) + 1
+    return counts
+
+
+def count_impact_severity(issues, quality):
+    """Return dict of impact severity -> count for a software quality."""
+    counts = {}
+    for i in issues:
+        for impact in i.get('impacts', []):
+            if impact.get('softwareQuality') != quality:
+                continue
+            severity = impact.get('severity', 'UNKNOWN')
+            counts[severity] = counts.get(severity, 0) + 1
+    return counts
+
+
+def impact_severity_color(severity):
+    """Return ANSI color code for impact severity."""
+    if severity == 'BLOCKER':
+        return RED
+    if severity == 'HIGH':
+        return RED
+    if severity == 'MEDIUM':
+        return ORANGE
+    if severity == 'LOW':
+        return YELLOW
+    if severity == 'INFO':
+        return CYAN
+    return GREEN
+
+
+def format_impact_line(quality, counts):
+    """Print a software-quality impact line with color."""
+    total = sum(counts.values())
+    print('  {}● {:<13}: {}{}'.format(total_issues_color(counts), quality, total, RESET))
+
+
 def display_summary(data):
     """Display the full SonarCloud issue summary."""
-    issues = data.get('issues', [])
-    total = data.get('total', len(issues))
+    issues = [i for i in data.get('issues', []) if i.get('status') not in ('CLOSED', 'RESOLVED')]
+    total = len(issues)
     counts = count_by_severity(issues)
+    impacts = count_by_impact(issues)
 
     print('')
     print('=== SonarCloud Summary ===')
@@ -68,6 +113,15 @@ def display_summary(data):
         print('  Issues by severity:')
         for sev in ['CRITICAL', 'MAJOR', 'MINOR', 'INFO']:
             format_severity_line(sev, counts[sev])
+        print('')
+        print('  Issues by software quality:')
+        for quality in ['RELIABILITY', 'MAINTAINABILITY', 'SECURITY', 'UNKNOWN']:
+            if quality in impacts:
+                format_impact_line(quality, impacts[quality])
+                severity_counts = count_impact_severity(issues, quality)
+                for severity in ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW', 'INFO', 'UNKNOWN']:
+                    if severity in severity_counts:
+                        print('      {}● {:<8}: {}{}'.format(impact_severity_color(severity), severity, severity_counts[severity], RESET))
         print('')
         print('  Top issues:')
         for issue in issues[:10]:

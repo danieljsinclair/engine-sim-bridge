@@ -106,7 +106,7 @@ clean-test-fixtures:
 	@echo "Done."
 
 # Run the bridge suite in explicit tiers.
-test: sonar-scan test-core test-deep sonar-summary
+test: test-core test-deep sonar-scan sonar-summary
 
 test-core: CTEST_SELECTOR := -E '$(BRIDGE_TEST_CORE_EXCLUDE)'
 test-core: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: core bridge suite (factory + preset regression coverage) ===
@@ -156,7 +156,7 @@ $(COVERAGE_REPORT): $(BUILD_STAMP)
 	@touch $@
 
 # coverage-run: run tests on coverage-instrumented build, merge profdata, export lcov
-coverage-run: $(COVERAGE_REPORT)
+coverage-run: $(COVERAGE_REPORT) presets
 	@LLVM_PROFDATA="$(LLVM_PROFDATA)" LLVM_COV="$(LLVM_COV)" \
 		bash scripts/run_coverage_tests.sh $(BUILD_DIR)
 
@@ -174,7 +174,7 @@ $(SONAR_STAMP): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(B
 	-Dsonar.token="$${SONAR_TOKEN_ES}"
 	@echo "=== [engine-sim-bridge] Caching SonarCloud issue report ==="
 	@TOKEN="$${SONAR_TOKEN_ES}"; \
-	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500" \
+	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&resolved=false&ps=500" \
 		> $(SONAR_REPORT) 2>/dev/null || true
 	@touch $@
 
