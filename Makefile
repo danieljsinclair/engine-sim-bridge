@@ -2,7 +2,9 @@
 .PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism test-deep presets clean-presets sonar-scan sonar-clean coverage-clean coverage-run sonar-summary test-nosonar
 
 BUILD_DIR ?= build
-BUILD_TYPE ?= Release
+BUILD_COV_DIR ?= build-cov
+BUILD_TYPE ?= RelWithDebInfo
+BUILD_TYPE_COV ?= RelWithDebInfo
 CTEST_VERBOSE ?= 0
 CTEST_QUIET ?= 0
 CTEST_UI_FLAGS := $(if $(filter 1,$(CTEST_VERBOSE)),-V,$(if $(filter 1,$(CTEST_QUIET)),-Q,))
@@ -18,10 +20,11 @@ CTEST_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 BUILD_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 CMAKE_BUILD_PARALLEL_FLAG := $(if $(strip $(BUILD_PARALLEL_LEVEL)),--parallel $(BUILD_PARALLEL_LEVEL),)
 BUILD_STAMP := $(BUILD_DIR)/.build-ready.stamp
-SONAR_STAMP := $(BUILD_DIR)/.sonar-scan.stamp
+BUILD_COV_STAMP := $(BUILD_COV_DIR)/.build-cov-ready.stamp
 SONAR_PROJECT_PROPERTIES := sonar-project.properties
-COMPILE_DB := $(BUILD_DIR)/compile_commands.json
-COVERAGE_REPORT := $(BUILD_DIR)/coverage.txt
+COMPILE_DB := $(BUILD_COV_DIR)/compile_commands.json
+COVERAGE_REPORT := $(BUILD_COV_DIR)/coverage.txt
+SONAR_REPORT := $(BUILD_COV_DIR)/sonar-report.json
 SONAR_TOKEN ?= ${SONAR_TOKEN_ES}
 
 # Source inputs that affect the bridge build. This ensures the stamp is invalidated
@@ -94,7 +97,7 @@ clean-test:
 # Full clean - remove entire build directory (superset of clean)
 scrub: clean
 	@echo "Scrubbing bridge build..."
-	@rm -rf $(BUILD_DIR) preset tmp
+	@rm -rf $(BUILD_DIR) $(BUILD_COV_DIR) preset tmp
 	@$(MAKE) remove-orphans
 	@rm -rf .scannerwork
 
@@ -139,54 +142,69 @@ test-quick: test-core
 LLVM_COV := $(shell xcrun --find llvm-cov 2>/dev/null || which llvm-cov 2>/dev/null)
 LLVM_PROFDATA := $(shell xcrun --find llvm-profdata 2>/dev/null || which llvm-profdata 2>/dev/null)
 
-# Coverage build: reconfigure + build with llvm-cov instrumentation
+# Coverage build: separate build-cov dir with llvm-cov instrumentation.
+# Uses RelWithDebInfo (NOT Debug) + -fprofile-instr-generate/-fcoverage-mapping/-g.
+# Has its own CMakeCache so coverage reconfigure does NOT invalidate the test build.
 # Does NOT run tests — tests are run separately via make coverage-run
-$(COVERAGE_REPORT): $(BUILD_STAMP)
-	@echo "=== [engine-sim-bridge] Configuring coverage build ==="
-	@cd $(BUILD_DIR) && cmake \
-		-DCMAKE_BUILD_TYPE=Debug \
+$(BUILD_COV_DIR)/CMakeCache.txt: CMakeLists.txt
+	@mkdir -p $(BUILD_COV_DIR)
+	@cd $(BUILD_COV_DIR) && cmake \
+		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE_COV) \
 		-DCMAKE_CXX_FLAGS="-fprofile-instr-generate -fcoverage-mapping -g" \
 		-DCMAKE_EXE_LINKER_FLAGS="-fprofile-instr-generate" \
 		-DBUILD_PRESET_ENGINE_TESTS=ON \
 		-DBUILD_IOS_ADAPTER_TESTS=ON \
 		-DBUILD_PHASE0_SPIKES=OFF \
 		..
-	@echo "=== [engine-sim-bridge] Building with coverage instrumentation ==="
-	@cmake --build $(BUILD_DIR) $(CMAKE_BUILD_PARALLEL_FLAG)
+
+$(BUILD_COV_STAMP): $(BUILD_INPUTS) $(BUILD_COV_DIR)/CMakeCache.txt
+	@echo "=== [engine-sim-bridge] Building coverage (build-cov, RelWithDebInfo+instr) ==="
+	@cmake --build $(BUILD_COV_DIR) $(CMAKE_BUILD_PARALLEL_FLAG)
 	@touch $@
 
 # coverage-run: run tests on coverage-instrumented build, merge profdata, export lcov
-coverage-run: $(COVERAGE_REPORT) presets
+# File-artefact target: re-runs only when build-cov, preset JSONs, source inputs, or
+# the coverage script change. run_coverage_tests.sh writes coverage.txt itself.
+$(COVERAGE_REPORT): $(BUILD_COV_STAMP) $(PRESET_JSONS) $(BUILD_INPUTS) scripts/run_coverage_tests.sh
 	@LLVM_PROFDATA="$(LLVM_PROFDATA)" LLVM_COV="$(LLVM_COV)" \
-		bash scripts/run_coverage_tests.sh $(BUILD_DIR)
+		bash scripts/run_coverage_tests.sh $(BUILD_COV_DIR)
 
-sonar-scan: $(SONAR_STAMP) coverage-run
+# Phony alias so callers can still `make coverage-run`.
+coverage-run: $(COVERAGE_REPORT)
 
-SONAR_REPORT := $(BUILD_DIR)/sonar-report.json
+sonar-scan: $(SONAR_REPORT)
 
-$(SONAR_STAMP): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(BUILD_STAMP)
-	@if [ -z "$${SONAR_TOKEN_ES}" ]; then \
-		echo "ERROR: SONAR_TOKEN_ES is not set. Run: source ~/.zshrc"; \
+# SONAR_REPORT depends on the coverage ARTEFACT (coverage.txt), so coverage is
+# regenerated (tests re-run) before the scan reads the fresh coverage report.
+# Re-scans only when coverage/compile-db/properties/sources change. The curl
+# writes SONAR_REPORT itself.
+$(SONAR_REPORT): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(BUILD_INPUTS)
+	@if [ -z "$${SONAR_TOKEN_ES}" ] && [ -z "$${SONAR_TOKEN}" ]; then \
+		echo "ERROR: Neither SONAR_TOKEN_ES nor SONAR_TOKEN is set. Run: source ~/.zshrc"; \
 		exit 1; \
 	fi
 	@echo "=== [engine-sim-bridge] Running Sonar scan ==="
-	@SONAR_TOKEN="$${SONAR_TOKEN_ES}" sonar-scanner \
-	-Dsonar.token="$${SONAR_TOKEN_ES}"
+	@SONAR_TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}" sonar-scanner > $(BUILD_COV_DIR)/sonar-scanner.log 2>&1; \
+		rc=$$?; \
+		if [ $$rc -ne 0 ]; then \
+			echo "=== [engine-sim-bridge] sonar-scanner failed (rc=$$rc); see $(BUILD_COV_DIR)/sonar-scanner.log ==="; \
+			tail -n 20 $(BUILD_COV_DIR)/sonar-scanner.log; \
+			exit $$rc; \
+		fi
 	@echo "=== [engine-sim-bridge] Caching SonarCloud issue report ==="
-	@TOKEN="$${SONAR_TOKEN_ES}"; \
-	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&resolved=false&ps=500" \
+	@TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}"; \
+	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500" \
 		> $(SONAR_REPORT) 2>/dev/null || true
-	@touch $@
 
-$(COMPILE_DB): $(BUILD_DIR)/CMakeCache.txt
+$(COMPILE_DB): $(BUILD_COV_DIR)/CMakeCache.txt
 
 sonar-clean:
-	@rm -f $(SONAR_STAMP)
+	@rm -f $(SONAR_REPORT)
 	@rm -rf .scannerwork
 
 coverage-clean:
-	@rm -f $(COVERAGE_REPORT) $(SONAR_REPORT) $(BUILD_DIR)/coverage.profdata $(BUILD_DIR)/lcov.info $(BUILD_DIR)/profraw/*.profraw
-	@rm -rf $(BUILD_DIR)/profraw
+	@rm -f $(COVERAGE_REPORT) $(BUILD_COV_DIR)/coverage.profdata $(BUILD_COV_DIR)/lcov.info $(BUILD_COV_DIR)/profraw/*.profraw
+	@rm -rf $(BUILD_COV_DIR)/profraw
 
 check: test
 
@@ -201,8 +219,10 @@ check: test
 # Single source of truth: CANDIDATE_ENGINES lists which scripts to compile.
 # ============================================================================
 
-# Sonar summary — display issues from cached SonarCloud report
-sonar-summary: $(SONAR_REPORT)
+# Sonar summary — display issues from cached SonarCloud report.
+# No prereq on $(SONAR_REPORT): this must NEVER trigger a scan. If the cached
+# report is absent (fresh tree / pre-scan), sonar_summary.py prints a hint.
+sonar-summary:
 	@python3 scripts/sonar_summary.py $(SONAR_REPORT)
 
 # Add/remove engines here — this is the ONLY list. Everything here is compiled, tested, and shipped.
