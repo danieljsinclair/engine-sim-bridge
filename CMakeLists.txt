@@ -115,8 +115,6 @@ set(BRIDGE_SOURCES
     src/preset/IgnitionModuleDeserializer.cpp
     src/preset/VehicleDeserializer.cpp
     src/preset/TransmissionDeserializer.cpp
-    # Hardcoded C++ engine preset factories (works on iOS without Piranha)
-    src/simulator/EnginePresets.cpp
     # Twin components
     src/twin/AutomaticGearbox.cpp
     src/twin/GearboxCsvLogger.cpp
@@ -269,24 +267,6 @@ if(NOT IOS AND TARGET engine-sim-script-interpreter)
     )
     target_compile_options(engine-sim-preset-compiler PRIVATE -Wno-unused-parameter)
     target_compile_definitions(engine-sim-preset-compiler PRIVATE ATG_ENGINE_SIM_PIRANHA_ENABLED)
-
-    # Preset Code Generator (macOS build-time tool)
-    # Compiles .mr scripts to C++ source code for baked presets
-    add_executable(engine-sim-preset-codegen tools/preset_codegen.cpp)
-    target_include_directories(engine-sim-preset-codegen
-        PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/include
-            ${CMAKE_CURRENT_SOURCE_DIR}
-            ${ENGINE_SIM_PATH}/dependencies/dr_libs
-            ${ENGINE_SIM_PATH}/include
-            ${ENGINE_SIM_PATH}/scripting/include
-    )
-    target_link_libraries(engine-sim-preset-codegen
-        PRIVATE
-            engine-sim
-            engine-sim-script-interpreter
-    )
-    target_compile_definitions(engine-sim-preset-codegen PRIVATE ATG_ENGINE_SIM_PIRANHA_ENABLED)
 endif()
 
 # -----------------------------------------------------------------------------
