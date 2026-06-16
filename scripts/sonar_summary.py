@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Display SonarCloud issue summary from cached report."""
-import json, sys
+import json, os, sys
 
 RED = '\033[31m'
 ORANGE = '\033[38;5;208m'
@@ -142,6 +142,13 @@ def load_report(path):
 
 
 def main():
+    # Ensure blocking I/O — make's pipe can be non-blocking, causing
+    # BlockingIOError(35, 'write could not complete without blocking') on print.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            os.set_blocking(stream.fileno(), True)
+        except (OSError, ValueError):
+            pass
     if len(sys.argv) < 2:
         print("Usage: sonar_summary.py <report.json>")
         sys.exit(1)
