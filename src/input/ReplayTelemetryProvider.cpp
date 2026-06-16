@@ -176,6 +176,14 @@ bool ReplayTelemetryProvider::parseCsv() {
     }
     std::stable_sort(samples_.begin(), samples_.end(),
                      [](const Sample& a, const Sample& b) { return a.timeS < b.timeS; });
+    // If all timestamps are identical (e.g. vehicle-sim capture tool wrote all
+    // zeros), distribute evenly at a default sample rate so the replay advances.
+    if (samples_.size() > 1 && samples_.front().timeS == samples_.back().timeS) {
+        const double defaultHz = 446.0;  // measured CAN frame rate from FirstDrive capture
+        for (size_t i = 0; i < samples_.size(); ++i) {
+            samples_[i].timeS = static_cast<double>(i) / defaultHz;
+        }
+    }
     return true;
 }
 
@@ -198,20 +206,28 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
     input.ignition = true;
 
     if (autoGearbox_ && gearbox_) {
-        // Auto: the AutomaticGearbox decides gears from the CSV road speed, and
-        // follows the gear_selector stalk (P/R/N/D). Coherent with the dyno-hold.
-        if (!s.gearSelector.empty()) {
-            gearbox_->setGearSelector(parseGearSelector(s.gearSelector));
-        }
-        double speedForBox = (s.roadSpeedKmh >= 0.0) ? s.roadSpeedKmh : 0.0;
-        gearbox_->update(dt, speedForBox, s.throttle, 0.0);
-        input.gearAbsolute = gearbox_->getCurrentGear();
-        input.gearSelector = static_cast<int>(gearbox_->getGearSelector());
-        input.gearAutoMode = (gearbox_->getGearSelector() == bridge::GearSelector::DRIVE);
+        // Follow the gear stalk. In PARK/NEUTRAL the clutch disengages + the
+        // engine free-revs naturally (no dyno, no pinned RPM, natural idle
+        // variation). Only in DRIVE does the gearbox decide gears + the dyno
+        // tracks road speed.
+        bridge::GearSelector sel = s.gearSelector.empty()
+            ? bridge::GearSelector::DRIVE : parseGearSelector(s.gearSelector);
+        gearbox_->setGearSelector(sel);
+        input.gearSelector = static_cast<int>(sel);
         input.roadSpeedKmh = s.roadSpeedKmh;
-        // Launch RPM floor (TC stopgap): rev to idle + throttle-scaled at standstill.
-        input.engineRpmFloor = gearboxProfile_.idleRpm +
-            s.throttle * (0.5 * gearboxProfile_.redlineRpm - gearboxProfile_.idleRpm);
+        if (sel == bridge::GearSelector::DRIVE) {
+            double speedForBox = (s.roadSpeedKmh >= 0.0) ? s.roadSpeedKmh : 0.0;
+            gearbox_->update(dt, speedForBox, s.throttle, 0.0);
+            input.gearAbsolute = gearbox_->getCurrentGear();
+            input.gearAutoMode = true;
+            input.engineRpmFloor = gearboxProfile_.idleRpm +
+                s.throttle * (0.5 * gearboxProfile_.redlineRpm - gearboxProfile_.idleRpm);
+        } else {
+            // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
+            // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).
+            input.gearAbsolute = 0;
+            input.gearAutoMode = false;
+        }
     } else {
         // Non-auto (e.g. rev-in-park): no gear forced, clutch disengaged, free-rev.
         input.roadSpeedKmh = s.roadSpeedKmh;
