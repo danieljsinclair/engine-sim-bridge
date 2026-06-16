@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := all
-.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism test-deep presets clean-presets sonar-scan sonar-clean coverage-clean coverage-run sonar-summary test-nosonar
+.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism             test-deep presets clean-presets          sonar-scan sonar-clean coverage-clean coverage-run sonar-summary test-nosonar
 
 BUILD_DIR ?= build
 BUILD_COV_DIR ?= build-cov
