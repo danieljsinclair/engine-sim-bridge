@@ -424,6 +424,34 @@ if(BUILD_BRIDGE_TESTS)
         add_test(NAME strategy_tests COMMAND strategy_tests --gtest_color=yes)
     endif()
 
+    # ISimulator strategy tests - extracted from engine-sim-cli/test/unit/ISimulatorTest.cpp
+    # Moves the ISimulatorStrategyTest fixture + cases (ThreadedStrategy/SyncPullStrategy
+    # driving ISimulator) into the bridge so coverage exercises them. ISimulator.cpp was
+    # 0% — tested only in the cli. CLI retains the original file (duplication accepted).
+    add_executable(simulator_strategy_tests
+        test/strategy/ISimulatorStrategyTest.cpp
+        test/AudioTestConstants.cpp
+    )
+    target_include_directories(simulator_strategy_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/mocks
+        ${ENGINE_SIM_PATH}/dependencies/dr_libs
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(simulator_strategy_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+            ${AUDIO_LIBRARY}
+    )
+    target_compile_options(simulator_strategy_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME simulator_strategy_tests COMMAND simulator_strategy_tests --gtest_color=yes)
+    endif()
+
     # Integration audio tests - moved from engine-sim-cli/test/unit to exercise bridge
     # CoreAudio hardware code under coverage instrumentation (CoreAudioHardwareProvider,
     # AudioHardwareProviderFactory). CoreAudio requires macOS, so the target is
