@@ -223,7 +223,7 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
     EngineInput input;
     const Sample& s = sampleAt(elapsedS_);
     input.throttle = s.throttle;
-    input.ignition = true;
+    input.ignition = ignitionOn_;
 
     if (autoGearbox_ && gearbox_) {
         // Follow the gear stalk. In PARK/NEUTRAL the clutch disengages + the
@@ -231,7 +231,7 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
         // variation). Only in DRIVE does the gearbox decide gears + the dyno
         // tracks road speed.
         bridge::GearSelector sel = s.gearSelector.empty()
-            ? bridge::GearSelector::DRIVE : parseGearSelector(s.gearSelector);
+            ? bridge::GearSelector::NEUTRAL : parseGearSelector(s.gearSelector);
         gearbox_->setGearSelector(sel);
         input.gearSelector = static_cast<int>(sel);
         input.roadSpeedKmh = s.roadSpeedKmh;
@@ -249,13 +249,25 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
             // Throttle biases the slip: at WOT launch we slip more (rev higher).
             input.vehicleSpeedTargetKmh = s.roadSpeedKmh;
             input.engineRpmFloor = 0.0;  // dyno disabled downstream
-            constexpr double kSyncKmh = 15.0;   // road speed where clutch ~locks
-            const double speedFrac = std::clamp(speedForBox / kSyncKmh, 0.0, 1.0);
-            // min pressure so the engine is never fully decoupled at standstill;
-            // throttle REDUCES the floor (more slip = more revs at launch).
-            const double minPressure = 0.15 * (1.0 - 0.6 * s.throttle);
+            // Slip-based clutch pressure: at idle (engine RPM >> road-implied),
+            // low pressure so the engine idles naturally. As road speed catches
+            // up (slip → 0), lock the clutch.
+            int gear = gearbox_->getCurrentGear();
+            double roadImpliedRpm = 0.0;
+            if (gear >= 1 && gear <= static_cast<int>(gearboxProfile_.gearRatios.size())
+                && s.roadSpeedKmh >= 0.0) {
+                double speedMs = s.roadSpeedKmh / 3.6;
+                double wheelRpm = speedMs / (2.0 * 3.14159265358979 * gearboxProfile_.tireRadiusM) * 60.0;
+                roadImpliedRpm = wheelRpm * gearboxProfile_.gearRatios[gear - 1]
+                               * gearboxProfile_.diffRatio;
+            }
+            double slip = engineRpmFeedback_ - roadImpliedRpm;
+            if (slip < 0.0) slip = 0.0;  // engine slower → locked (engine braking)
+            constexpr double kStallRpm = 2000.0;  // TC slip range
+            double slipRatio = std::clamp(slip / kStallRpm, 0.0, 1.0);
+            constexpr double kMinPressure = 0.05;  // minimal creep coupling
             input.clutchPressure =
-                std::clamp(minPressure + speedFrac * (1.0 - minPressure), 0.0, 1.0);
+                std::clamp(1.0 - slipRatio * (1.0 - kMinPressure), kMinPressure, 1.0);
         } else {
             // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
             // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).
@@ -287,6 +299,10 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
                 if (session_) session_->stop();
             } else if (key == 'p' || key == 'P') {
                 input.presetCycle = true;
+            } else if (key == 's' || key == 'S') {
+                input.starterButton = true;
+            } else if (key == 'i' || key == 'I') {
+                ignitionOn_ = !ignitionOn_;
             }
         }
     }

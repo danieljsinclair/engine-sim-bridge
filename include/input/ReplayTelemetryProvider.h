@@ -83,6 +83,7 @@ private:
     IKeyboardInput* keyboard_ = nullptr;
     ISimulatorSession* session_ = nullptr;
     double engineRpmFeedback_ = 0.0;  // last engine RPM from the physics (for slip calc)
+    bool ignitionOn_ = true;          // toggled by 'I' key during replay
 };
 
 } // namespace input
