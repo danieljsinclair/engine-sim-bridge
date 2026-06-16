@@ -96,6 +96,44 @@ double ReplayTelemetryProvider::durationS() const {
     return samples_.empty() ? 0.0 : samples_.back().timeS;
 }
 
+void ReplayTelemetryProvider::reconfigureProfile(const std::vector<double>& gearRatios,
+                                                  double diffRatio, double tireRadiusM) {
+    if (gearRatios.empty() || !autoGearbox_) return;
+    gearboxProfile_.gearRatios = gearRatios;
+    gearboxProfile_.diffRatio = diffRatio;
+    gearboxProfile_.tireRadiusM = tireRadiusM;
+    // Auto-generate shift table from the ratios + redline. Shift speed for each
+    // gear = the road speed at which the engine RPM reaches the shift-RPM band
+    // (~40% redline at light throttle, ~85% at WOT).
+    gearboxProfile_.shiftTableThrottleLevels = {0.05,0.15,0.25,0.40,0.55,0.70,0.80,0.90,0.95,1.00};
+    gearboxProfile_.shiftTable.clear();
+    for (double thr : gearboxProfile_.shiftTableThrottleLevels) {
+        std::vector<double> row;
+        double shiftRpm = gearboxProfile_.redlineRpm * (0.40 + 0.45 * thr);
+        for (size_t i = 0; i + 1 < gearRatios.size(); ++i) {
+            double speedMs = shiftRpm / 60.0 * 2.0 * 3.14159265358979 * tireRadiusM
+                           / (gearRatios[i] * diffRatio);
+            row.push_back(speedMs * 3.6);  // km/h
+        }
+        gearboxProfile_.shiftTable.push_back(row);
+    }
+    // Downshift table: ~70% of the upshift speed (hysteresis)
+    gearboxProfile_.separateDownshiftTableEnabled = true;
+    gearboxProfile_.downshiftTableThrottleLevels = gearboxProfile_.shiftTableThrottleLevels;
+    gearboxProfile_.downshiftTable.clear();
+    for (size_t t = 0; t < gearboxProfile_.shiftTable.size(); ++t) {
+        std::vector<double> row;
+        for (double upSpeed : gearboxProfile_.shiftTable[t]) {
+            row.push_back(upSpeed * 0.70);
+        }
+        gearboxProfile_.downshiftTable.push_back(row);
+    }
+    gearboxProfile_.hysteresisFactor = 0.85;
+    // Reconstruct the gearbox with the matched profile
+    gearbox_ = std::make_unique<twin::AutomaticGearbox>(gearboxProfile_);
+    gearbox_->setGearSelector(bridge::GearSelector::DRIVE);
+}
+
 bool ReplayTelemetryProvider::parseCsv() {
     std::ifstream in(csvPath_);
     if (!in.is_open()) {
@@ -255,7 +293,7 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
             // slip = higher revs at launch).
             constexpr double kSyncKmh = 15.0;
             const double speedFrac = std::clamp(speedForBox / kSyncKmh, 0.0, 1.0);
-            const double minPressure = 0.25 * (1.0 - 0.5 * s.throttle);
+            const double minPressure = 0.15 * (1.0 - 0.6 * s.throttle);
             input.clutchPressure =
                 std::clamp(minPressure + speedFrac * (1.0 - minPressure), 0.0, 1.0);
         } else {

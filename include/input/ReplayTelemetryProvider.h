@@ -55,6 +55,12 @@ public:
     // Total span of the parsed trace, in seconds (last sample time). 0 if empty.
     double durationS() const;
 
+    // Reconfigure the gearbox profile to match the ACTUAL engine preset's ratios.
+    // Auto-generates a shift table from the ratios + redline so shift points are
+    // correct regardless of the transmission (7-speed AMG, 8-speed ZF, etc.).
+    void reconfigureProfile(const std::vector<double>& gearRatios,
+                             double diffRatio, double tireRadiusM);
+
 private:
     struct Sample {
         double timeS = 0.0;
