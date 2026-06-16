@@ -37,10 +37,10 @@ def format_severity_line(sev, count):
 
 def format_issue_line(issue):
     """Print a single issue line with color."""
-    sev = issue.get('severity', '?')
-    msg = issue.get('message', '')[:60]
-    comp = issue.get('component', '').split(':')[-1]
-    line = issue.get('line', '')
+    sev = issue.get('severity') or '?'
+    msg = (issue.get('message') or '')[:60]
+    comp = (issue.get('component') or '').split(':')[-1]
+    line = issue.get('line')
     loc = comp + (':' + str(line) if line else '')
     print('    {}[{}]{} {} - {}'.format(severity_color(sev), sev, RESET, loc, msg))
 
@@ -58,8 +58,8 @@ def count_by_impact(issues):
     counts = {}
     for i in issues:
         for impact in i.get('impacts', []):
-            quality = impact.get('softwareQuality', 'UNKNOWN')
-            severity = impact.get('severity', 'UNKNOWN')
+            quality = impact.get('softwareQuality') or 'UNKNOWN'
+            severity = impact.get('severity') or 'UNKNOWN'
             counts.setdefault(quality, {})[severity] = counts.setdefault(quality, {}).get(severity, 0) + 1
     return counts
 
@@ -71,7 +71,7 @@ def count_impact_severity(issues, quality):
         for impact in i.get('impacts', []):
             if impact.get('softwareQuality') != quality:
                 continue
-            severity = impact.get('severity', 'UNKNOWN')
+            severity = impact.get('severity') or 'UNKNOWN'
             counts[severity] = counts.get(severity, 0) + 1
     return counts
 
