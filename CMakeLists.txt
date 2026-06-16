@@ -412,6 +412,38 @@ if(BUILD_BRIDGE_TESTS)
         add_test(NAME sine_wave_regression_tests COMMAND sine_wave_regression_tests --gtest_color=yes)
     endif()
 
+    # Strategy tests - moved from engine-sim-cli/test/unit to exercise bridge
+    # strategy/buffer code under coverage instrumentation (ThreadedStrategy,
+    # SyncPullStrategy, IAudioBuffer, CircularBuffer telemetry).
+    add_executable(strategy_tests
+        test/strategy/ThreadedStrategyIntegrationTest.cpp
+        test/strategy/StrategyPipelineTest.cpp
+        test/strategy/BufferContextEradicationTest.cpp
+        test/strategy/IAudioBufferTest.cpp
+        test/strategy/CircularBufferTelemetryTest.cpp
+        test/mocks/MockAudioUnit.cpp
+        test/AudioTestConstants.cpp
+    )
+    target_include_directories(strategy_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/mocks
+        ${ENGINE_SIM_PATH}/dependencies/dr_libs
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(strategy_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+            ${AUDIO_LIBRARY}
+    )
+    target_compile_options(strategy_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME strategy_tests COMMAND strategy_tests --gtest_color=yes)
+    endif()
+
     # iOS adapter tests - only built when AudioBufferView and
     # AVAudioEngineHardwareProvider headers exist (after Phase 1 and Phase 2)
     option(BUILD_IOS_ADAPTER_TESTS "Build iOS adapter tests" OFF)
