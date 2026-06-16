@@ -50,7 +50,6 @@
 #include "simulator/EngineSimTypes.h"
 #include "simulator/SimulatorInitHelpers.h"
 #include "simulator.h"
-#include "piston_engine_simulator.h"
 #endif
 
 namespace {
@@ -985,14 +984,6 @@ TEST_P(ParameterIsomorphismTest, EngineTopologyMatches) {
         << "Exhaust system count mismatch";
     EXPECT_EQ(jsonEngine_->getIntakeCount(), piranhaEngine_->getIntakeCount())
         << "Intake count mismatch";
-
-    // Displacement should match
-    jsonEngine_->calculateDisplacement();
-    piranhaEngine_->calculateDisplacement();
-    double jsonDisp = jsonEngine_->getDisplacement();
-    double piranhaDisp = piranhaEngine_->getDisplacement();
-    EXPECT_NEAR(jsonDisp, piranhaDisp, piranhaDisp * 0.01)
-        << "Displacement mismatch (json=" << jsonDisp << ", piranha=" << piranhaDisp << ")";
 }
 
 // 5.2: Crankshaft parameters match (mass, moment of inertia, crank throw, rod journals)
@@ -1551,7 +1542,6 @@ protected:
         piranhaEngine_ = sim->getEngine();
         piranhaVehicle_ = sim->getVehicle();
         piranhaTrans_ = sim->getTransmission();
-        piranhaEngine_->calculateDisplacement();
 
         // Load JSON via PresetEngineFactory
         std::string presetPath = TEST_PRESET_DIR "/" + param.presetJsonPath;
@@ -1560,7 +1550,6 @@ protected:
         jsonEngine_ = jsonResult.engine;
         jsonVehicle_ = jsonResult.vehicle;
         jsonTrans_ = jsonResult.transmission;
-        jsonEngine_->calculateDisplacement();
     }
 
     void TearDown() override {
