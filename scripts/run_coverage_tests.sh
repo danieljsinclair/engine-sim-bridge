@@ -9,13 +9,27 @@ LLVM_PROFDATA="${LLVM_PROFDATA:-$(xcrun --find llvm-profdata 2>/dev/null || whic
 
 mkdir -p "$PROFRAW_DIR"
 
+# Discover test binaries recursively so this works for both Make (binaries at
+# $BUILD_DIR root) and Ninja (binaries in $BUILD_DIR/test/{unit,integration,...}
+# subdirs) generators. Excludes build internals that aren't real test binaries:
+# googletest artifacts under _deps have test-like names, as do CMakeFiles/
+# CMakeScripts helpers and *.cmake/Makefile scripts. Sorted for determinism so
+# MAIN_BIN (first) + OBJECT_ARGS (rest) are stable across runs.
+TEST_BINS=$(find "$BUILD_DIR" -type f -name '*test*' -perm +111 \
+    -not -path '*/_deps/*' \
+    -not -path '*/CMakeFiles/*' \
+    -not -path '*/CMakeScripts/*' \
+    -not -name '*.cmake' \
+    -not -name 'Makefile' \
+    2>/dev/null | sort)
+
 # Track failures without aborting early: every binary runs so all profraw is
 # collected, but we exit non-zero at the end if any binary failed.
 FAILED_COUNT=0
 FAILED_BINS=""
 
 echo "=== Running tests with coverage instrumentation ==="
-for test_bin in "$BUILD_DIR"/*test*; do
+for test_bin in $TEST_BINS; do
     if [ -x "$test_bin" ] && [ -f "$test_bin" ]; then
         echo "  Running: $(basename $test_bin)"
         if ! LLVM_PROFILE_FILE="$PROFRAW_DIR/coverage-%p.profraw" "$test_bin"; then
@@ -30,10 +44,10 @@ echo "=== Merging coverage profiles ==="
 $LLVM_PROFDATA merge -sparse "$PROFRAW_DIR"/*.profraw -o "$BUILD_DIR/coverage.profdata"
 
 echo "=== Generating llvm-cov text report ==="
-# Build -object args for all test binaries
+# Build -object args for all test binaries (reuse the recursive TEST_BINS list)
 OBJECT_ARGS=""
 MAIN_BIN=""
-for test_bin in "$BUILD_DIR"/*test*; do
+for test_bin in $TEST_BINS; do
     if [ -x "$test_bin" ] && [ -f "$test_bin" ]; then
         if [ -z "$MAIN_BIN" ]; then
             MAIN_BIN="$test_bin"
