@@ -207,7 +207,7 @@ void SimulationLoop::applyVehicleControls(
         // setSpeedTrackingTarget is a BridgeSimulator-specific API, so downcast the engine.
         if (input.roadSpeedKmh >= 0.0) {
             if (auto* bridgeSim = dynamic_cast<BridgeSimulator*>(combustionEngine)) {
-                bridgeSim->setSpeedTrackingTarget(input.roadSpeedKmh);
+                bridgeSim->setSpeedTrackingTarget(input.roadSpeedKmh, input.engineRpmFloor);
             }
         }
     } else {

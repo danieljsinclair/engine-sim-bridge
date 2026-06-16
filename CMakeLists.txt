@@ -133,6 +133,7 @@ set(BRIDGE_SOURCES
     src/input/KeyboardInputProvider.cpp
     src/input/EngineInputTarget.cpp
     src/input/DemoControlsTarget.cpp
+    src/input/ReplayTelemetryProvider.cpp
 )
 
 # Platform-specific audio hardware and factory

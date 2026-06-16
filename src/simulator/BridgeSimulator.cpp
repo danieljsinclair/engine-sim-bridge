@@ -335,7 +335,7 @@ void BridgeSimulator::applyTransition(const TransitionDecision& decision) {
     m_simulator->m_starterMotor.m_enabled = decision.starterMotor;
 }
 
-bool BridgeSimulator::setSpeedTrackingTarget(double speedKmh) {
+bool BridgeSimulator::setSpeedTrackingTarget(double speedKmh, double rpmFloor) {
     auto* trans = m_simulator->getTransmission();
     if (!trans) {
         m_simulator->m_dyno.m_enabled = false;
@@ -361,8 +361,11 @@ bool BridgeSimulator::setSpeedTrackingTarget(double speedKmh) {
     double diffRatio = vehicle->getDiffRatio();
     double gearRatio = trans->getGearRatio();
 
-    // Compute target RPM using the pure function (no redline clamp for tracking)
-    double targetRpm = twin::computeTargetRpm(speedKmh, gearRatio, tireRadius, diffRatio, 0.0);
+    // Compute target RPM using the pure function (no redline clamp for tracking).
+    // Apply the launch floor (torque-converter style): rev to the floor at
+    // standstill, track road speed once roadSpeed x ratio exceeds it.
+    double targetRpm = std::max(rpmFloor,
+        twin::computeTargetRpm(speedKmh, gearRatio, tireRadius, diffRatio, 0.0));
 
     // Convert RPM to rad/s for dyno
     const double radPerRpm = 3.14159265358979323846 / 30.0;

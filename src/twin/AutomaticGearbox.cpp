@@ -170,25 +170,17 @@ void AutomaticGearbox::runShiftLogic(double dt, double speedKmh, double throttle
     bool canDownshift =
         (lastShiftDirection_ != -1 || timeSinceLastShiftS_ >= downInterval2);
 
-    // Redline safety: bypasses normal interval — engine approaching rev limiter
-    bool redlineUpshift = rpmFeedback_ > 0 && rpmFeedback_ > profile_.redlineRpm * 0.95;
-    if (redlineUpshift && currentGear_ < static_cast<int>(profile_.gearRatios.size())) {
-        double upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle_);
-        if (upshiftSpeed <= 0 || speedKmh <= upshiftSpeed) {
-            currentGear_ = currentGear_ + 1;
-            requestsShift_ = true;
-            hasShiftedBefore_ = true;
-            lastShiftDirection_ = 1;
-            targetGear_ = currentGear_;
-            timeSinceLastShiftS_ = 0.0;
-        }
-    }
-
-    // Check for speed-based upshift(s) — skip if redline already shifted this frame
+    // Speed-based upshift(s). Upshift when road speed passes the shift point OR
+    // the engine speed implied by road speed + current gear reaches the rev
+    // limiter (redline safety). Both conditions use the SAME speed model, so the
+    // redline decision cannot hunt against a decoupled real-RPM signal. One
+    // coherent multi-upshift pass; the loop stops once neither condition holds.
     if (canUpshift && !requestsShift_) {
         while (currentGear_ < static_cast<int>(profile_.gearRatios.size())) {
             double upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle_);
-            if (upshiftSpeed > 0 && speedKmh > upshiftSpeed) {
+            bool speedUpshift = (upshiftSpeed > 0 && speedKmh > upshiftSpeed);
+            bool redlineUpshift = (getEngineRpm(speedKmh, currentGear_) > profile_.redlineRpm * 0.95);
+            if (speedUpshift || redlineUpshift) {
                 currentGear_ = currentGear_ + 1;
                 requestsShift_ = true;
                 hasShiftedBefore_ = true;

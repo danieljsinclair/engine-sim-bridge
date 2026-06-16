@@ -93,11 +93,13 @@ public:
     // Returns true if configured, false if loadFraction <= 0.
     bool configureDynoLoad(double loadFraction);
 
-    // Set speed tracking target: configures dyno to hold engine RPM
-    // to match the road speed in the current gear.
-    // speedKmh: Target road speed in km/h.
-    // Returns true if in gear and dyno configured, false if in neutral.
-    bool setSpeedTrackingTarget(double speedKmh);
+    // Set speed tracking target: configures dyno to hold engine RPM to match the
+    // road speed in the current gear. rpmFloor (>=0) sets a minimum target RPM —
+    // the launch/torque-converter behaviour: at standstill the engine revs to the
+    // floor instead of being dragged to roadSpeed x ratio (~0); once road speed
+    // x ratio exceeds the floor, the dyno tracks the road. 0 disables the floor.
+    // speedKmh: Target road speed in km/h. Returns true if in gear, false if neutral.
+    bool setSpeedTrackingTarget(double speedKmh, double rpmFloor = 0.0);
 
     // Set display name directly
     void setName(const std::string& name) { name_ = name; }

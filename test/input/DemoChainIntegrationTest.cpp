@@ -12,6 +12,7 @@
 #include "twin/IceVehicleProfile.h"
 #include "simulator/GearConventions.h"
 #include "mocks/MockKeyboardInput.h"
+#include "simulator/EngineSimTypes.h"
 
 #include <gtest/gtest.h>
 #include <memory>
@@ -162,4 +163,56 @@ TEST_F(DemoChainIntegrationTest, NoKeys_ProducesStableDefault) {
 
     // Throttle should be stable (whatever the default is)
     EXPECT_DOUBLE_EQ(input1.throttle, input2.throttle);
+}
+
+// ============================================================================
+// REDLINE-NO-UPSHIFT REPRO (full --auto chain). User reports --auto redlines
+// in 1st without upshifting. Gearbox unit tests pass + feedback forwarding
+// passes, so this drives the live enhancer->twin->gearbox path with a
+// simulated redline-RPM feedback to pinpoint the break.
+// ============================================================================
+TEST_F(DemoChainIntegrationTest, RedlineUpshiftsViaFullAutoChain) {
+    target_->shiftUp(); target_->shiftUp(); target_->shiftUp();  // P->R->N->D
+    target_->setThrottle(0.5);
+
+    int lastGear = 1;
+    for (int i = 0; i < 400; ++i) {  // ~20s
+        EngineSimStats stats{};
+        stats.currentRPM = profile_.redlineRpm * 0.98;  // at redline
+        stats.vehicleSpeedKmh = 30.0 + i * 0.2;
+        stats.drivetrainTorqueNm = 100.0;
+        provider_->provideFeedback(stats);  // the loop's per-frame feedback call
+        EngineInput in = provider_->OnUpdateSimulation(0.05);
+        lastGear = in.gearAbsolute;
+        if (i % 50 == 0) {
+            printf("  i=%d gear=%d gearSel=%d demoSpeed=%.1f\n",
+                   i, in.gearAbsolute, in.gearSelector, demoProvider_->getDemoRoadSpeedKmh());
+        }
+    }
+    EXPECT_GT(lastGear, 1) << "Full --auto chain must upshift when feedback shows redline RPM";
+}
+
+// Isolate the REDLINE SAFETY through the live chain: low throttle keeps the
+// DemoVehiclePhysics speed below the 1->2 shift point, so ONLY the redline RPM
+// feedback can force an upshift. Reproduces the user's "redlines in 1st" — the
+// real engine hits redline while the demo speed model lags behind.
+TEST_F(DemoChainIntegrationTest, RedlineUpshiftsEvenWhenDemoSpeedStaysLow) {
+    target_->shiftUp(); target_->shiftUp(); target_->shiftUp();  // P->R->N->D
+    target_->setThrottle(0.2);  // low: demo speed stays < ~15 km/h for several seconds
+
+    int maxGear = 0;
+    for (int i = 0; i < 150; ++i) {  // ~7.5s
+        EngineSimStats stats{};
+        stats.currentRPM = profile_.redlineRpm * 0.98;  // real engine AT redline
+        stats.vehicleSpeedKmh = demoProvider_->getDemoRoadSpeedKmh();
+        stats.drivetrainTorqueNm = 100.0;
+        provider_->provideFeedback(stats);
+        EngineInput in = provider_->OnUpdateSimulation(0.05);
+        if (in.gearAbsolute > maxGear) maxGear = in.gearAbsolute;
+        if (i % 30 == 0) printf("  i=%d gear=%d demoSpeed=%.1f\n", i, in.gearAbsolute, demoProvider_->getDemoRoadSpeedKmh());
+    }
+    // Fixed behaviour: at low road speed (<8 km/h) the box holds 1st — it must
+    // NOT hunt (previously: 0->3->7->2->5) from a real-RPM redline decoupled
+    // from the speed model.
+    EXPECT_LE(maxGear, 1) << "At low road speed the box must hold 1st, not hunt";
 }

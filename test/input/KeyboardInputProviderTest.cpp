@@ -13,6 +13,7 @@
 #include "input/KeyHoldBridge.h"
 #include "mocks/MockKeyActionTarget.h"
 #include "mocks/MockKeyboardInput.h"
+#include "input/IDemoSpeedEnhancer.h"
 
 #include <gtest/gtest.h>
 #include <memory>
@@ -431,6 +432,53 @@ TEST_F(EngineInputTargetTest, ShiftUp_ClampsAtEighthGear) {
 TEST_F(EngineInputTargetTest, ShiftDown_ClampsAtReverse) {
     for (int i = 0; i < 20; ++i) target->shiftDown();
     EXPECT_EQ(target->buildInput().gearSelector, -1);
+}
+
+// ============================================================================
+// Feedback loop: provideFeedback must route simulator stats (RPM/speed/torque)
+// to the speed enhancer (twin/gearbox). Regression for the "redlines but never
+// upshifts" bug — KeyboardInputProvider had no provideFeedback override, so the
+// gearbox's rpmFeedback_ stayed 0 and the redline safety never fired.
+// ============================================================================
+namespace {
+class RecordingEnhancer : public input::IDemoSpeedEnhancer {
+public:
+    int feedbackCount = 0;
+    double lastRpm = -1.0;
+    input::EngineInput enhanceInput(const input::EngineInput& base, double) override { return base; }
+    void provideFeedback(const EngineSimStats& stats) override {
+        ++feedbackCount;
+        lastRpm = stats.currentRPM;
+    }
+};
+} // namespace
+
+TEST_F(EngineInputTargetTest, ProvideFeedback_ForwardsToSpeedEnhancer) {
+    RecordingEnhancer enh;
+    target->setSpeedEnhancer(&enh);
+    EngineSimStats stats{};
+    stats.currentRPM = 5000.0;
+    target->provideFeedback(stats);
+    EXPECT_EQ(enh.feedbackCount, 1);
+    EXPECT_DOUBLE_EQ(enh.lastRpm, 5000.0);
+}
+
+TEST_F(EngineInputTargetTest, ProvideFeedback_NoEnhancer_IsSafe) {
+    EngineSimStats stats{};
+    target->provideFeedback(stats);  // no enhancer set — must not crash
+    SUCCEED();
+}
+
+TEST_F(EngineInputTargetTest, ProvideFeedback_ChainsKeyboardProviderToEnhancer) {
+    RecordingEnhancer enh;
+    target->setSpeedEnhancer(&enh);
+    auto kb = std::make_unique<MockKeyboardInput>();
+    input::KeyboardInputProvider provider(std::move(kb), target.get());
+    EngineSimStats stats{};
+    stats.currentRPM = 6500.0;
+    provider.provideFeedback(stats);
+    EXPECT_EQ(enh.feedbackCount, 1);
+    EXPECT_DOUBLE_EQ(enh.lastRpm, 6500.0);
 }
 
 // ============================================================================

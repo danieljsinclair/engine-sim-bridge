@@ -43,6 +43,7 @@ struct EngineInput {
     // would force the dyno to hold the engine at 0 RPM (stall) every frame.
     // Once the user presses '.' the value is clamped to [0, 300] and stays >= 0.
     double roadSpeedKmh = -2.0;     // Virtual ICE Twin: manual road speed control (km/h)
+    double engineRpmFloor = 0.0;    // >=0: launch floor on the dyno target RPM (torque-converter style)
 
     // Simulator auto-disengages starter when RPM > threshold
     // Preset cycling

@@ -28,6 +28,10 @@ public:
     virtual void adjustSpeed(double) { (void)(double){0}; }  // km/h adjustment
 
     virtual EngineInput buildEngineInput(double dt) { (void)dt; return {}; }
+
+    // Forward simulator feedback (RPM/speed/torque) to targets that need it
+    // (EngineInputTarget -> speed enhancer -> twin/gearbox). Default no-op.
+    virtual void provideFeedback(const EngineSimStats& /*stats*/) {}
 };
 
 } // namespace input

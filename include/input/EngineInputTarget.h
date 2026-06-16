@@ -54,6 +54,9 @@ public:
 
     EngineInput buildEngineInput(double dt) override;
 
+    // Forward simulator feedback to the speed enhancer (twin/gearbox) when present.
+    void provideFeedback(const EngineSimStats& stats) override;
+
     bool quitRequested() const { return quitRequested_; }
 
 private:

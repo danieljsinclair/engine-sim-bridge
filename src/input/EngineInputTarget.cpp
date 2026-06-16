@@ -141,4 +141,9 @@ EngineInput EngineInputTarget::buildEngineInput(double dt) {
     return input;
 }
 
+void EngineInputTarget::provideFeedback(const EngineSimStats& stats) {
+    // Route simulator feedback to the speed enhancer (twin/gearbox) when present.
+    if (speedEnhancer_) speedEnhancer_->provideFeedback(stats);
+}
+
 } // namespace input

@@ -97,17 +97,13 @@ TEST_F(RedlineClampAndUpshiftTest, AutomaticGearboxUpshiftsAtRedline) {
     ASSERT_EQ(gearbox_->getCurrentGear(), 1)
         << "Gearbox should start in first gear";
 
-    // Provide RPM feedback above redline threshold (95% of redline)
+    // Road speed that implies >95% redline in 1st gear. The redline check now
+    // keys off the speed-implied RPM, not the rpmFeedback arg.
     double redlineThreshold = profile_.redlineRpm * 0.95;  // 6840 RPM
-    gearbox_->setTwinContext(
-        0,      // twinState (unused)
-        0.0,    // clutchPressure
-        50.0,   // speedFeedbackKmh
-        redlineThreshold + 100.0  // rpmFeedback (just above 95% redline)
-    );
+    gearbox_->setTwinContext(0, 0.0, 80.0, redlineThreshold + 100.0);
 
-    // Update gearbox with speed that would trigger upshift
-    gearbox_->update(0.1, 50.0, 0.5);
+    // 80 km/h in 1st implies >95% redline -> upshift.
+    gearbox_->update(0.1, 80.0, 0.5);
 
     // Should request upshift
     EXPECT_TRUE(gearbox_->requestsShift())
@@ -154,17 +150,12 @@ TEST_F(RedlineClampAndUpshiftTest, AutomaticGearboxNoUpshiftBelowRedlineThreshol
 TEST_F(RedlineClampAndUpshiftTest, RedlineUpshiftBypassesShiftInterval) {
     ASSERT_EQ(gearbox_->getCurrentGear(), 1);
 
-    // Provide RPM feedback above redline threshold
+    // Road speed implying >95% redline in 1st gear.
     double redlineThreshold = profile_.redlineRpm * 0.95;
-    gearbox_->setTwinContext(
-        0,
-        0.0,
-        50.0,
-        redlineThreshold + 100.0
-    );
+    gearbox_->setTwinContext(0, 0.0, 80.0, redlineThreshold + 100.0);
 
     // Immediately update (no time for normal shift interval to pass)
-    gearbox_->update(0.001, 50.0, 0.5);
+    gearbox_->update(0.001, 80.0, 0.5);
 
     // Should still request upshift (redline bypasses interval)
     EXPECT_TRUE(gearbox_->requestsShift())

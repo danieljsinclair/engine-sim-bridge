@@ -25,6 +25,13 @@ EngineInput KeyboardInputProvider::OnUpdateSimulation(double dt) {
     return target_->buildEngineInput(dt);
 }
 
+void KeyboardInputProvider::provideFeedback(const EngineSimStats& stats) {
+    // Close the feedback loop: forward real RPM/speed/torque to the target,
+    // which routes it to the demo enhancer -> twin -> gearbox. Without this the
+    // autobox's rpmFeedback_ stays 0 and the redline safety never upshifts.
+    if (target_) target_->provideFeedback(stats);
+}
+
 void KeyboardInputProvider::processKeys(double dt) {
     keyHold_.drainInput([this]() { return keyboard_->getKey(); }, dt * 1000.0);
 

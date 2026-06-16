@@ -48,17 +48,52 @@ TEST_F(AutoGearboxShiftLogicTest, AC1_UpshiftsBeforeRedlineInDrive) {
     AutomaticGearbox gb(profile);
     gb.setGearSelector(bridge::GearSelector::DRIVE);
 
-    // Feed redline-band RPM feedback so the redline safety path is the driver.
-    gb.setTwinContext(/*state*/ 3, /*clutch*/ 1.0, /*speedFb*/ 5.0,
-                      /*rpmFb*/ profile.redlineRpm * 0.98);
-    gb.update(0.1, 5.0, 0.9, /*torqueNm*/ 100.0);
+    // 60 km/h in 1st implies an engine speed past redline -> the speed-implied
+    // redline safety (coherent with the speed-based shifts) must upshift.
+    gb.update(0.1, /*speedKmh*/ 60.0, /*throttle*/ 0.9, /*torqueNm*/ 100.0);
 
     ASSERT_GT(gb.getCurrentGear(), 1)
-        << "Near redline in DRIVE the box must upshift to keep RPM below redline";
-    // In the new (higher) gear the same road speed yields lower engine RPM.
-    double rpmAfter = engineRpmAt(5.0, gb.getCurrentGear(), profile);
+        << "When road speed in 1st implies redline, the box must upshift";
+    // After upshift(s), the engine RPM implied at this road speed is below redline.
+    double rpmAfter = engineRpmAt(60.0, gb.getCurrentGear(), profile);
     EXPECT_LT(rpmAfter, profile.redlineRpm)
         << "After upshift, engine RPM at this road speed must be below redline";
+}
+
+// ============================================================================
+// REDLINE-NO-UPSHIFT REPRO: user reports --auto redlines in 1st without
+// shifting once the car is moving. AC1 only covers low road speed (5 km/h);
+// these exercise higher road speed where the bug manifests.
+// ============================================================================
+
+// Repro A: steady 40% throttle, engine revs up to redline, road speed rising
+// (the user's scenario: throttle to 40%, redline, no upshift).
+TEST_F(AutoGearboxShiftLogicTest, RedlineUpshiftsAsEngineRevsToRedlineAtSpeed) {
+    AutomaticGearbox gb(profile);
+    gb.setGearSelector(bridge::GearSelector::DRIVE);
+    double rpm = 1000.0;
+    for (int i = 0; i < 300; ++i) {  // ~15s
+        rpm += 150.0;
+        if (rpm > profile.redlineRpm * 0.99) rpm = profile.redlineRpm * 0.99;
+        double speed = 20.0 + i * 0.3;  // 20 -> ~110 km/h
+        gb.setTwinContext(3, 1.0, speed, rpm);
+        gb.update(0.05, speed, /*throttle*/ 0.4, /*torque*/ 100.0);
+    }
+    EXPECT_GT(gb.getCurrentGear(), 1)
+        << "Engine reaching redline at road speed must trigger an upshift (repro: redline-no-upshift)";
+}
+
+// Repro B: redline + high road speed + steady throttle (isolates the speed path
+// / redline guard, no tip-in).
+TEST_F(AutoGearboxShiftLogicTest, RedlineUpshiftsAtHighRoadSpeedSteadyThrottle) {
+    AutomaticGearbox gb(profile);
+    gb.setGearSelector(bridge::GearSelector::DRIVE);
+    for (int i = 0; i < 200; ++i) {
+        gb.setTwinContext(3, 1.0, /*speedFb*/ 60.0, /*rpmFb*/ profile.redlineRpm * 0.98);
+        gb.update(0.05, /*speedKmh*/ 60.0, /*throttle*/ 0.4, /*torque*/ 100.0);
+    }
+    EXPECT_GT(gb.getCurrentGear(), 1)
+        << "At redline the box must upshift even when road speed already exceeds the shift point";
 }
 
 // AC2: Low load / light throttle (cruise) -> upshifts.
