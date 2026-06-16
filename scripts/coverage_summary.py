@@ -4,24 +4,25 @@
 Parses the lcov produced by run_coverage_tests.sh and prints:
   - overall coverage (all SF records)
   - src-only coverage (SF records under /src/)
-  - per-file coverage for src files, sorted lowest-first
+  - src-only sonar-scope coverage (matches SonarCloud)
 
-This is the LOCAL ground truth — it reflects exactly what llvm-cov measured
-in build-cov. It is independent of SonarCloud's dashboard number, which also
-counts dead-stripped src files (absent from lcov) as fully uncovered.
+OUTPUT MODES:
+  Default (concise, used by `make`): the three headline numbers + the TOP 5
+  worst (lowest coverage) src files + the MISSING (dead-stripped) files list.
+  --verbose / --all : prints the full per-file table for every src file.
 
-SINGLE SOURCE OF TRUTH: the "src/ only (sonar scope)" line applies the SAME
-exclusions SonarCloud uses. It reads sonar-project.properties from repo_root,
-parses sonar.exclusions + sonar.coverage.exclusions (Ant-style globs, comma
-separated), and drops any SF whose repo-root-relative path matches. That way
-the local number matches what SonarCloud counts (sonar.sources=src minus the
-exclusion globs), instead of counting every /src/ SF in the lcov.
+SONAR-SCOPE DENOMINATOR: the "src/ sonar scope" line applies the SAME
+exclusions SonarCloud uses (sonar.exclusions + sonar.coverage.exclusions from
+sonar-project.properties) AND includes dead-stripped files at 0%. A dead-
+stripped file is one that is compiled but not linked into any test binary
+(no caller), so it has no coverage mapping and is ABSENT from lcov. SonarCloud
+counts these against sonar.sources=src at 0%, so they are added to the local
+denominator (LH=0) so the local number tracks SonarCloud. Their line count is
+approximated (no coverage mapping exists for an exact LF).
 
-Note: a src file that no build-cov test binary references has no coverage
-mapping, so it is ABSENT from lcov entirely (not "0%"). Such files show up
-on SonarCloud as 0% because Sonar counts them against sonar.sources=src.
-They are listed below under "src files absent from lcov" when they can be
-discovered on disk; those are the candidates whose coverage gap is real.
+A small residual gap vs SonarCloud is normal: Sonar and llvm-cov count
+executable lines slightly differently per file (lcov drift), independent of
+dead-stripping.
 """
 import fnmatch
 import os
@@ -198,8 +199,59 @@ def find_src_files_on_disk(lcov_src_files, repo_root):
     return absent, True
 
 
-def display(coverage_path, repo_root):
-    """Print the coverage summary."""
+def count_code_lines(path):
+    """Approximate executable line count for a source file with no lcov data.
+
+    Counts non-blank, non-comment lines (stripping // and /* */ comments and
+    standalone braces/symbols). This is an APPROXIMATION of what llvm-cov's LF
+    would record — it cannot be exact without coverage mapping, but it lets the
+    sonar-scope denominator include dead-stripped files at 0% so the local
+    number tracks SonarCloud (which counts them as uncovered). Returns 0 on
+    read failure (file treated as no contribution).
+    """
+    count = 0
+    in_block = False
+    try:
+        with open(path) as f:
+            for raw in f:
+                line = raw.strip()
+                if not line:
+                    continue
+                # Strip block comments across lines.
+                if in_block:
+                    if '*/' in line:
+                        in_block = False
+                        line = line.split('*/', 1)[1].strip()
+                    else:
+                        continue
+                # Remove full-line block comments and trailing // comments.
+                if line.startswith('/*'):
+                    rest = line[2:]
+                    if '*/' in rest:
+                        line = rest.split('*/', 1)[1].strip()
+                    else:
+                        in_block = True
+                        continue
+                line = line.split('//', 1)[0].strip()
+                if not line:
+                    continue
+                # Skip bare structural tokens llvm-cov wouldn't count.
+                if line in ('{', '}', '};', '};'):
+                    continue
+                count += 1
+    except OSError:
+        return 0
+    return count
+
+
+def display(coverage_path, repo_root, verbose=False):
+    """Print the coverage summary.
+
+    By default prints a CONCISE view: the three headline numbers (overall,
+    src/ only, src/ sonar scope), the TOP 5 worst (lowest coverage) src files,
+    and the MISSING (dead-stripped) files list. With verbose=True prints the
+    full per-file table instead of just the top 5.
+    """
     records = parse_lcov(coverage_path)
 
     all_hit, all_found, all_pct = summarize(records)
@@ -214,7 +266,26 @@ def display(coverage_path, repo_root):
                          if not matches_exclusions(r[0], repo_root, patterns)]
     else:
         sonar_records = src_records
-    sonar_hit, sonar_found, sonar_pct = summarize(sonar_records)
+
+    # Dead-stripped src files: on disk but absent from lcov. SonarCloud counts
+    # these against sonar.sources=src at 0%, so they MUST be in the denominator
+    # for the local number to track SonarCloud. We approximate their LF (no
+    # coverage mapping exists to give an exact count) and add them at LH=0.
+    absent, scanned = find_src_files_on_disk(
+        [r[0] for r in sonar_records], repo_root)
+    dead_added_lines = 0
+    dead_records = []
+    dead_paths = set()
+    if scanned and absent:
+        for path in absent:
+            approx_lf = count_code_lines(path)
+            if approx_lf > 0:
+                dead_records.append((path, approx_lf, 0))
+                dead_added_lines += approx_lf
+                dead_paths.add(path)
+
+    sonar_with_dead = list(sonar_records) + dead_records
+    sonar_hit, sonar_found, sonar_pct = summarize(sonar_with_dead)
 
     print('')
     print('=== Local Coverage Summary ===')
@@ -227,7 +298,11 @@ def display(coverage_path, repo_root):
     if patterns:
         print('  {}src/ sonar scope{:11} {}{}/{} lines ({:.1f}%){} {}'.format(
             BOLD, RESET, coverage_color(sonar_pct), sonar_hit, sonar_found,
-            sonar_pct, RESET, GREY + '(matches SonarCloud)' + RESET))
+            sonar_pct, RESET, GREY + '(tracks SonarCloud)' + RESET))
+        if dead_added_lines:
+            print('  {}  incl. dead-stripped:{} {} files, {} lines at 0% ({} approx){}'.format(
+                GREY, RESET, len(dead_records), dead_added_lines,
+                'line count', ''))
         print('  {}  exclusions:{} {}{}'.format(
             GREY, RESET, props_path, ''))
     else:
@@ -235,21 +310,27 @@ def display(coverage_path, repo_root):
             BOLD, RESET, GREY, RESET))
     print('')
 
-    # Per-file src coverage, lowest-first. Cap output to keep it readable.
-    # Use the sonar scope so the table reflects what SonarCloud counts.
-    src_file_records = sorted(sonar_records, key=lambda r: (r[2] / r[1] if r[1] else 0.0))
-    print('  src/ per-file (sonar scope, lowest coverage first):')
-    for path, lf, lh in src_file_records:
+    # Per-file src coverage, lowest-first. CONCISE by default (top 5 worst);
+    # --verbose shows the full table. Uses the sonar scope (includes dead files
+    # at 0% so the ranking reflects genuine coverage gaps).
+    src_file_records = sorted(
+        sonar_with_dead, key=lambda r: (r[2] / r[1] if r[1] else 0.0))
+    if verbose:
+        print('  src/ per-file (sonar scope, lowest coverage first):')
+    else:
+        print('  src/ top 5 worst (sonar scope): {}--verbose for full list{}'.format(
+            GREY, RESET))
+    shown = src_file_records if verbose else src_file_records[:5]
+    for path, lf, lh in shown:
         rel = os.path.relpath(path, repo_root) if repo_root else path
         pct = (100.0 * lh / lf) if lf else 0.0
-        print('    {}{:5.1f}%{:8} {}/{}  {}{}'.format(
-            coverage_color(pct), pct, RESET, lh, lf, rel, ''))
+        marker = '  {}DEAD{} '.format(RED, RESET) if path in dead_paths else ''
+        print('    {}{:5.1f}%{:8} {}/{}  {}{}{}'.format(
+            coverage_color(pct), pct, RESET, lh, lf, marker, rel, ''))
     print('')
 
     # Dead-stripped src files: on disk but absent from lcov. These are the
     # real 0% files on SonarCloud (genuine coverage gaps, not a measurement bug).
-    absent, scanned = find_src_files_on_disk(
-        [r[0] for r in sonar_records], repo_root)
     if scanned:
         print('  src files absent from lcov (dead-stripped — 0% on SonarCloud):')
         if absent:
@@ -261,25 +342,46 @@ def display(coverage_path, repo_root):
                 GREEN, RESET))
         print('')
 
-    print('  ' + BOLD + 'Note:' + RESET + ' the sonar-scope line is the single source of truth;')
-    print('  it applies the same exclusions as SonarCloud.')
+    print('  ' + BOLD + 'Note:' + RESET +
+          ' dead-stripped = compiled but not linked into any test binary')
+    print('  (no caller) -> absent from lcov, counted as 0% by SonarCloud. The')
+    print('  sonar-scope line includes them so local tracks SonarCloud. A small')
+    print('  residual gap is normal: Sonar and llvm-cov count executable lines')
+    print('  slightly differently per file.')
     print('')
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: coverage_summary.py <lcov.info> [repo_root]")
+    """Entry point. Accepts an optional --verbose/--all flag anywhere in argv.
+
+    Usage: coverage_summary.py <lcov.info> [repo_root] [--verbose|--all]
+    The Makefile calls this with just the lcov path (concise output). The user
+    can run `python3 coverage_summary.py lcov.info --verbose` for the full list.
+    """
+    verbose = False
+    positional = []
+    for arg in sys.argv[1:]:
+        if arg in ('--verbose', '--all', '-v'):
+            verbose = True
+        elif arg in ('-h', '--help'):
+            print(__doc__)
+            sys.exit(0)
+        else:
+            positional.append(arg)
+
+    if not positional:
+        print("Usage: coverage_summary.py <lcov.info> [repo_root] [--verbose]")
         sys.exit(1)
 
-    coverage_path = sys.argv[1]
-    repo_root = sys.argv[2] if len(sys.argv) > 2 else os.getcwd()
+    coverage_path = positional[0]
+    repo_root = positional[1] if len(positional) > 1 else os.getcwd()
 
     if not os.path.isfile(coverage_path):
         print('  No coverage yet. Run: make sonar-scan')
         sys.exit(0)
 
     try:
-        display(coverage_path, repo_root)
+        display(coverage_path, repo_root, verbose=verbose)
     except (OSError, ValueError) as exc:
         print('  Failed to read coverage ({}): {}'.format(coverage_path, exc), file=sys.stderr)
         print('  Re-run with: make coverage-run')
