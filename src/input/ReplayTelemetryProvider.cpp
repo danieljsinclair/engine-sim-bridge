@@ -293,9 +293,21 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
             // slip = higher revs at launch).
             constexpr double kSyncKmh = 15.0;
             const double speedFrac = std::clamp(speedForBox / kSyncKmh, 0.0, 1.0);
-            const double minPressure = 0.15 * (1.0 - 0.6 * s.throttle);
+            // Zero clutch at standstill — the engine must be free to idle. Any
+            // non-zero pressure loads the engine against the constraint-pinned
+            // wheels and stalls it. The clutch engages as soon as the car moves
+            // (speedFrac ramps from 0). TC creep feel comes from the ramp, not
+            // a minimum floor at 0 speed.
+            const double minPressure = (speedForBox > 0.5) ? 0.15 * (1.0 - 0.6 * s.throttle) : 0.0;
             input.clutchPressure =
                 std::clamp(minPressure + speedFrac * (1.0 - minPressure), 0.0, 1.0);
+            // Safety: if the engine drops below idle, fully disengage the clutch
+            // so it can recover. Without this, rapid deceleration (speed→0
+            // through the clutch) drags the engine below idle → stalls. The
+            // speed-based ramp re-engages once speed rises again.
+            if (engineRpmFeedback_ < gearboxProfile_.idleRpm) {
+                input.clutchPressure = 0.0;
+            }
         } else {
             // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
             // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).
