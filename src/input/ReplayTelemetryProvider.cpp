@@ -292,16 +292,24 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
             // standstill (clutch slips, engine can rev), ramps to full lockup as
             // road speed approaches ~15 km/h. Throttle reduces the floor (more
             // slip = higher revs at launch).
-            constexpr double kSyncKmh = 15.0;
-            const double speedFrac = std::clamp(speedForBox / kSyncKmh, 0.0, 1.0);
-            // Zero clutch at standstill — the engine must be free to idle. Any
-            // non-zero pressure loads the engine against the constraint-pinned
-            // wheels and stalls it. The clutch engages as soon as the car moves
-            // (speedFrac ramps from 0). TC creep feel comes from the ramp, not
-            // a minimum floor at 0 speed.
-            const double minPressure = (speedForBox > 0.5) ? 0.15 * (1.0 - 0.6 * s.throttle) : 0.0;
-            input.clutchPressure =
-                std::clamp(minPressure + speedFrac * (1.0 - minPressure), 0.0, 1.0);
+            // Clutch pressure ramps from 0 (below idle-implied speed) to 1.0
+            // (locked). The "idle-implied speed" is the road speed at which the
+            // engine RPM = idle in the current gear. Below that, the clutch MUST
+            // be open (the implied RPM is below idle → coupling would drag the
+            // engine down → stall). Above it, the engine can sustain against the
+            // coupling, so the clutch engages gradually.
+            int gear = gearbox_->getCurrentGear();
+            double idleSpeedKmh = 5.0;  // fallback
+            if (gear >= 1 && gear <= static_cast<int>(gearboxProfile_.gearRatios.size())) {
+                double idleRadS = gearboxProfile_.idleRpm * 3.14159265358979 / 30.0;
+                double wheelRadS = idleRadS / (gearboxProfile_.gearRatios[gear - 1]
+                                               * gearboxProfile_.diffRatio);
+                idleSpeedKmh = wheelRadS * gearboxProfile_.tireRadiusM * 3.6;
+            }
+            constexpr double kRampRangeKmh = 20.0;  // ramp width above idle speed
+            double speedFrac = std::clamp(
+                (speedForBox - idleSpeedKmh) / kRampRangeKmh, 0.0, 1.0);
+            input.clutchPressure = speedFrac;  // 0 below idle speed, 1 at lock
         } else {
             // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
             // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).
