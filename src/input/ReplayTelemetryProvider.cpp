@@ -249,25 +249,15 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
             // Throttle biases the slip: at WOT launch we slip more (rev higher).
             input.vehicleSpeedTargetKmh = s.roadSpeedKmh;
             input.engineRpmFloor = 0.0;  // dyno disabled downstream
-            // Slip-based clutch pressure: at idle (engine RPM >> road-implied),
-            // low pressure so the engine idles naturally. As road speed catches
-            // up (slip → 0), lock the clutch.
-            int gear = gearbox_->getCurrentGear();
-            double roadImpliedRpm = 0.0;
-            if (gear >= 1 && gear <= static_cast<int>(gearboxProfile_.gearRatios.size())
-                && s.roadSpeedKmh >= 0.0) {
-                double speedMs = s.roadSpeedKmh / 3.6;
-                double wheelRpm = speedMs / (2.0 * 3.14159265358979 * gearboxProfile_.tireRadiusM) * 60.0;
-                roadImpliedRpm = wheelRpm * gearboxProfile_.gearRatios[gear - 1]
-                               * gearboxProfile_.diffRatio;
-            }
-            double slip = engineRpmFeedback_ - roadImpliedRpm;
-            if (slip < 0.0) slip = 0.0;  // engine slower → locked (engine braking)
-            constexpr double kStallRpm = 2000.0;  // TC slip range
-            double slipRatio = std::clamp(slip / kStallRpm, 0.0, 1.0);
-            constexpr double kMinPressure = 0.05;  // minimal creep coupling
+            // Speed-based clutch ramp (torque-converter style): low pressure at
+            // standstill (clutch slips, engine can rev), ramps to full lockup as
+            // road speed approaches ~15 km/h. Throttle reduces the floor (more
+            // slip = higher revs at launch).
+            constexpr double kSyncKmh = 15.0;
+            const double speedFrac = std::clamp(speedForBox / kSyncKmh, 0.0, 1.0);
+            const double minPressure = 0.25 * (1.0 - 0.5 * s.throttle);
             input.clutchPressure =
-                std::clamp(1.0 - slipRatio * (1.0 - kMinPressure), kMinPressure, 1.0);
+                std::clamp(minPressure + speedFrac * (1.0 - minPressure), 0.0, 1.0);
         } else {
             // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
             // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).
