@@ -58,6 +58,15 @@ set(CMAKE_C_FLAGS "")
 # The old bug where this would permanently cache binaries was fixed in 2022.
 add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_ALL)
 
+# engine-sim is EXCLUDE_FROM_ALL above (don't build its app/discord/tools by
+# default), but it self-registers its physics safety-net tests via
+# gtest_discover_tests (DELEGATION model). For those tests to run, the
+# engine-sim-test binary MUST build — otherwise ctest sees a phantom
+# engine-sim-test_NOT_BUILT entry. Un-exclude just that one target.
+if(TARGET engine-sim-test)
+    set_target_properties(engine-sim-test PROPERTIES EXCLUDE_FROM_ALL OFF)
+endif()
+
 # Keep third-party piranha warnings out of normal build output.
 # We keep piranha enabled, but suppress known noisy warnings from that submodule.
 if(TARGET piranha)
