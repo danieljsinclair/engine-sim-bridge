@@ -43,6 +43,10 @@ Thumbs.db
 .claude/scheduled_tasks.lock
 .cache/
 
+# Python
+__pycache__/
+*.pyc
+
 # Generated JSON presets (rebuilt by 'make presets')
 /preset/
 

@@ -15,7 +15,7 @@
 #include <memory>
 
 #include "simulator/ISimulator.h"
-#include "MockSimulator.h"
+#include "../mocks/MockSimulator.h"
 #include "strategy/IAudioBuffer.h"
 #include "strategy/ThreadedStrategy.h"
 #include "strategy/SyncPullStrategy.h"
