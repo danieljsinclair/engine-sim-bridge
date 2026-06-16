@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := all
-.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism             test-deep presets clean-presets          sonar-scan sonar-clean coverage-clean coverage-run sonar-summary test-nosonar
+.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism             test-deep presets clean-presets          sonar-scan sonar-clean coverage-clean coverage-run coverage-summary sonar-summary test-nosonar
 
 BUILD_DIR ?= build
 BUILD_COV_DIR ?= build-cov
@@ -122,7 +122,7 @@ clean-test-fixtures:
 	@echo "Done."
 
 # Run the bridge suite in explicit tiers.
-test: test-core test-deep sonar-scan sonar-summary
+test: test-core test-deep sonar-scan coverage-summary sonar-summary
 
 test-core: CTEST_SELECTOR := -E '$(BRIDGE_TEST_CORE_EXCLUDE)'
 test-core: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: core bridge suite (factory + preset regression coverage) ===
@@ -235,6 +235,12 @@ check: test
 # Sonar summary — display issues from cached SonarCloud report.
 # No prereq on $(SONAR_REPORT): this must NEVER trigger a scan. If the cached
 # report is absent (fresh tree / pre-scan), sonar_summary.py prints a hint.
+# Coverage summary — display local coverage % from lcov.info.
+# No prereq: this must NEVER trigger a scan. If lcov is absent (fresh tree /
+# pre-scan), coverage_summary.py prints a hint.
+coverage-summary:
+	@python3 scripts/coverage_summary.py $(BUILD_COV_DIR)/lcov.info
+
 sonar-summary:
 	@python3 scripts/sonar_summary.py $(SONAR_REPORT)
 
