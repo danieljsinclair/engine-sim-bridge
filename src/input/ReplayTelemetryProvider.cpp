@@ -3,6 +3,7 @@
 #include "twin/AutomaticGearbox.h"
 #include "twin/IceVehicleProfile.h"
 #include "simulator/GearConventions.h"
+#include "simulator/EngineSimTypes.h"
 
 #include <algorithm>
 #include <cctype>
@@ -80,6 +81,10 @@ ReplayTelemetryProvider::ReplayTelemetryProvider(std::string csvPath, bool autoS
 
 ReplayTelemetryProvider::~ReplayTelemetryProvider() = default;
 
+void ReplayTelemetryProvider::provideFeedback(const EngineSimStats& stats) {
+    engineRpmFeedback_ = stats.currentRPM;
+}
+
 bool ReplayTelemetryProvider::Initialize() {
     if (!parseCsv()) return false;
     connected_ = !samples_.empty();
@@ -133,6 +138,21 @@ bool ReplayTelemetryProvider::parseCsv() {
             headerParsed = true;
             if (colTime < 0) {
                 lastError_ = "Telemetry CSV missing time column (time_s): " + csvPath_;
+                return false;
+            }
+            // Detect raw CAN format (undecoded) — clear error instead of silent
+            // failure (which would read 0 throttle/speed and the engine sits idle).
+            bool hasCanId = false, hasDataHex = false;
+            for (size_t i = 0; i < fields.size(); ++i) {
+                const std::string name = lower(trim(fields[i]));
+                if (name == "can_id") hasCanId = true;
+                if (name == "data_hex") hasDataHex = true;
+            }
+            if (hasCanId && hasDataHex) {
+                lastError_ = "This is a RAW CAN capture (can_id + data_hex columns). "
+                             "Decode it first with: vehicle-sim --connect file:" +
+                             csvPath_ + " --log-csv decoded.csv  "
+                             "then replay the decoded file.";
                 return false;
             }
             continue;
@@ -220,13 +240,29 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
             gearbox_->update(dt, speedForBox, s.throttle, 0.0);
             input.gearAbsolute = gearbox_->getCurrentGear();
             input.gearAutoMode = true;
-            input.engineRpmFloor = gearboxProfile_.idleRpm +
-                s.throttle * (0.5 * gearboxProfile_.redlineRpm - gearboxProfile_.idleRpm);
+
+            // Spike-A — pressure-modulated clutch launch controller (dyno OFF).
+            // Drive the WHEELS to the CSV road speed (vehicleSpeedTargetKmh) and
+            // let the clutch couple them to the engine. At launch (road slow,
+            // high slip) keep pressure LOW so the engine revs freely instead of
+            // being dragged; as road speed syncs, ramp pressure -> 1.0 (lockup).
+            // Throttle biases the slip: at WOT launch we slip more (rev higher).
+            input.vehicleSpeedTargetKmh = s.roadSpeedKmh;
+            input.engineRpmFloor = 0.0;  // dyno disabled downstream
+            constexpr double kSyncKmh = 15.0;   // road speed where clutch ~locks
+            const double speedFrac = std::clamp(speedForBox / kSyncKmh, 0.0, 1.0);
+            // min pressure so the engine is never fully decoupled at standstill;
+            // throttle REDUCES the floor (more slip = more revs at launch).
+            const double minPressure = 0.15 * (1.0 - 0.6 * s.throttle);
+            input.clutchPressure =
+                std::clamp(minPressure + speedFrac * (1.0 - minPressure), 0.0, 1.0);
         } else {
             // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
             // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).
             input.gearAbsolute = 0;
             input.gearAutoMode = false;
+            // Make sure any prior vehicle-speed constraint is released.
+            input.vehicleSpeedTargetKmh = -1.0;
         }
     } else {
         // Non-auto (e.g. rev-in-park): no gear forced, clutch disengaged, free-rev.

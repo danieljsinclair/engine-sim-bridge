@@ -21,6 +21,7 @@
 #define INPUT_REPLAY_TELEMETRY_PROVIDER_H
 
 #include "io/IInputProvider.h"
+#include "simulator/EngineSimTypes.h"
 #include "twin/IceVehicleProfile.h"
 #include "input/IKeyboardInput.h"
 #include "session/ISimulatorSession.h"
@@ -43,6 +44,7 @@ public:
     void Shutdown() override {}
     bool IsConnected() const override { return connected_; }
     EngineInput OnUpdateSimulation(double dt) override;
+    void provideFeedback(const EngineSimStats& stats) override;
     std::string GetProviderName() const override { return "ReplayTelemetry"; }
     std::string GetLastError() const override { return lastError_; }
 
@@ -80,6 +82,7 @@ private:
     // Keyboard input support for Q/P during replay
     IKeyboardInput* keyboard_ = nullptr;
     ISimulatorSession* session_ = nullptr;
+    double engineRpmFeedback_ = 0.0;  // last engine RPM from the physics (for slip calc)
 };
 
 } // namespace input

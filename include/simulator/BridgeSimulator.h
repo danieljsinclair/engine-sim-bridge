@@ -101,6 +101,14 @@ public:
     // speedKmh: Target road speed in km/h. Returns true if in gear, false if neutral.
     bool setSpeedTrackingTarget(double speedKmh, double rpmFloor = 0.0);
 
+    // Spike-A — inverse model: drive the vehicle-mass body to a target road speed
+    // via VehicleSpeedConstraint (NOT the dyno). The clutch then couples this
+    // driven wheel mass to the engine, so combustion sets engine RPM naturally
+    // instead of being pinned. Dyno is forced OFF. speedKmh in km/h; pass a
+    // negative value to disable the constraint (free-rolling). Returns true if
+    // the constraint was enabled.
+    bool setVehicleSpeedTarget(double speedKmh);
+
     // Set display name directly
     void setName(const std::string& name) { name_ = name; }
 

@@ -202,11 +202,19 @@ void SimulationLoop::applyVehicleControls(
         // HACK: Should put the clutch in here really
         applyDynoControl(simulator_, input.dynoTorqueScale, lastDynoTorqueScale);
 
-        // Speed tracking: set dyno to match road speed in current gear.
-        // Only when in gear (not neutral) - setSpeedTrackingTarget handles this check.
-        // setSpeedTrackingTarget is a BridgeSimulator-specific API, so downcast the engine.
-        if (input.roadSpeedKmh >= 0.0) {
-            if (auto* bridgeSim = dynamic_cast<BridgeSimulator*>(combustionEngine)) {
+        // Speed tracking. Spike-A: prefer the vehicle-speed constraint (drives the
+        // wheels, clutch couples to engine, dyno OFF) when commanded — this is the
+        // --auto DRIVE path that fixes the dragged-engine sound. Fall back to the
+        // dyno path (setSpeedTrackingTarget) for the legacy road-speed input.
+        // Both are BridgeSimulator-specific APIs, so downcast the engine.
+        if (auto* bridgeSim = dynamic_cast<BridgeSimulator*>(combustionEngine)) {
+            if (input.vehicleSpeedTargetKmh >= 0.0) {
+                // Spike-A inverse path: drive wheels, clutch couples, dyno OFF.
+                bridgeSim->setVehicleSpeedTarget(input.vehicleSpeedTargetKmh);
+            } else if (!input.gearAutoMode && input.roadSpeedKmh >= 0.0) {
+                // Legacy dyno fallback — manual road-speed input only. In --auto
+                // mode the gearbox provider owns speed tracking via the constraint;
+                // PARK/NEUTRAL frames must NOT fall through to the dyno (free-rev).
                 bridgeSim->setSpeedTrackingTarget(input.roadSpeedKmh, input.engineRpmFloor);
             }
         }

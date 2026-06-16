@@ -379,6 +379,45 @@ bool BridgeSimulator::setSpeedTrackingTarget(double speedKmh, double rpmFloor) {
     return true;
 }
 
+bool BridgeSimulator::setVehicleSpeedTarget(double speedKmh) {
+    // Spike-A — inverse model: drive the wheels (vehicle-mass body) to the CSV
+    // road speed; the clutch couples them to the engine. Dyno stays OFF so
+    // combustion is no longer overridden (no "dragged engine" sound).
+    auto* trans = m_simulator->getTransmission();
+    if (!trans) {
+        m_simulator->m_dyno.m_enabled = false;
+        m_simulator->m_vehicleSpeedConstraint.m_enabled = false;
+        return false;
+    }
+
+    // Negative = disable: let the car free-roll (clutch + drag only).
+    if (speedKmh < 0.0) {
+        m_simulator->m_vehicleSpeedConstraint.m_enabled = false;
+        m_simulator->m_dyno.m_enabled = false;
+        return false;
+    }
+
+    // Neutral / no gear: don't pin the wheels either — engine must free-rev.
+    int gear = trans->getGear();
+    if (gear < 0) {
+        m_simulator->m_vehicleSpeedConstraint.m_enabled = false;
+        m_simulator->m_dyno.m_enabled = false;
+        return false;
+    }
+
+    // CRITICAL: dyno off. The dyno is exactly the thing that pins RPM and
+    // produces the dragged sound. The new constraint replaces it.
+    m_simulator->m_dyno.m_enabled = false;
+    m_simulator->m_dyno.m_hold = false;
+
+    // Convert km/h -> m/s for the constraint's target linear speed.
+    const double speedMs = speedKmh / EngineSimDefaults::MS_TO_KMH;
+    m_simulator->m_vehicleSpeedConstraint.m_targetLinearSpeed = speedMs;
+    m_simulator->m_vehicleSpeedConstraint.m_enabled = true;
+
+    return true;
+}
+
 BridgeSimulator::DrivetrainSnapshot BridgeSimulator::captureDrivetrainState() const {
     DrivetrainSnapshot snapshot;
 
