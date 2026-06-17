@@ -2,6 +2,7 @@
 #include "input/ReplayTelemetryProvider.h"
 #include "twin/AutomaticGearbox.h"
 #include "twin/IceVehicleProfile.h"
+#include "twin/SlipLockController.h"
 #include "simulator/GearConventions.h"
 #include "simulator/EngineSimTypes.h"
 
@@ -280,31 +281,42 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
             input.gearAbsolute = gearbox_->getCurrentGear();
             input.gearAutoMode = true;
 
-            // Spike-A — pressure-modulated clutch launch controller (dyno OFF).
-            // Drive the WHEELS to the CSV road speed (vehicleSpeedTargetKmh) and
-            // let the clutch couple them to the engine. At launch (road slow,
-            // high slip) keep pressure LOW so the engine revs freely instead of
-            // being dragged; as road speed syncs, ramp pressure -> 1.0 (lockup).
-            // Throttle biases the slip: at WOT launch we slip more (rev higher).
+            // SlipLockController — pressure-modulated clutch launch controller
+            // (dyno OFF). Drive the WHEELS to the CSV road speed
+            // (vehicleSpeedTargetKmh) and let the clutch couple them to the
+            // engine via the torque-converter slip characteristic:
+            //   - standstill (road-implied < idle):   pressure 0   (engine free to idle, no stall)
+            //   - launch under throttle (high slip):  partial       (TC slip in power band)
+            //   - road catches up (slip -> 0):        pressure -> 1 (locked, direct coupling)
+            //   - decel (engine slower than road):    pressure 1    (locked, engine braking)
+            // The stall floor (pressure == 0 whenever roadSpeedImpliedRpm < idleRpm)
+            // is the lesson from the stall/redline circle: coupling below idle drags
+            // the engine under idle and stalls it. See twin/SlipLockController.h.
             input.vehicleSpeedTargetKmh = s.roadSpeedKmh;
             input.engineRpmFloor = 0.0;  // dyno disabled downstream
-            // Clutch pressure ramps from 0 (below idle-implied speed) to 1.0 (locked).
-            // The "idle-implied speed" is the road speed at which the engine RPM equals
-            // idle in the current gear. Below that, coupling the engine to the wheels
-            // would drag it below idle and stall it. Above it, the clutch engages
-            // gradually over a 20 km/h window.
-            int gear = gearbox_->getCurrentGear();
-            double idleSpeedKmh = 5.0;  // fallback
+
+            // Road-speed-implied engine RPM: the RPM the engine would be at if the
+            // clutch were locked in the current gear at the current road speed.
+            // engineRpm = wheelRadS * gearRatio * diffRatio,  wheelRadS = v / tireRadius.
+            const int gear = gearbox_->getCurrentGear();
+            double roadSpeedImpliedRpm = gearboxProfile_.idleRpm;  // fallback above the floor
             if (gear >= 1 && gear <= static_cast<int>(gearboxProfile_.gearRatios.size())) {
-                double idleRadS = gearboxProfile_.idleRpm * 3.14159265358979 / 30.0;
-                double wheelRadS = idleRadS / (gearboxProfile_.gearRatios[gear - 1]
-                                               * gearboxProfile_.diffRatio);
-                idleSpeedKmh = wheelRadS * gearboxProfile_.tireRadiusM * 3.6;
+                const double speedMs = speedForBox / 3.6;
+                const double wheelRadS = speedMs / gearboxProfile_.tireRadiusM;
+                roadSpeedImpliedRpm = wheelRadS
+                                      * gearboxProfile_.gearRatios[gear - 1]
+                                      * gearboxProfile_.diffRatio
+                                      * 30.0 / 3.14159265358979;
             }
-            constexpr double kRampRangeKmh = 20.0;
-            double speedFrac = std::clamp(
-                (speedForBox - idleSpeedKmh) / kRampRangeKmh, 0.0, 1.0);
-            input.clutchPressure = speedFrac;
+
+            const twin::SlipLockOutput slipLock = twin::computeSlipLockPressure(
+                twin::SlipLockInput{
+                    engineRpmFeedback_,
+                    roadSpeedImpliedRpm,
+                    s.throttle,
+                    gearboxProfile_.idleRpm,
+                    gearboxProfile_.redlineRpm});
+            input.clutchPressure = slipLock.clutchPressure;
         } else {
             // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
             // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).
