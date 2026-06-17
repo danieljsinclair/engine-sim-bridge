@@ -514,6 +514,11 @@ int SimulationLoop::run() {
         isFirstTick = false;
         previousStats = stats;
 
+        // Feed the previous frame's stats back to the input provider so it can
+        // use real engine RPM/speed/torque for decisions (e.g. the SlipLockController
+        // needs engineRpmFeedback to compute clutch pressure from slip).
+        if (inputProvider_) inputProvider_->provideFeedback(previousStats);
+
         if (engineInput.presetCycle) {
             return EXIT_BUT_CONTINUE_NEXT;
         }
