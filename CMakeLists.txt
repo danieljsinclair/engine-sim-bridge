@@ -15,7 +15,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Bridge always builds as static library
-set(LIB_TYPE STATIC)
+set(LIB_TYPE SHARED)
 
 # Find engine-sim (expected as a submodule at ./engine-sim)
 # Use ENGINE_SIM_PATH if set by parent project for override
