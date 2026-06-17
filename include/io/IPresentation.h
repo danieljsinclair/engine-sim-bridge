@@ -46,6 +46,10 @@ struct EngineState {
         double brakeLevel = 0.0;
         int gearSelector = 0;
         bool gearAutoMode = false;
+        // Commanded road-speed target (km/h) from the ','/'.' keys. Negative
+        // sentinel = "no speed commanded". Surfaced so it is visible in neutral
+        // where the vehicle speed readout otherwise shows physics only.
+        double commandedSpeedKmh = -1.0;
     } controls;
 
     // Audio + timing diagnostics (observability only)
@@ -70,6 +74,18 @@ struct EngineState {
 };
 
 // ============================================================================
+// Diagnostic Output Filter
+// Single bucket selecting which optional per-frame debug lines are printed.
+// Open/Closed: adding a category = adding a field here + a CLI flag that sets
+// it. No call-site signatures change. Injected by const ref via PresentationConfig.
+// ============================================================================
+
+struct DiagnosticOutputFilter {
+    bool frames = false;   // audio frame/buffer timing line (req=/got=/took=/room=)
+    bool freq   = false;   // update-call frequency line (calls=/need/kfps)
+};
+
+// ============================================================================
 // Presentation Configuration
 // ============================================================================
 
@@ -78,6 +94,10 @@ struct PresentationConfig {
     double duration = 0.0;  // 0 = infinite
     bool showProgress = true;
     bool showDiagnostics = true;
+
+    // Selective debug categories. Source of truth for which optional diagnostic
+    // lines get printed; defaults to all-off so the console stays quiet.
+    DiagnosticOutputFilter diagnostics;
 };
 
 // ============================================================================
@@ -100,7 +120,7 @@ public:
     // Output Methods
     // ========================================================================
 
-    virtual void ShowEngineState(const EngineState& state) = 0;
+    virtual void ShowSimulatorStates(const EngineState& state) = 0;
     virtual void ShowMessage(const std::string& message) = 0;
     virtual void ShowError(const std::string& error) = 0;
     virtual void ShowProgress(double currentTime, double duration) = 0;

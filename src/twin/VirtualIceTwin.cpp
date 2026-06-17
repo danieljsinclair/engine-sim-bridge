@@ -92,7 +92,8 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
         case TwinState::RUNNING: {
             double gearboxSpeedKmh = signal.speedKmh;
             gearbox_.setTwinContext(static_cast<int>(state_), clutchPressure_, vehicleSpeedFeedbackKmh_, engineRpmFeedback_);
-            gearbox_.update(dt, gearboxSpeedKmh, signal.throttleFraction);
+            gearbox_.setGearSelector(selector_);
+            gearbox_.update(dt, gearboxSpeedKmh, signal.throttleFraction, drivetrainTorqueNm_);
             output.ignition = true;
 
             // RUNNING->IDLE: selector moved to NEUTRAL or PARK

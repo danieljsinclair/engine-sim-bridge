@@ -39,6 +39,9 @@ namespace presentation {
             controls.brakeLevel = input.brakeLevel;
             controls.gearSelector = input.gearSelector;
             controls.gearAutoMode = input.gearAutoMode;
+            // Surface the commanded road-speed target so it is visible even in
+            // neutral (where the vehicle speed readout reflects physics only).
+            controls.commandedSpeedKmh = input.roadSpeedKmh;
             return controls;
         }
 

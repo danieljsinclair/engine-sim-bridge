@@ -4,6 +4,15 @@
 namespace twin {
 
 TwinOutput ManualTwin::update(double dt, const TwinFeedback& feedback) {
+    // The gear SELECTOR (P/R/N/D gate) is distinct from the gear NUMBER.
+    // A manual twin has no PRNDL gate; when in a forward gear (>0) it reports
+    // DRIVE so the renderer shows 'D', while the actual gear lives in output.gear
+    // (shown in the 'G' field). Neutral/0 reports NEUTRAL.
+    auto selectorForGear = [](int gear) {
+        return (gear > 0) ? bridge::GearSelector::DRIVE
+                          : bridge::GearSelector::NEUTRAL;
+    };
+
     TwinOutput output;
 
     if (!feedback.isValid) {
@@ -64,7 +73,7 @@ TwinOutput ManualTwin::update(double dt, const TwinFeedback& feedback) {
                 state_ = TwinState::RUNNING;
                 output.starterMotor = false;
                 output.gear = currentGear_;
-                output.gearSelector = static_cast<bridge::GearSelector>(currentGear_);
+                output.gearSelector = selectorForGear(currentGear_);
                 output.clutchPressure = 1.0;
             }
 
@@ -83,7 +92,7 @@ TwinOutput ManualTwin::update(double dt, const TwinFeedback& feedback) {
             output.starterMotor = false;
             output.ignition = true;
             output.gear = currentGear_;
-            output.gearSelector = static_cast<bridge::GearSelector>(currentGear_);
+            output.gearSelector = selectorForGear(currentGear_);
             output.clutchPressure = 1.0;
 
             if (!ignitionRequested_) {
@@ -95,7 +104,7 @@ TwinOutput ManualTwin::update(double dt, const TwinFeedback& feedback) {
             state_ = TwinState::RUNNING;
             output.throttle = std::clamp(inputThrottle_, 0.0, 1.0);
             output.gear = currentGear_;
-            output.gearSelector = static_cast<bridge::GearSelector>(currentGear_);
+            output.gearSelector = selectorForGear(currentGear_);
             output.clutchPressure = 1.0;
             break;
     }

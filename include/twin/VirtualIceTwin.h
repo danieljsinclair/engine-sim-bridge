@@ -21,6 +21,8 @@ public:
 
     void setEngineRpmFeedback(double rpm) { engineRpmFeedback_ = rpm; }
     void setVehicleSpeedFeedback(double kmh) { vehicleSpeedFeedbackKmh_ = kmh; }
+    // Drivetrain torque feedback (Nm) feeds the torque-driven shift logic.
+    void setDrivetrainTorqueFeedback(double nm) { drivetrainTorqueNm_ = nm; }
     void setGearboxLogger(IGearboxLogger* logger);
 
     void setGearSelector(bridge::GearSelector s) { selector_ = s; }
@@ -44,6 +46,7 @@ private:
     double crankingTimerS_ = 0.0;
     double engineRpmFeedback_ = 0.0;
     double vehicleSpeedFeedbackKmh_ = 0.0;
+    double drivetrainTorqueNm_ = 0.0;
     double clutchPressure_ = 1.0;
     bridge::GearSelector selector_ = bridge::GearSelector::NEUTRAL;
     bool ignitionOn_ = true;

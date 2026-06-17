@@ -96,6 +96,7 @@ void VirtualIceInputProvider::provideFeedback(const EngineSimStats& stats) {
     if (twin_) {
         twin_->setEngineRpmFeedback(stats.currentRPM);
         twin_->setVehicleSpeedFeedback(stats.vehicleSpeedKmh);
+        twin_->setDrivetrainTorqueFeedback(stats.drivetrainTorqueNm);
     }
 }
 

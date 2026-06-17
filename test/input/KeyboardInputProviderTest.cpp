@@ -13,6 +13,7 @@
 #include "input/KeyHoldBridge.h"
 #include "mocks/MockKeyActionTarget.h"
 #include "mocks/MockKeyboardInput.h"
+#include "input/IDemoSpeedEnhancer.h"
 
 #include <gtest/gtest.h>
 #include <memory>
@@ -419,6 +420,68 @@ TEST_F(EngineInputTargetTest, ShiftUp_IncrementsGearSelectorAndSetsDelta) {
 }
 
 // ============================================================================
+// Manual gear counter clamps to the valid selector range (REVERSE=-1 .. EIGHTH=8)
+// so the display can never render a stray 'P' (PARK=-2) or '?' (>8).
+// ============================================================================
+
+TEST_F(EngineInputTargetTest, ShiftUp_ClampsAtEighthGear) {
+    for (int i = 0; i < 20; ++i) target->shiftUp();
+    EXPECT_EQ(target->buildInput().gearSelector, 8);
+}
+
+TEST_F(EngineInputTargetTest, ShiftDown_ClampsAtReverse) {
+    for (int i = 0; i < 20; ++i) target->shiftDown();
+    EXPECT_EQ(target->buildInput().gearSelector, -1);
+}
+
+// ============================================================================
+// Feedback loop: provideFeedback must route simulator stats (RPM/speed/torque)
+// to the speed enhancer (twin/gearbox). Regression for the "redlines but never
+// upshifts" bug — KeyboardInputProvider had no provideFeedback override, so the
+// gearbox's rpmFeedback_ stayed 0 and the redline safety never fired.
+// ============================================================================
+namespace {
+class RecordingEnhancer : public input::IDemoSpeedEnhancer {
+public:
+    int feedbackCount = 0;
+    double lastRpm = -1.0;
+    input::EngineInput enhanceInput(const input::EngineInput& base, double) override { return base; }
+    void provideFeedback(const EngineSimStats& stats) override {
+        ++feedbackCount;
+        lastRpm = stats.currentRPM;
+    }
+};
+} // namespace
+
+TEST_F(EngineInputTargetTest, ProvideFeedback_ForwardsToSpeedEnhancer) {
+    RecordingEnhancer enh;
+    target->setSpeedEnhancer(&enh);
+    EngineSimStats stats{};
+    stats.currentRPM = 5000.0;
+    target->provideFeedback(stats);
+    EXPECT_EQ(enh.feedbackCount, 1);
+    EXPECT_DOUBLE_EQ(enh.lastRpm, 5000.0);
+}
+
+TEST_F(EngineInputTargetTest, ProvideFeedback_NoEnhancer_IsSafe) {
+    EngineSimStats stats{};
+    target->provideFeedback(stats);  // no enhancer set — must not crash
+    SUCCEED();
+}
+
+TEST_F(EngineInputTargetTest, ProvideFeedback_ChainsKeyboardProviderToEnhancer) {
+    RecordingEnhancer enh;
+    target->setSpeedEnhancer(&enh);
+    auto kb = std::make_unique<MockKeyboardInput>();
+    input::KeyboardInputProvider provider(std::move(kb), target.get());
+    EngineSimStats stats{};
+    stats.currentRPM = 6500.0;
+    provider.provideFeedback(stats);
+    EXPECT_EQ(enh.feedbackCount, 1);
+    EXPECT_DOUBLE_EQ(enh.lastRpm, 6500.0);
+}
+
+// ============================================================================
 // Test 30: toggleIgnition flips state
 // ============================================================================
 
@@ -615,16 +678,27 @@ TEST_F(EngineInputTargetTest, MomentaryThrottle_HeldMultipleFrames_ThenDecaysToB
 }
 
 // ============================================================================
-// Tests 41-45: Speed control state
+// Tests 41-46: Speed control state
 // ============================================================================
 
+TEST_F(EngineInputTargetTest, DefaultRoadSpeed_IsUncommandedSentinel) {
+    // The default must signal "no speed commanded" so the simulation loop does
+    // not force the dyno to hold the engine at 0 RPM (which stalls it in gear).
+    EngineInput input = target->buildInput();
+    EXPECT_LT(input.roadSpeedKmh, 0.0)
+        << "Uncommanded roadSpeedKmh must be negative; got " << input.roadSpeedKmh;
+}
+
 TEST_F(EngineInputTargetTest, AdjustSpeedUp_IncreasesByDelta) {
+    // Establish a 0 km/h baseline from the uncommanded sentinel first.
+    target->adjustSpeed(0.0);
     target->adjustSpeed(10.0);
     EngineInput input = target->buildInput();
     EXPECT_DOUBLE_EQ(input.roadSpeedKmh, 10.0);
 }
 
 TEST_F(EngineInputTargetTest, AdjustSpeedDown_DecreasesByDelta) {
+    target->adjustSpeed(0.0);
     target->adjustSpeed(50.0);
     target->adjustSpeed(-10.0);
     EngineInput input = target->buildInput();
@@ -632,6 +706,7 @@ TEST_F(EngineInputTargetTest, AdjustSpeedDown_DecreasesByDelta) {
 }
 
 TEST_F(EngineInputTargetTest, AdjustSpeed_ClampsToZero) {
+    target->adjustSpeed(0.0);
     target->adjustSpeed(50.0);
     target->adjustSpeed(-100.0);  // Try to go below zero
     EngineInput input = target->buildInput();
@@ -639,6 +714,7 @@ TEST_F(EngineInputTargetTest, AdjustSpeed_ClampsToZero) {
 }
 
 TEST_F(EngineInputTargetTest, AdjustSpeed_ClampsToMax) {
+    target->adjustSpeed(0.0);
     target->adjustSpeed(200.0);
     target->adjustSpeed(150.0);  // Try to exceed 300 km/h
     EngineInput input = target->buildInput();
@@ -646,7 +722,47 @@ TEST_F(EngineInputTargetTest, AdjustSpeed_ClampsToMax) {
 }
 
 TEST_F(EngineInputTargetTest, BuildInput_IncludesRoadSpeed) {
+    target->adjustSpeed(0.0);
     target->adjustSpeed(100.0);
     EngineInput input = target->buildInput();
     EXPECT_DOUBLE_EQ(input.roadSpeedKmh, 100.0);
+}
+
+// ============================================================================
+// Gearbox-mode propagation (AC1/AC2): --auto must engage the automatic box
+// and disable manual ]/[ shifting; default stays manual.
+// ============================================================================
+
+TEST_F(EngineInputTargetTest, DefaultMode_IsManual) {
+    // AC2: without --auto, mode is manual (M)
+    EngineInput input = target->buildInput();
+    EXPECT_FALSE(input.gearAutoMode);
+}
+
+TEST_F(EngineInputTargetTest, ManualMode_ShiftKeysChangeGear) {
+    // AC2: ]/[ shift in manual mode
+    target->shiftUp();
+    EngineInput input = target->buildInput();
+    EXPECT_EQ(input.gearDelta, 1);
+    EXPECT_NE(input.gearSelector, 0);
+}
+
+TEST_F(EngineInputTargetTest, AutoMode_ReportsGearAutoModeTrue) {
+    // AC1: with --auto, gearAutoMode is true (display char A)
+    target->setGearAutoMode(true);
+    EngineInput input = target->buildInput();
+    EXPECT_TRUE(input.gearAutoMode);
+}
+
+TEST_F(EngineInputTargetTest, AutoMode_ShiftKeysDoNotChangeGear) {
+    // AC1: in auto mode the box shifts itself; manual ]/[ must NOT change gear.
+    // gearDelta stays 0 and the gear selector/number is untouched.
+    target->setGearAutoMode(true);
+    target->shiftUp();
+    target->shiftDown();
+    EngineInput input = target->buildInput();
+    EXPECT_EQ(input.gearDelta, 0)
+        << "Manual shift keys must not request a gear change in auto mode";
+    EXPECT_EQ(input.gearSelector, 0)
+        << "Manual shift keys must not move the selector in auto mode";
 }

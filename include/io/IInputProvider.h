@@ -38,7 +38,12 @@ struct EngineInput {
     double vehicleSpeedTargetKmh = -1.0; // -1 = unchanged, for future SpeedTrackingForce
     int gearSelector = 0;           // GearSelector value for display
     bool gearAutoMode = false;      // true=auto(ZF), false=manual
-    double roadSpeedKmh = 0.0;      // Virtual ICE Twin: manual road speed control (km/h)
+    // Negative sentinel = "no speed commanded this frame" (unchanged).
+    // SimulationLoop gates setSpeedTrackingTarget on >= 0.0, so a default of 0.0
+    // would force the dyno to hold the engine at 0 RPM (stall) every frame.
+    // Once the user presses '.' the value is clamped to [0, 300] and stays >= 0.
+    double roadSpeedKmh = -2.0;     // Virtual ICE Twin: manual road speed control (km/h)
+    double engineRpmFloor = 0.0;    // >=0: launch floor on the dyno target RPM (torque-converter style)
 
     // Simulator auto-disengages starter when RPM > threshold
     // Preset cycling

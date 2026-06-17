@@ -10,6 +10,7 @@
 #include "simulator/EngineSimTypes.h"
 #include "simulation/CrankingController.h"
 #include "io/IInputProvider.h"
+#include "io/IPresentation.h"  // DiagnosticOutputFilter (carried via SimulationConfig)
 #include <atomic>
 #include <string>
 #include <memory>
@@ -53,6 +54,9 @@ struct SimulationConfig {
 
     // Optional display label for logging (e.g. ANSI-colored by CLI). Empty = auto-derive.
     std::string simulatorLabel;
+
+    // Selective debug categories, forwarded to PresentationConfig.
+    presentation::DiagnosticOutputFilter diagnostics;
 
     // Computed helpers
     double updateInterval() const { return 1.0 / 60.0; }
