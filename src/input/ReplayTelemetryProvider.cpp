@@ -288,28 +288,31 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
             // Throttle biases the slip: at WOT launch we slip more (rev higher).
             input.vehicleSpeedTargetKmh = s.roadSpeedKmh;
             input.engineRpmFloor = 0.0;  // dyno disabled downstream
-            // Speed-based clutch ramp (torque-converter style): low pressure at
-            // standstill (clutch slips, engine can rev), ramps to full lockup as
-            // road speed approaches ~15 km/h. Throttle reduces the floor (more
-            // slip = higher revs at launch).
-            // Clutch pressure ramps from 0 (below idle-implied speed) to 1.0
-            // (locked). The "idle-implied speed" is the road speed at which the
-            // engine RPM = idle in the current gear. Below that, the clutch MUST
-            // be open (the implied RPM is below idle → coupling would drag the
-            // engine down → stall). Above it, the engine can sustain against the
-            // coupling, so the clutch engages gradually.
+            // SlipLockController (Phase 2): clutch pressure from the ACTUAL slip
+            // between engine RPM and road-speed-implied RPM. At launch (high slip)
+            // pressure is low → engine revs freely into its power band. As road
+            // speed catches up (slip → 0) pressure → 1.0 → locked. Throttle widens
+            // the stall band (more throttle = more slip tolerance = higher launch RPM).
             int gear = gearbox_->getCurrentGear();
-            double idleSpeedKmh = 5.0;  // fallback
-            if (gear >= 1 && gear <= static_cast<int>(gearboxProfile_.gearRatios.size())) {
-                double idleRadS = gearboxProfile_.idleRpm * 3.14159265358979 / 30.0;
-                double wheelRadS = idleRadS / (gearboxProfile_.gearRatios[gear - 1]
-                                               * gearboxProfile_.diffRatio);
-                idleSpeedKmh = wheelRadS * gearboxProfile_.tireRadiusM * 3.6;
+            double roadImpliedRpm = 0.0;
+            if (gear >= 1 && gear <= static_cast<int>(gearboxProfile_.gearRatios.size())
+                && s.roadSpeedKmh >= 0.0) {
+                double speedMs = s.roadSpeedKmh / 3.6;
+                double wheelRpm = speedMs / (2.0 * 3.14159265358979 * gearboxProfile_.tireRadiusM) * 60.0;
+                roadImpliedRpm = wheelRpm * gearboxProfile_.gearRatios[gear - 1]
+                               * gearboxProfile_.diffRatio;
             }
-            constexpr double kRampRangeKmh = 20.0;  // ramp width above idle speed
-            double speedFrac = std::clamp(
-                (speedForBox - idleSpeedKmh) / kRampRangeKmh, 0.0, 1.0);
-            input.clutchPressure = speedFrac;  // 0 below idle speed, 1 at lock
+            double slip = engineRpmFeedback_ - roadImpliedRpm;
+            if (slip < 0.0) slip = 0.0;  // engine slower → locked (engine braking)
+            // Stall band: the RPM range over which the TC slips. Throttle widens it
+            // (WOT launch tolerates more slip → revs to ~50% redline before lockup).
+            double stallBand = gearboxProfile_.redlineRpm * (0.15 + 0.35 * s.throttle);
+            double slipRatio = std::clamp(slip / stallBand, 0.0, 1.0);
+            // K-factor: non-linear — minimal creep at high slip, fast lockup near sync.
+            // At slipRatio=0 → pressure=1.0 (locked). At slipRatio=1 → pressure=0.05 (creep).
+            double creep = 0.05;  // minimal coupling even at full stall (TC creep feel)
+            input.clutchPressure = std::clamp(1.0 - std::pow(slipRatio, 0.7) * (1.0 - creep),
+                                              creep, 1.0);
         } else {
             // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
             // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).
