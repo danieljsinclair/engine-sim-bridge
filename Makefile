@@ -3,6 +3,9 @@
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
+# Set to 1 to allow Debug builds (needed for coverage instrumentation).
+# Without this flag, any existing Debug CMakeCache.txt is a hard error.
+ALLOW_DEBUG_BUILD ?= 0
 CTEST_VERBOSE ?= 0
 CTEST_QUIET ?= 0
 CTEST_UI_FLAGS := $(if $(filter 1,$(CTEST_VERBOSE)),-V,$(if $(filter 1,$(CTEST_QUIET)),-Q,))
@@ -60,7 +63,27 @@ all: build test presets
 # Compile everything (cmake configure + build)
 build: $(BUILD_STAMP)
 
+# Guard: refuse to compile a Debug build unless ALLOW_DEBUG_BUILD=1.
+# The physics solver is 3-5× slower in Debug; building without Release is
+# almost always accidental (e.g. left behind by the coverage target, which
+# reconfigures the bridge as Debug for llvm-cov instrumentation).
+# Fix: run `make build` (Release) or `make scrub && build` (clean slate).
+# Override (coverage/special): `make build ALLOW_DEBUG_BUILD=1`.
+CHECK_BUILD_TYPE = \
+	if [ "$(ALLOW_DEBUG_BUILD)" != "1" ] && \
+	   grep -q "CMAKE_BUILD_TYPE:STRING=Debug" $(BUILD_DIR)/CMakeCache.txt 2>/dev/null; then \
+		echo ""; \
+		echo "ERROR: bridge CMakeCache.txt is Debug. Physics will be 3-5× slower."; \
+		echo "  This usually happens after 'make coverage-run' (which rebuilds as Debug for llvm-cov)."; \
+		echo "  Fix:  make build              # reconfigures as Release (if CMakeCache.txt is gone)"; \
+		echo "        make scrub && build    # clean slate"; \
+		echo "  Override (coverage/special):  make build ALLOW_DEBUG_BUILD=1"; \
+		echo ""; \
+		exit 1; \
+	fi
+
 $(BUILD_STAMP): $(BUILD_INPUTS) $(BUILD_DIR)/CMakeCache.txt
+	+$(call CHECK_BUILD_TYPE)
 	+$(call build_bridge_targets)
 	@touch $@
 
