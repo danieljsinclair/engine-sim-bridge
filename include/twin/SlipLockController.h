@@ -38,13 +38,22 @@ struct SlipLockOutput {
 };
 
 // Compute clutch pressure from slip. Algorithm:
-//   1. If roadSpeedImpliedRpm < idleRpm: return {0.0, false}  (stall floor)
+//   1. If roadSpeedImpliedRpm < idleRpm:
+//        - creepPressure = throttleFraction * maxCreepPressure  (TC fluid coupling at stall)
+//        - If creepPressure > 0: return {creepPressure, false}  (partial coupling, engine loaded)
+//        - Otherwise:            return {0.0, false}            (true neutral, no creep)
 //   2. slip      = max(0, engineRpm - roadSpeedImpliedRpm)
 //      stallBand = redlineRpm * (0.10 + 0.40 * throttleFraction)  (wider at WOT)
 //      slipRatio = clamp(slip / stallBand, 0, 1)
 //      pressure  = 1 - sqrt(slipRatio)                            (non-linear K-factor)
 //      locked    = (slipRatio < 0.1)
-SlipLockOutput computeSlipLockPressure(const SlipLockInput& input);
+//
+// The creep mode (step 1) mimics a real torque converter's fluid coupling:
+// even at zero road speed, some torque is transmitted proportional to throttle.
+// This prevents the engine from free-revving at standstill while keeping the
+// vehicle moving. maxCreepPressure is the clutch pressure at full throttle
+// with zero road speed (typical: 0.05-0.15).
+SlipLockOutput computeSlipLockPressure(const SlipLockInput& input, double maxCreepPressure = 0.10);
 
 }  // namespace twin
 

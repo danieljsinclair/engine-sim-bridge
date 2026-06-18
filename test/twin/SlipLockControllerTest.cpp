@@ -3,13 +3,16 @@
 // Deterministic (input -> output) tests for the torque-converter slip-lock
 // pressure function. Pure function — no engine-sim physics, no CLI.
 //
-// The lesson from the stall/redline circle: whenever the road speed implies an
-// engine RPM below idle, the clutch MUST be open (pressure == 0). Coupling
-// below idle drags the engine under its idle speed and stalls it. The TC
-// slip characteristic only applies once roadSpeedImpliedRpm >= idleRpm.
+// The creep-modified slip-lock algorithm: when road speed implies below-idle RPM,
+// a small clutch pressure proportional to throttle is applied (TC fluid coupling
+// creep). At zero throttle the clutch is fully open. Above idle the normal TC
+// slip characteristic applies.
 //
 // Algorithm under test (see SlipLockController.h):
-//   1. roadImplied < idle            -> pressure 0.0, locked false  (stall floor)
+//   1. roadImplied < idle:
+//        creep = throttle * maxCreepPressure
+//        if creep > 0: return {creep, false}   (TC fluid coupling)
+//        else:         return {0.0, false}     (true neutral, zero throttle)
 //   2. slip      = max(0, engine - roadImplied)
 //      stallBand = redline * (0.10 + 0.40 * throttle)
 //      slipRatio = clamp(slip / stallBand, 0, 1)
@@ -30,7 +33,8 @@ constexpr double kRedlineRpm = 6500.0;
 
 SlipLockOutput compute(double engineRpm, double roadImplied, double throttle) {
     return computeSlipLockPressure(SlipLockInput{
-        engineRpm, roadImplied, throttle, kIdleRpm, kRedlineRpm});
+        engineRpm, roadImplied, throttle, kIdleRpm, kRedlineRpm},
+        /*maxCreepPressure=*/0.10);
 }
 }  // namespace
 
@@ -46,12 +50,24 @@ TEST(SlipLockControllerTest, StandstillZeroThrottle_OpenClutch_NoStall) {
     EXPECT_FALSE(out.locked);
 }
 
-TEST(SlipLockControllerTest, RoadImpliedBelowIdle_AlwaysOpen) {
+TEST(SlipLockControllerTest, RoadImpliedBelowIdle_CreepProportionalToThrottle) {
     // In-gear crawl at ~5 km/h: road-implied 300 RPM is below idle 700.
-    // Coupling here would drag the engine under idle -> stall.
+    // The creep model applies a small clutch pressure proportional to throttle,
+    // mimicking TC fluid coupling. This loads the engine so it doesn't free-rev.
+    // With default maxCreepPressure=0.10 and throttle=0.10: creep = 0.10 * 0.10 = 0.01.
     const auto out = compute(800.0, 300.0, 0.10);
+    EXPECT_GT(out.clutchPressure, 0.0)
+        << "Creep mode must apply some pressure to load the engine at standstill";
+    EXPECT_LE(out.clutchPressure, 0.10)
+        << "Creep pressure must not exceed maxCreepPressure";
+    EXPECT_FALSE(out.locked);
+}
+
+TEST(SlipLockControllerTest, RoadImpliedBelowIdle_ZeroThrottle_StillOpen) {
+    // At zero throttle, creep pressure is 0 regardless of road speed.
+    const auto out = compute(800.0, 300.0, 0.0);
     EXPECT_DOUBLE_EQ(out.clutchPressure, 0.0)
-        << "Pressure must be 0 whenever roadSpeedImpliedRpm < idleRpm";
+        << "At zero throttle the clutch must be fully open (no creep)";
     EXPECT_FALSE(out.locked);
 }
 

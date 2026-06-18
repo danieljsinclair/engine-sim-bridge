@@ -22,10 +22,18 @@ inline double clampThrottle(double throttle) {
 
 }  // namespace
 
-SlipLockOutput computeSlipLockPressure(const SlipLockInput& input) {
-    // Stall-prevention floor: when the road would drag the engine below idle,
-    // the clutch must be fully open. This is the lesson from the stall circle.
+SlipLockOutput computeSlipLockPressure(const SlipLockInput& input, double maxCreepPressure) {
+    // Creep mode: when road speed would imply below-idle RPM (standstill or
+    // very low speed), apply a small clutch pressure proportional to throttle.
+    // This mimics a real torque converter's fluid coupling — even at stall,
+    // some torque is transmitted. The engine feels load and doesn't free-rev.
+    // maxCreepPressure is typically 0.05-0.15 (5-15% clutch at full throttle).
     if (input.roadSpeedImpliedRpm < input.idleRpm) {
+        const double throttle = clampThrottle(input.throttleFraction);
+        const double creep = throttle * clampDouble(maxCreepPressure, 0.0, 1.0);
+        if (creep > 0.0) {
+            return SlipLockOutput{creep, false};
+        }
         return SlipLockOutput{0.0, false};
     }
 

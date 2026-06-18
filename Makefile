@@ -69,21 +69,10 @@ build: $(BUILD_STAMP)
 # reconfigures the bridge as Debug for llvm-cov instrumentation).
 # Fix: run `make build` (Release) or `make scrub && build` (clean slate).
 # Override (coverage/special): `make build ALLOW_DEBUG_BUILD=1`.
-CHECK_BUILD_TYPE = \
-	if [ "$(ALLOW_DEBUG_BUILD)" != "1" ] && \
-	   grep -q "CMAKE_BUILD_TYPE:STRING=Debug" $(BUILD_DIR)/CMakeCache.txt 2>/dev/null; then \
-		echo ""; \
-		echo "ERROR: bridge CMakeCache.txt is Debug. Physics will be 3-5× slower."; \
-		echo "  This usually happens after 'make coverage-run' (which rebuilds as Debug for llvm-cov)."; \
-		echo "  Fix:  make build              # reconfigures as Release (if CMakeCache.txt is gone)"; \
-		echo "        make scrub && build    # clean slate"; \
-		echo "  Override (coverage/special):  make build ALLOW_DEBUG_BUILD=1"; \
-		echo ""; \
-		exit 1; \
-	fi
+check_build_type = { if [ "$(ALLOW_DEBUG_BUILD)" != "1" ] && grep -q "CMAKE_BUILD_TYPE:STRING=Debug" $(BUILD_DIR)/CMakeCache.txt 2>/dev/null; then printf '\nERROR: bridge build dir is Debug. Physics 3-5x slower.\n  Run: make scrub && build  (clean slate)\n  Or:  make build ALLOW_DEBUG_BUILD=1  (override)\n\n'; exit 1; fi; }
 
 $(BUILD_STAMP): $(BUILD_INPUTS) $(BUILD_DIR)/CMakeCache.txt
-	+$(call CHECK_BUILD_TYPE)
+	+$(call check_build_type)
 	+$(call build_bridge_targets)
 	@touch $@
 

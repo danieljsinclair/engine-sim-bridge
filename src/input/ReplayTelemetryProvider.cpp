@@ -309,13 +309,19 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
                                       * 30.0 / 3.14159265358979;
             }
 
+            // maxCreepPressure: clutch pressure at full throttle with zero road
+            // speed. Mimics TC fluid coupling — 0.10 = 10% clutch at stall.
+            // Tunable: lower = less creep (engine freer to rev), higher = more
+            // creep (stronger launch feel, but risk of stall at high throttle).
+            constexpr double kMaxCreepPressure = 0.10;
             const twin::SlipLockOutput slipLock = twin::computeSlipLockPressure(
                 twin::SlipLockInput{
                     engineRpmFeedback_,
                     roadSpeedImpliedRpm,
                     s.throttle,
                     gearboxProfile_.idleRpm,
-                    gearboxProfile_.redlineRpm});
+                    gearboxProfile_.redlineRpm},
+                kMaxCreepPressure);
             input.clutchPressure = slipLock.clutchPressure;
         } else {
             // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
