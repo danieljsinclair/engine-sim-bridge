@@ -32,6 +32,7 @@ namespace input {
 class LiveTelemetryProvider : public IInputProvider {
 public:
     // Production constructor: reads from std::cin.
+    // streamId is reserved for future use (e.g., named pipe paths).
     explicit LiveTelemetryProvider(std::string streamId = "-",
                                    bool autoStart = true);
 
@@ -54,7 +55,6 @@ private:
     // parsed and is now held in currentSample_.
     bool tryReadNextRow();
 
-    std::string streamId_;
     bool autoStart_;
     std::istream* stream_ = nullptr;  // non-owning; points to std::cin or test stream
     std::atomic<bool> connected_{false};

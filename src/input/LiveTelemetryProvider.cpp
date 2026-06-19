@@ -8,12 +8,12 @@
 
 namespace input {
 
-LiveTelemetryProvider::LiveTelemetryProvider(std::string streamId, bool autoStart)
-    : streamId_(std::move(streamId)), autoStart_(autoStart), stream_(&std::cin) {
+LiveTelemetryProvider::LiveTelemetryProvider(std::string /*streamId*/, bool autoStart)
+    : autoStart_(autoStart), stream_(&std::cin) {
 }
 
 LiveTelemetryProvider::LiveTelemetryProvider(std::istream& stream, bool autoStart)
-    : streamId_("-"), autoStart_(autoStart), stream_(&stream) {
+    : autoStart_(autoStart), stream_(&stream) {
 }
 
 LiveTelemetryProvider::~LiveTelemetryProvider() {
