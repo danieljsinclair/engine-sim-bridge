@@ -14,6 +14,7 @@
 namespace input {
 namespace {
 
+// trim/lower are used by parseGearSelector; CsvTelemetryParser has its own.
 std::string trim(std::string s) {
     const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), notSpace));
@@ -25,38 +26,6 @@ std::string lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(),
                    [](unsigned char c) { return std::tolower(c); });
     return s;
-}
-
-std::vector<std::string> split(const std::string& line, char delim) {
-    std::vector<std::string> out;
-    std::string field;
-    std::stringstream ss(line);
-    while (std::getline(ss, field, delim)) out.push_back(field);
-    return out;
-}
-
-bool parseDouble(const std::string& s, double& out) {
-    const std::string t = trim(s);
-    if (t.empty()) return false;
-    try {
-        size_t used = 0;
-        out = std::stod(t, &used);
-        return used != 0;
-    } catch (...) {
-        return false;
-    }
-}
-
-bool parseInt(const std::string& s, int& out) {
-    const std::string t = trim(s);
-    if (t.empty()) return false;
-    try {
-        size_t used = 0;
-        out = std::stoi(t, &used);
-        return used != 0;
-    } catch (...) {
-        return false;
-    }
 }
 
 // Convert PRNDL string to GearSelector enum (case-insensitive). Unknown -> DRIVE.
@@ -143,90 +112,33 @@ bool ReplayTelemetryProvider::parseCsv() {
     }
 
     std::string line;
-    int colTime = -1, colThrottle = -1, colRoad = -1, colGear = -1, colClutch = -1, colGearSelector = -1;
     bool headerParsed = false;
-    bool timeInMs = false;
     double firstTs = -1.0;
+    bool firstRow = true;
 
     while (std::getline(in, line)) {
         const std::string trimmed = trim(line);
         if (trimmed.empty()) continue;
 
-        auto fields = split(trimmed, ',');
         if (!headerParsed) {
-            for (size_t i = 0; i < fields.size(); ++i) {
-                const std::string name = lower(trim(fields[i]));
-                if (name == "timestamp_utc_ms" || name == "timestamp_ms" || name == "ts_ms") {
-                    colTime = static_cast<int>(i);
-                    timeInMs = true;
-                } else if (name == "time_s" || name == "time" || name == "t" || name == "timecode") {
-                    colTime = static_cast<int>(i);
-                } else if (name == "throttle_pct" || name == "throttle" || name == "throttle_percent") {
-                    colThrottle = static_cast<int>(i);
-                } else if (name == "road_speed_kmh" || name == "road_speed" ||
-                           name == "speed_kmh" || name == "speed") {
-                    colRoad = static_cast<int>(i);
-                } else if (name == "gear") {
-                    colGear = static_cast<int>(i);
-                } else if (name == "gear_selector" || name == "gearselector") {
-                    colGearSelector = static_cast<int>(i);
-                } else if (name == "clutch_pct" || name == "clutch") {
-                    colClutch = static_cast<int>(i);
-                }
+            if (!csvParser_.parseHeader(trimmed, lastError_)) {
+                return false;
             }
             headerParsed = true;
-            if (colTime < 0) {
-                lastError_ = "Telemetry CSV missing time column (time_s): " + csvPath_;
-                return false;
-            }
-            // Detect raw CAN format (undecoded) — clear error instead of silent
-            // failure (which would read 0 throttle/speed and the engine sits idle).
-            bool hasCanId = false, hasDataHex = false;
-            for (size_t i = 0; i < fields.size(); ++i) {
-                const std::string name = lower(trim(fields[i]));
-                if (name == "can_id") hasCanId = true;
-                if (name == "data_hex") hasDataHex = true;
-            }
-            if (hasCanId && hasDataHex) {
-                lastError_ = "This is a RAW CAN capture (can_id + data_hex columns). "
-                             "Decode it first with: vehicle-sim --connect file:" +
-                             csvPath_ + " --log-csv decoded.csv  "
-                             "then replay the decoded file.";
-                return false;
-            }
             continue;
         }
 
-        Sample s;
-        double v = 0.0;
-        if (colTime >= 0 && colTime < static_cast<int>(fields.size()) &&
-            parseDouble(fields[colTime], v)) {
-            if (firstTs < 0.0) firstTs = v;
-            s.timeS = (v - firstTs) / (timeInMs ? 1000.0 : 1.0);
-        } else {
-            continue;
+        CsvSample s;
+        std::string parseError;
+        double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
+        if (csvParser_.parseRow(trimmed, timeDivisor, s, parseError)) {
+            if (firstRow) {
+                firstTs = s.timeS;  // raw first timestamp (already divided)
+                firstRow = false;
+            }
+            s.timeS = s.timeS - firstTs;  // normalise to zero-based
+            samples_.push_back(s);
         }
-        if (colThrottle >= 0 && colThrottle < static_cast<int>(fields.size()) &&
-            parseDouble(fields[colThrottle], v)) {
-            s.throttle = std::clamp(v / 100.0, 0.0, 1.0);
-        }
-        if (colRoad >= 0 && colRoad < static_cast<int>(fields.size()) &&
-            parseDouble(fields[colRoad], v) && v >= 0.0) {
-            s.roadSpeedKmh = v;
-        }
-        int gi = 0;
-        if (colGear >= 0 && colGear < static_cast<int>(fields.size()) &&
-            parseInt(fields[colGear], gi)) {
-            s.gear = gi;
-        }
-        if (colGearSelector >= 0 && colGearSelector < static_cast<int>(fields.size())) {
-            s.gearSelector = trim(fields[colGearSelector]);
-        }
-        if (colClutch >= 0 && colClutch < static_cast<int>(fields.size()) &&
-            parseDouble(fields[colClutch], v) && v >= 0.0) {
-            s.clutchPct = std::clamp(v / 100.0, 0.0, 1.0);
-        }
-        samples_.push_back(s);
     }
 
     if (samples_.empty()) {
