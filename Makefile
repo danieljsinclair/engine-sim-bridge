@@ -206,7 +206,7 @@ $(SONAR_REPORT): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(
 		fi
 	@echo "=== [engine-sim-bridge] Caching SonarCloud issue report ==="
 	@TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}"; \
-	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500" \
+	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500&statuses=OPEN" \
 		> $(SONAR_REPORT) 2>/dev/null || true
 
 $(COMPILE_DB): $(BUILD_COV_DIR)/CMakeCache.txt
