@@ -61,3 +61,4 @@ codeql-db/
 coverage-report.xml
 coverage.lcov
 *.profraw
+__pycache__/
