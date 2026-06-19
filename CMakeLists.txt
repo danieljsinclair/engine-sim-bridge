@@ -145,6 +145,9 @@ set(BRIDGE_SOURCES
     src/input/EngineInputTarget.cpp
     src/input/DemoControlsTarget.cpp
     src/input/ReplayTelemetryProvider.cpp
+    src/input/LiveTelemetryProvider.cpp
+    # IO
+    src/io/LiveTelemetryParser.cpp
 )
 
 # Platform-specific audio hardware and factory
@@ -624,6 +627,23 @@ if(BUILD_BRIDGE_TESTS)
     target_compile_options(demo_input_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
     if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME demo_input_tests COMMAND demo_input_tests --gtest_color=yes)
+    endif()
+
+    # Live telemetry parser tests - tests for vehicle-sim JSON telemetry parser
+    add_executable(live_telemetry_parser_tests
+        test/input/LiveTelemetryParserTest.cpp
+    )
+    target_include_directories(live_telemetry_parser_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(live_telemetry_parser_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(live_telemetry_parser_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME live_telemetry_parser_tests COMMAND live_telemetry_parser_tests --gtest_color=yes)
     endif()
 
     # Keyboard consolidation tests - consolidated KeyboardInputProvider + EngineInputTarget
