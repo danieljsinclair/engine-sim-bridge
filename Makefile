@@ -197,7 +197,10 @@ $(SONAR_REPORT): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(
 		exit 1; \
 	fi
 	@echo "=== [engine-sim-bridge] Running Sonar scan ==="
-	@SONAR_TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}" sonar-scanner > $(BUILD_COV_DIR)/sonar-scanner.log 2>&1; \
+	@SONAR_TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}" sonar-scanner \
+		-Dsonar.coverageReportPaths=$(BUILD_COV_DIR)/coverage-sonar.xml \
+		-Dsonar.cfamily.compile-commands=$(BUILD_COV_DIR)/compile_commands.json \
+		> $(BUILD_COV_DIR)/sonar-scanner.log 2>&1; \
 		rc=$$?; \
 		if [ $$rc -ne 0 ]; then \
 			echo "=== [engine-sim-bridge] sonar-scanner failed (rc=$$rc); see $(BUILD_COV_DIR)/sonar-scanner.log ==="; \
