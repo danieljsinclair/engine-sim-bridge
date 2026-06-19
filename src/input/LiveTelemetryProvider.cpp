@@ -2,10 +2,9 @@
 #include "input/LiveTelemetryProvider.h"
 #include "simulator/EngineSimTypes.h"
 
-#include <cstdio>
-#include <cstring>
+#include <algorithm>
+#include <cctype>
 #include <iostream>
-#include <sstream>
 
 namespace input {
 
