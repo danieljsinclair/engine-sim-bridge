@@ -57,8 +57,8 @@ PRESET_DIR := preset
 ENGINE_SIM_ROOT := engine-sim
 PRESET_COMPILER := $(BUILD_DIR)/engine-sim-preset-compiler
 
-# Default target - build + test + presets (complete pipeline)
-all: build test presets
+# Default target - build + presets (test/coverage require explicit `make test`)
+all: build presets
 
 # Compile everything (cmake configure + build)
 build: $(BUILD_STAMP)
