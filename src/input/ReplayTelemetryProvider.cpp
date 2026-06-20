@@ -260,8 +260,24 @@ const ReplayTelemetryProvider::Sample& ReplayTelemetryProvider::sampleAt(double 
 
 EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
     elapsedS_ += dt;
+
+    // Time slicing: skip samples before startFromS.
+    if (startFromS_ >= 0.0 && elapsedS_ < startFromS_) {
+        elapsedS_ = startFromS_;
+    }
+
+    // Time slicing: stop at endAtS.
+    if (endAtS_ >= 0.0 && elapsedS_ >= endAtS_) {
+        if (session_) session_->stop();
+        EngineInput input;
+        input.ignition = false;
+        return input;
+    }
+
     EngineInput input;
     const Sample& s = sampleAt(elapsedS_);
+    currentTimestampS_ = s.timeS;
+    input.replayTimestampS = currentTimestampS_;
     input.throttle = s.throttle;
     input.ignition = ignitionOn_;
 

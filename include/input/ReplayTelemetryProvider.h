@@ -55,6 +55,14 @@ public:
     // Total span of the parsed trace, in seconds (last sample time). 0 if empty.
     double durationS() const;
 
+    // Time slicing: skip samples before startFromS, stop at endAtS.
+    // -1 = disabled (play full trace).
+    void setStartFromS(double s) { startFromS_ = s; }
+    void setEndAtS(double s) { endAtS_ = s; }
+
+    // Current replay timestamp (absolute, from CSV). -1 before first sample.
+    double currentTimestampS() const { return currentTimestampS_; }
+
     // Reconfigure the gearbox profile to match the ACTUAL engine preset's ratios.
     // Auto-generates a shift table from the ratios + redline so shift points are
     // correct regardless of the transmission (7-speed AMG, 8-speed ZF, etc.).
@@ -90,6 +98,9 @@ private:
     ISimulatorSession* session_ = nullptr;
     double engineRpmFeedback_ = 0.0;  // last engine RPM from the physics (for slip calc)
     bool ignitionOn_ = true;          // toggled by 'I' key during replay
+    double startFromS_ = -1.0;        // skip samples before this time (-1 = disabled)
+    double endAtS_ = -1.0;            // stop replay at this time (-1 = disabled)
+    double currentTimestampS_ = -1.0; // current absolute timestamp from CSV
 };
 
 } // namespace input

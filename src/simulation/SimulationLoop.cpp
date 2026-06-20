@@ -73,7 +73,7 @@ void SimulationLoop::updatePresentation(
 
     presentation::EngineState state;
     state.engine = presentation::builders::buildEngineState(stats, crankingState);
-    state.drivetrain = presentation::builders::buildDrivetrainState(stats);
+    state.drivetrain = presentation::builders::buildDrivetrainState(stats, input);
     state.controls = presentation::builders::buildControlState(input, crankingState);
     state.audio = presentation::builders::buildAudioState(timing, telemetryReader_, audioBuffer_, config_, tickTime, simulator_);
     state.presetShortName = simulator_.getName() ? simulator_.getName() : "";
