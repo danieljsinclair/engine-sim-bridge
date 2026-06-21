@@ -10,6 +10,8 @@ cmake_install.cmake
 Makefile
 *.cmake
 _deps/
+# FetchContent cache (kept outside build/ so scrub doesn't force re-download)
+.fetchcache/
 
 # Compiled libraries and binaries
 *.dylib

@@ -27,6 +27,18 @@ if(NOT EXISTS "${ENGINE_SIM_PATH}/CMakeLists.txt")
     message(FATAL_ERROR "engine-sim not found at ${ENGINE_SIM_PATH}")
 endif()
 
+# Keep FetchContent's download cache OUTSIDE build/ so `make scrub` (which
+# removes build/) does NOT force a fresh network re-fetch of googletest on the
+# next configure. A fresh configure that must hit the network can stall/hang
+# (DNS, captive portal, throttled github reachability, credential prompt).
+# Pinning the cache to .fetchcache means the tarball is downloaded once and
+# reused across scrubs, so configure is deterministic and offline-capable.
+set(FETCHCONTENT_BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.fetchcache" CACHE PATH
+    "FetchContent download/build cache (kept outside build/ to survive scrub)")
+# Never let a git operation inside FetchContent block on an interactive
+# credential prompt — fail fast instead of hanging indefinitely.
+set(ENV{GIT_TERMINAL_PROMPT} "0")
+
 # Add engine-sim as a subdirectory (it's a submodule of this repo)
 # Disable the GUI app and bridge from engine-sim's own CMakeLists
 # Also disable engine-sim's own tests to avoid phantom test entries
@@ -56,6 +68,22 @@ set(CMAKE_C_FLAGS "")
 # Only build targets that we actually depend on (engine-sim, not tests, not app, not tools)
 # As of CMake 3.21+ this CORRECTLY still rebuilds when source files change.
 # The old bug where this would permanently cache binaries was fixed in 2022.
+
+# Pin GoogleTest to the vendored local copy so configure NEVER does a network
+# download. engine-sim and its subdeps (piranha, csv-io, simple-2d-constraint-solver)
+# each unconditionally FetchContent_Declare(googletest URL <github tarball>) and
+# FetchContent_MakeAvailable it on every configure. On a fresh `make scrub` with
+# .fetchcache wiped, that is a network download that can stall indefinitely
+# (throttled github reachability, captive portal, offline). GIT_TERMINAL_PROMPT=0
+# (set above) does NOT prevent that — it only kills credential-prompt hangs.
+# FETCHCONTENT_SOURCE_DIR_<name> is the official FetchContent override: when set,
+# MakeAvailable uses this directory and performs NO download. Because all the
+# nested declares share the content name "googletest", one override covers them all.
+# The vendored copy ships in-tree (third_party/googletest), so this is fully
+# offline and deterministic.
+set(FETCHCONTENT_SOURCE_DIR_GOOGLETEST "${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest"
+    CACHE PATH "Vendored GoogleTest source (prevents network download at configure time)")
+
 add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_ALL)
 
 # engine-sim is EXCLUDE_FROM_ALL above (don't build its app/discord/tools by
@@ -292,14 +320,30 @@ if(IOS OR ESP_PLATFORM)
     set(BUILD_BRIDGE_TESTS OFF CACHE BOOL "Skip tests for embedded build" FORCE)
 endif()
 if(BUILD_BRIDGE_TESTS)
-    # Fetch GoogleTest if not available
+    # GoogleTest: prefer the vendored local copy (third_party/googletest) so
+    # configure NEVER does a network git clone. A fresh `make scrub` (or a
+    # clone on a throttled / captive-portaled / offline network) previously
+    # stalled indefinitely inside FetchContent's `git clone` of
+    # https://github.com/google/googletest.git. GIT_TERMINAL_PROMPT=0 (set
+    # above) only kills credential-prompt hangs, not network stalls, so the
+    # deterministic fix is to remove the network op from the normal path:
+    # use SOURCE_DIR when the vendor copy is present, and only fall back to
+    # the git download if the vendor copy is missing.
     include(FetchContent)
     include(GoogleTest)
-    FetchContent_Declare(
-        googletest
-        GIT_REPOSITORY https://github.com/google/googletest.git
-        GIT_TAG release-1.12.1
-    )
+    set(_bridge_gtest_vendor "${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest")
+    if(EXISTS "${_bridge_gtest_vendor}/CMakeLists.txt")
+        FetchContent_Declare(
+            googletest
+            SOURCE_DIR "${_bridge_gtest_vendor}"
+        )
+    else()
+        FetchContent_Declare(
+            googletest
+            GIT_REPOSITORY https://github.com/google/googletest.git
+            GIT_TAG release-1.12.1
+        )
+    endif()
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
 
