@@ -1,33 +1,54 @@
 #!/usr/bin/env python3
-"""Display local coverage summary from lcov.info.
+"""Display coverage summary: SonarCloud live + local lcov.
 
-Parses the lcov produced by run_coverage_tests.sh and prints:
-  - overall coverage (all SF records)
-  - src-only coverage (SF records under /src/)
-  - src-only sonar-scope coverage (matches SonarCloud)
+Prints TWO coverage numbers so the dashboard value and the honest local value
+are both visible (mirroring how the issues section shows open-vs-total):
+
+  - HEADLINE (first line, prominent): the LIVE SonarCloud coverage, fetched at
+    display time from /api/measures/component?metricKeys=coverage,
+    lines_to_cover,uncovered_lines. This is the number that matches the
+    SonarCloud dashboard — same live-GET pattern sonar_summary.py uses for
+    issues. Falls back gracefully (local only + "sonar unavailable" note) when
+    no token is set or the fetch fails.
+  - LOCAL lcov: the honest llvm-cov number over instrumented src files
+    (lcov SF records under /src/), clearly labelled "local lcov (excludes
+    dead-stripped)" so the small residual gap vs the sonar headline is
+    understood, not a mystery.
 
 OUTPUT MODES:
-  Default (concise, used by `make`): the three headline numbers + the TOP 5
-  worst (lowest coverage) src files + the MISSING (dead-stripped) files list.
-  --verbose / --all : prints the full per-file table for every src file.
+  Default (concise, used by `make`): the two coverage numbers + the TOP 5
+  worst (lowest coverage) src files + the MISSING (dead-stripped, 0% on
+  SonarCloud) files list + the platform-excluded files list. --verbose /
+  --all : prints the full per-file table for every src file.
 
-SONAR-SCOPE DENOMINATOR: the "src/ sonar scope" line applies the SAME
-exclusions SonarCloud uses (sonar.exclusions + sonar.coverage.exclusions from
-sonar-project.properties) AND includes dead-stripped files at 0%. A dead-
-stripped file is one that is compiled but not linked into any test binary
-(no caller), so it has no coverage mapping and is ABSENT from lcov. SonarCloud
-counts these against sonar.sources=src at 0%, so they are added to the local
-denominator (LH=0) so the local number tracks SonarCloud. Their line count is
-approximated (no coverage mapping exists for an exact LF).
+The earlier "mimic sonar" local heuristic (re-computing the SonarCloud
+denominator by adding dead-stripped files at 0%) is retired — now that the
+real SonarCloud number is shown live, the approximation was unnecessary and
+confusing. The dead-stripped files are still listed (they ARE the 0% files
+on the dashboard) but no longer folded into a local headline number.
 
-A small residual gap vs SonarCloud is normal: Sonar and llvm-cov count
-executable lines slightly differently per file (lcov drift), independent of
-dead-stripping.
+Two kinds of src file are NOT in the local lcov denominator and are handled
+distinctly:
+
+  * PLATFORM-EXCLUDED (e.g. ESP32I2SHardwareProvider.cpp): a src file whose
+    ENTIRE body sits behind a host-never-defined platform guard (#ifdef
+    ESP_PLATFORM / TARGET_OS_IPHONE / __ANDROID__ ...). The host (macOS)
+    preprocessor strips it to an empty translation unit, so it has ZERO
+    instrumentable lines, and SonarCloud reports it as "-" (no data, not in
+    the denominator). These are EXCLUDED and listed in their own "not
+    reported" category — they are NOT coverage gaps.
+
+  * DEAD-STRIPPED: a src file compiled for the host but not linked into any
+    test binary (no caller) -> absent from lcov. SonarCloud reports these at
+    0.0% (in the denominator, all uncovered). Listed as MISSING below.
 """
-import fnmatch
+import json
 import os
 import re
+import subprocess
 import sys
+import urllib.parse
+import urllib.request
 
 RED = '\033[31m'
 ORANGE = '\033[38;5;208m'
@@ -37,6 +58,56 @@ CYAN = '\033[36m'
 GREY = '\033[90m'
 BOLD = '\033[1m'
 RESET = '\033[0m'
+
+# SonarCloud component key + host for the live coverage GET. Must match the
+# key passed to sonar-scanner (sonar-project.properties: sonar.projectKey).
+SONAR_HOST = 'https://sonarcloud.io'
+SONAR_COMPONENT = 'danieljsinclair_engine-sim-bridge'
+
+
+def fetch_sonar_coverage():
+    """Live GET the SonarCloud coverage measures for the headline.
+
+    Mirrors sonar_summary.py's live-GET pattern: reads SONAR_TOKEN_ES /
+    SONAR_TOKEN from the environment and calls
+    /api/measures/component?metricKeys=coverage,lines_to_cover,uncovered_lines.
+
+    Returns a dict {coverage, lines_to_cover, uncovered_lines} (floats/ints)
+    on success, or None when there is no token or the fetch/parse fails. A
+    None return lets the caller fall back gracefully (show local only, note
+    sonar unavailable) rather than crash on a network blip or missing token.
+    """
+    token = os.environ.get('SONAR_TOKEN_ES') or os.environ.get('SONAR_TOKEN')
+    if not token:
+        return None
+    query = urllib.parse.urlencode({
+        'component': SONAR_COMPONENT,
+        'metricKeys': 'coverage,lines_to_cover,uncovered_lines',
+    })
+    url = f'{SONAR_HOST}/api/measures/component?{query}'
+    req = urllib.request.Request(url)
+    # HTTP Basic auth with the token as the username (empty password) — the
+    # same auth shape the rest of the pipeline uses with `curl -u "$TOKEN:"`.
+    import base64
+    cred = base64.b64encode(f'{token}:'.encode()).decode()
+    req.add_header('Authorization', f'Basic {cred}')
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    measures = {}
+    for m in (data.get('component', {}) or {}).get('measures', []) or []:
+        metric = m.get('metric')
+        value = m.get('value')
+        if metric and value is not None:
+            try:
+                measures[metric] = float(value)
+            except ValueError:
+                measures[metric] = value
+    if 'coverage' not in measures:
+        return None
+    return measures
 
 
 def coverage_color(pct):
@@ -200,17 +271,30 @@ def find_src_files_on_disk(lcov_src_files, repo_root):
 
 
 def count_code_lines(path):
-    """Approximate executable line count for a source file with no lcov data.
+    """Approximate EXECUTABLE line count for a source file with no lcov data.
 
-    Counts non-blank, non-comment lines (stripping // and /* */ comments and
-    standalone braces/symbols). This is an APPROXIMATION of what llvm-cov's LF
-    would record — it cannot be exact without coverage mapping, but it lets the
-    sonar-scope denominator include dead-stripped files at 0% so the local
-    number tracks SonarCloud (which counts them as uncovered). Returns 0 on
-    read failure (file treated as no contribution).
+    Counts non-blank, non-comment lines that a coverage tool (llvm-cov /
+    SonarQube) would treat as executable, excluding pure declarations and
+    structural-only lines. This is an APPROXIMATION of the LF/lines_to_cover a
+    coverage tool would record — it cannot be exact without coverage mapping
+    (tools differ on edge cases like lambda captures, defaulted methods, single
+    line getters), but it lets the sonar-scope denominator include dead-
+    stripped files at 0% so the local number tracks SonarCloud (which counts
+    them as uncovered). Returns 0 on read failure (file treated as no
+    contribution).
+
+    Excluded (not executable): comments, blank lines, bare braces/semicolons,
+    preprocessor directives, pure declarations (ending in ';' with no control-
+    flow keyword and no '{'), and function/class signature lines that open a
+    block on the next line.
     """
     count = 0
     in_block = False
+    # Tokens that, when present, make a ';' line an executable statement
+    # (assignment, call, return, throw) rather than a pure declaration.
+    exec_tokens = ('=', 'return', 'throw', 'break', 'continue', '(', '<<', '>>')
+    control_kw = ('if', 'else', 'for', 'while', 'switch', 'case', 'default',
+                  'do', 'goto', 'return', 'throw', 'try', 'catch')
     try:
         with open(path) as f:
             for raw in f:
@@ -235,8 +319,29 @@ def count_code_lines(path):
                 line = line.split('//', 1)[0].strip()
                 if not line:
                     continue
-                # Skip bare structural tokens llvm-cov wouldn't count.
-                if line in ('{', '}', '};', '};'):
+                # Preprocessor directives are not executable.
+                if line.startswith('#'):
+                    continue
+                # Bare structural tokens llvm-cov wouldn't count.
+                if line in ('{', '}', '};', '};', ';'):
+                    continue
+                # A line opening a block (signature / class / namespace / ctor
+                # init list) is structural, not executable on its own.
+                if line.endswith(':') and not any(
+                        line.startswith(k + ' ') or line.startswith(k + '(')
+                        for k in ('case', 'default', 'public', 'private',
+                                  'protected')):
+                    # label-style; skip
+                    continue
+                if line.endswith('{') and not any(
+                        line.startswith(k) for k in control_kw):
+                    # function/class/struct/enum/namespace signature opening a
+                    # body — not itself an executable line.
+                    continue
+                # Pure declaration: ends in ';' but has no assignment/call/
+                # control keyword. Skips `int x;`, `Foo bar;`, `using ...;`,
+                # typedefs, forward declares, friend decls, etc.
+                if line.endswith(';') and not any(t in line for t in exec_tokens):
                     continue
                 count += 1
     except OSError:
@@ -244,13 +349,93 @@ def count_code_lines(path):
     return count
 
 
-def display(coverage_path, repo_root, verbose=False):
+# Platform guards that are NEVER defined on the host (macOS) coverage build.
+# A src file whose NON-TRIVIAL body (executable lines outside comments/blank)
+# sits entirely inside one of these #ifdef blocks compiles to an empty
+# translation unit on the host -> zero instrumentable lines -> SonarCloud
+# reports it as "-" (no data). AudioHardwareProviderFactory.cpp is the
+# counter-example: it has a #elif ESP_PLATFORM branch but ALSO host-active
+# code, so it is NOT platform-excluded (it shows 100% on SonarCloud).
+HOST_PLATFORM_GUARDS = (
+    'ESP_PLATFORM',
+    'TARGET_OS_IPHONE',
+    '__IPHONE_OS_VERSION_MIN_REQUIRED',
+    '__ANDROID__',
+    '__linux__',
+)
+
+
+def is_platform_excluded(path):
+    """True if a src file's body is entirely behind a host-absent platform guard.
+
+    Detects the ESP32I2SHardwareProvider pattern: the whole file is wrapped in
+    `#ifdef ESP_PLATFORM` ... `#endif`, so on the macOS host it preprocesses to
+    nothing (zero instrumentable lines) and SonarCloud lists it as "-" rather
+    than 0.0%. Such files are categorically NOT coverage gaps — they are code
+    for another platform — so they are excluded from the headline denominator
+    and shown in their own "not reported" category.
+
+    A file with ANY host-active (unguarded) code is NOT platform-excluded even
+    if it also has a guarded branch (e.g. AudioHardwareProviderFactory.cpp).
+    """
+    try:
+        with open(path) as f:
+            lines = f.readlines()
+    except OSError:
+        return False
+    # depth of nested host-absent guards currently open at each source line.
+    depth = 0
+    has_guarded_body = False
+    has_host_body = False
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith('//'):
+            continue
+        stripped = line.split('//', 1)[0].strip()
+        if stripped.startswith('#'):
+            directive = stripped[1:].strip()
+            if directive.startswith('ifdef'):
+                guard = directive[5:].strip().split()[0] if len(directive) > 5 else ''
+                if guard in HOST_PLATFORM_GUARDS:
+                    depth += 1
+            elif directive.startswith('ifndef'):
+                guard = directive[6:].strip().split()[0] if len(directive) > 6 else ''
+                # ifndef of a host-defined macro (rare) is not handled; skip.
+                pass
+            elif directive.startswith('if '):
+                # `#if defined(ESP_PLATFORM)` style.
+                if any(g in directive for g in HOST_PLATFORM_GUARDS):
+                    depth += 1
+            elif directive.startswith('else'):
+                # An #else flips host-activeness for the simplest 1-deep case;
+                # conservatively treat any #else region as host-active.
+                depth = 0
+            elif directive.startswith('endif'):
+                depth = max(0, depth - 1)
+            continue
+        # A code line (not a directive, not blank/comment).
+        if line in ('{', '}', '};'):
+            continue
+        if depth > 0:
+            has_guarded_body = True
+        else:
+            has_host_body = True
+    return has_guarded_body and not has_host_body
+
+
+def display(coverage_path, repo_root, verbose=False, label='Local Coverage'):
     """Print the coverage summary.
 
-    By default prints a CONCISE view: the three headline numbers (overall,
-    src/ only, src/ sonar scope), the TOP 5 worst (lowest coverage) src files,
-    and the MISSING (dead-stripped) files list. With verbose=True prints the
-    full per-file table instead of just the top 5.
+    Prints TWO coverage numbers so the dashboard value and the honest local
+    value are both visible (mirroring how the issues section shows open-vs-
+    total). ``label`` names the report section (defaults to a plain header;
+    the Makefile passes a repo tag so coverage reads as part of the same
+    measurement report as the SonarCloud summary).
+
+    Default (concise, used by `make`): the live SonarCloud headline + the
+    local lcov number + the TOP 5 worst (lowest coverage) src files + the
+    MISSING (dead-stripped, 0% on SonarCloud) files list + the platform-
+    excluded files list. --verbose / --all : prints the full per-file table.
     """
     records = parse_lcov(coverage_path)
 
@@ -259,7 +444,7 @@ def display(coverage_path, repo_root, verbose=False):
     src_hit, src_found, src_pct = summarize(src_records)
 
     # Sonar scope: src/** minus sonar.exclusions + sonar.coverage.exclusions.
-    # This is the single source of truth — it matches what SonarCloud counts.
+    # Used to find the dead-stripped files (the 0% set on SonarCloud).
     patterns, props_path = load_sonar_exclusions(repo_root)
     if patterns:
         sonar_records = [r for r in src_records
@@ -267,60 +452,89 @@ def display(coverage_path, repo_root, verbose=False):
     else:
         sonar_records = src_records
 
-    # Dead-stripped src files: on disk but absent from lcov. SonarCloud counts
-    # these against sonar.sources=src at 0%, so they MUST be in the denominator
-    # for the local number to track SonarCloud. We approximate their LF (no
-    # coverage mapping exists to give an exact count) and add them at LH=0.
+    # Absent src files (on disk but not in lcov) split into two categories
+    # that SonarCloud reports DIFFERENTLY:
+    #   * PLATFORM-EXCLUDED: whole body behind a host-absent guard (#ifdef
+    #     ESP_PLATFORM ...) -> empty TU on host -> SonarCloud shows "-" (no
+    #     data, NOT in the denominator). Listed in their own "not reported"
+    #     category; NOT a coverage gap.
+    #   * DEAD-STRIPPED: compiled for host but linked into no test binary ->
+    #     SonarCloud shows 0.0% (IN the denominator, all uncovered). Listed
+    #     as MISSING below (they ARE the dashboard's 0% set).
     absent, scanned = find_src_files_on_disk(
         [r[0] for r in sonar_records], repo_root)
-    dead_added_lines = 0
-    dead_records = []
-    dead_paths = set()
-    if scanned and absent:
+    platform_excluded = []
+    dead_absent = []
+    if scanned:
         for path in absent:
-            approx_lf = count_code_lines(path)
-            if approx_lf > 0:
-                dead_records.append((path, approx_lf, 0))
-                dead_added_lines += approx_lf
-                dead_paths.add(path)
+            if is_platform_excluded(path):
+                platform_excluded.append(path)
+            else:
+                dead_absent.append(path)
 
-    sonar_with_dead = list(sonar_records) + dead_records
-    sonar_hit, sonar_found, sonar_pct = summarize(sonar_with_dead)
+    dead_paths = set(dead_absent)
+
+    # HEADLINE: live SonarCloud coverage (the dashboard number). Fetched at
+    # display time — same live-GET pattern sonar_summary.py uses for issues.
+    # Falls back gracefully (local only) when there is no token or the fetch
+    # fails, so a missing token / network blip never crashes the report.
+    sonar_measures = fetch_sonar_coverage()
 
     print('')
-    print('=== Local Coverage Summary ===')
-    print('  source: {}'.format(coverage_path))
-    print('')
-    print('  {}Overall{:18} {}{}/{} lines ({:.1f}%){}'.format(
-        BOLD, RESET, coverage_color(all_pct), all_hit, all_found, all_pct, RESET))
-    print('  {}src/ only{:17} {}{}/{} lines ({:.1f}%){}'.format(
-        BOLD, RESET, coverage_color(src_pct), src_hit, src_found, src_pct, RESET))
-    if patterns:
-        print('  {}src/ sonar scope{:11} {}{}/{} lines ({:.1f}%){} {}'.format(
-            BOLD, RESET, coverage_color(sonar_pct), sonar_hit, sonar_found,
-            sonar_pct, RESET, GREY + '(tracks SonarCloud)' + RESET))
-        if dead_added_lines:
-            print('  {}  incl. dead-stripped:{} {} files, {} lines at 0% ({} approx){}'.format(
-                GREY, RESET, len(dead_records), dead_added_lines,
-                'line count', ''))
-        print('  {}  exclusions:{} {}{}'.format(
-            GREY, RESET, props_path, ''))
+    print('=== {} Coverage ==='.format(label))
+    if sonar_measures is not None:
+        sc_cov = sonar_measures.get('coverage', 0.0)
+        sc_ltc = int(sonar_measures.get('lines_to_cover', 0) or 0)
+        sc_covd = sc_ltc - int(sonar_measures.get('uncovered_lines', 0) or 0)
+        # HEADLINE first, prominent. This is the number that matches the
+        # dashboard. Mirrors how the issues section leads with Open issues.
+        print('  {}Overall Coverage (SonarCloud): {}{:.1f}%{}  '
+              '{}{}/{}{}'.format(
+                  BOLD, coverage_color(sc_cov), sc_cov, RESET,
+                  GREY, sc_covd, sc_ltc, RESET))
+        print('  {}source: live {} /api/measures/component{}'.format(
+            GREY, SONAR_HOST, RESET))
     else:
-        print('  {}src/ sonar scope{:11} {}no sonar-project.properties — same as src/ only{}'.format(
-            BOLD, RESET, GREY, RESET))
+        # No token or fetch failed — show local as headline with a note so it
+        # is never mistaken for the dashboard number.
+        print('  {}Overall Coverage (local lcov): {}{:.1f}%{}  '
+              '{}{}/{} lines{}'.format(
+                  BOLD, coverage_color(src_pct), src_pct, RESET,
+                  GREY, src_hit, src_found, RESET))
+        print('  {}source: {}{}'.format(GREY, coverage_path, RESET))
+        print('  {}SonarCloud live unavailable — no token or fetch failed; '
+              'showing local only{}'.format(GREY, RESET))
+
+    # LOCAL lcov: the honest llvm-cov number over instrumented src files.
+    # Labelled "excludes dead-stripped" so the residual gap vs the sonar
+    # headline (sonar counts the dead-stripped 0% files in its denominator;
+    # lcov does not) is understood, not a mystery.
+    if sonar_measures is not None:
+        print('  {}local lcov (excludes dead-stripped): {}{:.1f}%{}  '
+              '{}{}/{} lines{}'.format(
+                  GREY, coverage_color(src_pct), src_pct, RESET,
+                  GREY, src_hit, src_found, RESET))
+        print('  {}source: {}{}'.format(GREY, coverage_path, RESET))
     print('')
+    if patterns:
+        print('  {}exclusions applied ({}): {}{}'.format(
+            GREY, 'sonar scope', RESET, props_path))
+        print('')
 
     # Per-file src coverage, lowest-first. CONCISE by default (top 5 worst);
-    # --verbose shows the full table. Uses the sonar scope (includes dead files
-    # at 0% so the ranking reflects genuine coverage gaps).
-    src_file_records = sorted(
-        sonar_with_dead, key=lambda r: (r[2] / r[1] if r[1] else 0.0))
+    # --verbose shows the full table. Ranks only LIVE records (present in lcov
+    # WITH executable lines): dead-stripped files (absent from lcov) and files
+    # with 0 executable lines are excluded here so they appear ONLY in the
+    # MISSING list below, not duplicated in the top-5.
+    live_records = [r for r in sonar_records
+                    if r[0] not in dead_paths and r[1] > 0]
+    live_records.sort(key=lambda r: (r[2] / r[1] if r[1] else 0.0))
     if verbose:
         print('  src/ per-file (sonar scope, lowest coverage first):')
     else:
-        print('  src/ top 5 worst (sonar scope): {}--verbose for full list{}'.format(
+        print('  src/ top 5 worst (sonar scope, live only): {}--verbose for full list{}'.format(
             GREY, RESET))
-    shown = src_file_records if verbose else src_file_records[:5]
+    shown = live_records if verbose else live_records[:5]
     for path, lf, lh in shown:
         rel = os.path.relpath(path, repo_root) if repo_root else path
         pct = (100.0 * lh / lf) if lf else 0.0
@@ -329,48 +543,72 @@ def display(coverage_path, repo_root, verbose=False):
             coverage_color(pct), pct, RESET, lh, lf, marker, rel, ''))
     print('')
 
-    # Dead-stripped src files: on disk but absent from lcov. These are the
-    # real 0% files on SonarCloud (genuine coverage gaps, not a measurement bug).
+    # Dead-stripped src files: on disk but absent from lcov, NOT platform-
+    # excluded. These are the real 0% files on SonarCloud (the dashboard's
+    # 0.0% set) — genuine coverage gaps, not a measurement artefact.
     if scanned:
-        print('  src files absent from lcov (dead-stripped — 0% on SonarCloud):')
-        if absent:
-            for path in absent:
+        print('  src files at 0% on SonarCloud (dead-stripped — absent from lcov):')
+        if dead_absent:
+            for path in dead_absent:
                 rel = os.path.relpath(path, repo_root) if repo_root else path
                 print('    {}MISSING{}  {}'.format(RED, RESET, rel))
         else:
-            print('    {}none — every src/*.cpp has coverage data{}'.format(
+            print('    {}none — every non-platform src/*.cpp has coverage data{}'.format(
                 GREEN, RESET))
         print('')
 
+        # Platform-excluded src files: whole body behind a host-absent guard.
+        # SonarCloud reports these as "-" (no data) — they are NOT in the
+        # denominator and are NOT coverage gaps, just code for another platform.
+        if platform_excluded:
+            print('  src files not reported to SonarCloud '
+                  '(platform-conditional — no host coverage data):')
+            for path in platform_excluded:
+                rel = os.path.relpath(path, repo_root) if repo_root else path
+                print('    {}EXCLUDED{} {}'.format(GREY, RESET, rel))
+            print('')
+
     print('  ' + BOLD + 'Note:' + RESET +
-          ' dead-stripped = compiled but not linked into any test binary')
-    print('  (no caller) -> absent from lcov, counted as 0% by SonarCloud. The')
-    print('  sonar-scope line includes them so local tracks SonarCloud. A small')
-    print('  residual gap is normal: Sonar and llvm-cov count executable lines')
-    print('  slightly differently per file.')
+          ' SonarCloud headline = live dashboard number; local lcov is the')
+    print('  honest llvm-cov figure over instrumented src (excludes dead-')
+    print('  stripped files, which SonarCloud counts as 0%). The small residual')
+    print('  gap is expected: llvm-cov and SonarQube also count executable lines')
+    print('  slightly differently per file. Platform-conditional code (e.g. ESP32')
+    print('  behind #ifdef ESP_PLATFORM) is not reported by SonarCloud ("-").')
     print('')
 
 
 def main():
-    """Entry point. Accepts an optional --verbose/--all flag anywhere in argv.
+    """Entry point. Accepts optional --verbose/--all and --label flags in argv.
 
-    Usage: coverage_summary.py <lcov.info> [repo_root] [--verbose|--all]
-    The Makefile calls this with just the lcov path (concise output). The user
-    can run `python3 coverage_summary.py lcov.info --verbose` for the full list.
+    Usage: coverage_summary.py <lcov.info> [repo_root] [--verbose|--all] [--label NAME]
+    The Makefile calls this with just the lcov path (concise output) plus a
+    --label tag so coverage reads as part of the same measurement report as the
+    SonarCloud summary. The user can run `python3 coverage_summary.py lcov.info
+    --verbose` for the full list.
     """
     verbose = False
+    label = 'Local Coverage'
     positional = []
-    for arg in sys.argv[1:]:
+    args = list(sys.argv[1:])
+    i = 0
+    while i < len(args):
+        arg = args[i]
         if arg in ('--verbose', '--all', '-v'):
             verbose = True
+            i += 1
         elif arg in ('-h', '--help'):
             print(__doc__)
             sys.exit(0)
+        elif arg == '--label' and i + 1 < len(args):
+            label = args[i + 1]
+            i += 2
         else:
             positional.append(arg)
+            i += 1
 
     if not positional:
-        print("Usage: coverage_summary.py <lcov.info> [repo_root] [--verbose]")
+        print("Usage: coverage_summary.py <lcov.info> [repo_root] [--verbose] [--label NAME]")
         sys.exit(1)
 
     coverage_path = positional[0]
@@ -381,7 +619,7 @@ def main():
         sys.exit(0)
 
     try:
-        display(coverage_path, repo_root, verbose=verbose)
+        display(coverage_path, repo_root, verbose=verbose, label=label)
     except (OSError, ValueError) as exc:
         print('  Failed to read coverage ({}): {}'.format(coverage_path, exc), file=sys.stderr)
         print('  Re-run with: make coverage-run')

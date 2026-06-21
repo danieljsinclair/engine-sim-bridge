@@ -121,7 +121,10 @@ clean-test-fixtures:
 	@rm -rf $(BUILD_DIR)/test/runtime-fixtures
 	@echo "Done."
 
-# Run the bridge suite in explicit tiers.
+# Run the bridge suite in explicit tiers. Declarative dependency list only:
+# each sub-target self-labels its own output (coverage-summary passes
+# --label "[engine-sim-bridge]", sonar-summary prints its own === headers), so
+# no procedural echo/banner wrapper is needed under test: itself.
 test: test-core test-deep sonar-scan coverage-summary sonar-summary
 
 test-core: CTEST_SELECTOR := -E '$(BRIDGE_TEST_CORE_EXCLUDE)'
@@ -190,7 +193,9 @@ sonar-scan: $(SONAR_REPORT)
 # SONAR_REPORT depends on the coverage ARTEFACT (coverage.txt), so coverage is
 # regenerated (tests re-run) before the scan reads the fresh coverage report.
 # Re-scans only when coverage/compile-db/properties/sources change. The curl
-# writes SONAR_REPORT itself.
+# writes SONAR_REPORT itself. The CE-poll block guarantees the report is only
+# cached after the Compute Engine has settled: under this file-stamp-gated model
+# a stale report would otherwise not self-correct until the next build change.
 $(SONAR_REPORT): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(BUILD_INPUTS)
 	@if [ -z "$${SONAR_TOKEN_ES}" ] && [ -z "$${SONAR_TOKEN}" ]; then \
 		echo "ERROR: Neither SONAR_TOKEN_ES nor SONAR_TOKEN is set. Run: source ~/.zshrc"; \
@@ -206,6 +211,33 @@ $(SONAR_REPORT): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(
 			echo "=== [engine-sim-bridge] sonar-scanner failed (rc=$$rc); see $(BUILD_COV_DIR)/sonar-scanner.log ==="; \
 			tail -n 20 $(BUILD_COV_DIR)/sonar-scanner.log; \
 			exit $$rc; \
+		fi
+	@echo "=== [engine-sim-bridge] Waiting for SonarCloud Compute Engine to finish ==="
+	@TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}"; \
+		CETASKID=$$(grep -E '^ceTaskId=' .scannerwork/report-task.txt 2>/dev/null | cut -d= -f2); \
+		if [ -z "$$CETASKID" ]; then \
+			echo "ERROR: no ceTaskId in .scannerwork/report-task.txt; cannot confirm analysis settled"; \
+			exit 1; \
+		fi; \
+		echo "  CE task: $$CETASKID"; \
+		dead=0; \
+		while [ $$dead -lt 60 ]; do \
+			status=$$(curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/ce/task?id=$$CETASKID" \
+				| python3 -c "import json,sys; print(json.load(sys.stdin).get('task',{}).get('status',''))" 2>/dev/null); \
+			if [ "$$status" = "SUCCESS" ]; then \
+				echo "  CE task SUCCESS after $$(($$dead * 2))s"; \
+				break; \
+			fi; \
+			if [ "$$status" = "FAILED" ] || [ "$$status" = "CANCELED" ]; then \
+				echo "ERROR: SonarCloud CE task $$status (id=$$CETASKID); report did not settle"; \
+				exit 1; \
+			fi; \
+			sleep 2; \
+			dead=$$((dead + 1)); \
+		done; \
+		if [ "$$status" != "SUCCESS" ]; then \
+			echo "ERROR: timed out waiting for SonarCloud CE task (last status=$$status, id=$$CETASKID)"; \
+			exit 1; \
 		fi
 	@echo "=== [engine-sim-bridge] Caching SonarCloud issue report ==="
 	@TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}"; \
@@ -235,17 +267,29 @@ check: test
 # Single source of truth: CANDIDATE_ENGINES lists which scripts to compile.
 # ============================================================================
 
-# Sonar summary — display issues from cached SonarCloud report.
-# No prereq on $(SONAR_REPORT): this must NEVER trigger a scan. If the cached
-# report is absent (fresh tree / pre-scan), sonar_summary.py prints a hint.
-# Coverage summary — display local coverage % from lcov.info.
+# Coverage summary -- display local coverage % from lcov.info.
 # No prereq: this must NEVER trigger a scan. If lcov is absent (fresh tree /
-# pre-scan), coverage_summary.py prints a hint.
+# pre-scan), coverage_summary.py prints a hint. The --label tag matches the
+# SonarCloud summary banner so coverage + sonar read as one measurement report.
 coverage-summary:
-	@python3 scripts/coverage_summary.py $(BUILD_COV_DIR)/lcov.info
+	@python3 scripts/coverage_summary.py $(BUILD_COV_DIR)/lcov.info --label "[engine-sim-bridge]"
 
+# Sonar summary -- display issues from a LIVE SonarCloud report.
+# No prereq on $(SONAR_REPORT): this must NEVER trigger a scan (only GETs).
+# Curls the API live at display time (refreshing the cached file) so local
+# counts always match the dashboard -- same pattern as engine-sim-cli/app. The
+# OPEN set is fetched WITH the impactSeverities facet, and the REMOVED set's
+# facet is fetched separately, so sonar_summary.py prints the dashboard's own
+# server-side severity distribution (OPEN union REMOVED). If no token, prints
+# a hint; a transient curl failure is tolerated (|| true) so the summary does
+# not crash on a network blip.
+SONAR_REMOVED_FACET := $(BUILD_COV_DIR)/sonar-removed-facet.json
 sonar-summary:
-	@python3 scripts/sonar_summary.py $(SONAR_REPORT)
+	@TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}"; \
+	if [ -z "$$TOKEN" ]; then echo "  No token"; exit 0; fi; \
+	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500&statuses=OPEN&facets=impactSeverities" > $(SONAR_REPORT) 2>/dev/null || true; \
+	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=1&resolutions=REMOVED&facets=impactSeverities" > $(SONAR_REMOVED_FACET) 2>/dev/null || true; \
+	python3 scripts/sonar_summary.py $(SONAR_REPORT) --label "[engine-sim-bridge]" --removed-facet $(SONAR_REMOVED_FACET)
 
 # Add/remove engines here — this is the ONLY list. Everything here is compiled, tested, and shipped.
 ENGINES := ferrari_f136 2jz C63_M156_V2 subaru_ej25 lfa_v10 v8_gm_ls 11_merlin_v12 06_subaru_ej25
