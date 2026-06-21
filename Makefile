@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := all
-.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism             test-deep presets clean-presets          sonar-scan sonar-clean coverage-clean coverage-run coverage-summary sonar-summary test-nosonar
+.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism             test-deep presets clean-presets          sonar-scan sonar-clean coverage-clean coverage-run coverage-summary sonar-summary test-nosonar          summary test-reset
 
 BUILD_DIR ?= build
 BUILD_COV_DIR ?= build-cov
@@ -30,6 +30,13 @@ COVERAGE_REPORT := $(BUILD_COV_DIR)/coverage.txt
 SONAR_REPORT := $(BUILD_COV_DIR)/sonar-report.json
 SONAR_TOKEN ?= ${SONAR_TOKEN_ES}
 
+# Combined ctest summary log: every ctest tier (test-core, test-deep) appends
+# its "N% tests passed, M tests failed out of N" line here (via the tee in
+# run_bridge_ctest_suite). reset at the start of `test` so each run is clean.
+# build_summary.py aggregates ALL summary lines so the headline reflects the
+# union of every tier run in this `make test`, not just the last.
+TEST_SUMMARY_LOG := $(BUILD_DIR)/test-summary.log
+
 # Source inputs that affect the bridge build. This ensures the stamp is invalidated
 # when bridge or engine-sim sources change, so rebuilds happen when necessary.
 BUILD_INPUTS := $(shell find Makefile CMakeLists.txt src include test tools engine-sim -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' -o -name '*.h' -o -name '*.hh' -o -name '*.hpp' -o -name '*.cmake' \) | sort)
@@ -47,7 +54,10 @@ define bridge_print_hint
 endef
 
 define run_bridge_ctest_suite
-	@if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) $(CTEST_SELECTOR); then \
+	@set -o pipefail; \
+	mkdir -p $(dir $(abspath $(TEST_SUMMARY_LOG))); \
+	if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) $(CTEST_SELECTOR) \
+			2>&1 | tee -a $(abspath $(TEST_SUMMARY_LOG)); then \
 		echo "$(SUMMARY_PASS_MESSAGE)"; \
 	else \
 		echo "$(SUMMARY_FAIL_MESSAGE)"; \
@@ -60,8 +70,9 @@ PRESET_DIR := preset
 ENGINE_SIM_ROOT := engine-sim
 PRESET_COMPILER := $(BUILD_DIR)/engine-sim-preset-compiler
 
-# Default target - build + presets (test/coverage require explicit `make test`)
-all: build presets
+# Default target - build + test + presets (complete pipeline). `summary` is
+# the LAST step so the end-of-make headline is the final build output.
+all: build test presets summary
 
 # Compile everything (cmake configure + build)
 build: $(BUILD_STAMP)
@@ -124,15 +135,23 @@ clean-test-fixtures:
 # Run the bridge suite in explicit tiers. Declarative dependency list only:
 # each sub-target self-labels its own output (coverage-summary passes
 # --label "[engine-sim-bridge]", sonar-summary prints its own === headers), so
-# no procedural echo/banner wrapper is needed under test: itself.
-test: test-core test-deep sonar-scan coverage-summary sonar-summary
+# no procedural echo/banner wrapper is needed under test: itself. `summary`
+# (the end-of-make headline) is the LAST prereq so it is the final output.
+test: test-core test-deep sonar-scan coverage-summary sonar-summary summary
+
+# Order-only reset of the combined ctest summary log. Both ctest tiers depend
+# on this so the log is empty at the start of a `make test` regardless of
+# which tier runs first (the tiers APPEND via the tee in run_bridge_ctest_suite).
+test-reset:
+	@mkdir -p $(BUILD_DIR)
+	@: > $(TEST_SUMMARY_LOG)
 
 test-core: CTEST_SELECTOR := -E '$(BRIDGE_TEST_CORE_EXCLUDE)'
 test-core: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: core bridge suite (factory + preset regression coverage) ===
 test-core: SKIP_HINT_MESSAGE := === [engine-sim-bridge] HINT: this is the always-on core suite in make test; there is no core-only skip target inside the safe path. Use app run-notest or run-quick only when you intentionally want to bypass the full test gate. ===
 test-core: SUMMARY_PASS_MESSAGE := === [engine-sim-bridge] SUMMARY: PASS (core) ===
 test-core: SUMMARY_FAIL_MESSAGE := === [engine-sim-bridge] SUMMARY: FAIL (core) ===
-test-core: build presets
+test-core: build presets | test-reset
 	$(run_bridge_ctest_suite)
 
 test-isomorphism: CTEST_SELECTOR := -R '$(BRIDGE_TEST_ISOMORPHISM_MATCH)'
@@ -140,7 +159,7 @@ test-isomorphism: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: isomorph
 test-isomorphism: SKIP_HINT_MESSAGE := === [engine-sim-bridge] HINT: skip this next time by running make test-core instead of make test or make test-deep. ===
 test-isomorphism: SUMMARY_PASS_MESSAGE := === [engine-sim-bridge] SUMMARY: PASS (isomorphism) ===
 test-isomorphism: SUMMARY_FAIL_MESSAGE := === [engine-sim-bridge] SUMMARY: FAIL (isomorphism) ===
-test-isomorphism: $(ISOMORPHISM_STAMP)
+test-isomorphism: $(ISOMORPHISM_STAMP) | test-reset
 	@:
 
 test-deep: build test-isomorphism
@@ -284,12 +303,39 @@ coverage-summary:
 # a hint; a transient curl failure is tolerated (|| true) so the summary does
 # not crash on a network blip.
 SONAR_REMOVED_FACET := $(BUILD_COV_DIR)/sonar-removed-facet.json
+# Cached SonarCloud measures (coverage headline). Curled by sonar-summary so
+# build_summary.py reads the SAME headline coverage_block.py/coverage_summary.py
+# show -- no live re-query at summary time (fast, cached).
+SONAR_MEASURES := $(BUILD_COV_DIR)/sonar-measures.json
 sonar-summary:
 	@TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}"; \
 	if [ -z "$$TOKEN" ]; then echo "  No token"; exit 0; fi; \
 	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500&statuses=OPEN&facets=impactSeverities" > $(SONAR_REPORT) 2>/dev/null || true; \
 	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=1&resolutions=REMOVED&facets=impactSeverities" > $(SONAR_REMOVED_FACET) 2>/dev/null || true; \
+	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/measures/component?component=danieljsinclair_engine-sim-bridge&metricKeys=coverage,lines_to_cover,uncovered_lines" > $(SONAR_MEASURES) 2>/dev/null || true; \
 	python3 scripts/sonar_summary.py $(SONAR_REPORT) --label "[engine-sim-bridge]" --removed-facet $(SONAR_REMOVED_FACET)
+
+# summary: the end-of-make HEADLINE line (one coloured row) for the bridge.
+# Greps plain numbers from the existing report files and re-emits them
+# coloured -- no live re-query, never triggers a scan/test, never crashes.
+# Tests come from the combined ctest summary log (test-summary.log, aggregated
+# over every tier run in this `make test`); coverage from the cached
+# sonar-measures.json (the SAME headline coverage_block.py shows; falls back to
+# local lcov when no token/report exists); sonar open/total from the cached
+# sonar-report.json. Missing fields are omitted gracefully. This is a LEAF --
+# the bridge is the deepest
+# nesting doll, so its summary prints exactly one line.
+# --removed-facet mirrors sonar-summary: total = open + removed (OPEN union
+# REMOVED, matching the dashboard severity widget and sonar_summary.py).
+BUILD_SUMMARY_SCRIPT := scripts/build_summary.py
+summary:
+	@python3 $(BUILD_SUMMARY_SCRIPT) \
+		--label "[engine-sim-bridge]" \
+		--test-log $(TEST_SUMMARY_LOG) \
+		--cov-measures $(SONAR_MEASURES) \
+		--local-cov $(BUILD_COV_DIR)/lcov.info --local-type lcov \
+		--sonar-report $(SONAR_REPORT) \
+		--removed-facet $(SONAR_REMOVED_FACET)
 
 # Add/remove engines here — this is the ONLY list. Everything here is compiled, tested, and shipped.
 ENGINES := ferrari_f136 2jz C63_M156_V2 subaru_ej25 lfa_v10 v8_gm_ls 11_merlin_v12 06_subaru_ej25
@@ -317,11 +363,12 @@ ISOMORPHISM_INPUTS = \
 	tools/preset_compiler.cpp \
 	$(BUILD_DIR)/preset_isomorphism_tests
 
-$(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets
-	@mkdir -p $(dir $@)
-	@echo "$(BLOCK_START_MESSAGE)"; \
+$(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets test-reset
+	@set -o pipefail; \
+	mkdir -p $(dir $@); \
+	echo "$(BLOCK_START_MESSAGE)"; \
 	$(call bridge_print_hint) \
-	if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -R '$(BRIDGE_TEST_ISOMORPHISM_MATCH)'; then \
+	if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -R '$(BRIDGE_TEST_ISOMORPHISM_MATCH)' 2>&1 | tee -a $(abspath $(TEST_SUMMARY_LOG)); then \
 		echo "=== [engine-sim-bridge] SUMMARY: PASS (isomorphism) ==="; \
 		$(call bridge_print_result,32,PASSED); \
 		$(call bridge_print_hint) \
@@ -354,6 +401,7 @@ help:
 	@echo "  make test-isomorphism - Run file-based incremental isomorphism tests when inputs are newer"
 	@echo "  make test-deep - Run isomorphism suite"
 	@echo "  make test-nosonar - Run the full test gate (core + isomorphism) WITHOUT sonar/coverage"
+	@echo "  make summary  - Print the end-of-make headline line (tests/cov/sonar)"
 	@echo "  make presets  - Compile .mr wrappers to JSON presets"
 	@echo "  make clean    - Clean build artifacts (fast rebuild)"
 	@echo "  make scrub    - Remove entire build directory (full clean)"
