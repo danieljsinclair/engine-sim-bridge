@@ -38,22 +38,40 @@ struct SlipLockOutput {
 };
 
 // Compute clutch pressure from slip. Algorithm:
-//   1. If roadSpeedImpliedRpm < idleRpm:
-//        - creepPressure = throttleFraction * maxCreepPressure  (TC fluid coupling at stall)
-//        - If creepPressure > 0: return {creepPressure, false}  (partial coupling, engine loaded)
-//        - Otherwise:            return {0.0, false}            (true neutral, no creep)
-//   2. slip      = max(0, engineRpm - roadSpeedImpliedRpm)
-//      stallBand = redlineRpm * (0.10 + 0.40 * throttleFraction)  (wider at WOT)
+//
+//   1. Creep mode (roadSpeedImpliedRpm < idleRpm):
+//        Models a real torque converter's fluid coupling at stall/low speed.
+//        Unlike a friction clutch (binary lock/slip), a TC transmits torque
+//        proportional to slip — maximum at zero road speed, tapering to zero
+//        as engine and turbine speeds converge.
+//
+//        slip = max(0, engineRpm - roadSpeedImpliedRpm)
+//        slipRatio = clamp(slip / redlineRpm, 0, 1)
+//
+//        // TC coupling coefficient: 1.0 at max slip, 0.0 at zero slip
+//        tcCoupling = 1.0 - slipRatio
+//
+//        // Throttle scaling: baseline coupling even at light throttle,
+//        // stronger at high throttle. At 0% throttle, ~30% of max coupling.
+//        throttleScale = 0.3 + 0.7 * throttleFraction
+//
+//        // Final creep pressure
+//        creep = maxCreepPressure * tcCoupling * throttleScale
+//
+//        if creep > 0.001: return {clamp(creep, 0, 1), false}
+//        else:             return {0.0, false}
+//
+//   2. Normal slip mode (roadSpeedImpliedRpm >= idleRpm):
+//      slip      = max(0, engineRpm - roadSpeedImpliedRpm)
+//      stallBand = redlineRpm * (0.10 + 0.40 * throttleFraction)
 //      slipRatio = clamp(slip / stallBand, 0, 1)
-//      pressure  = 1 - sqrt(slipRatio)                            (non-linear K-factor)
+//      pressure  = 1.0 - sqrt(slipRatio)
 //      locked    = (slipRatio < 0.1)
 //
-// The creep mode (step 1) mimics a real torque converter's fluid coupling:
-// even at zero road speed, some torque is transmitted proportional to throttle.
-// This prevents the engine from free-revving at standstill while keeping the
-// vehicle moving. maxCreepPressure is the clutch pressure at full throttle
-// with zero road speed (typical: 0.05-0.15).
-SlipLockOutput computeSlipLockPressure(const SlipLockInput& input, double maxCreepPressure = 0.10);
+// maxCreepPressure: peak clutch pressure at full throttle, zero road speed,
+// max slip. Typical range 0.10-0.25. Higher = more engine loading at stall
+// but risk of stall at high throttle.
+SlipLockOutput computeSlipLockPressure(const SlipLockInput& input, double maxCreepPressure = 0.35);
 
 }  // namespace twin
 

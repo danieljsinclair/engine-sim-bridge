@@ -23,16 +23,27 @@ inline double clampThrottle(double throttle) {
 }  // namespace
 
 SlipLockOutput computeSlipLockPressure(const SlipLockInput& input, double maxCreepPressure) {
-    // Creep mode: when road speed would imply below-idle RPM (standstill or
-    // very low speed), apply a small clutch pressure proportional to throttle.
-    // This mimics a real torque converter's fluid coupling — even at stall,
-    // some torque is transmitted. The engine feels load and doesn't free-rev.
-    // maxCreepPressure is typically 0.05-0.15 (5-15% clutch at full throttle).
+    // Creep mode: road speed implies below-idle RPM (standstill or very low speed).
+    // Models a real torque converter's fluid coupling. The TC torque capacity
+    // scales with the SQUARE of engine RPM (fluid dynamics), creating a natural
+    // governor effect:
+    //
+    //   clutchPressure = maxCreep × (engineRpm/redlineRpm)² × throttleScale
+    //
+    // At low RPM: low pressure (engine revs freely, light throttle)
+    // At high RPM: high pressure (clutch loads the engine progressively)
+    //
+    // This creates a natural equilibrium: the engine revs until the clutch
+    // pressure is high enough to transmit the engine's torque output. Light
+    // throttle → equilibrium at low RPM. WOT → equilibrium at high RPM.
     if (input.roadSpeedImpliedRpm < input.idleRpm) {
         const double throttle = clampThrottle(input.throttleFraction);
-        const double creep = throttle * clampDouble(maxCreepPressure, 0.0, 1.0);
-        if (creep > 0.0) {
-            return SlipLockOutput{creep, false};
+        const double rpmRatio = clampDouble(input.engineRpm / input.redlineRpm, 0.0, 1.0);
+        const double tcCapacity = rpmRatio * rpmRatio;  // square law (fluid coupling)
+        const double throttleScale = 0.2 + 0.8 * throttle;
+        const double creep = maxCreepPressure * tcCapacity * throttleScale;
+        if (creep > 0.001) {
+            return SlipLockOutput{clampDouble(creep, 0.0, 1.0), false};
         }
         return SlipLockOutput{0.0, false};
     }

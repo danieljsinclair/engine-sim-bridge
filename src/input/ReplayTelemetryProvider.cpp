@@ -297,19 +297,18 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
             input.gearAbsolute = gearbox_->getCurrentGear();
             input.gearAutoMode = true;
 
-            // SlipLockController — pressure-modulated clutch launch controller
-            // (dyno OFF). Drive the WHEELS to the CSV road speed
-            // (vehicleSpeedTargetKmh) and let the clutch couple them to the
-            // engine via the torque-converter slip characteristic:
-            //   - standstill (road-implied < idle):   pressure 0   (engine free to idle, no stall)
-            //   - launch under throttle (high slip):  partial       (TC slip in power band)
-            //   - road catches up (slip -> 0):        pressure -> 1 (locked, direct coupling)
-            //   - decel (engine slower than road):    pressure 1    (locked, engine braking)
-            // The stall floor (pressure == 0 whenever roadSpeedImpliedRpm < idleRpm)
-            // is the lesson from the stall/redline circle: coupling below idle drags
-            // the engine under idle and stalls it. See twin/SlipLockController.h.
-            input.vehicleSpeedTargetKmh = s.roadSpeedKmh;
-            input.engineRpmFloor = 0.0;  // dyno disabled downstream
+            // Vehicle speed target with soft coupling. Instead of hard-pinning
+            // the wheels to the CSV road speed (which causes instant engine load
+            // and redline at light throttle), we use a proportional approach:
+            // the target speed is the CSV speed, but the clutch pressure is
+            // computed from the slip between engine and road-implied RPM.
+            //
+            // The key insight: the clutch pressure should be high enough to
+            // transmit the engine's torque at the current slip. If the engine
+            // revs too fast, the slip increases and the clutch locks more,
+            // loading the engine. If the engine slows, the clutch slips more,
+            // allowing revs to build. This creates a natural equilibrium.
+            input.engineRpmFloor = 0.0;
 
             // Road-speed-implied engine RPM: the RPM the engine would be at if the
             // clutch were locked in the current gear at the current road speed.
@@ -325,10 +324,13 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
                                       * 30.0 / 3.14159265358979;
             }
 
-            // maxCreepPressure: clutch pressure at full throttle with zero road
-            // speed. Mimics TC fluid coupling — 0.10 = 10% clutch at stall.
-            // Tunable: lower = less creep (engine freer to rev), higher = more
-            // creep (stronger launch feel, but risk of stall at high throttle).
+            // Creep pressure: proportional to throttle. At light throttle, the
+            // clutch is partially engaged, loading the engine. At WOT, the
+            // clutch is more firmly engaged. The vehicle speed target pins the
+            // wheels, and the clutch pressure determines how much engine torque
+            // is transmitted. The engine will rev until its torque output
+            // matches the clutch's torque capacity — this creates a natural
+            // equilibrium RPM for each throttle level.
             constexpr double kMaxCreepPressure = 0.10;
             const twin::SlipLockOutput slipLock = twin::computeSlipLockPressure(
                 twin::SlipLockInput{
@@ -339,6 +341,22 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
                     gearboxProfile_.redlineRpm},
                 kMaxCreepPressure);
             input.clutchPressure = slipLock.clutchPressure;
+
+            // Vehicle speed target: only pin wheels when CSV road speed is above
+            // a minimum threshold. At standstill/very low speed, release the pin
+            // and let the engine rev naturally while the clutch gradually couples.
+            // This prevents the hard-pin behavior that loads the engine too much
+            // at light throttle.
+            //
+            // The threshold is set to ~5 km/h (walking speed). Below this, the
+            // engine can rev freely. Above it, the constraint progressively loads
+            // the engine as speed builds.
+            constexpr double kMinSpeedKmh = 5.0;
+            if (s.roadSpeedKmh >= kMinSpeedKmh) {
+                input.vehicleSpeedTargetKmh = s.roadSpeedKmh;
+            } else {
+                input.vehicleSpeedTargetKmh = -1.0;  // release pin
+            }
         } else {
             // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
             // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).

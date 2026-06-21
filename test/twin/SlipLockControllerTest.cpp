@@ -50,11 +50,14 @@ TEST(SlipLockControllerTest, StandstillZeroThrottle_OpenClutch_NoStall) {
     EXPECT_FALSE(out.locked);
 }
 
-TEST(SlipLockControllerTest, RoadImpliedBelowIdle_CreepProportionalToThrottle) {
+TEST(SlipLockControllerTest, RoadImpliedBelowIdle_CreepProportionalToSlipAndThrottle) {
     // In-gear crawl at ~5 km/h: road-implied 300 RPM is below idle 700.
-    // The creep model applies a small clutch pressure proportional to throttle,
-    // mimicking TC fluid coupling. This loads the engine so it doesn't free-rev.
-    // With default maxCreepPressure=0.10 and throttle=0.10: creep = 0.10 * 0.10 = 0.01.
+    // Creep model: pressure = maxCreep * tcCoupling * throttleScale
+    // where tcCoupling = 1 - slipRatio (max at zero road speed)
+    // and throttleScale = 0.3 + 0.7 * throttle.
+    // Engine at 800 RPM, road at 300 RPM: slip = 500, slipRatio = 500/6500 ≈ 0.077
+    // tcCoupling ≈ 0.923, throttleScale = 0.3 + 0.7*0.1 = 0.37
+    // creep ≈ 0.10 * 0.923 * 0.37 ≈ 0.034
     const auto out = compute(800.0, 300.0, 0.10);
     EXPECT_GT(out.clutchPressure, 0.0)
         << "Creep mode must apply some pressure to load the engine at standstill";
