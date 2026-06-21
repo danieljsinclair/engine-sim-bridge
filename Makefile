@@ -79,7 +79,7 @@ $(BUILD_STAMP): $(BUILD_INPUTS) $(BUILD_DIR)/CMakeCache.txt
 $(BUILD_DIR)/CMakeCache.txt: CMakeLists.txt
 	@mkdir -p $(BUILD_DIR)
 	@cd $(BUILD_DIR) && cmake $(BRIDGE_TEST_CMAKE_FLAGS) -DCMAKE_BUILD_TYPE=Release .. \
-		&& sed -i '' 's/^CMAKE_BUILD_TYPE:STRING=.*/CMAKE_BUILD_TYPE:STRING=Release/' $(BUILD_DIR)/CMakeCache.txt
+		&& sed -i '' 's/^CMAKE_BUILD_TYPE:STRING=.*/CMAKE_BUILD_TYPE:STRING=Release/' CMakeCache.txt
 
 # Remove orphaned binaries, symlinks, and stray cmake junk from source dirs
 remove-orphans:
