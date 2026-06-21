@@ -70,7 +70,7 @@ public:
                              double diffRatio, double tireRadiusM);
 
 private:
-    const twin::IceVehicleProfile profile_;
+    twin::IceVehicleProfile profile_;
     std::unique_ptr<IThrottleSource> throttleSource_;
     std::unique_ptr<GearSelectorInput> gearSelector_;
     std::unique_ptr<IgnitionInput> ignition_;
