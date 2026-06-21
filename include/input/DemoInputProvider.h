@@ -17,6 +17,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace input {
 
@@ -62,6 +63,11 @@ public:
 
     // Gearbox diagnostic logging
     void setGearboxLogger(twin::IGearboxLogger* logger);
+
+    // Reconfigure the gearbox to match the actual engine preset's ratios.
+    // Passthrough to VirtualIceInputProvider → VirtualIceTwin.
+    void reconfigureProfile(const std::vector<double>& gearRatios,
+                             double diffRatio, double tireRadiusM);
 
 private:
     const twin::IceVehicleProfile profile_;

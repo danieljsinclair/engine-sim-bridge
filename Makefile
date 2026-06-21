@@ -3,6 +3,9 @@
 
 BUILD_DIR ?= build
 BUILD_TYPE ?= Release
+# Set to 1 to allow Debug builds (needed for coverage instrumentation).
+# Without this flag, any existing Debug CMakeCache.txt is a hard error.
+ALLOW_DEBUG_BUILD ?= 0
 CTEST_VERBOSE ?= 0
 CTEST_QUIET ?= 0
 CTEST_UI_FLAGS := $(if $(filter 1,$(CTEST_VERBOSE)),-V,$(if $(filter 1,$(CTEST_QUIET)),-Q,))
@@ -54,19 +57,29 @@ PRESET_DIR := preset
 ENGINE_SIM_ROOT := engine-sim
 PRESET_COMPILER := $(BUILD_DIR)/engine-sim-preset-compiler
 
-# Default target - build + test + presets (complete pipeline)
-all: build test presets
+# Default target - build + presets (test/coverage require explicit `make test`)
+all: build presets
 
 # Compile everything (cmake configure + build)
 build: $(BUILD_STAMP)
 
+# Guard: refuse to compile a Debug build unless ALLOW_DEBUG_BUILD=1.
+# The physics solver is 3-5× slower in Debug; building without Release is
+# almost always accidental (e.g. left behind by the coverage target, which
+# reconfigures the bridge as Debug for llvm-cov instrumentation).
+# Fix: run `make build` (Release) or `make scrub && build` (clean slate).
+# Override (coverage/special): `make build ALLOW_DEBUG_BUILD=1`.
+check_build_type = { if [ "$(ALLOW_DEBUG_BUILD)" != "1" ] && grep -q "CMAKE_BUILD_TYPE:STRING=Debug" $(BUILD_DIR)/CMakeCache.txt 2>/dev/null; then printf '\nERROR: bridge build dir is Debug. Physics 3-5x slower.\n  Run: make scrub && build  (clean slate)\n  Or:  make build ALLOW_DEBUG_BUILD=1  (override)\n\n'; exit 1; fi; }
+
 $(BUILD_STAMP): $(BUILD_INPUTS) $(BUILD_DIR)/CMakeCache.txt
+	+$(call check_build_type)
 	+$(call build_bridge_targets)
 	@touch $@
 
 $(BUILD_DIR)/CMakeCache.txt: CMakeLists.txt
 	@mkdir -p $(BUILD_DIR)
-	@cd $(BUILD_DIR) && cmake $(BRIDGE_TEST_CMAKE_FLAGS) ..
+	@cd $(BUILD_DIR) && cmake $(BRIDGE_TEST_CMAKE_FLAGS) -DCMAKE_BUILD_TYPE=Release .. \
+		&& sed -i '' 's/^CMAKE_BUILD_TYPE:STRING=.*/CMAKE_BUILD_TYPE:STRING=Release/' CMakeCache.txt
 
 # Remove orphaned binaries, symlinks, and stray cmake junk from source dirs
 remove-orphans:

@@ -2,6 +2,7 @@
 #include "input/ReplayTelemetryProvider.h"
 #include "twin/AutomaticGearbox.h"
 #include "twin/IceVehicleProfile.h"
+#include "twin/SlipLockController.h"
 #include "simulator/GearConventions.h"
 #include "simulator/EngineSimTypes.h"
 
@@ -171,8 +172,24 @@ const ReplayTelemetryProvider::Sample& ReplayTelemetryProvider::sampleAt(double 
 
 EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
     elapsedS_ += dt;
+
+    // Time slicing: skip samples before startFromS.
+    if (startFromS_ >= 0.0 && elapsedS_ < startFromS_) {
+        elapsedS_ = startFromS_;
+    }
+
+    // Time slicing: stop at endAtS.
+    if (endAtS_ >= 0.0 && elapsedS_ >= endAtS_) {
+        if (session_) session_->stop();
+        EngineInput input;
+        input.ignition = false;
+        return input;
+    }
+
     EngineInput input;
     const Sample& s = sampleAt(elapsedS_);
+    currentTimestampS_ = s.timeS;
+    input.replayTimestampS = currentTimestampS_;
     input.throttle = s.throttle;
     input.ignition = ignitionOn_;
 
@@ -192,36 +209,48 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
             input.gearAbsolute = gearbox_->getCurrentGear();
             input.gearAutoMode = true;
 
-            // Spike-A — pressure-modulated clutch launch controller (dyno OFF).
-            // Drive the WHEELS to the CSV road speed (vehicleSpeedTargetKmh) and
-            // let the clutch couple them to the engine. At launch (road slow,
-            // high slip) keep pressure LOW so the engine revs freely instead of
-            // being dragged; as road speed syncs, ramp pressure -> 1.0 (lockup).
-            // Throttle biases the slip: at WOT launch we slip more (rev higher).
+            // SlipLockController — pressure-modulated clutch launch controller
+            // (dyno OFF). Drive the WHEELS to the CSV road speed
+            // (vehicleSpeedTargetKmh) and let the clutch couple them to the
+            // engine via the torque-converter slip characteristic:
+            //   - standstill (road-implied < idle):   pressure 0   (engine free to idle, no stall)
+            //   - launch under throttle (high slip):  partial       (TC slip in power band)
+            //   - road catches up (slip -> 0):        pressure -> 1 (locked, direct coupling)
+            //   - decel (engine slower than road):    pressure 1    (locked, engine braking)
+            // The stall floor (pressure == 0 whenever roadSpeedImpliedRpm < idleRpm)
+            // is the lesson from the stall/redline circle: coupling below idle drags
+            // the engine under idle and stalls it. See twin/SlipLockController.h.
             input.vehicleSpeedTargetKmh = s.roadSpeedKmh;
             input.engineRpmFloor = 0.0;  // dyno disabled downstream
-            // Speed-based clutch ramp (torque-converter style): low pressure at
-            // standstill (clutch slips, engine can rev), ramps to full lockup as
-            // road speed approaches ~15 km/h. Throttle reduces the floor (more
-            // slip = higher revs at launch).
-            // Clutch pressure ramps from 0 (below idle-implied speed) to 1.0
-            // (locked). The "idle-implied speed" is the road speed at which the
-            // engine RPM = idle in the current gear. Below that, the clutch MUST
-            // be open (the implied RPM is below idle → coupling would drag the
-            // engine down → stall). Above it, the engine can sustain against the
-            // coupling, so the clutch engages gradually.
-            int gear = gearbox_->getCurrentGear();
-            double idleSpeedKmh = 5.0;  // fallback
+
+            // Road-speed-implied engine RPM: the RPM the engine would be at if the
+            // clutch were locked in the current gear at the current road speed.
+            // engineRpm = wheelRadS * gearRatio * diffRatio,  wheelRadS = v / tireRadius.
+            const int gear = gearbox_->getCurrentGear();
+            double roadSpeedImpliedRpm = gearboxProfile_.idleRpm;  // fallback above the floor
             if (gear >= 1 && gear <= static_cast<int>(gearboxProfile_.gearRatios.size())) {
-                double idleRadS = gearboxProfile_.idleRpm * 3.14159265358979 / 30.0;
-                double wheelRadS = idleRadS / (gearboxProfile_.gearRatios[gear - 1]
-                                               * gearboxProfile_.diffRatio);
-                idleSpeedKmh = wheelRadS * gearboxProfile_.tireRadiusM * 3.6;
+                const double speedMs = speedForBox / 3.6;
+                const double wheelRadS = speedMs / gearboxProfile_.tireRadiusM;
+                roadSpeedImpliedRpm = wheelRadS
+                                      * gearboxProfile_.gearRatios[gear - 1]
+                                      * gearboxProfile_.diffRatio
+                                      * 30.0 / 3.14159265358979;
             }
-            constexpr double kRampRangeKmh = 20.0;  // ramp width above idle speed
-            double speedFrac = std::clamp(
-                (speedForBox - idleSpeedKmh) / kRampRangeKmh, 0.0, 1.0);
-            input.clutchPressure = speedFrac;  // 0 below idle speed, 1 at lock
+
+            // maxCreepPressure: clutch pressure at full throttle with zero road
+            // speed. Mimics TC fluid coupling — 0.10 = 10% clutch at stall.
+            // Tunable: lower = less creep (engine freer to rev), higher = more
+            // creep (stronger launch feel, but risk of stall at high throttle).
+            constexpr double kMaxCreepPressure = 0.10;
+            const twin::SlipLockOutput slipLock = twin::computeSlipLockPressure(
+                twin::SlipLockInput{
+                    engineRpmFeedback_,
+                    roadSpeedImpliedRpm,
+                    s.throttle,
+                    gearboxProfile_.idleRpm,
+                    gearboxProfile_.redlineRpm},
+                kMaxCreepPressure);
+            input.clutchPressure = slipLock.clutchPressure;
         } else {
             // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
             // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).

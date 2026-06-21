@@ -179,6 +179,11 @@ void DemoInputProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
     twinProvider_.setGearboxLogger(logger);
 }
 
+void DemoInputProvider::reconfigureProfile(const std::vector<double>& gearRatios,
+                                            double diffRatio, double tireRadiusM) {
+    twinProvider_.reconfigureProfile(gearRatios, diffRatio, tireRadiusM);
+}
+
 void DemoInputProvider::setBrake(double level) {
     brakeInput_.setLevel(level);
 }

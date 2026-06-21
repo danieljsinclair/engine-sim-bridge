@@ -2,8 +2,8 @@
 
 namespace input {
 
-VirtualIceInputProvider::VirtualIceInputProvider(const twin::IceVehicleProfile& profile)
-    : profile_(profile), isInitialized_(false) {
+VirtualIceInputProvider::VirtualIceInputProvider(twin::IceVehicleProfile profile)
+    : profile_(std::move(profile)), isInitialized_(false) {
 }
 
 VirtualIceInputProvider::~VirtualIceInputProvider() {
@@ -83,6 +83,11 @@ void VirtualIceInputProvider::setIgnition(bool on) {
     if (twin_) {
         twin_->setIgnition(on);
     }
+}
+
+void VirtualIceInputProvider::reconfigureProfile(const std::vector<double>& gearRatios,
+                                                  double diffRatio, double tireRadiusM) {
+    if (twin_) twin_->reconfigureProfile(gearRatios, diffRatio, tireRadiusM);
 }
 
 void VirtualIceInputProvider::setGearboxLogger(twin::IGearboxLogger* logger) {

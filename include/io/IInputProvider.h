@@ -45,6 +45,10 @@ struct EngineInput {
     double roadSpeedKmh = -2.0;     // Virtual ICE Twin: manual road speed control (km/h)
     double engineRpmFloor = 0.0;    // >=0: launch floor on the dyno target RPM (torque-converter style)
 
+    // Replay timestamp: absolute CSV time in seconds, -1 if not replaying.
+    // Passed through to EngineState.drivetrain.replayTimestampS for display.
+    double replayTimestampS = -1.0;
+
     // Simulator auto-disengages starter when RPM > threshold
     // Preset cycling
     bool presetCycle = false;       // true = cycle to next preset engine configuration

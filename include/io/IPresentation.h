@@ -37,6 +37,7 @@ struct EngineState {
         int gear = 0;
         double dynoTorque = 0.0;
         double dynoTargetRPM = 0.0;
+        double replayTimestampS = -1.0;  // absolute CSV timestamp (-1 = not replaying)
     } drivetrain;
 
     // User control inputs (what the driver is commanding)

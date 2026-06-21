@@ -124,6 +124,7 @@ set(BRIDGE_SOURCES
     src/twin/VirtualIceTwin.cpp
     src/twin/ManualTwin.cpp
     src/twin/GearboxCsvLogger.cpp
+    src/twin/SlipLockController.cpp
     # Input providers
     src/input/VirtualIceInputProvider.cpp
     src/input/ManualTwinProvider.cpp
@@ -474,6 +475,7 @@ if(BUILD_BRIDGE_TESTS)
         test/twin/ThrottleSmootherTest.cpp
         test/twin/VirtualIceTwinTest.cpp
         test/twin/ManualTwinTest.cpp
+        test/twin/SlipLockControllerTest.cpp
     )
     target_include_directories(twin_core_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
