@@ -14,10 +14,15 @@ namespace input {
 
 // Forward declaration
 class IDemoSpeedEnhancer;
+class IDemoControls;
 
 class EngineInputTarget : public IKeyActionTarget {
 public:
     explicit EngineInputTarget(ILogging* logger = nullptr);
+
+    // Gearbox mode: true = automatic (box shifts itself; manual ]/[ disabled),
+    // false = manual (default; ]/[ shift). Set from --auto/--connect-demo.
+    void setGearAutoMode(bool autoMode);
 
     void quit() override;
     void setThrottle(double level) override;
@@ -37,11 +42,20 @@ public:
     // The enhancer receives the base EngineInput and enhances it with speed data
     void setSpeedEnhancer(IDemoSpeedEnhancer* enhancer);
 
+    // Set the demo control surface for --connect-demo mode. When present,
+    // shift keys (]/[) advance the demo provider's PRNDL GearSelectorInput
+    // (P/R/N/D) instead of the manual gear counter, so the keyboard can drive
+    // the selector into DRIVE for the automatic gearbox.
+    void setDemoControls(IDemoControls* controls);
+
     // Build the EngineInput struct from current state.
     // Resets one-shot flags (gearDelta, starter, presetCycle).
     EngineInput buildInput();
 
     EngineInput buildEngineInput(double dt) override;
+
+    // Forward simulator feedback to the speed enhancer (twin/gearbox) when present.
+    void provideFeedback(const EngineSimStats& stats) override;
 
     bool quitRequested() const { return quitRequested_; }
 
@@ -58,9 +72,15 @@ private:
     bool throttleTouched_;  // true if set/adjusted this frame
     double latchedThrottle_;  // Baseline set by W/Z/R/Space
     bool momentaryActive_;   // True when a 0-9 key is being held
-    double roadSpeedKmh_ = 0.0;  // Virtual ICE Twin: target road speed (km/h)
+    bool gearAutoMode_ = false;  // true = automatic gearbox (manual ]/[ disabled)
+    // Negative sentinel = "no speed commanded". See EngineInput::roadSpeedKmh:
+    // the loop's setSpeedTrackingTarget gate is >= 0.0, so a 0.0 default would
+    // hold the engine at 0 RPM and stall it in gear. adjustSpeed() clamps to
+    // [0, 300], so any user input immediately moves into the active range.
+    double roadSpeedKmh_ = -1.0;  // Virtual ICE Twin: target road speed (km/h)
     ILogging* logger_;
     IDemoSpeedEnhancer* speedEnhancer_ = nullptr;  // Optional speed enhancer for demo mode
+    IDemoControls* demoControls_ = nullptr;        // Optional demo PRNDL control surface
 };
 
 } // namespace input

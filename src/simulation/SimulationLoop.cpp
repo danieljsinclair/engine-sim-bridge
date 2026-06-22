@@ -73,11 +73,11 @@ void SimulationLoop::updatePresentation(
 
     presentation::EngineState state;
     state.engine = presentation::builders::buildEngineState(stats, crankingState);
-    state.drivetrain = presentation::builders::buildDrivetrainState(stats);
+    state.drivetrain = presentation::builders::buildDrivetrainState(stats, input);
     state.controls = presentation::builders::buildControlState(input, crankingState);
     state.audio = presentation::builders::buildAudioState(timing, telemetryReader_, audioBuffer_, config_, tickTime, simulator_);
     state.presetShortName = simulator_.getName() ? simulator_.getName() : "";
-    presentation_->ShowEngineState(state);
+    presentation_->ShowSimulatorStates(state);
 }
 
 // ============================================================================
@@ -201,6 +201,23 @@ void SimulationLoop::applyVehicleControls(
     if (!crankingState.starterEngaged) {
         // HACK: Should put the clutch in here really
         applyDynoControl(simulator_, input.dynoTorqueScale, lastDynoTorqueScale);
+
+        // Speed tracking. Spike-A: prefer the vehicle-speed constraint (drives the
+        // wheels, clutch couples to engine, dyno OFF) when commanded — this is the
+        // --auto DRIVE path that fixes the dragged-engine sound. Fall back to the
+        // dyno path (setSpeedTrackingTarget) for the legacy road-speed input.
+        // Both are BridgeSimulator-specific APIs, so downcast the engine.
+        if (auto* bridgeSim = dynamic_cast<BridgeSimulator*>(combustionEngine)) {
+            if (input.vehicleSpeedTargetKmh >= 0.0) {
+                // Spike-A inverse path: drive wheels, clutch couples, dyno OFF.
+                bridgeSim->setVehicleSpeedTarget(input.vehicleSpeedTargetKmh);
+            } else if (!input.gearAutoMode && input.roadSpeedKmh >= 0.0) {
+                // Legacy dyno fallback — manual road-speed input only. In --auto
+                // mode the gearbox provider owns speed tracking via the constraint;
+                // PARK/NEUTRAL frames must NOT fall through to the dyno (free-rev).
+                bridgeSim->setSpeedTrackingTarget(input.roadSpeedKmh, input.engineRpmFloor);
+            }
+        }
     } else {
         logger_->info(LogMask::BRIDGE, "Cranking: starter engaged, dyno disabled - consider using the clutch instead");
     }
@@ -496,6 +513,11 @@ int SimulationLoop::run() {
         engineInput = pollInput(currentTime, config_.updateInterval(), isFirstTick);
         isFirstTick = false;
         previousStats = stats;
+
+        // Feed the previous frame's stats back to the input provider so it can
+        // use real engine RPM/speed/torque for decisions (e.g. the SlipLockController
+        // needs engineRpmFeedback to compute clutch pressure from slip).
+        if (inputProvider_) inputProvider_->provideFeedback(previousStats);
 
         if (engineInput.presetCycle) {
             return EXIT_BUT_CONTINUE_NEXT;

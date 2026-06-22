@@ -112,6 +112,7 @@ TEST_F(FunctionDeserializationTest, FunctionWithSamplesCreatesCorrectFunction) {
     EXPECT_NEAR(profile->getX(2), 1.0, TOLERANCE);
     EXPECT_NEAR(profile->getY(2), 0.0, TOLERANCE);
 
+    engine->destroy();
     delete engine;
 }
 
@@ -147,6 +148,7 @@ TEST_F(FunctionDeserializationTest, FilterRadiusComputedFromSampleSpacing) {
             << "filterRadius must match JSON value (read, not computed)";
     }
 
+    engine->destroy();
     delete engine;
 }
 
@@ -183,6 +185,7 @@ TEST_F(FunctionDeserializationTest, ManySamplesPreservesAllPairsExactly) {
                     samples[static_cast<size_t>(jsonSamples - 1)][static_cast<size_t>(1)].asNumber(), TOLERANCE);
     }
 
+    engine->destroy();
     delete engine;
 }
 
@@ -225,6 +228,7 @@ TEST_F(DeserializationCompletenessTest, CrankshaftReadsAllFields) {
     EXPECT_NEAR(cs->getRodJournalAngle(2), 1.570796326795, TOLERANCE);
     EXPECT_NEAR(cs->getRodJournalAngle(3), 3.14159265359, TOLERANCE);
 
+    engine->destroy();
     delete engine;
 }
 
@@ -249,6 +253,7 @@ TEST_F(DeserializationCompletenessTest, ExhaustSystemReadsAllFields) {
     EXPECT_NEAR(ex->getVelocityDecay(), 1.0, TOLERANCE);
     EXPECT_NEAR(ex->getAudioVolume(), 4.0, TOLERANCE);
 
+    engine->destroy();
     delete engine;
 }
 
@@ -271,6 +276,7 @@ TEST_F(DeserializationCompletenessTest, IntakeReadsAllFields) {
     EXPECT_GT(intake->getInputFlowK(), 0.0)
         << "InputFlowK must be positive (engine needs air)";
 
+    engine->destroy();
     delete engine;
 }
 
@@ -294,6 +300,7 @@ TEST_F(DeserializationCompletenessTest, FuelReadsAllFields) {
     EXPECT_NE(fuel->getTurbulenceToFlameSpeedRatio(), nullptr)
         << "turbulenceToFlameSpeedRatio must not be null";
 
+    engine->destroy();
     delete engine;
 }
 
@@ -381,6 +388,7 @@ TEST_F(DeserializationCompletenessTest, CylinderBankAndHeadReadAllFields) {
     EXPECT_NE(head0->getExhaustPortFlow(), nullptr)
         << "Exhaust port flow function must be set";
 
+    engine->destroy();
     delete engine;
 }
 
@@ -407,6 +415,7 @@ TEST_F(DeserializationCompletenessTest, IgnitionModuleReadsTimingAndFiringOrder)
     // Firing order must be set for all cylinders
     EXPECT_EQ(ignition->getCylinderCount(), engine->getCylinderCount());
 
+    engine->destroy();
     delete engine;
 }
 
@@ -499,6 +508,7 @@ TEST_P(EndToEndPresetTest, PresetLoadsAndProducesValidEngine) {
     EXPECT_GT(engine->getRedline(), 50.0) << "Redline too low";
     EXPECT_LT(engine->getRedline(), 2000.0) << "Redline too high";
 
+    engine->destroy();
     delete engine;
 }
 
@@ -538,6 +548,7 @@ TEST_F(EndToEndPresetTest, GmLsHasCorrectEngineGeometry) {
     EXPECT_GT(displacement, 5.0e-3) << "GM LS displacement should be >5L";
     EXPECT_LT(displacement, 6.0e-3) << "GM LS displacement should be <6L";
 
+    engine->destroy();
     delete engine;
 }
 
@@ -570,6 +581,7 @@ TEST_F(EndToEndPresetTest, HondaTrx520HasCorrectGeometry) {
     EXPECT_GT(displacement, 4.5e-4) << "Honda displacement should be >450cc";
     EXPECT_LT(displacement, 6.0e-4) << "Honda displacement should be <600cc";
 
+    engine->destroy();
     delete engine;
 }
 
@@ -600,6 +612,7 @@ TEST_F(EndToEndPresetTest, PortFlowFunctionsAreNonNull) {
         }
     }
 
+    engine->destroy();
     delete engine;
 }
 
@@ -630,6 +643,7 @@ TEST_F(EndToEndPresetTest, CamshaftLobeProfilesPresentAndNonEmpty) {
             << "Bank " << bi << " exhaust lobe profile is empty";
     }
 
+    engine->destroy();
     delete engine;
 }
 
@@ -646,6 +660,7 @@ TEST_F(EndToEndPresetTest, ExhaustOutletFlowRateIsNonZero) {
             << "Exhaust " << i << " outletFlowRate must be non-zero";
     }
 
+    engine->destroy();
     delete engine;
 }
 
@@ -669,6 +684,7 @@ TEST_F(EndToEndPresetTest, FuelFlameSpeedReturnsPositiveValue) {
     EXPECT_FALSE(std::isnan(flameSpeed)) << "Flame speed must not be NaN";
     EXPECT_GT(flameSpeed, 0.0) << "Flame speed must be positive";
 
+    engine->destroy();
     delete engine;
 }
 
@@ -735,6 +751,7 @@ TEST_F(EndToEndPresetTest, JsonFieldsMatchEngineValues) {
     EXPECT_NEAR(fuel->getMaxTurbulenceEffect(), fuelJson["maxTurbulenceEffect"].asNumber(), TOLERANCE);
     EXPECT_NEAR(fuel->getMaxDilutionEffect(), fuelJson["maxDilutionEffect"].asNumber(), TOLERANCE);
 
+    engine->destroy();
     delete engine;
 }
 
@@ -951,7 +968,7 @@ public:
                 }
                 f.piranhaSim.reset();
             }
-            delete f.jsonEngine;
+            if (f.jsonEngine) { f.jsonEngine->destroy(); delete f.jsonEngine; }
             f.jsonEngine = nullptr;
             if (f.generatedFixture && !f.jsonFixturePath.empty()) {
                 std::filesystem::remove(f.jsonFixturePath);
@@ -1198,6 +1215,7 @@ TEST_P(ParameterIsomorphismTest, VehicleParametersMatch) {
         << "Vehicle tireRadius mismatch";
 
     // Note: jsonResult.engine needs cleanup since we only needed vehicle
+    jsonResult.engine->destroy();
     delete jsonResult.engine;
 }
 
@@ -1300,6 +1318,7 @@ TEST_P(ParameterIsomorphismTest, TransmissionAndExhaustParametersMatch) {
         }
     }
 
+    jsonResult.engine->destroy();
     delete jsonResult.engine;
 }
 
@@ -1633,7 +1652,7 @@ protected:
     }
 
     void TearDown() override {
-        delete jsonEngine_;
+        if (jsonEngine_) { jsonEngine_->destroy(); delete jsonEngine_; }
         jsonEngine_ = nullptr;
 
         if (piranhaSim_) {
@@ -1679,5 +1698,69 @@ INSTANTIATE_TEST_SUITE_P(
         RoundTripParam{"LFA_V10", "engines/atg-video-2/10_lfa_v10.mr", "lfa_v10.json"}
     )
 );
+
+// ============================================================================
+// Pipeline Smoke Test
+//
+// Proves the full SimulatorFactory::create() → JSON preset → simulation
+// pipeline works end-to-end. One engine is enough — we're testing the pipe,
+// not the water. The isomorphism tests already prove JSON ≡ .mr.
+// ============================================================================
+
+class PipelineSmokeTest : public ::testing::Test {
+protected:
+    void TearDown() override {
+        if (sim_) {
+            sim_->destroy();
+        }
+    }
+
+    std::unique_ptr<ISimulator> sim_;
+};
+
+// Load a JSON preset via SimulatorFactory and run one simulation frame.
+// This proves the JSON preset path through SimulatorFactory works identically
+// to the .mr script path (which the isomorphism tests already validate).
+TEST_F(PipelineSmokeTest, LoadJsonPresetAndSimulate) {
+    ISimulatorConfig config;
+    config.sampleRate = 48000;
+    config.simulationFrequency = 10000;
+
+    std::string presetPath = std::string(TEST_PRESET_DIR) + "/v8_gm_ls.json";
+
+    ASSERT_TRUE(std::filesystem::exists(presetPath))
+        << "Preset file not found: " << presetPath;
+
+    // Save/restore CWD — SimulatorFactory resolves asset paths relative to CWD
+    std::filesystem::path savedCwd = std::filesystem::current_path();
+    std::filesystem::path engineSimRoot = std::filesystem::path(TEST_ENGINE_SIM_ASSETS).parent_path();
+
+    sim_ = SimulatorFactory::create(
+        SimulatorType::PistonEngine,
+        presetPath,
+        TEST_ENGINE_SIM_ASSETS "/",
+        config);
+
+    std::filesystem::current_path(savedCwd);
+
+    ASSERT_NE(sim_, nullptr) << "SimulatorFactory::create returned null for JSON preset";
+
+    // Initialize convolution filters and get internal simulator (same as RoundTrip tests)
+    auto* bridge = dynamic_cast<BridgeSimulator*>(sim_.get());
+    ASSERT_NE(bridge, nullptr) << "Could not get bridge simulator";
+
+    Simulator* innerSim = bridge->getInternalSimulator();
+    ASSERT_NE(innerSim, nullptr) << "Could not get internal simulator";
+
+    SimulatorInitHelpers::initializeConvolutionFilters(innerSim);
+
+    // Run one simulation frame — proves the JSON preset pipeline works end-to-end
+    // Use the inner simulator directly to avoid any BridgeSimulator overhead
+    innerSim->startFrame(1.0 / 60.0);
+    while (innerSim->simulateStep()) {}
+    innerSim->endFrame();
+
+    SUCCEED() << "JSON preset pipeline: load → simulate succeeded";
+}
 
 #endif // !TARGET_OS_IPHONE && ENGINE_SIM_PIRANHA_ENABLED

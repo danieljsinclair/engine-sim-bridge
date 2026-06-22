@@ -4,14 +4,48 @@
 
 namespace twin {
 
-VirtualIceTwin::VirtualIceTwin(const IceVehicleProfile& profile)
-    : profile_(profile),
-      gearbox_(profile),
-      throttleSmoother_(profile.throttleSmoothingTauMs),
+VirtualIceTwin::VirtualIceTwin(IceVehicleProfile profile)
+    : profile_(std::move(profile)),
+      gearbox_(std::make_unique<AutomaticGearbox>(profile_)),
+      throttleSmoother_(profile_.throttleSmoothingTauMs),
       state_(TwinState::OFF) {}
 
+void VirtualIceTwin::reconfigureProfile(const std::vector<double>& gearRatios,
+                                          double diffRatio, double tireRadiusM) {
+    if (gearRatios.empty()) return;
+    profile_.gearRatios = gearRatios;
+    profile_.diffRatio = diffRatio;
+    profile_.tireRadiusM = tireRadiusM;
+    // Auto-generate shift table (same logic as ReplayTelemetryProvider)
+    profile_.shiftTableThrottleLevels = {0.05,0.15,0.25,0.40,0.55,0.70,0.80,0.90,0.95,1.00};
+    profile_.shiftTable.clear();
+    for (double thr : profile_.shiftTableThrottleLevels) {
+        std::vector<double> row;
+        double shiftRpm = profile_.redlineRpm * (0.40 + 0.45 * thr);
+        for (size_t i = 0; i + 1 < gearRatios.size(); ++i) {
+            double speedMs = shiftRpm / 60.0 * 2.0 * 3.14159265358979 * tireRadiusM
+                           / (gearRatios[i] * diffRatio);
+            row.push_back(speedMs * 3.6);
+        }
+        profile_.shiftTable.push_back(row);
+    }
+    profile_.separateDownshiftTableEnabled = true;
+    profile_.downshiftTableThrottleLevels = profile_.shiftTableThrottleLevels;
+    profile_.downshiftTable.clear();
+    for (size_t t = 0; t < profile_.shiftTable.size(); ++t) {
+        std::vector<double> row;
+        for (double upSpeed : profile_.shiftTable[t]) row.push_back(upSpeed * 0.70);
+        profile_.downshiftTable.push_back(row);
+    }
+    profile_.hysteresisFactor = 0.85;
+    // Reconstruct gearbox with matched profile
+    gearbox_ = std::make_unique<AutomaticGearbox>(profile_);
+    gearbox_->setGearSelector(selector_);
+    gearbox_->setLogger(nullptr);  // logger not preserved across reconstruct
+}
+
 void VirtualIceTwin::setGearboxLogger(IGearboxLogger* logger) {
-    gearbox_.setLogger(logger);
+    gearbox_->setLogger(logger);
 }
 
 TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal) {
@@ -22,7 +56,7 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
         if (timeWithoutValidTelemetryS_ >= EngineSimDefaults::TELEMETRY_TIMEOUT_S) {
             state_ = TwinState::OFF;
         }
-        output.gear = gearbox_.getCurrentGear();
+        output.gear = gearbox_->getCurrentGear();
         return output;
     }
 
@@ -36,7 +70,7 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
 
     // Stay OFF while ignition is off
     if (!ignitionOn_) {
-        output.gear = gearbox_.getCurrentGear();
+        output.gear = gearbox_->getCurrentGear();
         output.ignition = false;
         output.clutchPressure = clutchPressure_;
         output.gearSelector = selector_;
@@ -91,8 +125,9 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
 
         case TwinState::RUNNING: {
             double gearboxSpeedKmh = signal.speedKmh;
-            gearbox_.setTwinContext(static_cast<int>(state_), clutchPressure_, vehicleSpeedFeedbackKmh_, engineRpmFeedback_);
-            gearbox_.update(dt, gearboxSpeedKmh, signal.throttleFraction);
+            gearbox_->setTwinContext(static_cast<int>(state_), clutchPressure_, vehicleSpeedFeedbackKmh_, engineRpmFeedback_);
+            gearbox_->setGearSelector(selector_);
+            gearbox_->update(dt, gearboxSpeedKmh, signal.throttleFraction, drivetrainTorqueNm_);
             output.ignition = true;
 
             // RUNNING->IDLE: selector moved to NEUTRAL or PARK
@@ -102,21 +137,21 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             } else if (signal.speedKmh < profile_.standstillThresholdKmh &&
                        signal.throttleFraction < profile_.throttleIdleThreshold) {
                 state_ = TwinState::IDLE;
-            } else if (gearbox_.requestsShift()) {
+            } else if (gearbox_->requestsShift()) {
                 state_ = TwinState::SHIFTING;
                 shiftTimerS_ = 0.0;
             }
 
-            output.gear = gearbox_.getCurrentGear();
+            output.gear = gearbox_->getCurrentGear();
             clutchPressure_ = 1.0;
             break;
         }
 
         case TwinState::SHIFTING:
-            gearbox_.setTwinContext(static_cast<int>(state_), clutchPressure_, vehicleSpeedFeedbackKmh_, engineRpmFeedback_);
+            gearbox_->setTwinContext(static_cast<int>(state_), clutchPressure_, vehicleSpeedFeedbackKmh_, engineRpmFeedback_);
             updateShiftExecution(dt);
             output.ignition = true;
-            output.gear = gearbox_.getCurrentGear();
+            output.gear = gearbox_->getCurrentGear();
             break;
     }
 
@@ -134,7 +169,7 @@ void VirtualIceTwin::updateShiftExecution(double dt) {
     double reengageDuration;
 
     double currentThrottle = throttleSmoother_.getCurrentValue();
-    int shiftDirection = gearbox_.getLastShiftDirection();
+    int shiftDirection = gearbox_->getLastShiftDirection();
     (void)currentThrottle;
     (void)shiftDirection;
 
@@ -149,7 +184,7 @@ void VirtualIceTwin::updateShiftExecution(double dt) {
     } else if (shiftTimerS_ <= disengageDuration + pauseDuration) {
         clutchPressure_ = 0.0;
         if (shiftTimerS_ > disengageDuration + pauseDuration / 2.0) {
-            gearbox_.update(0, 0, 0);
+            gearbox_->update(0, 0, 0);
         }
     } else if (shiftTimerS_ <= disengageDuration + pauseDuration + reengageDuration) {
         double reengageProgress = (shiftTimerS_ - disengageDuration - pauseDuration) / reengageDuration;

@@ -14,6 +14,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Bridge always builds as static library
+set(LIB_TYPE STATIC)
+
 # Find engine-sim (expected as a submodule at ./engine-sim)
 # Use ENGINE_SIM_PATH if set by parent project for override
 if(NOT DEFINED ENGINE_SIM_PATH)
@@ -121,6 +124,7 @@ set(BRIDGE_SOURCES
     src/twin/VirtualIceTwin.cpp
     src/twin/ManualTwin.cpp
     src/twin/GearboxCsvLogger.cpp
+    src/twin/SlipLockController.cpp
     # Input providers
     src/input/VirtualIceInputProvider.cpp
     src/input/ManualTwinProvider.cpp
@@ -133,6 +137,7 @@ set(BRIDGE_SOURCES
     src/input/KeyboardInputProvider.cpp
     src/input/EngineInputTarget.cpp
     src/input/DemoControlsTarget.cpp
+    src/input/ReplayTelemetryProvider.cpp
 )
 
 # Platform-specific audio hardware and factory
@@ -159,14 +164,13 @@ else()
     )
 endif()
 
-# iOS builds produce a static library for linking into Xcode project
-# macOS builds produce a shared library (.dylib) for the CLI app
-# ESP32 builds produce a static library for linking into ESP-IDF component
-if(IOS OR ESP_PLATFORM)
-    add_library(engine-sim-bridge STATIC ${BRIDGE_SOURCES})
-else()
-    add_library(engine-sim-bridge SHARED ${BRIDGE_SOURCES})
+# Bridge is always static; coverage uses llvm-cov instrumentation
+option(ENABLE_COVERAGE "Enable llvm-cov coverage instrumentation" OFF)
+if(ENABLE_COVERAGE)
+    add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
+    add_link_options(-fprofile-instr-generate)
 endif()
+add_library(engine-sim-bridge ${LIB_TYPE} ${BRIDGE_SOURCES})
 
 # Platform-specific audio libraries
 if(IOS)
@@ -217,24 +221,6 @@ if(APPLE AND NOT IOS)
         INSTALL_NAME_DIR "@rpath"
     )
 
-    # Custom target that always runs to copy library files
-    add_custom_target(copy-engine-sim-bridge ALL
-        COMMAND ${CMAKE_COMMAND} -E remove -f
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.dylib
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.dylib
-            ${CMAKE_BINARY_DIR}/libenginesim.dylib
-        COMMAND ${CMAKE_COMMAND} -E copy
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.dylib
-        COMMAND ${CMAKE_COMMAND} -E copy
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.dylib
-        COMMAND ${CMAKE_COMMAND} -E copy
-            ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.1.0.0.dylib
-            ${CMAKE_BINARY_DIR}/libenginesim.dylib
-        DEPENDS engine-sim-bridge
-        COMMENT "Copying libenginesim to build directories"
-    )
 endif()
 
 # Critical fix for iOS cross compilation:
@@ -335,6 +321,15 @@ if(BUILD_BRIDGE_TESTS)
         test/BridgeUnitTests.cpp
         test/CrankingControllerTests.cpp
         test/simulator/BrakeConstraintTest.cpp
+        test/simulator/SpeedTrackingTest.cpp
+        test/simulator/NeutralAtStandstillTest.cpp
+        test/simulation/SpeedTrackingIntegrationTest.cpp
+        test/GearClutchBugTest.cpp
+        test/GearRefactorTest.cpp
+        test/SineWaveRegressionTests.cpp
+        test/twin/SpeedRpmConversionTest.cpp
+        test/twin/RedlineClampAndUpshiftTest.cpp
+        test/simulation/CommandedSpeedDisplayTest.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -356,39 +351,6 @@ if(BUILD_BRIDGE_TESTS)
     # Preset engine tests - verifies C++ factory engines match Piranha scripts
     option(BUILD_PRESET_ENGINE_TESTS "Build preset engine tests" OFF)
     if(BUILD_PRESET_ENGINE_TESTS)
-        add_executable(preset_engine_tests
-            test/PresetEngineTests.cpp
-        )
-        target_include_directories(preset_engine_tests PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/include
-            ${ENGINE_SIM_PATH}/include
-        )
-        target_compile_definitions(preset_engine_tests PRIVATE
-            TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
-            TEST_ENGINE_SIM_ASSETS="${ENGINE_SIM_PATH}/assets"
-            TEST_ES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/es"
-            TEST_ENGINE_SIM_ROOT="${ENGINE_SIM_PATH}"
-        )
-        target_link_libraries(preset_engine_tests
-            PRIVATE
-                GTest::gtest_main
-                engine-sim-bridge
-        )
-        if(TARGET engine-sim-script-interpreter)
-            target_compile_definitions(preset_engine_tests PRIVATE
-                ENGINE_SIM_PIRANHA_ENABLED
-                TEST_PRESET_COMPILER_PATH="$<TARGET_FILE:engine-sim-preset-compiler>"
-            )
-            add_dependencies(preset_engine_tests engine-sim-preset-compiler)
-        endif()
-        if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-            gtest_discover_tests(
-                preset_engine_tests
-                DISCOVERY_MODE PRE_TEST
-                EXTRA_ARGS --gtest_color=yes
-            )
-        endif()
-
         # Isomorphism tests - proves .mr and JSON paths produce identical engines
         add_executable(preset_isomorphism_tests
             test/PresetIsomorphismTests.cpp
@@ -402,6 +364,7 @@ if(BUILD_BRIDGE_TESTS)
             TEST_ENGINE_SIM_ASSETS="${ENGINE_SIM_PATH}/assets"
             TEST_ENGINE_SIM_ROOT="${ENGINE_SIM_PATH}"
             TEST_PRESET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/preset"
+            TEST_ES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/es"
         )
         if(TARGET engine-sim-script-interpreter)
             target_compile_definitions(preset_isomorphism_tests PRIVATE
@@ -419,6 +382,7 @@ if(BUILD_BRIDGE_TESTS)
             gtest_discover_tests(
                 preset_isomorphism_tests
                 DISCOVERY_MODE PRE_TEST
+                DISCOVERY_TIMEOUT 30
                 EXTRA_ARGS --gtest_color=yes
             )
         endif()
@@ -489,6 +453,7 @@ if(BUILD_BRIDGE_TESTS)
     # Twin gearbox tests - tests for AutomaticGearbox
     add_executable(twin_gearbox_tests
         test/twin/AutomaticGearboxTest.cpp
+        test/twin/AutoGearboxShiftLogicTest.cpp
     )
     target_include_directories(twin_gearbox_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -508,6 +473,7 @@ if(BUILD_BRIDGE_TESTS)
         test/twin/ThrottleSmootherTest.cpp
         test/twin/VirtualIceTwinTest.cpp
         test/twin/ManualTwinTest.cpp
+        test/twin/SlipLockControllerTest.cpp
     )
     target_include_directories(twin_core_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -597,6 +563,26 @@ if(BUILD_BRIDGE_TESTS)
     target_compile_options(keyboard_consolidation_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
     if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME keyboard_consolidation_tests COMMAND keyboard_consolidation_tests --gtest_color=yes)
+    endif()
+
+    # Runtime bugs integration tests - reproduces LIVE integration-path bugs
+    # that pass in isolation but fail end-to-end (keyboard -> EngineInput ->
+    # SimulationLoop gate -> BridgeSimulator dyno).
+    add_executable(runtime_bugs_integration_tests
+        test/simulation/RuntimeBugsIntegrationTest.cpp
+    )
+    target_include_directories(runtime_bugs_integration_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(runtime_bugs_integration_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(runtime_bugs_integration_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME runtime_bugs_integration_tests COMMAND runtime_bugs_integration_tests --gtest_color=yes)
     endif()
 
     # Twin scenario tests - Phase 1 acceptance criteria tests

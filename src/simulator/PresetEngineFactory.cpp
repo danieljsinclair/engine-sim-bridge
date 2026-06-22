@@ -42,10 +42,14 @@ static void resolveImpulseResponsePaths(Engine* engine, const std::filesystem::p
 
 PresetLoadResult PresetEngineFactory::loadFromFile(const std::string& jsonPath,
                                                     const std::string& assetBasePath) {
-    std::ifstream file(jsonPath);
+    std::filesystem::path resolvedPath(jsonPath);
+    if (!resolvedPath.is_absolute()) {
+        resolvedPath = std::filesystem::absolute(resolvedPath);
+    }
+    std::ifstream file(resolvedPath);
     if (!file.is_open()) {
         PresetLoadResult result;
-        result.error = "Cannot open preset file: " + jsonPath;
+        result.error = "Cannot open preset file: " + resolvedPath.string();
         return result;
     }
 

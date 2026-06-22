@@ -743,24 +743,21 @@ TEST_F(AutomaticGearboxTest, TipCorrection_DoesNotBlockDownshift) {
 }
 
 // ============================================================
-// Redline Safety (twin feedback)
+// Redline Safety (speed-implied RPM — coherent with the shift speed model)
 // ============================================================
 
-TEST_F(AutomaticGearboxTest, RedlineSafetyUpshift_WhenRpmFeedbackExceeds95Percent) {
+TEST_F(AutomaticGearboxTest, RedlineSafetyUpshift_WhenImpliedRpmExceeds95Percent) {
     IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
     AutomaticGearbox gearbox(custom);
 
-    // Start at low speed (5 kph), which would NOT trigger normal upshift
-    gearbox.update(0.1, 5.0, 0.90);
-
-    // Set RPM feedback above 95% of redline (6500 * 0.95 = 6175)
-    gearbox.setTwinContext(3, 1.0, 5.0, 6200.0);
-
-    // Run another frame — redline safety should force upshift
-    gearbox.update(0.1, 5.0, 0.90);
+    // A road speed whose implied engine speed in 1st gear exceeds 95% redline.
+    // The redline check is now coherent with the speed model (it no longer keys
+    // off the separate real-engine rpmFeedback_, which could hunt against the
+    // speed-based shifts).
+    gearbox.update(0.1, 50.0, 0.90);
 
     EXPECT_GT(gearbox.getCurrentGear(), 1)
-        << "Should upshift when engine RPM exceeds 95% of redline, even at low road speed";
+        << "Should upshift when road speed in 1st implies >95% redline";
 }
 
 TEST_F(AutomaticGearboxTest, RedlineSafety_DoesNotBlockDownshift) {
@@ -820,22 +817,10 @@ TEST_F(AutomaticGearboxTest, RedlineSafety_DoesNotOverrideKickdown) {
         << "Kickdown should override redline safety";
 }
 
-TEST_F(AutomaticGearboxTest, RedlineSafety_BypassesIntervalTimer) {
-    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
-    AutomaticGearbox gearbox(custom);
-
-    // Start at low speed in gear 1
-    gearbox.update(0.1, 5.0, 0.90);
-    ASSERT_EQ(gearbox.getCurrentGear(), 1);
-
-    // Set RPM above redline threshold — redline should fire immediately
-    // even though interval timer (2.0s) has NOT elapsed (only 0.1s since last shift)
-    gearbox.setTwinContext(3, 1.0, 5.0, 6200.0);
-    gearbox.update(0.1, 5.0, 0.90);
-
-    EXPECT_GT(gearbox.getCurrentGear(), 1)
-        << "Redline safety should bypass interval timer";
-}
+// RedlineSafety_BypassesIntervalTimer removed: the redline safety is now folded
+// into the speed-based upshift pass (coherent with the speed model), so it no
+// longer bypasses the shift interval. The bypass premise was tied to the old
+// real-RPM redline that could hunt; see RedlineSafetyUpshift_*ImpliedRpm* above.
 
 // RED: NoOscillation_AfterUpshift_DownshiftRequiresInterval
 // Stashed — requires gearbox interval logic redesign (lastShiftDirection_ vs hasShiftedBefore_)
