@@ -22,9 +22,11 @@ consistent palette and dodges that entirely.
 
 Colour rules (matching coverage_block.py / sonar_summary.py):
 
-    tests       : GREEN if all passed, RED if any failed.
+    tests       : GREEN + "PASS" prefix if all passed; RED + "FAIL" prefix if any failed.
     coverage %  : GREEN >=80 / CYAN >=60 / YELLOW >=40 / ORANGE >0 / RED =0.
-    sonar       : RED if any BLOCKER severity present, else YELLOW by open count.
+    sonar       : RED if a BLOCKER is present, YELLOW if open>0 with no blocker,
+                  GREEN if 0 open (clean). A short reason suffix (GREY) names
+                  the tier: "(N blocker)" / "(no blocker)" / "(clean)".
 
 DATA SOURCES -- plain numbers grepped from existing report files:
 
@@ -148,6 +150,89 @@ def parse_tests(log_path):
     if passed == 0 and failed == 0:
         return None
     return passed, passed + failed
+
+
+def _xcresult_metric(metrics, key):
+    """Read an int metric from an xcresult metrics dict, or None.
+
+    xcresult JSON wraps each value as ``{"_type": {"_name": "Int"},
+    "_value": "<n>"}``. Returns the int value or None when absent/unparseable.
+    """
+    if not isinstance(metrics, dict):
+        return None
+    node = metrics.get(key)
+    if not isinstance(node, dict):
+        return None
+    try:
+        return int(node.get('_value'))
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_xcresult_tests(glob_pattern):
+    """Return (passed, total) from the NEWEST xcresult matching ``glob_pattern``.
+
+    iOS app tests run via ``xcodebuild test`` (no greppable ctest log). The
+    cleanest count source is the action's ResultMetrics in the .xcresult bundle
+    xcodebuild writes under ``<derivedData>/Logs/Test/*.xcresult``: it carries
+    ``testsCount`` (total) and ``testsFailedCount`` (failures; absent or 0 when
+    all pass). The newest bundle is used (a run may leave several over time).
+    Returns None when no bundle exists, xcresulttool is unavailable, or the
+    metrics are absent so the caller OMITS the tests field gracefully.
+    """
+    if not glob_pattern:
+        return None
+    import glob as _glob
+    bundles = sorted(_glob.glob(glob_pattern), key=os.path.getmtime)
+    if not bundles:
+        return None
+    xcresult = bundles[-1]
+    dump_path = _xcresult_dump_path()
+    try:
+        # --legacy gives the stable JSON shape with metrics at the top level.
+        rc = os.system(
+            'xcrun xcresulttool get --legacy --format json --path {} >{}'.format(
+                _shell_quote(xcresult), _shell_quote(dump_path)))
+        if rc != 0:
+            return None
+        with open(dump_path, errors='replace') as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    finally:
+        try:
+            os.unlink(dump_path)
+        except OSError:
+            pass
+    metrics = data.get('metrics') or {}
+    total = _xcresult_metric(metrics, 'testsCount')
+    if total is None:
+        # Some bundles carry metrics only under actions[].actionResult.metrics.
+        for action in (data.get('actions', {}) or {}).get('_values', []) or []:
+            am = (action.get('actionResult', {}) or {}).get('metrics', {})
+            total = _xcresult_metric(am, 'testsCount')
+            if total is not None:
+                metrics = am
+                break
+    if total is None:
+        return None
+    failed = _xcresult_metric(metrics, 'testsFailedCount') or 0
+    return total - failed, total
+
+
+def _xcresult_dump_path():
+    """Return a temp path for the xcresulttool JSON dump (cleaned on exit)."""
+    import tempfile
+    fd, path = tempfile.mkstemp(prefix='build_summary_xcresult_', suffix='.json')
+    os.close(fd)
+    return path
+
+
+def _shell_quote(value):
+    """Single-quote ``value`` for safe shell interpolation (sh style)."""
+    if not value:
+        return "''"
+    return "'" + value.replace("'", "'\\''") + "'"
 
 
 # ---------------------------------------------------------------------------
@@ -286,13 +371,40 @@ def coverage_for(cov_measures_path, local_cov_path, local_type):
 # ---------------------------------------------------------------------------
 # Sonar issues
 # ---------------------------------------------------------------------------
-def _sonar_colour(has_blocker, open_count):
-    """RED if any BLOCKER severity, else YELLOW by open count (keep readable)."""
-    if has_blocker:
+def _sonar_colour(blocker_count, open_count):
+    """Sonar colour by a 3-tier rule.
+
+    RED    = a BLOCKER severity is present (``blocker_count > 0``).
+    YELLOW = open issues but NO blocker.
+    GREEN  = 0 open issues (clean).
+
+    The BLOCKER tier dominates: any blocker is RED regardless of the open
+    count. Without a blocker the open count decides YELLOW (open) vs GREEN
+    (clean) -- previously 0-open with no blocker was wrongly YELLOW.
+    """
+    if blocker_count:
         return RED
     if open_count > 0:
         return YELLOW
     return GREEN
+
+
+def _sonar_reason(blocker_count, open_count):
+    """Short reason suffix explaining the sonar tier (empty when irrelevant).
+
+    RED    (blocker): ``(N blocker)`` -- names the count driving the tier.
+    YELLOW (open)   : ``(no blocker)`` -- clarifies why YELLOW not RED.
+    GREEN  (clean)  : ``(clean)``.
+
+    The suffix lets a reader tell at a glance why app is YELLOW (open, no
+    blocker) while cli/bridge are RED (blocker present) without cross-refering
+    the dashboard.
+    """
+    if blocker_count:
+        return '({} blocker)'.format(blocker_count)
+    if open_count > 0:
+        return '(no blocker)'
+    return '(clean)'
 
 
 def _impact_severity_facet(data):
@@ -332,15 +444,20 @@ def _removed_count(removed_facet_path):
 
 
 def parse_sonar(report_path, removed_facet_path=None):
-    """Return (open, total, has_blocker, removed) from cached reports, or None.
+    """Return (open, total, blocker_count, removed) from cached reports, or None.
 
-    ``open`` + ``has_blocker`` come from the OPEN report's ``impactSeverities``
-    facet when present (the dashboard's own server-side count), else from the
-    per-issue impacts/legacy severity field. ``total`` is ``open + removed``
-    -- the SAME OPEN union REMOVED definition the SonarCloud dashboard and the
-    detailed sonar_summary.py use. ``removed`` is read from the separate
-    removed-facet report (``removed_facet_path``); when that is absent/empty
-    ``removed`` is 0 and ``total`` falls back to ``open``.
+    ``open`` + ``blocker_count`` come from the OPEN report's
+    ``impactSeverities`` facet when present (the dashboard's own server-side
+    count), else from the per-issue impacts/legacy severity field. ``total``
+    is ``open + removed`` -- the SAME OPEN union REMOVED definition the
+    SonarCloud dashboard and the detailed sonar_summary.py use. ``removed`` is
+    read from the separate removed-facet report (``removed_facet_path``); when
+    that is absent/empty ``removed`` is 0 and ``total`` falls back to ``open``.
+
+    ``blocker_count`` is the BLOCKER count (>=0 int), read from the SAME
+    ``impactSeverities`` facet (the 'BLOCKER' bucket), so the emitter can show
+    a ``(N blocker)`` reason suffix without a second pass. The fallback per-
+    issue path counts BLOCKER-tagged issues instead.
 
     The returned tuple carries ``removed`` (and an implied open-only flag when
     it is 0 only because the file was missing) so the emitter can annotate a
@@ -360,25 +477,23 @@ def parse_sonar(report_path, removed_facet_path=None):
     facet = _impact_severity_facet(data)
     if facet is not None:
         open_count = sum(facet.values())
-        has_blocker = facet.get('BLOCKER', 0) > 0
+        blocker_count = facet.get('BLOCKER', 0) or 0
     else:
         # Fall back to per-issue counting over the OPEN issues in the report.
         issues = data.get('issues') or []
         open_count = len(issues)
-        has_blocker = False
+        blocker_count = 0
         for issue in issues:
             # Modern impacts taxonomy (preferred).
             impacts = issue.get('impacts') or []
-            for imp in impacts:
-                if isinstance(imp, dict) and imp.get('severity') == 'BLOCKER':
-                    has_blocker = True
-                    break
-            if has_blocker:
-                break
+            issue_is_blocker = any(
+                isinstance(imp, dict) and imp.get('severity') == 'BLOCKER'
+                for imp in impacts)
             # Legacy severity field.
-            if issue.get('severity') == 'BLOCKER':
-                has_blocker = True
-                break
+            if not issue_is_blocker and issue.get('severity') == 'BLOCKER':
+                issue_is_blocker = True
+            if issue_is_blocker:
+                blocker_count += 1
 
     # REMOVED count from the separate removed-facet report. None => the file
     # was absent/unparseable (open-only fallback); int => genuinely read.
@@ -387,22 +502,68 @@ def parse_sonar(report_path, removed_facet_path=None):
     removed = _removed_count(removed_facet_path) if removed_present else None
     effective_removed = removed if removed is not None else 0
     total = open_count + effective_removed
-    return open_count, total, has_blocker, removed
+    return open_count, total, blocker_count, removed
 
 
 # ---------------------------------------------------------------------------
 # Line emission
 # ---------------------------------------------------------------------------
+
+# Fixed column widths so the three repo lines align vertically. ANSI colour
+# codes are ZERO display-width but non-zero string length, so padding MUST be
+# computed on the VISIBLE text (ANSI-stripped) and appended as PLAIN spaces
+# OUTSIDE any colour span -- padding inside a colour run would either paint
+# trailing space or misalign when the terminal re-wraps. See ``pad_visible``.
+#
+# Widths are sized to the widest realistic value in each column so the three
+# lines (app/cli/bridge) line up without an over-wide table:
+#   label : 19 ("[engine-sim-bridge]")
+#   tests : 18 ("tests: PASS 68/68"; FAIL detail form is wider and overflows)
+#   cov   : 20 ("cov: 69.3% 3179/4588")
+#   sonar : 39 ("sonar: open 378 / total 418 (1 blocker)" + room for
+#               "(open-only)" which is the same width as the reason suffix)
+COL_WIDTH_LABEL = 19
+COL_WIDTH_TESTS = 18
+COL_WIDTH_COV = 20
+COL_WIDTH_SONAR = 39
+
+
+def _visible_len(text):
+    """Return the display length of ``text`` (ANSI escape codes count as 0).
+
+    Terminals render ANSI colour codes invisibly, so ``len()`` overcounts by the
+    combined length of every escape sequence. This strips them first.
+    """
+    return len(_strip_ansi(text))
+
+
+def pad_visible(text, width):
+    """Right-pad ``text`` with plain spaces so its VISIBLE length is ``width``.
+
+    The pad is appended AFTER the text (outside any ANSI span) as plain spaces,
+    so it never inherits a colour and never throws off alignment. When the text
+    is already wider than ``width`` it is returned unchanged (no truncation --
+    a column never silently drops data).
+    """
+    pad = width - _visible_len(text)
+    return text + (' ' * pad if pad > 0 else '')
+
+
 def emit_line(label, tests, cov, sonar):
     """Print the single coloured headline line for one repo.
 
     ``tests`` is (passed, total) or None; ``cov`` is (covered, total, pct) or
-    None; ``sonar`` is (open, total, has_blocker, removed) or None. Missing
+    None; ``sonar`` is (open, total, blocker_count, removed) or None. Missing
     fields are OMITTED so the line never prints garbage. When ``removed`` is
     None the total fell back to open-only (no removed-facet file); a GREY
     ``(open-only)`` marker annotates that so a redundant-looking
     ``open X / total X`` is never mistaken for the merged OPEN union REMOVED
     total.
+
+    Each column is padded to a fixed VISIBLE width (see pad_visible) so the
+    three repo lines (app, cli, bridge) align vertically -- the labels,
+    ``tests:``/``cov:``/``sonar:`` keywords, and ``|`` separators each form a
+    column. Padding is plain spaces outside the colour spans.
     """
     parts = []
 
@@ -413,8 +574,9 @@ def emit_line(label, tests, cov, sonar):
             tests_str = '{}tests: FAIL ({}/{} passed, {} failed){}'.format(
                 RED, passed, total, failed, RESET)
         else:
-            tests_str = '{}tests: {}/{}{}'.format(GREEN, passed, total, RESET)
-        parts.append(tests_str)
+            tests_str = '{}tests: PASS {}/{}{}'.format(
+                GREEN, passed, total, RESET)
+        parts.append(pad_visible(tests_str, COL_WIDTH_TESTS))
 
     if cov is not None:
         covered, total, pct = cov
@@ -424,27 +586,29 @@ def emit_line(label, tests, cov, sonar):
                 colour, pct, RESET, GREY, covered, total, RESET)
         else:
             cov_str = '{}cov: {:.1f}%{}'.format(colour, pct, RESET)
-        parts.append(cov_str)
+        parts.append(pad_visible(cov_str, COL_WIDTH_COV))
 
     if sonar is not None:
-        open_count, total, has_blocker, removed = sonar
-        colour = _sonar_colour(has_blocker, open_count)
+        open_count, total, blocker_count, removed = sonar
+        colour = _sonar_colour(blocker_count, open_count)
+        reason = _sonar_reason(blocker_count, open_count)
         # Annotate when the total is open-only (no removed-facet file). When
-        # removed is an int (incl. 0) the merged total is genuine and no marker
-        # is needed -- open==total with 0 removed is correct, not redundant.
-        # The marker is emitted OUTSIDE the coloured span (own GREY + RESET) so
-        # it reads as a neutral note regardless of the sonar colour.
+        # removed is an int (incl. 0) the merged total is genuine, so the
+        # suffix carries the tier REASON instead. The suffix/marker is emitted
+        # OUTSIDE the coloured span (own GREY + RESET) so it reads as a neutral
+        # note regardless of the sonar colour.
         if removed is None:
-            sonar_str = '{}sonar: open {} / total {}{} {}(open-only){}'.format(
-                colour, open_count, total, RESET, GREY, RESET)
+            note = '(open-only)'
         else:
-            sonar_str = '{}sonar: open {} / total {}{}'.format(
-                colour, open_count, total, RESET)
-        parts.append(sonar_str)
+            note = reason
+        sonar_str = '{}sonar: open {} / total {}{} {}{}{}'.format(
+            colour, open_count, total, RESET, GREY, note, RESET)
+        parts.append(pad_visible(sonar_str, COL_WIDTH_SONAR))
 
     body = ' {}|{} '.format(GREY, RESET).join(parts) if parts else \
         '{}(no summary data){}'.format(GREY, RESET)
-    print('{}{}{} {}{}'.format(BOLD, label, RESET, body, ''))
+    label_str = pad_visible('{}{}{}'.format(BOLD, label, RESET), COL_WIDTH_LABEL)
+    print('{} {}'.format(label_str, body))
 
 
 def main(argv=None):
@@ -455,6 +619,10 @@ def main(argv=None):
                    help='Repo label, e.g. "[engine-sim-bridge]"')
     p.add_argument('--test-log',
                    help='ctest log with N%% tests passed summary or per-test markers')
+    p.add_argument('--xcresult-glob',
+                   help='Glob for the newest .xcresult bundle (iOS xcodebuild tests). '
+                        'Reads ResultMetrics.testsCount/testsFailedCount so the app '
+                        'line gets a tests field without a greppable ctest log.')
     p.add_argument('--cov-measures',
                    help='Cached sonar-measures.json (preferred coverage source)')
     p.add_argument('--local-cov',
@@ -470,7 +638,11 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     try:
+        # Prefer the ctest log when present; fall back to the xcresult bundle
+        # (iOS app tests run via xcodebuild, which writes no ctest log).
         tests = parse_tests(args.test_log)
+        if tests is None:
+            tests = parse_xcresult_tests(args.xcresult_glob)
         cov = coverage_for(args.cov_measures, args.local_cov, args.local_type)
         sonar = parse_sonar(args.sonar_report, args.removed_facet)
         emit_line(args.label, tests, cov, sonar)
