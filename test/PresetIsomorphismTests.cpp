@@ -905,6 +905,7 @@ namespace {
                                 const std::string& engineName) {
         SCOPED_TRACE("topology diagnostics for " + engineName);
 
+#ifdef ATG_ENGINE_SIM_TEST_VERBOSE
         const double jsonDisp = [&] {
             jsonEngine->calculateDisplacement();
             return jsonEngine->getDisplacement();
@@ -929,6 +930,7 @@ namespace {
            << "\n    displacement    json=" << jsonDisp
            << "  piranha=" << piranhaDisp;
         std::cout << ss.str() << std::endl;
+#endif
     }
 }
 
