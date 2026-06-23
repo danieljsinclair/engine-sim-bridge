@@ -10,6 +10,8 @@ cmake_install.cmake
 Makefile
 *.cmake
 _deps/
+# FetchContent cache (kept outside build/ so scrub doesn't force re-download)
+.fetchcache/
 
 # Compiled libraries and binaries
 *.dylib
@@ -43,6 +45,10 @@ Thumbs.db
 .claude/scheduled_tasks.lock
 .cache/
 
+# Python
+__pycache__/
+*.pyc
+
 # Generated JSON presets (rebuilt by 'make presets')
 /preset/
 
@@ -57,3 +63,4 @@ codeql-db/
 coverage-report.xml
 coverage.lcov
 *.profraw
+__pycache__/
