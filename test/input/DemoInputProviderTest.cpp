@@ -281,13 +281,17 @@ TEST(DemoInputProviderIntegration, GearboxShiftsAt20PercentThrottle) {
     int gearChanges = 0;
     int lastGear = 0;
 
+#ifdef ATG_ENGINE_SIM_TEST_VERBOSE
     printf("\n=== FULL-CHAIN INTEGRATION TEST: 20%% THROTTLE GEARSHIFT ===\n");
     printf("  Profile: ZF 8HP45 (ratios: 4.714, 3.143, 2.106, 1.667, 1.285, 1.000, 0.839, 0.667)\n");
     printf("  Simulation rate: %.1f Hz (dt=%.4f sec)\n", 1.0/dt, dt);
     printf("  Duration: 60 seconds\n\n");
+#endif
 
     for (int i = 0; i < static_cast<int>(60.0 / dt); ++i) {
+#ifdef ATG_ENGINE_SIM_TEST_VERBOSE
         double t = i * dt;
+#endif
 
         // Simulate what SimulationLoop does:
         // 1. provideFeedback with engine-sim stats
@@ -316,24 +320,30 @@ TEST(DemoInputProviderIntegration, GearboxShiftsAt20PercentThrottle) {
 
         if (gear != lastGear && lastGear != 0) {
             gearChanges++;
+#ifdef ATG_ENGINE_SIM_TEST_VERBOSE
             printf("  GEAR CHANGE at t=%.1fs: gear %d → %d, demoSpeed=%.1f kph, engineRPM=%.0f\n",
                    t, lastGear, gear, provider->getDemoRoadSpeedKmh(), feedbackStats.currentRPM);
+#endif
         }
         lastGear = gear;
 
         // Print every 5 seconds
         if (i % static_cast<int>(5.0 / dt) == 0) {
+#ifdef ATG_ENGINE_SIM_TEST_VERBOSE
             printf("  t=%5.1fs  gear=%d  demoSpeed=%.1f kph  rpm=%.0f  fbSpeed=%.1f\n",
                    t, gear, provider->getDemoRoadSpeedKmh(), feedbackStats.currentRPM, feedbackStats.vehicleSpeedKmh);
+#endif
         }
     }
 
+#ifdef ATG_ENGINE_SIM_TEST_VERBOSE
     printf("\n=== FINAL RESULTS ===\n");
     printf("  Total gear changes: %d\n", gearChanges);
     printf("  Final gear: %d\n", lastGear);
     printf("  Final speed: %.1f kph\n", provider->getDemoRoadSpeedKmh());
     printf("  Final RPM: %.0f\n", feedbackStats.currentRPM);
     printf("======================\n\n");
+#endif
 
     EXPECT_GT(gearChanges, 0) << "Gearbox should shift at least once during 60s at 20% throttle";
     EXPECT_GT(lastGear, 1) << "Final gear should be > 1 after 60s at 20% throttle";

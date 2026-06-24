@@ -406,9 +406,11 @@ TEST_F(VirtualIceTwinTest, GentleAcceleration_20PercentThrottle_ShiftsToGear2) {
     input::DemoVehiclePhysics physics;
     double dt = 1.0 / 60.0;
 
+#ifdef ATG_ENGINE_SIM_TEST_VERBOSE
     printf("\n=== DIAGNOSTIC: 20%% Throttle Gentle Acceleration ===\n");
     printf("  Time(s)  Speed(kph)  Gear  State\n");
     printf("  -------  ----------  ----  -----\n");
+#endif
 
     for (int i = 0; i < static_cast<int>(60.0 / dt); ++i) {
         double t = i * dt;
@@ -431,19 +433,25 @@ TEST_F(VirtualIceTwinTest, GentleAcceleration_20PercentThrottle_ShiftsToGear2) {
 
         // Print diagnostics every 5 seconds
         if (i % static_cast<int>(5.0 / dt) == 0) {
+#ifdef ATG_ENGINE_SIM_TEST_VERBOSE
             printf("  %6.1f  %10.1f  %4d  %d\n",
                    t, speedKmh, gear, static_cast<int>(twin_->getState()));
+#endif
         }
 
         // Early exit if we shifted to gear 2
         if (gear >= 2 && t < 30.0) {
+#ifdef ATG_ENGINE_SIM_TEST_VERBOSE
             printf("  *** SHIFTED to gear %d at t=%.1fs, speed=%.1f kph ***\n", gear, t, speedKmh);
+#endif
             break;
         }
     }
 
+#ifdef ATG_ENGINE_SIM_TEST_VERBOSE
     printf("  Final: speed=%.1f kph, gear=%d\n", physics.getSpeedKmh(), twin_->getCurrentGear());
     printf("=====================================================\n\n");
+#endif
 
     EXPECT_GE(twin_->getCurrentGear(), 2)
         << "At 20% throttle with DemoVehiclePhysics, gearbox should shift to gear 2 within 60 seconds. "

@@ -1,19 +1,13 @@
-// LiveTelemetryProvider.cpp
-#include "input/LiveTelemetryProvider.h"
-#include "simulator/EngineSimTypes.h"
+// LiveTelemetryProvider.cpp - Live telemetry input provider for engine-sim
 
-#include <algorithm>
-#include <cctype>
-#include <iostream>
+#include "input/LiveTelemetryProvider.h"
 
 namespace input {
 
-LiveTelemetryProvider::LiveTelemetryProvider(std::string /*streamId*/, bool autoStart)
-    : autoStart_(autoStart), stream_(&std::cin) {
-}
-
-LiveTelemetryProvider::LiveTelemetryProvider(std::istream& stream, bool autoStart)
-    : autoStart_(autoStart), stream_(&stream) {
+LiveTelemetryProvider::LiveTelemetryProvider(const twin::IceVehicleProfile& profile)
+    : profile_(profile)
+    , signalReceived_(false)
+    , initialized_(false) {
 }
 
 LiveTelemetryProvider::~LiveTelemetryProvider() {
@@ -21,99 +15,95 @@ LiveTelemetryProvider::~LiveTelemetryProvider() {
 }
 
 bool LiveTelemetryProvider::Initialize() {
-    // stdin is always "open"; we just mark connected and wait for the first
-    // header line to arrive in OnUpdateSimulation.
-    connected_.store(true);
-    headerParsed_ = false;
-    hasSample_ = false;
-    startFired_ = false;
-    eofSeen_ = false;
-    elapsedS_ = 0.0;
-    lastError_.clear();
-    return true;
+    if (initialized_.load()) {
+        lastError_ = "Already initialized";
+        return false;
+    }
+
+    try {
+        twinProvider_ = std::make_unique<VirtualIceInputProvider>(profile_);
+        if (!twinProvider_->Initialize()) {
+            lastError_ = "Failed to initialize twin provider: " + twinProvider_->GetLastError();
+            twinProvider_.reset();
+            return false;
+        }
+        initialized_.store(true);
+        return true;
+    } catch (const std::exception& e) {
+        lastError_ = std::string("Failed to create twin provider: ") + e.what();
+        return false;
+    }
 }
 
 void LiveTelemetryProvider::Shutdown() {
-    connected_.store(false);
+    if (twinProvider_) {
+        twinProvider_->Shutdown();
+        twinProvider_.reset();
+    }
+    initialized_.store(false);
 }
 
 bool LiveTelemetryProvider::IsConnected() const {
-    return connected_.load();
-}
-
-bool LiveTelemetryProvider::tryReadNextRow() {
-    if (eofSeen_) return false;
-
-    if (!stream_ || !*stream_) {
-        eofSeen_ = true;
-        connected_.store(false);
-        return false;
-    }
-
-    std::string line;
-    if (!std::getline(*stream_, line)) {
-        eofSeen_ = true;
-        connected_.store(false);
-        return false;
-    }
-
-    // Skip empty lines.
-    {
-        const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
-        auto start = std::find_if(line.begin(), line.end(), notSpace);
-        if (start == line.end()) return false;
-    }
-
-    if (!headerParsed_) {
-        if (!csvParser_.parseHeader(line, lastError_)) {
-            connected_.store(false);
-            return false;
-        }
-        headerParsed_ = true;
-        return false;  // header is not a data row
-    }
-
-    CsvSample sample;
-    std::string parseError;
-    double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
-    if (csvParser_.parseRow(line, timeDivisor, sample, parseError)) {
-        currentSample_ = sample;
-        hasSample_ = true;
-        return true;
-    }
-
-    return false;
+    return initialized_.load() && twinProvider_ != nullptr && signalReceived_.load();
 }
 
 EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
-    elapsedS_ += dt;
+    EngineInput input{};
 
-    // Try to read a new row from stdin (non-blocking: only what's available).
-    // We read at most one row per simulation step to avoid starving the loop.
-    tryReadNextRow();
-
-    EngineInput input;
-
-    if (hasSample_) {
-        input.throttle = currentSample_.throttle;
-        input.roadSpeedKmh = currentSample_.roadSpeedKmh;
-        input.gearAbsolute = currentSample_.gear;
-        input.clutchPressure = currentSample_.clutchPct;
-        input.gearSelector = 0;
-        input.gearAutoMode = false;
+    if (!initialized_.load() || !twinProvider_) {
+        lastError_ = "Provider not initialized";
+        return input;
     }
 
-    // One-shot starter pulse on the first frame so the CrankingController cranks.
-    if (autoStart_ && !startFired_) {
-        input.starterButton = true;
-        startFired_ = true;
-    }
+    // Read the latest signal atomically and feed it to the twin
+    UpstreamSignal signal = currentSignal_.load();
+    twinProvider_->setUpstreamSignal(signal);
+
+    // Delegate to the twin for gearbox/clutch/throttle processing
+    input = twinProvider_->OnUpdateSimulation(dt);
 
     return input;
 }
 
-void LiveTelemetryProvider::provideFeedback(const EngineSimStats& /*stats*/) {
-    // Live provider does not currently use feedback.
+std::string LiveTelemetryProvider::GetProviderName() const {
+    return "LiveTelemetryProvider";
+}
+
+std::string LiveTelemetryProvider::GetLastError() const {
+    return lastError_;
+}
+
+void LiveTelemetryProvider::submitSignal(const UpstreamSignal& signal) {
+    currentSignal_.store(signal, std::memory_order_relaxed);
+    signalReceived_.store(true, std::memory_order_relaxed);
+}
+
+void LiveTelemetryProvider::submitSignal(const UpstreamSignal& signal, uint64_t timestampUtcMs) {
+    UpstreamSignal timedSignal = signal;
+    timedSignal.timestampUtcMs = timestampUtcMs;
+    submitSignal(timedSignal);
+}
+
+void LiveTelemetryProvider::setGearSelector(int selector) {
+    if (twinProvider_) {
+        twinProvider_->setGearSelector(selector);
+    }
+}
+
+void LiveTelemetryProvider::setIgnition(bool on) {
+    if (twinProvider_) {
+        twinProvider_->setIgnition(on);
+    }
+}
+
+void LiveTelemetryProvider::provideFeedback(const EngineSimStats& stats) {
+    if (twinProvider_) {
+        twinProvider_->provideFeedback(stats);
+    }
+}
+
+UpstreamSignal LiveTelemetryProvider::getCurrentSignal() const {
+    return currentSignal_.load(std::memory_order_relaxed);
 }
 
 } // namespace input

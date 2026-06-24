@@ -185,8 +185,10 @@ TEST_F(DemoChainIntegrationTest, RedlineUpshiftsViaFullAutoChain) {
         EngineInput in = provider_->OnUpdateSimulation(0.05);
         lastGear = in.gearAbsolute;
         if (i % 50 == 0) {
+#ifdef ATG_ENGINE_SIM_TEST_VERBOSE
             printf("  i=%d gear=%d gearSel=%d demoSpeed=%.1f\n",
                    i, in.gearAbsolute, in.gearSelector, demoProvider_->getDemoRoadSpeedKmh());
+#endif
         }
     }
     EXPECT_GT(lastGear, 1) << "Full --auto chain must upshift when feedback shows redline RPM";
@@ -209,7 +211,11 @@ TEST_F(DemoChainIntegrationTest, RedlineUpshiftsEvenWhenDemoSpeedStaysLow) {
         provider_->provideFeedback(stats);
         EngineInput in = provider_->OnUpdateSimulation(0.05);
         if (in.gearAbsolute > maxGear) maxGear = in.gearAbsolute;
-        if (i % 30 == 0) printf("  i=%d gear=%d demoSpeed=%.1f\n", i, in.gearAbsolute, demoProvider_->getDemoRoadSpeedKmh());
+        if (i % 30 == 0) {
+#ifdef ATG_ENGINE_SIM_TEST_VERBOSE
+            printf("  i=%d gear=%d demoSpeed=%.1f\n", i, in.gearAbsolute, demoProvider_->getDemoRoadSpeedKmh());
+#endif
+        }
     }
     // Fixed behaviour: at low road speed (<8 km/h) the box holds 1st — it must
     // NOT hunt (previously: 0->3->7->2->5) from a real-RPM redline decoupled

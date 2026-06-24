@@ -1,73 +1,86 @@
-// LiveTelemetryProvider.h
+// LiveTelemetryProvider.h - Live telemetry input provider for engine-sim
 //
-// Reads live decoded CSV telemetry from stdin, one row at a time.
-// Designed for piping from vehicle-sim or a real-time telemetry source:
+// Accepts UpstreamSignal from an external source (vehicle-sim BLE/OBD2 feed)
+// via the thread-safe submitSignal() method, then delegates to VirtualIceInputProvider
+// for twin-based gearbox/clutch processing.
 //
-//   vehicle-sim --connect file:capture.csv --log-csv | engine-sim-cli --live-telemetry -
+// This provider wraps VirtualIceInputProvider to reuse its twin logic:
+//   - Throttle smoothing
+//   - Automatic gearbox shifting
+//   - Clutch pressure modeling
+//   - Engine RPM feedback for cranking transitions
 //
-// Behaviour:
-//   - Reads the CSV header from the first line of stdin.
-//   - Each subsequent line is parsed as a telemetry sample.
-//   - Between row arrivals, the last received sample is held (step-hold).
-//   - EOF on stdin sets IsConnected() to false; no crash.
-//   - --live-telemetry and --replay-telemetry are mutually exclusive (enforced
-//     by CLI argument parsing, not this class).
+// Usage:
+//   auto provider = std::make_unique<LiveTelemetryProvider>(IceVehicleProfile::zf8hp45());
+//   provider->Initialize();
+//   provider->submitSignal(signal);  // called from telemetry thread
+//   EngineInput input = provider->OnUpdateSimulation(dt);  // called from sim thread
 //
-// CSV format: same header-driven format as ReplayTelemetryProvider (time_s,
-// throttle_pct, road_speed_kmh, gear, gear_selector, clutch_pct).
-// Uses CsvTelemetryParser internally to avoid duplicating parsing logic.
+// Thread safety: submitSignal() uses an atomic copy of UpstreamSignal so the
+// telemetry feed thread and the simulation loop thread can run concurrently.
 
-#ifndef INPUT_LIVE_TELEMETRY_PROVIDER_H
-#define INPUT_LIVE_TELEMETRY_PROVIDER_H
+#ifndef LIVE_TELEMETRY_PROVIDER_H
+#define LIVE_TELEMETRY_PROVIDER_H
 
 #include "io/IInputProvider.h"
-#include "input/CsvTelemetryParser.h"
+#include "io/UpstreamSignal.h"
+#include "input/VirtualIceInputProvider.h"
+#include "twin/IceVehicleProfile.h"
+#include "simulator/EngineSimTypes.h"
 
-#include <istream>
-#include <string>
 #include <atomic>
+#include <memory>
+#include <string>
 
 namespace input {
 
 class LiveTelemetryProvider : public IInputProvider {
 public:
-    // Production constructor: reads from std::cin.
-    // streamId is reserved for future use (e.g., named pipe paths).
-    explicit LiveTelemetryProvider(std::string streamId = "-",
-                                   bool autoStart = true);
-
-    // Test constructor: reads from the provided istream.
-    explicit LiveTelemetryProvider(std::istream& stream,
-                                   bool autoStart = true);
+    /// Create a live telemetry provider with the given vehicle profile.
+    /// The profile defines gear ratios, shift tables, and vehicle dynamics.
+    explicit LiveTelemetryProvider(const twin::IceVehicleProfile& profile);
 
     ~LiveTelemetryProvider() override;
 
+    // IInputProvider lifecycle
     bool Initialize() override;
     void Shutdown() override;
     bool IsConnected() const override;
+
+    // IInputProvider input queries
     EngineInput OnUpdateSimulation(double dt) override;
+    std::string GetProviderName() const override;
+    std::string GetLastError() const override;
+
+    /// Submit a new upstream signal from the telemetry feed.
+    /// Thread-safe: can be called from any thread (BLE/serial/network).
+    /// Overwrites the previous signal (only the latest matters).
+    void submitSignal(const UpstreamSignal& signal);
+
+    /// Submit a signal with explicit timestamp (UTC ms).
+    void submitSignal(const UpstreamSignal& signal, uint64_t timestampUtcMs);
+
+    /// Forward gear selector changes to the twin (e.g., from UI).
+    void setGearSelector(int selector);
+
+    /// Forward ignition state to the twin.
+    void setIgnition(bool on);
+
+    /// Forward simulator RPM feedback to the twin for cranking transition.
     void provideFeedback(const EngineSimStats& stats) override;
-    std::string GetProviderName() const override { return "LiveTelemetry"; }
-    std::string GetLastError() const override { return lastError_; }
+
+    /// Get the current upstream signal (for diagnostics/debugging).
+    UpstreamSignal getCurrentSignal() const;
 
 private:
-    // Try to read the next row from stdin. Returns true if a new sample was
-    // parsed and is now held in currentSample_.
-    bool tryReadNextRow();
-
-    bool autoStart_;
-    std::istream* stream_ = nullptr;  // non-owning; points to std::cin or test stream
-    std::atomic<bool> connected_{false};
+    const twin::IceVehicleProfile& profile_;
+    std::unique_ptr<VirtualIceInputProvider> twinProvider_;
+    std::atomic<UpstreamSignal> currentSignal_;
+    std::atomic<bool> signalReceived_;
+    std::atomic<bool> initialized_;
     std::string lastError_;
-    CsvTelemetryParser csvParser_;
-    bool headerParsed_ = false;
-    CsvSample currentSample_{};
-    bool hasSample_ = false;
-    double elapsedS_ = 0.0;
-    bool startFired_ = false;
-    bool eofSeen_ = false;
 };
 
 } // namespace input
 
-#endif // INPUT_LIVE_TELEMETRY_PROVIDER_H
+#endif // LIVE_TELEMETRY_PROVIDER_H
