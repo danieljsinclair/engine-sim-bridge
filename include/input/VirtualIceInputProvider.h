@@ -9,13 +9,18 @@
 #include "twin/IGearboxLogger.h"
 
 #include <memory>
+#include <vector>
 #include <string>
 
 namespace input {
 
 class VirtualIceInputProvider : public IInputProvider {
 public:
-    explicit VirtualIceInputProvider(const twin::IceVehicleProfile& profile);
+    explicit VirtualIceInputProvider(twin::IceVehicleProfile profile);
+
+    // Reconfigure the gearbox to match the actual engine preset's ratios.
+    void reconfigureProfile(const std::vector<double>& gearRatios,
+                             double diffRatio, double tireRadiusM);
     ~VirtualIceInputProvider() override;
 
     // IInputProvider lifecycle
@@ -44,7 +49,7 @@ public:
     void setGearboxLogger(twin::IGearboxLogger* logger);
 
 private:
-    const twin::IceVehicleProfile& profile_;
+    twin::IceVehicleProfile profile_;  // owned (was const ref)
     std::unique_ptr<twin::VirtualIceTwin> twin_;
     std::string lastError_;
     bool isInitialized_;

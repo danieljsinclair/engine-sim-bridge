@@ -21,13 +21,15 @@ namespace presentation {
             return engine;
         }
 
-        EngineState::Drivetrain buildDrivetrainState(const EngineSimStats& stats) {
+        EngineState::Drivetrain buildDrivetrainState(const EngineSimStats& stats,
+                                                      const input::EngineInput& input) {
             EngineState::Drivetrain drivetrain;
             drivetrain.speedMph = stats.speedMph();
             drivetrain.vehicleSpeedKmh = stats.vehicleSpeedKmh;
             drivetrain.gear = stats.gear;
             drivetrain.dynoTorque = stats.dynoTorque;
             drivetrain.dynoTargetRPM = stats.dynoTargetRPM;
+            drivetrain.replayTimestampS = input.replayTimestampS;
             return drivetrain;
         }
 
@@ -39,6 +41,9 @@ namespace presentation {
             controls.brakeLevel = input.brakeLevel;
             controls.gearSelector = input.gearSelector;
             controls.gearAutoMode = input.gearAutoMode;
+            // Surface the commanded road-speed target so it is visible even in
+            // neutral (where the vehicle speed readout reflects physics only).
+            controls.commandedSpeedKmh = input.roadSpeedKmh;
             return controls;
         }
 

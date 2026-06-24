@@ -1,5 +1,10 @@
 #!/bin/bash
-# Run all test binaries with LLVM coverage profiling, merge, and export
+# Run all test binaries with LLVM coverage profiling, merge, and export.
+#
+# Discovers test binaries recursively under the build dir so it works for both
+# the bridge (binaries directly under build/) and the CLI (binaries nested under
+# build-cov/test/{,unit,integration,telemetry,smoke}). A binary is a "test" if
+# its path or name contains "test" (case-insensitive) and it is executable.
 set -e
 
 BUILD_DIR="$1"
@@ -9,31 +14,44 @@ LLVM_PROFDATA="${LLVM_PROFDATA:-$(xcrun --find llvm-profdata 2>/dev/null || whic
 
 mkdir -p "$PROFRAW_DIR"
 
-# Track failures without aborting early: every binary runs so all profraw is
-# collected, but we exit non-zero at the end if any binary failed.
-FAILED_COUNT=0
-FAILED_BINS=""
+# Discover test binaries: executable regular files whose BASENAME matches
+# *test* (so e.g. build/bridge_unit_tests and build-cov/test/unit/unit_tests both
+# match). Exclude third-party deps (_deps) and source/script files. Symlinks,
+# directories, and non-executable files are skipped by find's predicates.
+mapfile -t TEST_BINS < <(find "$BUILD_DIR" \
+    -type d -name "_deps" -prune -o \
+    -type f -perm +111 -name "*test*" ! -name "*.py" ! -name "*.sh" \
+    ! -name "*.cmake" ! -name "*.json" -print 2>/dev/null || true)
 
 echo "=== Running tests with coverage instrumentation ==="
-for test_bin in "$BUILD_DIR"/*test*; do
+echo "  Found ${#TEST_BINS[@]} test binary candidate(s)"
+FAILED_COUNT=0
+FAILED_BINS=""
+for test_bin in "${TEST_BINS[@]}"; do
     if [ -x "$test_bin" ] && [ -f "$test_bin" ]; then
-        echo "  Running: $(basename $test_bin)"
+        echo "  Running: ${test_bin#$BUILD_DIR/}"
         if ! LLVM_PROFILE_FILE="$PROFRAW_DIR/coverage-%p.profraw" "$test_bin"; then
-            echo "  FAILED: $(basename $test_bin) (exit non-zero) — continuing to collect remaining coverage"
+            echo "  FAILED: ${test_bin#$BUILD_DIR/} (exit non-zero) — continuing to collect remaining coverage"
             FAILED_COUNT=$((FAILED_COUNT + 1))
-            FAILED_BINS="$FAILED_BINS $(basename $test_bin)"
+            FAILED_BINS="$FAILED_BINS ${test_bin#$BUILD_DIR/}"
         fi
     fi
 done
 
+# Bail out gracefully if no coverage was produced (no test binaries ran).
+if ! ls "$PROFRAW_DIR"/*.profraw >/dev/null 2>&1; then
+    echo "=== No coverage profiles generated (no test binaries ran) ==="
+    exit 1
+fi
+
 echo "=== Merging coverage profiles ==="
+# nullglob-style safety: the ls check above guarantees a match here.
 $LLVM_PROFDATA merge -sparse "$PROFRAW_DIR"/*.profraw -o "$BUILD_DIR/coverage.profdata"
 
-echo "=== Generating llvm-cov text report ==="
-# Build -object args for all test binaries
+# Build -object args for all test binaries; the first is the main object.
 OBJECT_ARGS=""
 MAIN_BIN=""
-for test_bin in "$BUILD_DIR"/*test*; do
+for test_bin in "${TEST_BINS[@]}"; do
     if [ -x "$test_bin" ] && [ -f "$test_bin" ]; then
         if [ -z "$MAIN_BIN" ]; then
             MAIN_BIN="$test_bin"
@@ -43,18 +61,49 @@ for test_bin in "$BUILD_DIR"/*test*; do
     fi
 done
 
+echo "=== Generating llvm-cov text report ==="
 $LLVM_COV show --show-branches=count \
     -instr-profile "$BUILD_DIR/coverage.profdata" \
     "$MAIN_BIN" \
     $OBJECT_ARGS \
     > "$BUILD_DIR/coverage.txt" 2>/dev/null || true
 
-echo "=== Generating lcov report (for coverage-gutters) ==="
+echo "=== Generating lcov report (for coverage-gutters + SonarCloud) ==="
 $LLVM_COV export -format=lcov \
     -instr-profile "$BUILD_DIR/coverage.profdata" \
     "$MAIN_BIN" \
     $OBJECT_ARGS \
     > "$BUILD_DIR/lcov.info" 2>/dev/null || true
+
+echo "=== Generating SonarCloud generic coverage XML (lcov -> XML) ==="
+# lcov.info is NOT accepted by sonar-scanner; it needs generic XML per
+# sonar-generic-coverage.xsd (same format the app produces via xccov_to_sonar).
+# Convert here so both bridge (build/) and CLI (build-cov/) get coverage-sonar.xml.
+# Errors are NOT suppressed: a silent converter failure or a stale build dir
+# (missing test binaries) would otherwise drop covered files from the XML and
+# the SonarCloud dashboard would show them as 0% with no warning.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$BUILD_DIR/.." && pwd)"
+python3 "$SCRIPT_DIR/lcov_to_xml.py" \
+    "$BUILD_DIR/lcov.info" \
+    "$BUILD_DIR/coverage-sonar.xml" \
+    --project-root "$PROJECT_ROOT"
+
+# Guard: every src/ file that has DA line data in lcov.info MUST appear in the
+# XML, otherwise coverage is silently lost. This catches a stale build dir that
+# was not rebuilt after new source/test targets were added (the lcov then lacks
+# the new test binaries' coverage, so files the scanner should see are absent).
+LCOV_SRC_FILES=$(grep -E "^SF:" "$BUILD_DIR/lcov.info" \
+    | grep -c "${PROJECT_ROOT}/src/")
+XML_SRC_FILES=$(grep -c '<file path="src/' "$BUILD_DIR/coverage-sonar.xml" || true)
+echo "  lcov src/ file records: ${LCOV_SRC_FILES}"
+echo "  coverage-sonar.xml src/ files: ${XML_SRC_FILES}"
+if [ "${XML_SRC_FILES}" -lt "${LCOV_SRC_FILES}" ]; then
+    echo "  WARNING: coverage-sonar.xml has fewer src/ files (${XML_SRC_FILES})" \
+         "than lcov.info (${LCOV_SRC_FILES}). The coverage build dir may be" \
+         "stale — rebuild it (make coverage-clean && make coverage-run) so all" \
+         "test binaries are present and every covered source is exported." >&2
+fi
 
 echo "=== Coverage report generated ==="
 wc -l "$BUILD_DIR/coverage.txt" | awk '{print "Lines:", $1}'

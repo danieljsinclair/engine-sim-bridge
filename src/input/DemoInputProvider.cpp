@@ -179,6 +179,11 @@ void DemoInputProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
     twinProvider_.setGearboxLogger(logger);
 }
 
+void DemoInputProvider::reconfigureProfile(const std::vector<double>& gearRatios,
+                                            double diffRatio, double tireRadiusM) {
+    twinProvider_.reconfigureProfile(gearRatios, diffRatio, tireRadiusM);
+}
+
 void DemoInputProvider::setBrake(double level) {
     brakeInput_.setLevel(level);
 }
@@ -202,6 +207,17 @@ EngineInput DemoInputProvider::enhanceInput(const EngineInput& baseInput, double
     signal.isValid = true;
     twinProvider_.setUpstreamSignal(signal);
     twinProvider_.setIgnition(baseInput.ignition);
+
+    // Forward the current PRNDL selector to the twin (same as OnUpdateSimulation).
+    // Without this, keyboard shift keys advance GearSelectorInput but the twin —
+    // and hence the EngineInput selector — never reflects the new gate.
+    if (gearSelector_) {
+        int currentSelector = gearSelector_->getState();
+        if (currentSelector != lastForwardedSelector_) {
+            twinProvider_.setGearSelector(currentSelector);
+            lastForwardedSelector_ = currentSelector;
+        }
+    }
 
     EngineInput twinInput = twinProvider_.OnUpdateSimulation(dt);
     currentGear_ = twinInput.gearAbsolute;

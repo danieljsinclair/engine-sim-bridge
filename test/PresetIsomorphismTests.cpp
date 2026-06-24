@@ -42,6 +42,7 @@
 
 // Bridge headers
 #include "simulator/PresetEngineFactory.h"
+#include "common/PresetSerializer.h"
 #include "common/JsonParser.h"
 
 #if !TARGET_OS_IPHONE && defined(ENGINE_SIM_PIRANHA_ENABLED)
@@ -846,22 +847,89 @@ namespace {
         *os << param.name;
     }
 
-    std::string generatePresetJsonFromScript(const std::string& scriptPath, const std::string& name) {
-        namespace fs = std::filesystem;
+    // ---- Single-build round-trip helpers ----
+    // These replace the old "run the .mr script through the preset-compiler
+    // subprocess" step. That second Piranha invocation was the source of the
+    // isomorphism flake: ASLR perturbs Piranha's hash-based node ordering, so
+    // the JSON produced out-of-process was not guaranteed to mirror the
+    // in-process engine. Instead we serialize the already-built Piranha engine
+    // to JSON in-process and round-trip that, so both sides of every category-5
+    // comparison trace back to one and the same Piranha build.
 
+    // Serialize a Piranha Engine to a preset JSON string, in-process.
+    // Single responsibility: object graph -> JSON text.
+    std::string serializeEngineToJsonString(Engine* engine, Vehicle* vehicle,
+                                            Transmission* transmission) {
+        return PresetSerializer::serializeEngineToJson(engine, vehicle, transmission);
+    }
+
+    // Choose a unique temp fixture path for an engine name, using the
+    // steady-clock nonce so parallel/shuffled runs never collide.
+    std::filesystem::path makeTempFixturePath(const std::string& name) {
         const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
-        const fs::path outputPath = fs::temp_directory_path() /
+        return std::filesystem::temp_directory_path() /
             ("preset_isomorphism_" + name + "_" + std::to_string(nonce) + ".json");
+    }
 
-        const std::string command = std::string("\"") + TEST_PRESET_COMPILER_PATH +
-            "\" \"" + scriptPath + "\" \"" + outputPath.string() +
-            "\" \"" + TEST_ENGINE_SIM_ROOT + "\" >/dev/null 2>&1";
-
-        if (std::system(command.c_str()) != 0) {
-            throw std::runtime_error("Failed to generate preset JSON from script: " + scriptPath);
+    // Write a JSON string to a path. Single responsibility: text -> file.
+    void writeJsonToFile(const std::filesystem::path& path, const std::string& json) {
+        std::ofstream out(path, std::ios::binary);
+        if (!out) {
+            throw std::runtime_error("Failed to open fixture for writing: " + path.string());
         }
+        out << json;
+        out.close();
+        if (!out) {
+            throw std::runtime_error("Failed to write fixture: " + path.string());
+        }
+    }
 
-        return outputPath.string();
+    // Serialize the Piranha engine to JSON, persist it to a temp fixture path,
+    // and load it straight back. Returns the path so later tests that reload
+    // (vehicle/transmission comparisons) reuse the same on-disk fixture.
+    std::string roundTripPiranhaEngineToFixture(Engine* engine, Vehicle* vehicle,
+                                                 Transmission* transmission,
+                                                 const std::string& name) {
+        const std::string json = serializeEngineToJsonString(engine, vehicle, transmission);
+        const auto path = makeTempFixturePath(name);
+        writeJsonToFile(path, json);
+        return path.string();
+    }
+
+    // Emit, for both engines, the topology counts compared by 5.1 plus both
+    // displacement values. Attached as a SCOPED_TRACE so any failing assertion
+    // below it is annotated with the numbers that diverged. Single
+    // responsibility: observation/diagnostics only -- never asserts.
+    void logTopologyDiagnostics(Engine* jsonEngine, Engine* piranhaEngine,
+                                const std::string& engineName) {
+        SCOPED_TRACE("topology diagnostics for " + engineName);
+
+#ifdef ATG_ENGINE_SIM_TEST_VERBOSE
+        const double jsonDisp = [&] {
+            jsonEngine->calculateDisplacement();
+            return jsonEngine->getDisplacement();
+        }();
+        const double piranhaDisp = [&] {
+            piranhaEngine->calculateDisplacement();
+            return piranhaEngine->getDisplacement();
+        }();
+
+        std::ostringstream ss;
+        ss << "\n  [topology] " << engineName
+           << "\n    cylinders       json=" << jsonEngine->getCylinderCount()
+           << "  piranha=" << piranhaEngine->getCylinderCount()
+           << "\n    cylinder banks  json=" << jsonEngine->getCylinderBankCount()
+           << "  piranha=" << piranhaEngine->getCylinderBankCount()
+           << "\n    crankshafts     json=" << jsonEngine->getCrankshaftCount()
+           << "  piranha=" << piranhaEngine->getCrankshaftCount()
+           << "\n    exhaust systems json=" << jsonEngine->getExhaustSystemCount()
+           << "  piranha=" << piranhaEngine->getExhaustSystemCount()
+           << "\n    intakes         json=" << jsonEngine->getIntakeCount()
+           << "  piranha=" << piranhaEngine->getIntakeCount()
+           << "\n    displacement    json=" << jsonDisp
+           << "  piranha=" << piranhaDisp;
+        std::cout << ss.str() << std::endl;
+#endif
     }
 }
 
@@ -923,20 +991,8 @@ protected:
 
         if (!cached.attempted) {
             cached.attempted = true;
-            try {
-                if (param.generatePresetAtRuntime) {
-                    cached.jsonFixturePath =
-                        generatePresetJsonFromScript(param.scriptPath, param.name);
-                    cached.generatedFixture = true;
-                } else {
-                    cached.jsonFixturePath = param.fixturePath;
-                }
-            } catch (const std::exception& e) {
-                FAIL() << "Failed to generate preset JSON for " << param.name
-                       << ": " << e.what();
-                return;
-            }
 
+            // 1) Build the engine once, in-process, via Piranha.
             cached.piranhaEngine =
                 loadEngineFromScript(param.scriptPath, param.assetBase, cached.piranhaSim);
             if (!cached.piranhaEngine) {
@@ -944,6 +1000,35 @@ protected:
                 return;
             }
 
+            // 2) Serialize that single build to JSON in-process (no second
+            //    Piranha run, no ASLR-induced node reordering) and persist it
+            //    to a temp fixture. The Piranha simulator also holds the
+            //    vehicle/transmission, which we serialize alongside so the
+            //    reloaded fixture is complete for the vehicle/transmission
+            //    comparison tests.
+            Vehicle* piranhaVehicle = nullptr;
+            Transmission* piranhaTrans = nullptr;
+            auto* bridge = dynamic_cast<BridgeSimulator*>(cached.piranhaSim.get());
+            if (bridge) {
+                if (Simulator* sim = bridge->getInternalSimulator()) {
+                    piranhaVehicle = sim->getVehicle();
+                    piranhaTrans = sim->getTransmission();
+                }
+            }
+
+            try {
+                cached.jsonFixturePath = roundTripPiranhaEngineToFixture(
+                    cached.piranhaEngine, piranhaVehicle, piranhaTrans, param.name);
+                cached.generatedFixture = true;
+            } catch (const std::exception& e) {
+                FAIL() << "Failed to serialize/round-trip preset JSON for "
+                       << param.name << ": " << e.what();
+                return;
+            }
+
+            // 3) Load the in-process-serialized JSON back as the comparison
+            //    engine. Both sides of every category-5 check now derive from
+            //    the same Piranha build.
             cached.jsonEngine = loadEngineFromJson(cached.jsonFixturePath);
             if (!cached.jsonEngine) {
                 FAIL() << "Failed to load JSON engine from " << cached.jsonFixturePath;
@@ -974,6 +1059,11 @@ protected:
 
 // 5.1: Engine topology matches (cylinder count, bank count, crankshaft count)
 TEST_P(ParameterIsomorphismTest, EngineTopologyMatches) {
+    // Emit every topology count for both engines so that, if this test ever
+    // fails again, the failing assertion is named alongside the exact numbers
+    // that diverged rather than a bare count mismatch.
+    logTopologyDiagnostics(jsonEngine_, piranhaEngine_, GetParam().name);
+
     EXPECT_EQ(jsonEngine_->getCylinderCount(), piranhaEngine_->getCylinderCount())
         << "Cylinder count mismatch";
     EXPECT_EQ(jsonEngine_->getCylinderBankCount(), piranhaEngine_->getCylinderBankCount())
