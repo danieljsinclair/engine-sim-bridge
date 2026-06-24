@@ -613,5 +613,20 @@ public node vehicle => __engine_sim__vehicle {
 
 public node transmission => __engine_sim__transmission {
     input max_clutch_torque [float]: 1000 * units.lb_ft;
+    input torque_converter [torque_converter_channel]: no_torque_converter();
     alias output __out [transmission_channel];
+}
+
+public node torque_converter_channel => __engine_sim__torque_converter_channel { /* virtual wrapper */ }
+
+public node no_torque_converter => __engine_sim__no_torque_converter {
+    alias output __out [torque_converter_channel];
+}
+
+public node torque_converter => __engine_sim__torque_converter {
+    input stall_torque_ratio [float]: 2.0;
+    input capacity_factor [float]: 1.8e-5;
+    input lockup_rpm [float]: 1500 * units.rpm;
+    input max_input_torque [float]: 1000 * units.Nm;
+    alias output __out [torque_converter_channel];
 }

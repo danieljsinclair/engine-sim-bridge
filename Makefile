@@ -90,7 +90,7 @@ $(BUILD_STAMP): $(BUILD_INPUTS) $(BUILD_DIR)/CMakeCache.txt
 	+$(call build_bridge_targets)
 	@touch $@
 
-$(BUILD_DIR)/CMakeCache.txt: CMakeLists.txt
+$(BUILD_DIR)/CMakeCache.txt: CMakeLists.txt Makefile
 	@mkdir -p $(BUILD_DIR)
 	@cd $(BUILD_DIR) && cmake $(BRIDGE_TEST_CMAKE_FLAGS) -DCMAKE_BUILD_TYPE=Release .. \
 		&& sed -i '' 's/^CMAKE_BUILD_TYPE:STRING=.*/CMAKE_BUILD_TYPE:STRING=Release/' CMakeCache.txt

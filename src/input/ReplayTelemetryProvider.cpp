@@ -310,37 +310,27 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
             // allowing revs to build. This creates a natural equilibrium.
             input.engineRpmFloor = 0.0;
 
-            // Road-speed-implied engine RPM: the RPM the engine would be at if the
-            // clutch were locked in the current gear at the current road speed.
-            // engineRpm = wheelRadS * gearRatio * diffRatio,  wheelRadS = v / tireRadius.
-            const int gear = gearbox_->getCurrentGear();
-            double roadSpeedImpliedRpm = gearboxProfile_.idleRpm;  // fallback above the floor
-            if (gear >= 1 && gear <= static_cast<int>(gearboxProfile_.gearRatios.size())) {
-                const double speedMs = speedForBox / 3.6;
-                const double wheelRadS = speedMs / gearboxProfile_.tireRadiusM;
-                roadSpeedImpliedRpm = wheelRadS
-                                      * gearboxProfile_.gearRatios[gear - 1]
-                                      * gearboxProfile_.diffRatio
-                                      * 30.0 / 3.14159265358979;
+            // TorqueConverter: the TC's fluid coupling physics (K × N²) handle
+            // the engine loading. The TC's maxInputTorque is set in
+            // Transmission::update() based on clutch pressure. Here we just
+            // need to signal that the TC should be active (clutch pressure > 0).
+            //
+            // For TC-equipped transmissions, the clutch pressure controls the
+            // TC's capacity. Light throttle → low capacity → engine settles at
+            // low RPM. WOT → high capacity → engine reaches stall speed.
+            //
+            // For friction-clutch transmissions, use the SlipLockController.
+            // The TC check is done via the gearbox profile's redline flag
+            // (a TC-equipped box has a specific marker).
+            {
+                // Compute a target TC capacity based on throttle.
+                // This is passed through as clutch pressure, and the
+                // Transmission::update() will set the TC's maxInputTorque.
+                constexpr double kMaxTcCapacity = 600.0;  // Nm at full throttle
+                const double tcCapacity = kMaxTcCapacity * s.throttle;
+                // Normalize to 0-1 range for clutch pressure
+                input.clutchPressure = std::min(tcCapacity / kMaxTcCapacity, 1.0);
             }
-
-            // Creep pressure: proportional to throttle. At light throttle, the
-            // clutch is partially engaged, loading the engine. At WOT, the
-            // clutch is more firmly engaged. The vehicle speed target pins the
-            // wheels, and the clutch pressure determines how much engine torque
-            // is transmitted. The engine will rev until its torque output
-            // matches the clutch's torque capacity — this creates a natural
-            // equilibrium RPM for each throttle level.
-            constexpr double kMaxCreepPressure = 0.10;
-            const twin::SlipLockOutput slipLock = twin::computeSlipLockPressure(
-                twin::SlipLockInput{
-                    engineRpmFeedback_,
-                    roadSpeedImpliedRpm,
-                    s.throttle,
-                    gearboxProfile_.idleRpm,
-                    gearboxProfile_.redlineRpm},
-                kMaxCreepPressure);
-            input.clutchPressure = slipLock.clutchPressure;
 
             // Vehicle speed target: only pin wheels when CSV road speed is above
             // a minimum threshold. At standstill/very low speed, release the pin

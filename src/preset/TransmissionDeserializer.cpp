@@ -1,6 +1,7 @@
 #include "preset/TransmissionDeserializer.h"
 
 #include "transmission.h"
+#include "torque_converter.h"
 
 #include <stdexcept>
 #include <vector>
@@ -39,10 +40,27 @@ Transmission* TransmissionDeserializer::deserialize(const JsonValue& json, const
     }
     double maxClutchTorque = json["maxClutchTorque"].asNumber();
 
+    // Read optional torque converter parameters
+    atg_scs::TorqueConverter::Parameters tcParams;
+    bool hasTC = false;
+    if (json.has("torqueConverter") && json["torqueConverter"].isObject()) {
+        const JsonValue& tcJson = json["torqueConverter"];
+        tcParams.stallTorqueRatio = tcJson.has("stallTorqueRatio")
+            ? tcJson["stallTorqueRatio"].asNumber() : 2.0;
+        tcParams.capacityFactor = tcJson.has("capacityFactor")
+            ? tcJson["capacityFactor"].asNumber() : 1.8e-5;
+        tcParams.lockupRpm = tcJson.has("lockupRpm")
+            ? tcJson["lockupRpm"].asNumber() : 1500.0;
+        tcParams.maxInputTorque = tcJson.has("maxInputTorque")
+            ? tcJson["maxInputTorque"].asNumber() : maxClutchTorque;
+        hasTC = true;
+    }
+
     Transmission::Parameters params;
     params.GearCount = gearCount;
     params.GearRatios = gearRatios.data();
     params.MaxClutchTorque = maxClutchTorque;
+    params.TorqueConverterParams = hasTC ? &tcParams : nullptr;
 
     Transmission* trans = new Transmission();
     trans->initialize(params);

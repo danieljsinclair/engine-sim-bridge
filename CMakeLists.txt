@@ -158,8 +158,10 @@ set(BRIDGE_SOURCES
     src/twin/ThrottleSmoother.cpp
     src/twin/VirtualIceTwin.cpp
     src/twin/ManualTwin.cpp
-    src/twin/GearboxCsvLogger.cpp
     src/twin/SlipLockController.cpp
+    src/twin/TorqueConverterPhysics.cpp
+    # Torque converter (SCS constraint)
+    engine-sim/src/torque_converter.cpp
     # Input providers
     src/input/VirtualIceInputProvider.cpp
     src/input/ManualTwinProvider.cpp

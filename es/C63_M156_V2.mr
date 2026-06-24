@@ -473,7 +473,13 @@ public node C63_vehicle {
 private node C63_transmission {
     alias output __out:
         transmission(
-            max_clutch_torque: 1250 * units.Nm
+            max_clutch_torque: 1250 * units.Nm,
+            torque_converter: torque_converter(
+                stall_torque_ratio: 2.0,
+                capacity_factor: 1.8e-5,
+                lockup_rpm: 1500 * units.rpm,
+                max_input_torque: 1250 * units.Nm
+            )
         )
         .add_gear(4.34)
         .add_gear(2.89)
