@@ -17,6 +17,7 @@ KeyboardInputProvider::KeyboardInputProvider(
 KeyboardInputProvider::~KeyboardInputProvider() = default;
 
 bool KeyboardInputProvider::Initialize() { return true; }
+// Keyboard input is polled per-frame in processKeys(); nothing to tear down.
 void KeyboardInputProvider::Shutdown() {}
 bool KeyboardInputProvider::IsConnected() const { return true; }
 

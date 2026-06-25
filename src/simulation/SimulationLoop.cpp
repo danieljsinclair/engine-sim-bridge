@@ -32,10 +32,10 @@
 namespace {
 
 // Timed input simulation constants
-static constexpr double THROTTLE_RAMP_DURATION_SECONDS = 0.5;  // Time to ramp from 0 to 1
-static constexpr double FULL_THROTTLE = 1.0;                     // Maximum throttle value
-static constexpr double SECONDS_TO_MICROSECONDS = 1000000.0;
-static constexpr double SECONDS_TO_MILLISECONDS = 1000.0;
+constexpr double THROTTLE_RAMP_DURATION_SECONDS = 0.5;  // Time to ramp from 0 to 1
+constexpr double FULL_THROTTLE = 1.0;                     // Maximum throttle value
+constexpr double SECONDS_TO_MICROSECONDS = 1000000.0;
+constexpr double SECONDS_TO_MILLISECONDS = 1000.0;
 
 } // anonymous namespace — constants only
 
@@ -87,13 +87,13 @@ namespace {
 
 // Timing control for 60Hz loop pacing using sleep_until for accuracy
 struct LoopTimer {
-    std::chrono::steady_clock::time_point nextWakeTime;
-    std::chrono::microseconds intervalUs;
+    std::chrono::steady_clock::time_point nextWakeTime{};
+    std::chrono::microseconds intervalUs{};
 
-    explicit LoopTimer(double intervalSeconds)
-        : nextWakeTime(std::chrono::steady_clock::now())
-        , intervalUs(static_cast<long long>(intervalSeconds * SECONDS_TO_MICROSECONDS))
-    {}
+    explicit LoopTimer(double intervalSeconds) {
+        nextWakeTime = std::chrono::steady_clock::now();
+        intervalUs = std::chrono::microseconds(static_cast<long long>(intervalSeconds * SECONDS_TO_MICROSECONDS));
+    }
 
     void waitUntilNextTick() {
         nextWakeTime += intervalUs;
@@ -104,8 +104,7 @@ struct LoopTimer {
 // Named audio render callback -- bridges AudioBufferView to strategy->render()
 int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer) {
     if (!strategy->isPlaying()) {
-        float* dst = buffer.asFloat();
-        if (dst) {
+        if (float* dst = buffer.asFloat(); dst) {
             size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
             std::memset(dst, 0, totalSamples * sizeof(float));
         }
@@ -140,7 +139,7 @@ std::unique_ptr<IAudioHardwareProvider> createHardwareProvider(
 void applyGearChange(ISimulator& simulator, int gearDelta, ILogging* logger) {
 
     if (simulator.changeGear(gearDelta)) {
-        logger->info(LogMask::BRIDGE, "New gear: %+d", simulator.getGear());
+        logger->info(LogMask::BRIDGE, __ilog_format("New gear: %+d", simulator.getGear()));
     }
 }
 
@@ -263,7 +262,7 @@ void initializeSimulator(
 {
     // Use provided label directly, no internal logic about simulator type
     const std::string& label = config.simulatorLabel;
-    logger->info(LogMask::BRIDGE, "Loading simulator: %s", label.c_str());
+    logger->info(LogMask::BRIDGE, __ilog_format("Loading simulator: %s", label.c_str()));
 
     if (!simulator.create(*engineConfig, logger, telemetryWriter)) {
         throw std::runtime_error("Failed to create simulator: " + simulator.getLastError());
@@ -376,7 +375,7 @@ public:
             if (hasDrivetrainMomentum(snapshot)) {
                 auto rolloverDecision = TransitionDecision{EnginePhase::Rollover, false, 0.0, true};
                 applyDecision(combustion, rolloverDecision);
-                logger->info(LogMask::BRIDGE, "Hot-swap → Rollover (gear=%d, vtheta=%.1f)", snapshot.gear, snapshot.vehicleMassVtheta);
+                logger->info(LogMask::BRIDGE, __ilog_format("Hot-swap → Rollover (gear=%d, vtheta=%.1f)", snapshot.gear, snapshot.vehicleMassVtheta));
             } else {
                 auto decision = crankingController_.engageStarter(*combustion, true, true);
                 applyDecision(combustion, decision);
@@ -392,7 +391,7 @@ public:
         ASSERT(newSimulator, "handoverSession: null simulator provided");
         ASSERT(simulator_, "handoverSession: current simulator is null");
 
-        logger_->info(LogMask::BRIDGE, "handoverSession: loading %s", presetFilePath.c_str());
+        logger_->info(LogMask::BRIDGE, __ilog_format("handoverSession: loading %s", presetFilePath.c_str()));
 
         // Initialize the new simulator (audio config only, not pipeline)
         initializeSimulator(*newSimulator, config_, logger_, telemetryWriter_, &config_.engineConfig);
@@ -480,7 +479,7 @@ int SimulationLoop::run() {
     double currentTime = 0.0;
     LoopTimer timer(config_.updateInterval());
 
-    logger_->info(LogMask::BRIDGE, "SimulationLoop starting with %s", config_.simulatorLabel.c_str());
+    logger_->info(LogMask::BRIDGE, __ilog_format("SimulationLoop starting with %s", config_.simulatorLabel.c_str()));
 
     // Track for the loop lifetime - first tick to trigger auto-start in non-interactive mode
     bool isFirstTick = true;
@@ -571,12 +570,12 @@ std::unique_ptr<ISimulatorSession> createSession(
     strategyConfig.synthLatency = config.engineConfig.targetSynthesizerLatency;
     audioBuffer->initialize(strategyConfig, config.sampleRate());
 
-    auto callback = [audioBuffer](AudioBufferView& buffer) -> int {
+    auto callback = [audioBuffer](AudioBufferView& buffer) {
         return audioRenderCallback(audioBuffer, buffer);
     };
     auto hardwareProvider = createHardwareProvider(config.sampleRate(), callback, logger);
 
-    logger->info(LogMask::AUDIO, "Audio initialized: strategy=%s, sr=%d", audioBuffer->getName(), config.sampleRate());
+    logger->info(LogMask::AUDIO, __ilog_format("Audio initialized: strategy=%s, sr=%d", audioBuffer->getName(), config.sampleRate()));
 
     return std::make_unique<SimulatorSession>(
         sessionConfig,

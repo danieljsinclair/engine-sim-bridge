@@ -241,7 +241,7 @@ bool BridgeSimulator::changeGear(int gearDelta) {
     }
 
     // Get current gear in bridge convention
-    int currentEngineSimGear = trans->getGear();
+    auto currentEngineSimGear = trans->getGear();
     int currentBridgeGear = static_cast<int>(bridge::toBridge(currentEngineSimGear));
 
     // Compute new gear in bridge convention
@@ -254,7 +254,7 @@ bool BridgeSimulator::changeGear(int gearDelta) {
     newBridgeGear = std::min(newBridgeGear, gearCount);  // Clamp at max gear
 
     // Translate back to engine-sim convention and apply
-    int newEngineSimGear = static_cast<int>(bridge::toEngineSim(static_cast<bridge::BridgeGear>(newBridgeGear)));
+    auto newEngineSimGear = static_cast<int>(bridge::toEngineSim(static_cast<bridge::BridgeGear>(newBridgeGear)));
     trans->changeGear(newEngineSimGear);
 
     // Set clutch pressure: forward gears get 1.0, neutral gets 0.0
@@ -274,7 +274,7 @@ bool BridgeSimulator::changeGear(int gearDelta, double clutchPressure) {
     }
 
     // Get current gear in bridge convention
-    int currentEngineSimGear = trans->getGear();
+    auto currentEngineSimGear = trans->getGear();
     int currentBridgeGear = static_cast<int>(bridge::toBridge(currentEngineSimGear));
 
     // Compute new gear in bridge convention
@@ -286,7 +286,7 @@ bool BridgeSimulator::changeGear(int gearDelta, double clutchPressure) {
     newBridgeGear = std::min(newBridgeGear, gearCount);  // Clamp at max gear
 
     // Translate back to engine-sim convention and apply
-    int newEngineSimGear = static_cast<int>(bridge::toEngineSim(static_cast<bridge::BridgeGear>(newBridgeGear)));
+    auto newEngineSimGear = static_cast<int>(bridge::toEngineSim(static_cast<bridge::BridgeGear>(newBridgeGear)));
     trans->changeGear(newEngineSimGear);
 
     // Apply explicit clutch pressure
@@ -336,21 +336,20 @@ void BridgeSimulator::applyTransition(const TransitionDecision& decision) {
 }
 
 bool BridgeSimulator::setSpeedTrackingTarget(double speedKmh, double rpmFloor) {
-    auto* trans = m_simulator->getTransmission();
+    auto const* trans = m_simulator->getTransmission();
     if (!trans) {
         m_simulator->m_dyno.m_enabled = false;
         return false;
     }
 
     // Fail if in neutral (gear -1 in engine-sim convention)
-    int gear = trans->getGear();
-    if (gear < 0) {
+    if (int gear = trans->getGear(); gear < 0) {
         // Disable dyno when in neutral (neutral-at-standstill behavior)
         m_simulator->m_dyno.m_enabled = false;
         return false;
     }
 
-    auto* vehicle = m_simulator->getVehicle();
+    auto const* vehicle = m_simulator->getVehicle();
     if (!vehicle) {
         m_simulator->m_dyno.m_enabled = false;
         return false;
@@ -383,7 +382,7 @@ bool BridgeSimulator::setVehicleSpeedTarget(double speedKmh) {
     // Spike-A — inverse model: drive the wheels (vehicle-mass body) to the CSV
     // road speed; the clutch couples them to the engine. Dyno stays OFF so
     // combustion is no longer overridden (no "dragged engine" sound).
-    auto* trans = m_simulator->getTransmission();
+    auto const* trans = m_simulator->getTransmission();
     if (!trans) {
         m_simulator->m_dyno.m_enabled = false;
         m_simulator->m_vehicleSpeedConstraint.m_enabled = false;
@@ -398,8 +397,7 @@ bool BridgeSimulator::setVehicleSpeedTarget(double speedKmh) {
     }
 
     // Neutral / no gear: don't pin the wheels either — engine must free-rev.
-    int gear = trans->getGear();
-    if (gear < 0) {
+    if (int gear = trans->getGear(); gear < 0) {
         m_simulator->m_vehicleSpeedConstraint.m_enabled = false;
         m_simulator->m_dyno.m_enabled = false;
         return false;

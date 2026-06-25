@@ -4,6 +4,7 @@
 #include <simulator/EngineSimTypes.h>
 #include <algorithm>
 #include <cmath>
+#include <array>
 
 namespace twin {
 
@@ -274,13 +275,14 @@ double AutomaticGearbox::getShiftSpeed(int fromGear, int toGear, double throttle
     }
 
     // Use profile throttle levels if available, otherwise fall back to legacy 5-level
-    const double legacyLevels[] = {0.1, 0.25, 0.5, 0.75, 1.0};
-    const size_t legacyNumLevels = 5;
+    static constexpr std::array<double, 5> legacyLevels = {0.1, 0.25, 0.5, 0.75, 1.0};
+    static constexpr size_t legacyNumLevels = 5;
 
     size_t numLevels;
     bool useProfileLevels = !profile_.shiftTableThrottleLevels.empty();
 
-    double levelLow, levelHigh;
+    double levelLow = 0.0;
+    double levelHigh = 0.0;
     size_t lowerIndex = 0;
     size_t upperIndex = 0;
 
@@ -390,7 +392,7 @@ double AutomaticGearbox::getEngineRpm(double speedKmh, int gear) const {
     return engineRpm;
 }
 
-bool AutomaticGearbox::shouldKickdown(double throttleFraction, double dt) {
+bool AutomaticGearbox::shouldKickdown(double throttleFraction, [[maybe_unused]] double dt) {
     // Kickdown if throttle exceeds threshold
     if (throttleFraction >= profile_.kickdownThrottleThreshold) {
         return true;

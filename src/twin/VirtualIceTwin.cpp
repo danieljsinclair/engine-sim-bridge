@@ -39,6 +39,12 @@ void VirtualIceTwin::reconfigureProfile(const std::vector<double>& gearRatios,
     }
     profile_.hysteresisFactor = 0.85;
     // Reconstruct gearbox with matched profile
+    profile_.downshiftTable.clear();
+    for (const auto& srcRow : profile_.shiftTable) {
+        std::vector<double> row;
+        for (double upSpeed : srcRow) row.push_back(upSpeed * 0.70);
+        profile_.downshiftTable.push_back(row);
+    }
     gearbox_ = std::make_unique<AutomaticGearbox>(profile_);
     gearbox_->setGearSelector(selector_);
     gearbox_->setLogger(nullptr);  // logger not preserved across reconstruct
