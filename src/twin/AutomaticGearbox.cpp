@@ -392,7 +392,7 @@ double AutomaticGearbox::getEngineRpm(double speedKmh, int gear) const {
     return engineRpm;
 }
 
-bool AutomaticGearbox::shouldKickdown(double throttleFraction, [[maybe_unused]] double dt) {
+bool AutomaticGearbox::shouldKickdown(double throttleFraction, [[maybe_unused]] double dt) const {
     // Kickdown if throttle exceeds threshold
     if (throttleFraction >= profile_.kickdownThrottleThreshold) {
         return true;

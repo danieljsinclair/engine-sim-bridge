@@ -76,7 +76,7 @@ private:
     double getShiftSpeed(int fromGear, int toGear, double throttle) const;
     double getDownshiftSpeed(int fromGear, int toGear, double throttle) const;
     double getEngineRpm(double speedKmh, int gear) const;
-    bool shouldKickdown(double throttleFraction, double dt);
+    bool shouldKickdown(double throttleFraction, double dt) const;
     int findSafeGear(double speedKmh, int maxDownshifts) const;
     // True when the selector is in a forward position that allows shifting.
     bool isShifterInDrive() const;

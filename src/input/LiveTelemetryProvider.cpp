@@ -11,7 +11,7 @@ LiveTelemetryProvider::LiveTelemetryProvider(const twin::IceVehicleProfile& prof
 }
 
 LiveTelemetryProvider::~LiveTelemetryProvider() {
-    Shutdown();
+    doShutdown();
 }
 
 bool LiveTelemetryProvider::Initialize() {
@@ -36,6 +36,10 @@ bool LiveTelemetryProvider::Initialize() {
 }
 
 void LiveTelemetryProvider::Shutdown() {
+    doShutdown();
+}
+
+void LiveTelemetryProvider::doShutdown() {
     if (twinProvider_) {
         twinProvider_->Shutdown();
         twinProvider_.reset();
@@ -74,8 +78,8 @@ std::string LiveTelemetryProvider::GetLastError() const {
 }
 
 void LiveTelemetryProvider::submitSignal(const UpstreamSignal& signal) {
-    currentSignal_.store(signal, std::memory_order_relaxed);
-    signalReceived_.store(true, std::memory_order_relaxed);
+    currentSignal_.store(signal, std::memory_order_seq_cst);
+    signalReceived_.store(true, std::memory_order_seq_cst);
 }
 
 void LiveTelemetryProvider::submitSignal(const UpstreamSignal& signal, uint64_t timestampUtcMs) {
@@ -103,7 +107,7 @@ void LiveTelemetryProvider::provideFeedback(const EngineSimStats& stats) {
 }
 
 UpstreamSignal LiveTelemetryProvider::getCurrentSignal() const {
-    return currentSignal_.load(std::memory_order_relaxed);
+    return currentSignal_.load(std::memory_order_seq_cst);
 }
 
 } // namespace input

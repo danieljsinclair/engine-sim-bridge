@@ -309,7 +309,7 @@ public:
 
     ~SimulatorSession() override {
         if (!closed_) {
-            close();
+            doClose();
         }
     }
 
@@ -347,7 +347,7 @@ public:
     }
 
     void stop() override {
-        stopRequested_.store(true, std::memory_order_release);
+        stopRequested_.store(true, std::memory_order_seq_cst);
     }
 
     bool hasDrivetrainMomentum(const BridgeSimulator::DrivetrainSnapshot& snapshot) const {
@@ -414,7 +414,7 @@ public:
         config_.configPath = presetFilePath;
 
         // Reset stopped flag so the loop runs again when session->run() is called
-        stopRequested_.store(false, std::memory_order_release);
+        stopRequested_.store(false, std::memory_order_seq_cst);
 
         logger_->info(LogMask::BRIDGE, "handoverSession: complete");
         return true;
@@ -422,6 +422,10 @@ public:
 
     void close() override {
         if (closed_) return;
+        doClose();
+    }
+
+    void doClose() {
         cleanupSimulation(hardwareProvider_.get(), *simulator_);
         closed_ = true;
     }
@@ -521,7 +525,7 @@ int SimulationLoop::run() {
         if (engineInput.presetCycle) {
             return EXIT_BUT_CONTINUE_NEXT;
         }
-    } while (!stopRequested_.load(std::memory_order_acquire));
+    } while (!stopRequested_.load(std::memory_order_seq_cst));
 
     return 0;
 }

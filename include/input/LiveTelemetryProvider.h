@@ -79,6 +79,9 @@ private:
     std::atomic<bool> signalReceived_;
     std::atomic<bool> initialized_;
     std::string lastError_;
+
+    /// Non-virtual cleanup. Called by destructor and Shutdown().
+    void doShutdown();
 };
 
 } // namespace input
