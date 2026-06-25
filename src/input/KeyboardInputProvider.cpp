@@ -18,7 +18,10 @@ KeyboardInputProvider::~KeyboardInputProvider() = default;
 
 bool KeyboardInputProvider::Initialize() { return true; }
 // Keyboard input is polled per-frame in processKeys(); nothing to tear down.
-void KeyboardInputProvider::Shutdown() {}
+void KeyboardInputProvider::Shutdown() {
+    // No-op: keyboard state is transient; each OnUpdateSimulation() call
+    // reads fresh input from the device, so there is nothing to tear down.
+}
 bool KeyboardInputProvider::IsConnected() const { return true; }
 
 EngineInput KeyboardInputProvider::OnUpdateSimulation(double dt) {

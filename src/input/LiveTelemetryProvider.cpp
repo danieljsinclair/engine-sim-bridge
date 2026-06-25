@@ -1,6 +1,7 @@
 // LiveTelemetryProvider.cpp - Live telemetry input provider for engine-sim
 
 #include "input/LiveTelemetryProvider.h"
+#include "common/PresetExceptions.h"
 
 namespace input {
 
@@ -29,6 +30,15 @@ bool LiveTelemetryProvider::Initialize() {
         }
         initialized_.store(true);
         return true;
+    } catch (const std::bad_alloc& e) {
+        lastError_ = std::string("Out of memory creating twin provider: ") + e.what();
+        return false;
+    } catch (const PresetException& e) {
+        lastError_ = std::string("Failed to create twin provider (preset error): ") + e.what();
+        return false;
+    } catch (const SimulatorException& e) {
+        lastError_ = std::string("Failed to create twin provider (simulator error): ") + e.what();
+        return false;
     } catch (const std::exception& e) {
         lastError_ = std::string("Failed to create twin provider: ") + e.what();
         return false;

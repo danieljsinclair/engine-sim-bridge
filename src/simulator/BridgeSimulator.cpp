@@ -242,10 +242,10 @@ bool BridgeSimulator::changeGear(int gearDelta) {
 
     // Get current gear in bridge convention
     auto currentEngineSimGear = trans->getGear();
-    int currentBridgeGear = static_cast<int>(bridge::toBridge(currentEngineSimGear));
+    auto currentBridgeGear = static_cast<int>(bridge::toBridge(currentEngineSimGear));
 
     // Compute new gear in bridge convention
-    int newBridgeGear = currentBridgeGear + gearDelta;
+    auto newBridgeGear = currentBridgeGear + gearDelta;
     int gearCount = trans->getGearCount();
 
     // Clamp in bridge convention: neutral (0) to max forward gear (gearCount)
@@ -275,10 +275,10 @@ bool BridgeSimulator::changeGear(int gearDelta, double clutchPressure) {
 
     // Get current gear in bridge convention
     auto currentEngineSimGear = trans->getGear();
-    int currentBridgeGear = static_cast<int>(bridge::toBridge(currentEngineSimGear));
+    auto currentBridgeGear = static_cast<int>(bridge::toBridge(currentEngineSimGear));
 
     // Compute new gear in bridge convention
-    int newBridgeGear = currentBridgeGear + gearDelta;
+    auto newBridgeGear = currentBridgeGear + gearDelta;
     int gearCount = trans->getGearCount();
 
     // Clamp in bridge convention: neutral (0) to max forward gear (gearCount)

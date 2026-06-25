@@ -32,9 +32,9 @@ void VirtualIceTwin::reconfigureProfile(const std::vector<double>& gearRatios,
     profile_.separateDownshiftTableEnabled = true;
     profile_.downshiftTableThrottleLevels = profile_.shiftTableThrottleLevels;
     profile_.downshiftTable.clear();
-    for (size_t t = 0; t < profile_.shiftTable.size(); ++t) {
+    for (const auto& srcRow : profile_.shiftTable) {
         std::vector<double> row;
-        for (double upSpeed : profile_.shiftTable[t]) row.push_back(upSpeed * 0.70);
+        for (double upSpeed : srcRow) row.push_back(upSpeed * 0.70);
         profile_.downshiftTable.push_back(row);
     }
     profile_.hysteresisFactor = 0.85;
