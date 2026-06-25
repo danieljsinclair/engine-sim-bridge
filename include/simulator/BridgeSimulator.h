@@ -49,7 +49,14 @@ public:
     void setThrottle(double position) override;
     void setIgnition(bool on) override;
     void setStarterMotor(bool on) override;
+
+    // Gear setting with automatic clutch pressure (default overload)
+    // Forward gears (>=1) get clutch 1.0, neutral (0) gets clutch 0.0
     int setGear(int gear) override;
+
+    // Full version: set gear AND apply explicit clutch pressure
+    int setGear(int gear, double clutchPressure);
+
     int getGear() const override;
     void setClutchPressure(double pressure) override;
     void setBrakePressure(double pressure) override;
@@ -71,13 +78,36 @@ public:
     };
     DrivetrainSnapshot captureDrivetrainState() const;
     void restoreDrivetrainState(const DrivetrainSnapshot& snapshot);
+
+    // Change gear by delta with automatic clutch pressure (default overload)
+    // Forward gears (>=1) get clutch 1.0, neutral (0) gets clutch 0.0
     bool changeGear(int gearDelta) override;
+
+    // Full version: change gear by delta AND apply explicit clutch pressure
+    bool changeGear(int gearDelta, double clutchPressure);
+
     void setDynoTorqueScale(double scale) override;
 
     // Configure dyno in load torque mode (brake-only).
     // loadFraction: 0.0-1.0 fraction of DYNO_MAX_TORQUE_FT_LBS.
     // Returns true if configured, false if loadFraction <= 0.
     bool configureDynoLoad(double loadFraction);
+
+    // Set speed tracking target: configures dyno to hold engine RPM to match the
+    // road speed in the current gear. rpmFloor (>=0) sets a minimum target RPM —
+    // the launch/torque-converter behaviour: at standstill the engine revs to the
+    // floor instead of being dragged to roadSpeed x ratio (~0); once road speed
+    // x ratio exceeds the floor, the dyno tracks the road. 0 disables the floor.
+    // speedKmh: Target road speed in km/h. Returns true if in gear, false if neutral.
+    bool setSpeedTrackingTarget(double speedKmh, double rpmFloor = 0.0);
+
+    // Spike-A — inverse model: drive the vehicle-mass body to a target road speed
+    // via VehicleSpeedConstraint (NOT the dyno). The clutch then couples this
+    // driven wheel mass to the engine, so combustion sets engine RPM naturally
+    // instead of being pinned. Dyno is forced OFF. speedKmh in km/h; pass a
+    // negative value to disable the constraint (free-rolling). Returns true if
+    // the constraint was enabled.
+    bool setVehicleSpeedTarget(double speedKmh);
 
     // Set display name directly
     void setName(const std::string& name) { name_ = name; }

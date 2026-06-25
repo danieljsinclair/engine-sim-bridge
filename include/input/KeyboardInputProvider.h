@@ -28,6 +28,7 @@ public:
     void Shutdown() override;
     bool IsConnected() const override;
     EngineInput OnUpdateSimulation(double dt) override;
+    void provideFeedback(const EngineSimStats& stats) override;
     std::string GetProviderName() const override;
     std::string GetLastError() const override;
 

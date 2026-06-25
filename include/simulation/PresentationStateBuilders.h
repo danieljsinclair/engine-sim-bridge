@@ -23,8 +23,9 @@ EngineState::Engine buildEngineState(
     const EngineSimStats& stats,
     const CrankingController::State& cranking);
 
-// Build drivetrain mechanical state from simulator stats
-EngineState::Drivetrain buildDrivetrainState(const EngineSimStats& stats);
+// Build drivetrain mechanical state from simulator stats + input (for replay timestamp)
+EngineState::Drivetrain buildDrivetrainState(const EngineSimStats& stats,
+                                              const input::EngineInput& input);
 
 // Build user control inputs from input provider + cranking controller
 EngineState::Controls buildControlState(

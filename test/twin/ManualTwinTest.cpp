@@ -174,3 +174,47 @@ TEST_F(ManualTwinTest, GearUpClampsAtEighth) {
     }
     EXPECT_EQ(twin_.getCurrentGear(), static_cast<int>(bridge::BridgeGear::EIGHTH));
 }
+
+// ============================================================================
+// Selector / gear-number separation (AC4/AC5): the gear SELECTOR (P/R/N/D gate)
+// must never be conflated with the gear NUMBER. A manual twin in a forward gear
+// reports DRIVE as its selector; the actual gear lives in output.gear. The
+// selector must always be a renderable GearSelector value (never a raw 1-8 cast).
+// ============================================================================
+
+TEST_F(ManualTwinTest, RunningInFirstGear_SelectorIsDriveNotGearNumber) {
+    advanceToRunning();
+    ASSERT_EQ(twin_.getState(), TwinState::RUNNING);
+
+    twin_.requestGearUp();  // NEUTRAL -> FIRST
+    auto output = twin_.update(0.016, makeFeedback(800.0));
+    EXPECT_EQ(output.gear, static_cast<int>(bridge::BridgeGear::FIRST));
+    // Selector must be DRIVE (the gate), NOT GearSelector(1) which is undefined.
+    EXPECT_EQ(output.gearSelector, bridge::GearSelector::DRIVE)
+        << "Manual twin in a forward gear must report DRIVE selector, not the raw gear number";
+}
+
+TEST_F(ManualTwinTest, OffState_SelectorIsNeutral) {
+    auto output = twin_.update(0.016, makeFeedback(0.0));
+    EXPECT_EQ(twin_.getState(), TwinState::OFF);
+    EXPECT_EQ(output.gearSelector, bridge::GearSelector::NEUTRAL);
+}
+
+TEST_F(ManualTwinTest, CrankingState_SelectorIsNeutral) {
+    advanceToCranking();
+    ASSERT_EQ(twin_.getState(), TwinState::CRANKING);
+    auto output = twin_.update(0.016, makeFeedback(200.0));
+    EXPECT_EQ(output.gearSelector, bridge::GearSelector::NEUTRAL);
+}
+
+TEST_F(ManualTwinTest, RunningInAnyForwardGear_SelectorStaysDrive) {
+    advanceToRunning();
+    for (int g = static_cast<int>(bridge::BridgeGear::FIRST);
+         g <= static_cast<int>(bridge::BridgeGear::EIGHTH); ++g) {
+        twin_.requestGearUp();
+        auto output = twin_.update(0.016, makeFeedback(800.0));
+        EXPECT_EQ(output.gearSelector, bridge::GearSelector::DRIVE)
+            << "Selector must be DRIVE in forward gear " << g;
+        EXPECT_EQ(output.gear, g);  // gear NUMBER tracked separately
+    }
+}

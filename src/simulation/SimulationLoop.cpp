@@ -22,9 +22,9 @@
 #include "common/ILogging.h"
 #include "telemetry/ITelemetryProvider.h"
 #include "common/Verification.h"
-#include "common/PresetExceptions.h"
 
 #include <cstring>
+#include <stdexcept>
 #include <thread>
 #include <chrono>
 
@@ -32,10 +32,10 @@
 namespace {
 
 // Timed input simulation constants
-constexpr double THROTTLE_RAMP_DURATION_SECONDS = 0.5;  // Time to ramp from 0 to 1
-constexpr double FULL_THROTTLE = 1.0;                     // Maximum throttle value
-constexpr double SECONDS_TO_MICROSECONDS = 1000000.0;
-constexpr double SECONDS_TO_MILLISECONDS = 1000.0;
+static constexpr double THROTTLE_RAMP_DURATION_SECONDS = 0.5;  // Time to ramp from 0 to 1
+static constexpr double FULL_THROTTLE = 1.0;                     // Maximum throttle value
+static constexpr double SECONDS_TO_MICROSECONDS = 1000000.0;
+static constexpr double SECONDS_TO_MILLISECONDS = 1000.0;
 
 } // anonymous namespace — constants only
 
@@ -73,11 +73,11 @@ void SimulationLoop::updatePresentation(
 
     presentation::EngineState state;
     state.engine = presentation::builders::buildEngineState(stats, crankingState);
-    state.drivetrain = presentation::builders::buildDrivetrainState(stats);
+    state.drivetrain = presentation::builders::buildDrivetrainState(stats, input);
     state.controls = presentation::builders::buildControlState(input, crankingState);
     state.audio = presentation::builders::buildAudioState(timing, telemetryReader_, audioBuffer_, config_, tickTime, simulator_);
     state.presetShortName = simulator_.getName() ? simulator_.getName() : "";
-    presentation_->ShowEngineState(state);
+    presentation_->ShowSimulatorStates(state);
 }
 
 // ============================================================================
@@ -87,11 +87,12 @@ namespace {
 
 // Timing control for 60Hz loop pacing using sleep_until for accuracy
 struct LoopTimer {
-    std::chrono::steady_clock::time_point nextWakeTime = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point nextWakeTime;
     std::chrono::microseconds intervalUs;
 
     explicit LoopTimer(double intervalSeconds)
-        : intervalUs(static_cast<long long>(intervalSeconds * SECONDS_TO_MICROSECONDS))
+        : nextWakeTime(std::chrono::steady_clock::now())
+        , intervalUs(static_cast<long long>(intervalSeconds * SECONDS_TO_MICROSECONDS))
     {}
 
     void waitUntilNextTick() {
@@ -103,7 +104,8 @@ struct LoopTimer {
 // Named audio render callback -- bridges AudioBufferView to strategy->render()
 int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer) {
     if (!strategy->isPlaying()) {
-        if (float* dst = buffer.asFloat()) {
+        float* dst = buffer.asFloat();
+        if (dst) {
             size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
             std::memset(dst, 0, totalSamples * sizeof(float));
         }
@@ -128,7 +130,7 @@ std::unique_ptr<IAudioHardwareProvider> createHardwareProvider(
     format.sampleRate = sampleRate;
 
     if (!provider->initialize(format)) {
-        throw SimulatorException("Failed to initialize audio hardware");
+        throw std::runtime_error("Failed to initialize audio hardware");
     }
 
     return provider;
@@ -137,8 +139,8 @@ std::unique_ptr<IAudioHardwareProvider> createHardwareProvider(
 // Apply gear changes from keyboard input ([/] keys). Clamps at gear 0 (neutral).
 void applyGearChange(ISimulator& simulator, int gearDelta, ILogging* logger) {
 
-    if (simulator.changeGear(gearDelta) && logger) {
-        logger->info(LogMask::BRIDGE, __ilog_format("New gear: %+d", simulator.getGear()));
+    if (simulator.changeGear(gearDelta)) {
+        logger->info(LogMask::BRIDGE, "New gear: %+d", simulator.getGear());
     }
 }
 
@@ -182,9 +184,9 @@ void SimulationLoop::applyVehicleControls(
     const input::EngineInput& input, const CrankingController::State& crankingState,
     double& lastDynoTorqueScale) {
 
-    simulator_.setThrottle(crankingState.startingThrottle); // NOSONAR S2259 — simulator_ is a reference member, always non-null
+    simulator_.setThrottle(crankingState.startingThrottle);
 
-    if (combustionEngine != nullptr) {
+    if (combustionEngine) {
         combustionEngine->setIgnition(input.ignition);
     }
 
@@ -199,8 +201,25 @@ void SimulationLoop::applyVehicleControls(
     if (!crankingState.starterEngaged) {
         // HACK: Should put the clutch in here really
         applyDynoControl(simulator_, input.dynoTorqueScale, lastDynoTorqueScale);
-    } else if (logger_) {
-        logger_->info(LogMask::BRIDGE, __ilog_format("Cranking: starter engaged, dyno disabled - consider using the clutch instead"));
+
+        // Speed tracking. Spike-A: prefer the vehicle-speed constraint (drives the
+        // wheels, clutch couples to engine, dyno OFF) when commanded — this is the
+        // --auto DRIVE path that fixes the dragged-engine sound. Fall back to the
+        // dyno path (setSpeedTrackingTarget) for the legacy road-speed input.
+        // Both are BridgeSimulator-specific APIs, so downcast the engine.
+        if (auto* bridgeSim = dynamic_cast<BridgeSimulator*>(combustionEngine)) {
+            if (input.vehicleSpeedTargetKmh >= 0.0) {
+                // Spike-A inverse path: drive wheels, clutch couples, dyno OFF.
+                bridgeSim->setVehicleSpeedTarget(input.vehicleSpeedTargetKmh);
+            } else if (!input.gearAutoMode && input.roadSpeedKmh >= 0.0) {
+                // Legacy dyno fallback — manual road-speed input only. In --auto
+                // mode the gearbox provider owns speed tracking via the constraint;
+                // PARK/NEUTRAL frames must NOT fall through to the dyno (free-rev).
+                bridgeSim->setSpeedTrackingTarget(input.roadSpeedKmh, input.engineRpmFloor);
+            }
+        }
+    } else {
+        logger_->info(LogMask::BRIDGE, "Cranking: starter engaged, dyno disabled - consider using the clutch instead");
     }
 
     // Twin clutch control (direct pressure, overrides applyGearChange's hardwired clutch)
@@ -244,10 +263,10 @@ void initializeSimulator(
 {
     // Use provided label directly, no internal logic about simulator type
     const std::string& label = config.simulatorLabel;
-    logger->info(LogMask::BRIDGE, __ilog_format("Loading simulator: %s", label.c_str()));
+    logger->info(LogMask::BRIDGE, "Loading simulator: %s", label.c_str());
 
     if (!simulator.create(*engineConfig, logger, telemetryWriter)) {
-        throw SimulatorException("Failed to create simulator: " + simulator.getLastError());
+        throw std::runtime_error("Failed to create simulator: " + simulator.getLastError());
     }
 }
 
@@ -266,27 +285,22 @@ void cleanupSimulation(IAudioHardwareProvider* hardwareProvider, ISimulator& sim
 // Composes SimulationLoop for the main tick execution.
 // ============================================================================
 
-/// Session-owned resources — groups the unique ownership arguments for session creation.
-struct SessionResources {
-    SimulationConfig config;
-    std::unique_ptr<ISimulator> simulator;
-    std::unique_ptr<IAudioHardwareProvider> hardwareProvider;
-};
-
 class SimulatorSession : public ISimulatorSession {
 public:
     SimulatorSession(
-        SessionResources resources,
+        const SimulationConfig& config,
+        std::unique_ptr<ISimulator> simulator,
         IAudioBuffer* audioBuffer,
+        std::unique_ptr<IAudioHardwareProvider> hardwareProvider,
         input::IInputProvider* inputProvider,
         presentation::IPresentation* presentation,
         telemetry::ITelemetryWriter* telemetryWriter,
         telemetry::ITelemetryReader* telemetryReader,
         ILogging* logger)
-        : config_(std::move(resources.config))
-        , simulator_(std::move(resources.simulator))
+        : config_(config)
+        , simulator_(std::move(simulator))
         , audioBuffer_(audioBuffer)
-        , hardwareProvider_(std::move(resources.hardwareProvider))
+        , hardwareProvider_(std::move(hardwareProvider))
         , inputProvider_(inputProvider)
         , presentation_(presentation)
         , telemetryWriter_(telemetryWriter)
@@ -296,39 +310,32 @@ public:
 
     ~SimulatorSession() override {
         if (!closed_) {
-            doClose();
+            close();
         }
     }
 
     int run() override {
-        if (closed_) throw SimulatorException("Session is closed");
+        if (closed_) throw std::runtime_error("Session is closed");
 
         // Start audio only if not already playing (hot-swap keeps audio running)
         if (!audioBuffer_->isPlaying()) {
             if (!audioBuffer_->startPlayback(simulator_.get())) {
-                throw SimulatorException("Failed to start audio playback");
+                throw std::runtime_error("Failed to start audio playback");
             }
             hardwareProvider_->setVolume(config_.volume);
             audioBuffer_->prepareBuffer();
 
             if (!hardwareProvider_->startPlayback()) {
-                logger_->error(LogMask::AUDIO, __ilog_format("Failed to start hardware playback"));
+                logger_->error(LogMask::AUDIO, "Failed to start hardware playback");
             }
         }
 
         // Create loop with injected dependencies — no parameter plumbing
-        SimulationDependencies loopDeps;
-        loopDeps.simulator = simulator_.get();
-        loopDeps.config = &config_;
-        loopDeps.audioBuffer = audioBuffer_;
-        loopDeps.crankingController = &crankingController_;
-        loopDeps.stopRequested = &stopRequested_;
-        loopDeps.inputProvider = inputProvider_;
-        loopDeps.presentation = presentation_;
-        loopDeps.telemetryWriter = telemetryWriter_;
-        loopDeps.telemetryReader = telemetryReader_;
-        loopDeps.logger = logger_;
-        SimulationLoop loop(loopDeps);
+        SimulationLoop loop(
+            *simulator_, config_, *audioBuffer_, crankingController_,
+            stopRequested_,
+            inputProvider_, presentation_,
+            telemetryWriter_, telemetryReader_, logger_);
 
         int exitCode = loop.run();
 
@@ -341,16 +348,16 @@ public:
     }
 
     void stop() override {
-        stopRequested_.store(true);
+        stopRequested_.store(true, std::memory_order_release);
     }
 
     bool hasDrivetrainMomentum(const BridgeSimulator::DrivetrainSnapshot& snapshot) const {
         return snapshot.gear >= 0 && std::abs(snapshot.vehicleMassVtheta) > 1.0;
     }
 
-    void transferDrivetrainState(ISimulator& newSimulator, const ISimulator& oldSimulator, ILogging* logger) {
+    void transferDrivetrainState(ISimulator& newSimulator, ISimulator& oldSimulator, ILogging* logger) {
         // Transfer drivetrain state from old simulator to new
-        const auto* oldBridge = dynamic_cast<const BridgeSimulator*>(&oldSimulator);
+        auto* oldBridge = dynamic_cast<BridgeSimulator*>(&oldSimulator);
         auto* newBridge = dynamic_cast<BridgeSimulator*>(&newSimulator);
 
         if (oldBridge && newBridge) {
@@ -358,7 +365,7 @@ public:
             newBridge->restoreDrivetrainState(snapshot);
 
             if (snapshot.enginePhase == EnginePhase::Stopped) {
-                logger->info(LogMask::BRIDGE, __ilog_format("Old engine was Stopped — no state to transfer"));
+                logger->info(LogMask::BRIDGE, "Old engine was Stopped — no state to transfer");
                 return;
             }
 
@@ -369,14 +376,14 @@ public:
             if (hasDrivetrainMomentum(snapshot)) {
                 auto rolloverDecision = TransitionDecision{EnginePhase::Rollover, false, 0.0, true};
                 applyDecision(combustion, rolloverDecision);
-                logger->info(LogMask::BRIDGE, __ilog_format("Hot-swap → Rollover (gear=%d, vtheta=%.1f)", snapshot.gear, snapshot.vehicleMassVtheta));
+                logger->info(LogMask::BRIDGE, "Hot-swap → Rollover (gear=%d, vtheta=%.1f)", snapshot.gear, snapshot.vehicleMassVtheta);
             } else {
                 auto decision = crankingController_.engageStarter(*combustion, true, true);
                 applyDecision(combustion, decision);
-                logger->info(LogMask::BRIDGE, __ilog_format("Hot-swap → Cranking (neutral, starter engaged)"));
+                logger->info(LogMask::BRIDGE, "Hot-swap → Cranking (neutral, starter engaged)");
             }
         } else {
-            logger->error(LogMask::BRIDGE, __ilog_format("Drivetrain transfer skipped — one or both simulators are not BridgeSimulators"));
+            logger->error(LogMask::BRIDGE, "Drivetrain transfer skipped — one or both simulators are not BridgeSimulators");
         }
     }
 
@@ -385,7 +392,7 @@ public:
         ASSERT(newSimulator, "handoverSession: null simulator provided");
         ASSERT(simulator_, "handoverSession: current simulator is null");
 
-        logger_->info(LogMask::BRIDGE, __ilog_format("handoverSession: loading %s", presetFilePath.c_str()));
+        logger_->info(LogMask::BRIDGE, "handoverSession: loading %s", presetFilePath.c_str());
 
         // Initialize the new simulator (audio config only, not pipeline)
         initializeSimulator(*newSimulator, config_, logger_, telemetryWriter_, &config_.engineConfig);
@@ -408,20 +415,16 @@ public:
         config_.configPath = presetFilePath;
 
         // Reset stopped flag so the loop runs again when session->run() is called
-        stopRequested_.store(false);
+        stopRequested_.store(false, std::memory_order_release);
 
-        logger_->info(LogMask::BRIDGE, __ilog_format("handoverSession: complete"));
+        logger_->info(LogMask::BRIDGE, "handoverSession: complete");
         return true;
     }
 
-    void doClose() {
+    void close() override {
         if (closed_) return;
         cleanupSimulation(hardwareProvider_.get(), *simulator_);
         closed_ = true;
-    }
-
-    void close() override {
-        doClose();
     }
 
     ISimulator* getSimulator() const override {
@@ -450,24 +453,34 @@ private:
 // SimulationLoop - Implementation
 // ============================================================================
 
-SimulationLoop::SimulationLoop(const SimulationDependencies& deps)
-        : simulator_(*deps.simulator)
-        , config_(*deps.config)
-        , audioBuffer_(*deps.audioBuffer)
-        , crankingController_(*deps.crankingController)
-        , stopRequested_(*deps.stopRequested)
-        , inputProvider_(deps.inputProvider)
-        , presentation_(deps.presentation)
-        , telemetryWriter_(deps.telemetryWriter)
-        , telemetryReader_(deps.telemetryReader)
-        , logger_(deps.logger)
+SimulationLoop::SimulationLoop(
+    ISimulator& simulator,
+    const SimulationConfig& config,
+    IAudioBuffer& audioBuffer,
+    CrankingController& crankingController,
+    const std::atomic<bool>& stopRequested,
+    input::IInputProvider* inputProvider,
+    presentation::IPresentation* presentation,
+    telemetry::ITelemetryWriter* telemetryWriter,
+    telemetry::ITelemetryReader* telemetryReader,
+    ILogging* logger)
+        : simulator_(simulator)
+        , config_(config)
+        , audioBuffer_(audioBuffer)
+        , crankingController_(crankingController)
+        , stopRequested_(stopRequested)
+        , inputProvider_(inputProvider)
+        , presentation_(presentation)
+        , telemetryWriter_(telemetryWriter)
+        , telemetryReader_(telemetryReader)
+        , logger_(logger)
     {}
 
 int SimulationLoop::run() {
     double currentTime = 0.0;
     LoopTimer timer(config_.updateInterval());
 
-    logger_->info(LogMask::BRIDGE, __ilog_format("SimulationLoop starting with %s", config_.simulatorLabel.c_str()));
+    logger_->info(LogMask::BRIDGE, "SimulationLoop starting with %s", config_.simulatorLabel.c_str());
 
     // Track for the loop lifetime - first tick to trigger auto-start in non-interactive mode
     bool isFirstTick = true;
@@ -501,10 +514,15 @@ int SimulationLoop::run() {
         isFirstTick = false;
         previousStats = stats;
 
+        // Feed the previous frame's stats back to the input provider so it can
+        // use real engine RPM/speed/torque for decisions (e.g. the SlipLockController
+        // needs engineRpmFeedback to compute clutch pressure from slip).
+        if (inputProvider_) inputProvider_->provideFeedback(previousStats);
+
         if (engineInput.presetCycle) {
             return EXIT_BUT_CONTINUE_NEXT;
         }
-    } while (!stopRequested_.load());
+    } while (!stopRequested_.load(std::memory_order_acquire));
 
     return 0;
 }
@@ -513,30 +531,37 @@ int SimulationLoop::run() {
 // Session factory - GLOBAL scope
 // ============================================================================
 
-std::unique_ptr<ISimulatorSession> createSession(SessionConfig cfg)
+std::unique_ptr<ISimulatorSession> createSession(
+    const SimulationConfig& config,
+    const std::string& scriptPath,
+    std::unique_ptr<ISimulator> simulator,
+    IAudioBuffer* audioBuffer,
+    std::unique_ptr<ISimulatorSession> existingSession,
+    input::IInputProvider* inputProvider,
+    presentation::IPresentation* presentation,
+    telemetry::ITelemetryWriter* telemetryWriter,
+    telemetry::ITelemetryReader* telemetryReader,
+    ILogging* logger)
 {
-    const SimulationConfig& config = cfg.config;
-    const std::string& scriptPath = cfg.scriptPath;
-
     // Hot-swap path: caller passed an existing session — swap the simulator within it
-    if (cfg.existingSession) {
-        ASSERT(cfg.simulator, "simulator must be provided for hot-swap");
-        auto localSession = std::move(cfg.existingSession);
-        if (auto* session = static_cast<SimulatorSession*>(localSession.get()); !session || !session->handoverSession(scriptPath, std::move(cfg.simulator))) {
-            throw SimulatorException("Failed to swap preset within existing session: " + scriptPath);
+    if (existingSession) {
+        ASSERT(simulator, "simulator must be provided for hot-swap");
+        auto* session = static_cast<SimulatorSession*>(existingSession.get());
+        if (!session || !session->handoverSession(scriptPath, std::move(simulator))) {
+            throw std::runtime_error("Failed to swap preset within existing session: " + scriptPath);
         }
-        return localSession;
+        return existingSession;
     }
 
     // First-run path: create a new session with audio hardware
-    ASSERT(cfg.simulator, "simulator must be provided");
-    ASSERT(cfg.audioBuffer, "audioBuffer must be provided");
+    ASSERT(simulator, "simulator must be provided");
+    ASSERT(audioBuffer, "audioBuffer must be provided");
     ASSERT(config.engineConfig.sampleRate > 0, "config.sampleRate must be set");
     ASSERT(config.updateInterval() > 0.0, "config.updateInterval must be set");
     ASSERT(config.framesPerUpdate() > 0, "config.framesPerUpdate must be set");
 
     // Initialize the simulator
-    initializeSimulator(*cfg.simulator, config, cfg.logger, cfg.telemetryWriter, &config.engineConfig);
+    initializeSimulator(*simulator, config, logger, telemetryWriter, &config.engineConfig);
     SimulationConfig sessionConfig = config;
     sessionConfig.configPath = scriptPath;
 
@@ -544,24 +569,21 @@ std::unique_ptr<ISimulatorSession> createSession(SessionConfig cfg)
     AudioBufferConfig strategyConfig;
     strategyConfig.channels = EngineSimAudio::STEREO;
     strategyConfig.synthLatency = config.engineConfig.targetSynthesizerLatency;
-    cfg.audioBuffer->initialize(strategyConfig, config.sampleRate());
+    audioBuffer->initialize(strategyConfig, config.sampleRate());
 
-    auto callback = [audioBuffer = cfg.audioBuffer](AudioBufferView& buffer) {
+    auto callback = [audioBuffer](AudioBufferView& buffer) -> int {
         return audioRenderCallback(audioBuffer, buffer);
     };
-    auto hardwareProvider = createHardwareProvider(config.sampleRate(), callback, cfg.logger);
+    auto hardwareProvider = createHardwareProvider(config.sampleRate(), callback, logger);
 
-    cfg.logger->info(LogMask::AUDIO, __ilog_format("Audio initialized: strategy=%s, sr=%d", cfg.audioBuffer->getName(), config.sampleRate()));
-
-    SessionResources resources;
-    resources.config = std::move(sessionConfig);
-    resources.simulator = std::move(cfg.simulator);
-    resources.hardwareProvider = std::move(hardwareProvider);
+    logger->info(LogMask::AUDIO, "Audio initialized: strategy=%s, sr=%d", audioBuffer->getName(), config.sampleRate());
 
     return std::make_unique<SimulatorSession>(
-        std::move(resources),
-        cfg.audioBuffer,
-        cfg.inputProvider, cfg.presentation,
-        cfg.telemetryWriter, cfg.telemetryReader,
-        cfg.logger);
+        sessionConfig,
+        std::move(simulator),
+        audioBuffer,
+        std::move(hardwareProvider),
+        inputProvider, presentation,
+        telemetryWriter, telemetryReader,
+        logger);
 }// GLOBAL scope — session factory, no access to SimulationLoop members
