@@ -314,7 +314,9 @@ sonar-summary:
 	if [ -z "$$TOKEN" ]; then echo "  No token"; exit 0; fi; \
 	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500&statuses=OPEN&facets=impactSeverities" > $(SONAR_REPORT) 2>/dev/null || true; \
 	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=1&resolutions=REMOVED&facets=impactSeverities" > $(SONAR_REMOVED_FACET) 2>/dev/null || true; \
-	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/measures/component?component=danieljsinclair_engine-sim-bridge&metricKeys=coverage,lines_to_cover,uncovered_lines" > $(SONAR_MEASURES) 2>/dev/null || true; \
+	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/measures/component?component=danieljsinclair_engine-sim-bridge&metricKeys=coverage,lines_to_cover,uncovered_lines" > $(SONAR_MEASURES) 2>/dev/null || true
+	@echo ""
+	@echo "=== [engine-sim-bridge] BEGIN: SonarCloud issues summary ==="
 	python3 scripts/sonar_summary.py $(SONAR_REPORT) --label "[engine-sim-bridge]" --removed-facet $(SONAR_REMOVED_FACET)
 	@echo "=== [engine-sim-bridge] END: SonarCloud issues summary ==="
 
