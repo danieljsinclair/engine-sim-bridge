@@ -39,9 +39,6 @@ bool LiveTelemetryProvider::Initialize() {
     } catch (const SimulatorException& e) {
         lastError_ = std::string("Failed to create twin provider (simulator error): ") + e.what();
         return false;
-    } catch (const std::exception& e) {
-        lastError_ = std::string("Failed to create twin provider: ") + e.what();
-        return false;
     }
 }
 
