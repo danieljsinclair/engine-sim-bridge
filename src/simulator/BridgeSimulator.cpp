@@ -204,7 +204,7 @@ int BridgeSimulator::setGear(int gear) {
     return setGear(gear, clutchPressure);
 }
 
-int BridgeSimulator::setGear(int gear, double clutchPressure) {
+int BridgeSimulator::setGear(int gear, double clutchPressure) { // NOSONAR S5817 - false positive: mutates via m_simulator unique_ptr indirection
     int newGear = 0x7FFFFFFF;
     if (m_simulator->getTransmission()) {
         // Translate bridge convention (BridgeGear) to engine-sim convention (EngineSimGear)
