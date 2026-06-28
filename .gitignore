@@ -57,10 +57,4 @@ __pycache__/
 codeql-db/
 
 # Coverage artifacts
-*.gcno
-*.gcda
-*.gcov
-coverage-report.xml
-coverage.lcov
 *.profraw
-__pycache__/
