@@ -80,6 +80,24 @@ private:
     int findSafeGear(double speedKmh, int maxDownshifts) const;
     // True when the selector is in a forward position that allows shifting.
     bool isShifterInDrive() const;
+
+    // Throttle pre-processing (smoothing + delta tracking + tip correction).
+    void smoothThrottleInput(double throttleFraction, double dt);
+    void trackThrottleDelta(double throttleFraction, double dt);
+    void applyTipCorrection(double throttleDelta, double dt);
+
+    // Engine-brake gate: true when coasting conditions block upshifts only.
+    bool isEngineBrakingActive(double throttleFraction, double speedKmh) const;
+
+    // Shift decision passes — each returns true if a shift was committed.
+    bool tryKickdown(double speedKmh);
+    bool tryTorqueDownshift(double speedKmh);
+    bool trySpeedUpshift(double speedKmh);
+    bool trySpeedDownshift(double speedKmh);
+
+    // Logger snapshot: populate and emit a GearboxLogEntry when logger_ is set.
+    void logShiftState(double throttleFraction, double dt, double speedKmh);
+
     // Core throttle/speed/torque shift decision (shared by both public updates).
     void runShiftLogic(double dt, double speedKmh, double throttleFraction);
 };

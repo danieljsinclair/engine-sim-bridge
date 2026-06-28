@@ -52,7 +52,58 @@ void AutomaticGearbox::runShiftLogic(double dt, double speedKmh, double throttle
     throttleFraction = std::clamp(throttleFraction, 0.0, 1.0);
     timeSinceLastShiftS_ += dt;
 
-    // Smooth throttle input (initialize on first call)
+    double throttleDelta = throttleFraction - previousThrottle_;
+    smoothThrottleInput(throttleFraction, dt);
+    trackThrottleDelta(throttleFraction, dt);
+    applyTipCorrection(throttleDelta, dt);
+
+    requestsShift_ = false;
+    targetGear_ = currentGear_;
+    kickdownActive_ = shouldKickdown(throttleFraction, dt);
+
+    // Don't shift at standstill
+    if (speedKmh < profile_.standstillThresholdKmh) {
+        logShiftState(throttleFraction, dt, speedKmh);
+        return;
+    }
+
+    bool engineBrakingActive = isEngineBrakingActive(throttleFraction, speedKmh);
+
+    if (kickdownActive_ && tryKickdown(speedKmh)) {
+        logShiftState(throttleFraction, dt, speedKmh);
+        return;
+    }
+
+    if (currentGear_ > 1 && tryTorqueDownshift(speedKmh)) {
+        logShiftState(throttleFraction, dt, speedKmh);
+        return;
+    }
+
+    // Asymmetric shift intervals
+    double upInterval = profile_.upshiftMinIntervalS > 0.0
+        ? profile_.upshiftMinIntervalS
+        : profile_.minShiftIntervalS;
+    double downInterval = profile_.downshiftMinIntervalS > 0.0
+        ? profile_.downshiftMinIntervalS
+        : profile_.minShiftIntervalS;
+
+    bool canUpshift = !engineBrakingActive && !tipBlocksUpshift_ &&
+        (lastShiftDirection_ != 1 || timeSinceLastShiftS_ >= upInterval);
+    bool canDownshift =
+        (lastShiftDirection_ != -1 || timeSinceLastShiftS_ >= downInterval);
+
+    if (canUpshift && !requestsShift_) {
+        trySpeedUpshift(speedKmh);
+    }
+
+    if (!requestsShift_ && canDownshift) {
+        trySpeedDownshift(speedKmh);
+    }
+
+    logShiftState(throttleFraction, dt, speedKmh);
+}
+
+void AutomaticGearbox::smoothThrottleInput(double throttleFraction, double dt) {
     double tau = profile_.throttleSmoothingTauMs / 1000.0;
     double alpha = dt / (tau + dt);
     if (smoothedThrottle_ < 0.0) {
@@ -60,22 +111,22 @@ void AutomaticGearbox::runShiftLogic(double dt, double speedKmh, double throttle
     } else {
         smoothedThrottle_ += alpha * (throttleFraction - smoothedThrottle_);
     }
+}
 
-    // Track throttle delta for kickdown detection
+void AutomaticGearbox::trackThrottleDelta(double throttleFraction, double dt) {
     double throttleDelta = throttleFraction - previousThrottle_;
     throttleDeltaTimeS_ += dt;
     throttleDeltaHistory_ = std::max(throttleDeltaHistory_, throttleDelta);
 
-    // Reset delta history if window has passed
     if (throttleDeltaTimeS_ > profile_.kickdownWindowMs / 1000.0) {
         throttleDeltaHistory_ = 0.0;
         throttleDeltaTimeS_ = 0.0;
     }
 
     previousThrottle_ = throttleFraction;
+}
 
-    // Tip-in/tip-out correction (per x-engineer ch6 s4.4)
-    // Level-sensitive: blocks upshifts while throttle gradient exceeds threshold
+void AutomaticGearbox::applyTipCorrection(double throttleDelta, double dt) {
     tipBlocksUpshift_ = false;
     if (profile_.tipCorrectionEnabled && hadPreviousThrottle_ && dt > 0.0) {
         throttleGradient_ = throttleDelta / dt * 100.0;  // %/s
@@ -85,163 +136,142 @@ void AutomaticGearbox::runShiftLogic(double dt, double speedKmh, double throttle
         }
     }
     hadPreviousThrottle_ = true;
+}
 
-    requestsShift_ = false;
-    targetGear_ = currentGear_;
-    kickdownActive_ = shouldKickdown(throttleFraction, dt);
+bool AutomaticGearbox::isEngineBrakingActive(double throttleFraction, double speedKmh) const {
+    if (!profile_.engineBrakingInhibitorEnabled) {
+        return false;
+    }
+    return throttleFraction < profile_.engineBrakingMaxThrottle &&
+           speedKmh >= profile_.engineBrakingMinSpeedKmh;
+}
 
-    // Don't shift at standstill
-    if (speedKmh < profile_.standstillThresholdKmh) {
-        return;
+bool AutomaticGearbox::tryKickdown(double speedKmh) {
+    int safeGear = findSafeGear(speedKmh, currentGear_ - 1);
+    if (safeGear >= currentGear_) {
+        return false;
     }
 
-    // Engine braking inhibitor: blocks upshifts when coasting (per x-engineer ch6 s4.3)
-    // Condition: throttle < 1% AND speed >= threshold → block upshifts only
-    bool engineBrakingActive = false;
-    if (profile_.engineBrakingInhibitorEnabled &&
-        throttleFraction < profile_.engineBrakingMaxThrottle &&
-        speedKmh >= profile_.engineBrakingMinSpeedKmh) {
-        engineBrakingActive = true;
-    }
-
-    // Check for kickdown (downshift on throttle spike) — overrides inhibitor
-    if (kickdownActive_) {
-        int safeGear = findSafeGear(speedKmh, currentGear_ - 1);
-        if (safeGear < currentGear_) {
-            // Use downshift interval for kickdown gate
-            double downInterval = profile_.downshiftMinIntervalS > 0.0
-                ? profile_.downshiftMinIntervalS
-                : profile_.minShiftIntervalS;
-            if (lastShiftDirection_ != -1 || timeSinceLastShiftS_ >= downInterval) {
-                currentGear_ = safeGear;
-                targetGear_ = safeGear;
-                requestsShift_ = true;
-                hasShiftedBefore_ = true;
-                lastShiftDirection_ = -1;
-                timeSinceLastShiftS_ = 0.0;
-                throttleDeltaHistory_ = 0.0;
-                throttleDeltaTimeS_ = 0.0;
-                return;
-            }
-        }
-    }
-
-    // Torque-driven downshift (Virtual ICE Twin spec, AC4): sustained high
-    // drivetrain torque (load) pulls a downshift even without a throttle spike
-    // — the earliest auto boxes worked on torque alone. Require a few
-    // consecutive frames above the high-load band so transient spikes don't
-    // trigger a shift, and gate by the downshift interval for hysteresis.
-    if (currentGear_ > 1) {
-        if (drivetrainTorqueNm_ >= highLoadTorqueThresholdNm_) {
-            ++torqueLoadBandStableFrames_;
-        } else if (drivetrainTorqueNm_ <= lowLoadTorqueThresholdNm_) {
-            torqueLoadBandStableFrames_ = 0;
-        }
-        // Sustained high load: demand a lower gear if engine speed allows it.
-        if (torqueLoadBandStableFrames_ >= 3 && !requestsShift_) {
-            int safeGear = findSafeGear(speedKmh, currentGear_ - 1);
-            if (safeGear < currentGear_) {
-                double downInterval = profile_.downshiftMinIntervalS > 0.0
-                    ? profile_.downshiftMinIntervalS
-                    : profile_.minShiftIntervalS;
-                if (lastShiftDirection_ != -1 || timeSinceLastShiftS_ >= downInterval) {
-                    currentGear_ = safeGear;
-                    targetGear_ = safeGear;
-                    requestsShift_ = true;
-                    hasShiftedBefore_ = true;
-                    lastShiftDirection_ = -1;
-                    timeSinceLastShiftS_ = 0.0;
-                    torqueLoadBandStableFrames_ = 0;
-                    return;
-                }
-            }
-        }
-    }
-
-    // Asymmetric shift intervals: use direction-specific interval if set
-    double upInterval = profile_.upshiftMinIntervalS > 0.0
-        ? profile_.upshiftMinIntervalS
-        : profile_.minShiftIntervalS;
-    double downInterval2 = profile_.downshiftMinIntervalS > 0.0
+    if (double downInterval = profile_.downshiftMinIntervalS > 0.0
         ? profile_.downshiftMinIntervalS
         : profile_.minShiftIntervalS;
-
-    bool canUpshift = !engineBrakingActive && !tipBlocksUpshift_ &&
-        (lastShiftDirection_ != 1 || timeSinceLastShiftS_ >= upInterval);
-    bool canDownshift =
-        (lastShiftDirection_ != -1 || timeSinceLastShiftS_ >= downInterval2);
-
-    // Speed-based upshift(s). Upshift when road speed passes the shift point OR
-    // the engine speed implied by road speed + current gear reaches the rev
-    // limiter (redline safety). Both conditions use the SAME speed model, so the
-    // redline decision cannot hunt against a decoupled real-RPM signal. One
-    // coherent multi-upshift pass; the loop stops once neither condition holds.
-    if (canUpshift && !requestsShift_) {
-        while (currentGear_ < static_cast<int>(profile_.gearRatios.size())) {
-            double upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle_);
-            bool speedUpshift = (upshiftSpeed > 0 && speedKmh > upshiftSpeed);
-            bool redlineUpshift = (getEngineRpm(speedKmh, currentGear_) > profile_.redlineRpm * 0.95);
-            if (speedUpshift || redlineUpshift) {
-                currentGear_ = currentGear_ + 1;
-                requestsShift_ = true;
-                hasShiftedBefore_ = true;
-                lastShiftDirection_ = 1;
-            } else {
-                break;
-            }
-        }
-        if (requestsShift_) {
-            targetGear_ = currentGear_;
-            timeSinceLastShiftS_ = 0.0;
-        }
+        lastShiftDirection_ != -1 && timeSinceLastShiftS_ < downInterval) {
+        return false;
     }
 
-    // Check for downshift(s) — use getDownshiftSpeed() for separate table lookup
-    if (!requestsShift_ && canDownshift) {
-        while (currentGear_ > 1) {
-            double downshiftSpeed = getDownshiftSpeed(currentGear_ - 1, currentGear_, smoothedThrottle_);
-            if (speedKmh < downshiftSpeed) {
-                currentGear_ = currentGear_ - 1;
-                requestsShift_ = true;
-                hasShiftedBefore_ = true;
-                lastShiftDirection_ = -1;
-            } else {
-                break;
-            }
-        }
-        if (requestsShift_) {
-            targetGear_ = currentGear_;
-            timeSinceLastShiftS_ = 0.0;
-        }
+    currentGear_ = safeGear;
+    targetGear_ = safeGear;
+    requestsShift_ = true;
+    hasShiftedBefore_ = true;
+    lastShiftDirection_ = -1;
+    timeSinceLastShiftS_ = 0.0;
+    throttleDeltaHistory_ = 0.0;
+    throttleDeltaTimeS_ = 0.0;
+    return true;
+}
+
+bool AutomaticGearbox::tryTorqueDownshift(double speedKmh) {
+    if (drivetrainTorqueNm_ >= highLoadTorqueThresholdNm_) {
+        ++torqueLoadBandStableFrames_;
+    } else if (drivetrainTorqueNm_ <= lowLoadTorqueThresholdNm_) {
+        torqueLoadBandStableFrames_ = 0;
     }
 
-    if (logger_) {
-        GearboxLogEntry e;
-        e.frame = frame_++;
-        e.dt = dt;
-        e.speedKmh = speedKmh;
-        e.throttleRaw = throttleFraction;
-        e.throttleSmoothed = smoothedThrottle_;
-        e.vehicleSpeedFeedbackKmh = speedFeedbackKmh_;
-        e.engineRpmFeedback = rpmFeedback_;
-        e.currentGear = currentGear_;
-        e.targetGear = targetGear_;
-        e.requestsShift = requestsShift_;
-        e.lastShiftDirection = lastShiftDirection_;
-        e.timeSinceLastShiftS = timeSinceLastShiftS_;
-        e.kickdownActive = kickdownActive_;
-        e.throttleDeltaHistory = throttleDeltaHistory_;
-        e.engineRpm = getEngineRpm(speedKmh, currentGear_);
-        e.twinState = twinState_;
-        e.clutchPressure = clutchPressureFeedback_;
-        if (currentGear_ >= 1 && speedKmh >= 0.1) {
-            e.upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle_);
-            if (currentGear_ > 1) {
-                e.downshiftSpeed = getDownshiftSpeed(currentGear_ - 1, currentGear_, smoothedThrottle_);
-            }
-        }
-        logger_->log(e);
+    if (torqueLoadBandStableFrames_ < 3 || requestsShift_) {
+        return false;
     }
+
+    int safeGear = findSafeGear(speedKmh, currentGear_ - 1);
+    if (safeGear >= currentGear_) {
+        return false;
+    }
+
+    if (double downInterval = profile_.downshiftMinIntervalS > 0.0
+        ? profile_.downshiftMinIntervalS
+        : profile_.minShiftIntervalS;
+        lastShiftDirection_ != -1 && timeSinceLastShiftS_ < downInterval) {
+        return false;
+    }
+
+    currentGear_ = safeGear;
+    targetGear_ = safeGear;
+    requestsShift_ = true;
+    hasShiftedBefore_ = true;
+    lastShiftDirection_ = -1;
+    timeSinceLastShiftS_ = 0.0;
+    torqueLoadBandStableFrames_ = 0;
+    return true;
+}
+
+bool AutomaticGearbox::trySpeedUpshift(double speedKmh) {
+    while (currentGear_ < static_cast<int>(profile_.gearRatios.size())) {
+        double upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle_);
+        bool speedUpshift = (upshiftSpeed > 0 && speedKmh > upshiftSpeed);
+        bool redlineUpshift = (getEngineRpm(speedKmh, currentGear_) > profile_.redlineRpm * 0.95);
+        if (speedUpshift || redlineUpshift) {
+            currentGear_ = currentGear_ + 1;
+            requestsShift_ = true;
+            hasShiftedBefore_ = true;
+            lastShiftDirection_ = 1;
+        } else {
+            break;
+        }
+    }
+    if (requestsShift_) {
+        targetGear_ = currentGear_;
+        timeSinceLastShiftS_ = 0.0;
+    }
+    return requestsShift_;
+}
+
+bool AutomaticGearbox::trySpeedDownshift(double speedKmh) {
+    while (currentGear_ > 1) {
+        double downshiftSpeed = getDownshiftSpeed(currentGear_ - 1, currentGear_, smoothedThrottle_);
+        if (speedKmh < downshiftSpeed) {
+            currentGear_ = currentGear_ - 1;
+            requestsShift_ = true;
+            hasShiftedBefore_ = true;
+            lastShiftDirection_ = -1;
+        } else {
+            break;
+        }
+    }
+    if (requestsShift_) {
+        targetGear_ = currentGear_;
+        timeSinceLastShiftS_ = 0.0;
+    }
+    return requestsShift_;
+}
+
+void AutomaticGearbox::logShiftState(double throttleFraction, double dt, double speedKmh) {
+    if (!logger_) {
+        return;
+    }
+    GearboxLogEntry e;
+    e.frame = frame_++;
+    e.dt = dt;
+    e.speedKmh = speedKmh;
+    e.throttleRaw = throttleFraction;
+    e.throttleSmoothed = smoothedThrottle_;
+    e.vehicleSpeedFeedbackKmh = speedFeedbackKmh_;
+    e.engineRpmFeedback = rpmFeedback_;
+    e.currentGear = currentGear_;
+    e.targetGear = targetGear_;
+    e.requestsShift = requestsShift_;
+    e.lastShiftDirection = lastShiftDirection_;
+    e.timeSinceLastShiftS = timeSinceLastShiftS_;
+    e.kickdownActive = kickdownActive_;
+    e.throttleDeltaHistory = throttleDeltaHistory_;
+    e.engineRpm = getEngineRpm(speedKmh, currentGear_);
+    e.twinState = twinState_;
+    e.clutchPressure = clutchPressureFeedback_;
+    if (currentGear_ >= 1 && speedKmh >= 0.1) {
+        e.upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle_);
+        if (currentGear_ > 1) {
+            e.downshiftSpeed = getDownshiftSpeed(currentGear_ - 1, currentGear_, smoothedThrottle_);
+        }
+    }
+    logger_->log(e);
 }
 
 int AutomaticGearbox::getCurrentGear() const {
