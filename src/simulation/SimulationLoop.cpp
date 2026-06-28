@@ -289,22 +289,19 @@ public:
     SimulatorSession(
         const SimulationConfig& config,
         std::unique_ptr<ISimulator> simulator,
-        IAudioBuffer* audioBuffer,
-        std::unique_ptr<IAudioHardwareProvider> hardwareProvider,
-        input::IInputProvider* inputProvider,
-        presentation::IPresentation* presentation,
-        telemetry::ITelemetryWriter* telemetryWriter,
-        telemetry::ITelemetryReader* telemetryReader,
-        ILogging* logger)
+        const SessionDependencies& deps,
+        std::unique_ptr<IAudioHardwareProvider> hardwareProvider)
         : config_(config)
         , simulator_(std::move(simulator))
-        , audioBuffer_(audioBuffer)
+        , audioBuffer_(deps.audioBuffer)
         , hardwareProvider_(std::move(hardwareProvider))
-        , inputProvider_(inputProvider)
-        , presentation_(presentation)
-        , telemetryWriter_(telemetryWriter)
-        , telemetryReader_(telemetryReader)
-        , logger_(logger)
+        , inputProvider_(deps.inputProvider)
+        , presentation_(deps.presentation)
+        , telemetryWriter_(deps.telemetryWriter)
+        , telemetryReader_(deps.telemetryReader)
+        , logger_(deps.logger)
+        , crankingController_(*deps.crankingController)
+        , stopRequested_(deps.stopRequested)
     {}
 
     ~SimulatorSession() override {
@@ -330,11 +327,17 @@ public:
         }
 
         // Create loop with injected dependencies — no parameter plumbing
-        SimulationLoop loop(
-            *simulator_, config_, *audioBuffer_, crankingController_,
+        SessionDependencies loopDeps{
+            audioBuffer_,
+            &crankingController_,
             stopRequested_,
-            inputProvider_, presentation_,
-            telemetryWriter_, telemetryReader_, logger_);
+            inputProvider_,
+            presentation_,
+            telemetryWriter_,
+            telemetryReader_,
+            logger_
+        };
+        SimulationLoop loop(*simulator_, config_, loopDeps);
 
         int exitCode = loop.run();
 
@@ -347,7 +350,7 @@ public:
     }
 
     void stop() override {
-        stopRequested_.store(true, std::memory_order_seq_cst);
+        stopRequested_->store(true, std::memory_order_seq_cst);
     }
 
     bool hasDrivetrainMomentum(const BridgeSimulator::DrivetrainSnapshot& snapshot) const {
@@ -414,7 +417,7 @@ public:
         config_.configPath = presetFilePath;
 
         // Reset stopped flag so the loop runs again when session->run() is called
-        stopRequested_.store(false, std::memory_order_seq_cst);
+        stopRequested_->store(false, std::memory_order_seq_cst);
 
         logger_->info(LogMask::BRIDGE, "handoverSession: complete");
         return true;
@@ -446,7 +449,7 @@ private:
     telemetry::ITelemetryReader* telemetryReader_;
     ILogging* logger_;
     CrankingController crankingController_;
-    std::atomic<bool> stopRequested_{false};
+    std::atomic<bool>* stopRequested_{nullptr};
     bool closed_{false};
 };
 
@@ -459,24 +462,17 @@ private:
 SimulationLoop::SimulationLoop(
     ISimulator& simulator,
     const SimulationConfig& config,
-    IAudioBuffer& audioBuffer,
-    CrankingController& crankingController,
-    const std::atomic<bool>& stopRequested,
-    input::IInputProvider* inputProvider,
-    presentation::IPresentation* presentation,
-    telemetry::ITelemetryWriter* telemetryWriter,
-    telemetry::ITelemetryReader* telemetryReader,
-    ILogging* logger)
+    const SessionDependencies& deps)
         : simulator_(simulator)
         , config_(config)
-        , audioBuffer_(audioBuffer)
-        , crankingController_(crankingController)
-        , stopRequested_(stopRequested)
-        , inputProvider_(inputProvider)
-        , presentation_(presentation)
-        , telemetryWriter_(telemetryWriter)
-        , telemetryReader_(telemetryReader)
-        , logger_(logger)
+        , audioBuffer_(*deps.audioBuffer)
+        , crankingController_(*deps.crankingController)
+        , stopRequested_(deps.stopRequested)
+        , inputProvider_(deps.inputProvider)
+        , presentation_(deps.presentation)
+        , telemetryWriter_(deps.telemetryWriter)
+        , telemetryReader_(deps.telemetryReader)
+        , logger_(deps.logger)
     {}
 
 int SimulationLoop::run() {
@@ -525,7 +521,7 @@ int SimulationLoop::run() {
         if (engineInput.presetCycle) {
             return EXIT_BUT_CONTINUE_NEXT;
         }
-    } while (!stopRequested_.load(std::memory_order_seq_cst));
+    } while (!stopRequested_->load(std::memory_order_seq_cst));
 
     return 0;
 }
@@ -538,14 +534,16 @@ std::unique_ptr<ISimulatorSession> createSession(
     const SimulationConfig& config,
     const std::string& scriptPath,
     std::unique_ptr<ISimulator> simulator,
-    IAudioBuffer* audioBuffer,
-    std::unique_ptr<ISimulatorSession> existingSession,
-    input::IInputProvider* inputProvider,
-    presentation::IPresentation* presentation,
-    telemetry::ITelemetryWriter* telemetryWriter,
-    telemetry::ITelemetryReader* telemetryReader,
-    ILogging* logger)
+    const SessionDependencies& deps,
+    std::unique_ptr<ISimulatorSession> existingSession)
 {
+    auto* audioBuffer = deps.audioBuffer;
+    auto* inputProvider = deps.inputProvider;
+    auto* presentation = deps.presentation;
+    auto* telemetryWriter = deps.telemetryWriter;
+    auto* telemetryReader = deps.telemetryReader;
+    auto* logger = deps.logger;
+
     // Hot-swap path: caller passed an existing session — swap the simulator within it
     if (existingSession) {
         ASSERT(simulator, "simulator must be provided for hot-swap");
@@ -581,12 +579,19 @@ std::unique_ptr<ISimulatorSession> createSession(
 
     logger->info(LogMask::AUDIO, __ilog_format("Audio initialized: strategy=%s, sr=%d", audioBuffer->getName(), config.sampleRate()));
 
+    SessionDependencies sessionDeps{
+        audioBuffer,
+        nullptr,  // crankingController not needed at session construction
+        nullptr,  // stopRequested set by session internally
+        inputProvider,
+        presentation,
+        telemetryWriter,
+        telemetryReader,
+        logger
+    };
     return std::make_unique<SimulatorSession>(
         sessionConfig,
         std::move(simulator),
-        audioBuffer,
-        std::move(hardwareProvider),
-        inputProvider, presentation,
-        telemetryWriter, telemetryReader,
-        logger);
+        sessionDeps,
+        std::move(hardwareProvider));
 }// GLOBAL scope — session factory, no access to SimulationLoop members

@@ -16,6 +16,7 @@
 #include <memory>
 
 class IAudioBuffer;
+class IAudioHardwareProvider;
 class ISimulator;
 class ISimulatorSession;
 
@@ -26,6 +27,24 @@ namespace telemetry { class ITelemetryWriter; class ITelemetryReader; }
 
 // Forward declaration of simulator type enum (defined in simulator/SimulatorFactory.h)
 enum class SimulatorType;
+
+// ============================================================================
+// SessionDependencies - Bundled infrastructure deps for session construction.
+// Cuts parameter count on SimulationLoop, SimulatorSession, and createSession
+// from 10 → 6 (S107). Each field is an infra dependency; the owning object
+// retains the non-null pointer/reference for the session lifetime.
+// ============================================================================
+
+struct SessionDependencies {
+    IAudioBuffer* audioBuffer = nullptr;
+    CrankingController* crankingController = nullptr;
+    std::atomic<bool>* stopRequested = nullptr;
+    input::IInputProvider* inputProvider = nullptr;
+    presentation::IPresentation* presentation = nullptr;
+    telemetry::ITelemetryWriter* telemetryWriter = nullptr;
+    telemetry::ITelemetryReader* telemetryReader = nullptr;
+    ILogging* logger = nullptr;
+};
 
 // Exit code returned by SimulationLoop::run() when preset cycling is requested
 constexpr int EXIT_BUT_CONTINUE_NEXT = 2;
@@ -70,18 +89,11 @@ struct SimulationConfig {
 // ============================================================================
 
 class SimulationLoop {
-public: 
+public:
   SimulationLoop(
     ISimulator& simulator,
     const SimulationConfig& config,
-    IAudioBuffer& audioBuffer,
-    CrankingController& crankingController,
-    const std::atomic<bool>& stopRequested,
-    input::IInputProvider* inputProvider,
-    presentation::IPresentation* presentation,
-    telemetry::ITelemetryWriter* telemetryWriter,
-    telemetry::ITelemetryReader* telemetryReader,
-    ILogging* logger);
+    const SessionDependencies& deps);
 
     // Run the loop until stopRequested or duration expires.
     // Returns EXIT_BUT_CONTINUE_NEXT on preset cycle, 0 on normal exit.
@@ -118,7 +130,7 @@ private:
     const SimulationConfig& config_;
     IAudioBuffer& audioBuffer_;
     CrankingController& crankingController_;
-    const std::atomic<bool>& stopRequested_;
+    const std::atomic<bool>* stopRequested_;
     input::IInputProvider* inputProvider_;
     presentation::IPresentation* presentation_;
     telemetry::ITelemetryWriter* telemetryWriter_;
@@ -135,12 +147,7 @@ std::unique_ptr<ISimulatorSession> createSession(
     const SimulationConfig& config,
     const std::string& scriptPath,
     std::unique_ptr<ISimulator> simulator,
-    IAudioBuffer* audioBuffer,
-    std::unique_ptr<ISimulatorSession> existingSession = nullptr,
-    input::IInputProvider* inputProvider = nullptr,
-    presentation::IPresentation* presentation = nullptr,
-    telemetry::ITelemetryWriter* telemetryWriter = nullptr,
-    telemetry::ITelemetryReader* telemetryReader = nullptr,
-    ILogging* logger = nullptr);
+    const SessionDependencies& deps,
+    std::unique_ptr<ISimulatorSession> existingSession = nullptr);
 
 #endif // SIMULATION_LOOP_H
