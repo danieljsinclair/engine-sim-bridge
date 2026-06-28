@@ -194,3 +194,48 @@ TEST(LiveTelemetryParserTest, FieldsInDifferentOrder)
     EXPECT_DOUBLE_EQ(signal.speedKmh, 100.0);
     EXPECT_DOUBLE_EQ(signal.brakeFraction, 0.05);
 }
+
+// MARK: - parseNumber / extractDoubleRaw error paths via public parse()
+
+// Exponent parsing (covers positive, negative, E/e variants)
+TEST(LiveTelemetryParserTest, Parse_ScientificNotation_SpeedAndThrottle)
+{
+    UpstreamSignal signal = LiveTelemetryParser::parse(
+        "{\"throttle\":45.2,\"speed\":1.5e3}");
+    EXPECT_TRUE(signal.isValid);
+    EXPECT_DOUBLE_EQ(signal.throttleFraction, 0.452);
+    EXPECT_DOUBLE_EQ(signal.speedKmh, 1500.0);
+}
+
+TEST(LiveTelemetryParserTest, Parse_ScientificNotation_NegativeExponent)
+{
+    UpstreamSignal signal = LiveTelemetryParser::parse(
+        "{\"speed\":2.5e-1}");
+    EXPECT_TRUE(signal.isValid);
+    EXPECT_DOUBLE_EQ(signal.speedKmh, 0.25);
+}
+
+// Malformed numbers: parse() treats invalid values as 0.0 via extractDouble's default
+TEST(LiveTelemetryParserTest, Parse_NaNField_DefaultsToZero)
+{
+    UpstreamSignal signal = LiveTelemetryParser::parse(
+        "{\"throttle\":NaN}");
+    EXPECT_TRUE(signal.isValid);
+    EXPECT_DOUBLE_EQ(signal.throttleFraction, 0.0);
+}
+
+TEST(LiveTelemetryParserTest, Parse_InfinityField_DefaultsToZero)
+{
+    UpstreamSignal signal = LiveTelemetryParser::parse(
+        "{\"speed\":Infinity}");
+    EXPECT_TRUE(signal.isValid);
+    EXPECT_DOUBLE_EQ(signal.speedKmh, 0.0);
+}
+
+TEST(LiveTelemetryParserTest, Parse_ExponentWithoutDigits_DefaultsToZero)
+{
+    UpstreamSignal signal = LiveTelemetryParser::parse(
+        "{\"throttle\":1.0e}");
+    EXPECT_TRUE(signal.isValid);
+    EXPECT_DOUBLE_EQ(signal.throttleFraction, 0.0);
+}

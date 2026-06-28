@@ -2,7 +2,6 @@
 
 #include "io/LiveTelemetryParser.h"
 #include <cmath>
-#include <limits>
 
 namespace input {
 
@@ -99,33 +98,27 @@ bool LiveTelemetryParser::parseNumber(const std::string& json, size_t& i, double
         return false;
     }
 
-    // Integer part
-    if (json[i] >= '0' && json[i] <= '9') {
-        while (i < json.size() && json[i] >= '0' && json[i] <= '9') {
-            i++;
-        }
+    // Integer part (required — a number must have at least one digit)
+    if (!parseIntegerPart(json, i)) {
+        return false;
     }
 
-    // Decimal part
+    // Decimal part (optional fractional digits)
     if (i < json.size() && json[i] == '.') {
         i++;
-        while (i < json.size() && json[i] >= '0' && json[i] <= '9') {
-            i++;
+        if (!parseDecimalPart(json, i)) {
+            return false;
         }
     }
 
-    // Exponent part
+    // Exponent part (optional e/E with optional sign)
     if (i < json.size() && (json[i] == 'e' || json[i] == 'E')) {
         i++;
         if (i < json.size() && (json[i] == '+' || json[i] == '-')) {
             i++;
         }
-        // Must have at least one digit in exponent
-        if (i >= json.size() || json[i] < '0' || json[i] > '9') {
+        if (!parseExponentPart(json, i)) {
             return false;
-        }
-        while (i < json.size() && json[i] >= '0' && json[i] <= '9') {
-            i++;
         }
     }
 
@@ -136,10 +129,44 @@ bool LiveTelemetryParser::parseNumber(const std::string& json, size_t& i, double
 
     // Use strtod on the substring for accurate parsing
     std::string numStr = json.substr(start, i - start);
-    char* endPtr = nullptr;
-    double value = std::strtod(numStr.c_str(), &endPtr);
+    return convertStringToDouble(numStr, out);
+}
 
-    if (endPtr == numStr.c_str()) {
+bool LiveTelemetryParser::parseIntegerPart(const std::string& json, size_t& i) {
+    if (i >= json.size() || json[i] < '0' || json[i] > '9') {
+        return false;
+    }
+    while (i < json.size() && json[i] >= '0' && json[i] <= '9') {
+        i++;
+    }
+    return true;
+}
+
+bool LiveTelemetryParser::parseDecimalPart(const std::string& json, size_t& i) {
+    if (i >= json.size() || json[i] < '0' || json[i] > '9') {
+        return false;
+    }
+    while (i < json.size() && json[i] >= '0' && json[i] <= '9') {
+        i++;
+    }
+    return true;
+}
+
+bool LiveTelemetryParser::parseExponentPart(const std::string& json, size_t& i) {
+    if (i >= json.size() || json[i] < '0' || json[i] > '9') {
+        return false;
+    }
+    while (i < json.size() && json[i] >= '0' && json[i] <= '9') {
+        i++;
+    }
+    return true;
+}
+
+bool LiveTelemetryParser::convertStringToDouble(std::string_view numStr, double& out) {
+    char* endPtr = nullptr;
+    double value = std::strtod(numStr.data(), &endPtr);
+
+    if (endPtr == numStr.data()) {
         return false; // No conversion performed
     }
 

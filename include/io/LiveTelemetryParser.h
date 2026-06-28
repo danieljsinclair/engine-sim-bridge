@@ -17,6 +17,7 @@
 
 #include "io/UpstreamSignal.h"
 #include <string>
+#include <string_view>
 #include <cstdlib>
 #include <cstring>
 
@@ -47,6 +48,18 @@ private:
 
     /// Skip whitespace starting at position i.
     static size_t skipWhitespace(const std::string& json, size_t i);
+
+    /// Parse the integer part (digits) starting at position i. Advances i.
+    static bool parseIntegerPart(const std::string& json, size_t& i);
+
+    /// Parse the decimal part (.digits) starting at position i. Advances i.
+    static bool parseDecimalPart(const std::string& json, size_t& i);
+
+    /// Parse the exponent part (e±digits) starting at position i. Advances i.
+    static bool parseExponentPart(const std::string& json, size_t& i);
+
+    /// Convert a string to double, rejecting NaN and infinity.
+    static bool convertStringToDouble(std::string_view numStr, double& out);
 
     /// Parse a JSON number starting at position i. Advances i past the number.
     static bool parseNumber(const std::string& json, size_t& i, double& out);
