@@ -152,14 +152,19 @@ def format_severity_line(label: str, counts: dict, order: list) -> None:
 
 
 def format_issue_line(issue: dict) -> None:
-    """Print a single top issue, coloured by its highest impact severity."""
+    """Print a single top issue, coloured by its highest impact severity.
+
+    Format: ``[SEVERITY] [rule] file:line - message`` -- the rule (e.g.
+    ``cpp:S5421``) lets the reader jump straight to the SonarCloud rule page.
+    """
     sev = highest_impact_severity(issue) or type_severity(issue)
     colour = severity_colour(sev if sev in IMPACT_ORDER else "")
     message = (issue.get("message") or "")[:70]
     component = (issue.get("component") or "").split(":")[-1]
     line = issue.get("line")
     location = component + (f":{line}" if line else "")
-    print(f"    {colour}[{sev:<6}]{RESET} {location} - {message}")
+    rule = issue.get("rule") or "?"
+    print(f"    {colour}[{sev:<6}] [{rule}]{RESET} {location} - {message}")
 
 
 def sort_critical_first(issues: Iterable[dict]) -> list:
