@@ -362,23 +362,40 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
         startFired_ = true;
     }
 
-    // Q (quit) + P (preset cycle) during replay.
-    if (keyboard_) {
-        int key;
-        while ((key = keyboard_->getKey()) > 0) {
-            if (key == 'q' || key == 'Q' || key == 27) {
-                if (session_) session_->stop();
-            } else if (key == 'p' || key == 'P') {
-                input.presetCycle = true;
-            } else if (key == 's' || key == 'S') {
-                input.starterButton = true;
-            } else if (key == 'i' || key == 'I') {
-                ignitionOn_ = !ignitionOn_;
-            }
-        }
-    }
+    processKeyboardInput(input);
 
     return input;
+}
+
+void ReplayTelemetryProvider::processKeyboardInput(EngineInput& input) {
+    int key;
+    while ((key = keyboard_->getKey()) > 0) {
+        processReplayKey(key, input);
+    }
+}
+
+void ReplayTelemetryProvider::processReplayKey(int key, EngineInput& input) {
+    switch (key) {
+        case 'q':
+        case 'Q':
+        case 27:
+            session_->stop();
+            break;
+        case 'p':
+        case 'P':
+            input.presetCycle = true;
+            break;
+        case 's':
+        case 'S':
+            input.starterButton = true;
+            break;
+        case 'i':
+        case 'I':
+            ignitionOn_ = !ignitionOn_;
+            break;
+        default:
+            break;
+    }
 }
 
 } // namespace input

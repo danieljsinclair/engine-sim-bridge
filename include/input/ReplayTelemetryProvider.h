@@ -81,6 +81,8 @@ private:
 
     bool parseCsv();
     const Sample& sampleAt(double t) const;
+    void processKeyboardInput(EngineInput& input);
+    void processReplayKey(int key, EngineInput& input);
 
     std::string csvPath_;
     bool autoStart_;
