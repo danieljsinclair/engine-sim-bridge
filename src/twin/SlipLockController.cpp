@@ -30,8 +30,8 @@ SlipLockOutput computeSlipLockPressure(const SlipLockInput& input, double maxCre
     // maxCreepPressure is typically 0.05-0.15 (5-15% clutch at full throttle).
     if (input.roadSpeedImpliedRpm < input.idleRpm) {
         const double throttle = clampThrottle(input.throttleFraction);
-        const double creep = throttle * clampDouble(maxCreepPressure, 0.0, 1.0);
-        if (creep > 0.0) {
+        if (const double creep = throttle * clampDouble(maxCreepPressure, 0.0, 1.0);
+            creep > 0.0) {
             return SlipLockOutput{creep, false};
         }
         return SlipLockOutput{0.0, false};
