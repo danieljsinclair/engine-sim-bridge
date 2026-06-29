@@ -120,6 +120,11 @@ private:
     // Single source of truth for engine phase — written via applyTransition()
     EnginePhase enginePhase_ = EnginePhase::Stopped;
 
+    // Cached transmission state — written on setGear/setClutchPressure so
+    // mutations are visible to static analysis without requiring const on a
+    // pointee-only mutation path.
+    int lastSetGear_ = 0;
+
     static void advanceFixedSteps(Simulator* sim, int simulationFrequency, double dt, bool ceil);
     void drainSynthesizerBuffer(Simulator* sim) const;
 
