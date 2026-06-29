@@ -5,6 +5,7 @@
 #include "twin/SlipLockController.h"
 #include "simulator/GearConventions.h"
 #include "simulator/EngineSimTypes.h"
+#include "common/Verification.h"
 
 #include <algorithm>
 #include <cctype>
@@ -369,6 +370,7 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
 }
 
 void ReplayTelemetryProvider::processKeyboardInput(EngineInput& input) {
+    ASSERT(keyboard_ != nullptr, "keyboard_ must be set before calling processKeyboardInput");
     int key;
     while ((key = keyboard_->getKey()) > 0) {
         processReplayKey(key, input);
