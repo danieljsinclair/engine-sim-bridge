@@ -80,6 +80,23 @@ private:
     };
 
     bool parseCsv();
+
+    // parseCsv helpers
+    bool parseHeaderLine(const std::vector<std::string>& fields,
+                         int& colTime, int& colThrottle, int& colRoad, int& colGear,
+                         int& colClutch, int& colGearSelector, bool& timeInMs);
+    void parseDataLine(const std::vector<std::string>& fields, int colTime, int colThrottle,
+                       int colRoad, int colGear, int colClutch, int colGearSelector,
+                       bool timeInMs, double& firstTs, Sample& s);
+    void postProcessSamples();
+
+    // OnUpdateSimulation helpers
+    bool applyTimeSlicing(EngineInput& input, double dt);
+    void buildBaseEngineInput(EngineInput& input, const Sample& s);
+    void handleAutoGearboxDrive(EngineInput& input, const Sample& s, double dt, double speedForBox);
+    void handleAutoGearboxNonDrive(EngineInput& input);
+    void handleNonAutoGearbox(EngineInput& input, const Sample& s);
+
     const Sample& sampleAt(double t) const;
     void processKeyboardInput(EngineInput& input);
     void processReplayKey(int key, EngineInput& input);

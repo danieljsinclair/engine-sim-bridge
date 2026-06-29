@@ -170,25 +170,9 @@ bool ReplayTelemetryProvider::parseCsv() {
 
         auto fields = split(trimmed, ',');
         if (!headerParsed) {
-            for (size_t i = 0; i < fields.size(); ++i) {
-                const std::string name = lower(trim(fields[i]));
-                if (name == "timestamp_utc_ms" || name == "timestamp_ms" || name == "ts_ms") {
-                    colTime = static_cast<int>(i);
-                    timeInMs = true;
-                } else if (name == "time_s" || name == "time" || name == "t" || name == "timecode") {
-                    colTime = static_cast<int>(i);
-                } else if (name == "throttle_pct" || name == "throttle" || name == "throttle_percent") {
-                    colThrottle = static_cast<int>(i);
-                } else if (name == "road_speed_kmh" || name == "road_speed" ||
-                           name == "speed_kmh" || name == "speed") {
-                    colRoad = static_cast<int>(i);
-                } else if (name == "gear") {
-                    colGear = static_cast<int>(i);
-                } else if (name == "gear_selector" || name == "gearselector") {
-                    colGearSelector = static_cast<int>(i);
-                } else if (name == "clutch_pct" || name == "clutch") {
-                    colClutch = static_cast<int>(i);
-                }
+            if (!parseHeaderLine(fields, colTime, colThrottle, colRoad, colGear,
+                                 colClutch, colGearSelector, timeInMs)) {
+                return false;
             }
             headerParsed = true;
             if (colTime < 0) {
@@ -215,41 +199,84 @@ bool ReplayTelemetryProvider::parseCsv() {
         }
 
         Sample s;
-        double v = 0.0;
-        if (colTime >= 0 && colTime < static_cast<int>(fields.size()) &&
-            parseDouble(fields[colTime], v)) {
-            if (firstTs < 0.0) firstTs = v;
-            s.timeS = (v - firstTs) / (timeInMs ? 1000.0 : 1.0);
-        } else {
-            continue;
+        parseDataLine(fields, colTime, colThrottle, colRoad, colGear,
+                      colClutch, colGearSelector, timeInMs, firstTs, s);
+        if (s.timeS >= 0.0) {
+            samples_.push_back(s);
         }
-        if (colThrottle >= 0 && colThrottle < static_cast<int>(fields.size()) &&
-            parseDouble(fields[colThrottle], v)) {
-            s.throttle = std::clamp(v / 100.0, 0.0, 1.0);
-        }
-        if (colRoad >= 0 && colRoad < static_cast<int>(fields.size()) &&
-            parseDouble(fields[colRoad], v) && v >= 0.0) {
-            s.roadSpeedKmh = v;
-        }
-        int gi = 0;
-        if (colGear >= 0 && colGear < static_cast<int>(fields.size()) &&
-            parseInt(fields[colGear], gi)) {
-            s.gear = gi;
-        }
-        if (colGearSelector >= 0 && colGearSelector < static_cast<int>(fields.size())) {
-            s.gearSelector = trim(fields[colGearSelector]);
-        }
-        if (colClutch >= 0 && colClutch < static_cast<int>(fields.size()) &&
-            parseDouble(fields[colClutch], v) && v >= 0.0) {
-            s.clutchPct = std::clamp(v / 100.0, 0.0, 1.0);
-        }
-        samples_.push_back(s);
     }
 
     if (samples_.empty()) {
         if (!headerParsed) lastError_ = "Empty telemetry CSV: " + csvPath_;
         return true;
     }
+
+    postProcessSamples();
+    return true;
+}
+
+bool ReplayTelemetryProvider::parseHeaderLine(const std::vector<std::string>& fields,
+                                              int& colTime, int& colThrottle, int& colRoad, int& colGear,
+                                              int& colClutch, int& colGearSelector, bool& timeInMs) {
+    for (size_t i = 0; i < fields.size(); ++i) {
+        const std::string name = lower(trim(fields[i]));
+        if (name == "timestamp_utc_ms" || name == "timestamp_ms" || name == "ts_ms") {
+            colTime = static_cast<int>(i);
+            timeInMs = true;
+        } else if (name == "time_s" || name == "time" || name == "t" || name == "timecode") {
+            colTime = static_cast<int>(i);
+        } else if (name == "throttle_pct" || name == "throttle" || name == "throttle_percent") {
+            colThrottle = static_cast<int>(i);
+        } else if (name == "road_speed_kmh" || name == "road_speed" ||
+                   name == "speed_kmh" || name == "speed") {
+            colRoad = static_cast<int>(i);
+        } else if (name == "gear") {
+            colGear = static_cast<int>(i);
+        } else if (name == "gear_selector" || name == "gearselector") {
+            colGearSelector = static_cast<int>(i);
+        } else if (name == "clutch_pct" || name == "clutch") {
+            colClutch = static_cast<int>(i);
+        }
+    }
+    return true;
+}
+
+void ReplayTelemetryProvider::parseDataLine(const std::vector<std::string>& fields,
+                                            int colTime, int colThrottle, int colRoad,
+                                            int colGear, int colClutch, int colGearSelector,
+                                            bool timeInMs, double& firstTs, Sample& s) {
+    double v = 0.0;
+    if (colTime >= 0 && colTime < static_cast<int>(fields.size()) &&
+        parseDouble(fields[colTime], v)) {
+        if (firstTs < 0.0) firstTs = v;
+        s.timeS = (v - firstTs) / (timeInMs ? 1000.0 : 1.0);
+    } else {
+        s.timeS = -1.0;  // invalid
+        return;
+    }
+    if (colThrottle >= 0 && colThrottle < static_cast<int>(fields.size()) &&
+        parseDouble(fields[colThrottle], v)) {
+        s.throttle = std::clamp(v / 100.0, 0.0, 1.0);
+    }
+    if (colRoad >= 0 && colRoad < static_cast<int>(fields.size()) &&
+        parseDouble(fields[colRoad], v) && v >= 0.0) {
+        s.roadSpeedKmh = v;
+    }
+    int gi = 0;
+    if (colGear >= 0 && colGear < static_cast<int>(fields.size()) &&
+        parseInt(fields[colGear], gi)) {
+        s.gear = gi;
+    }
+    if (colGearSelector >= 0 && colGearSelector < static_cast<int>(fields.size())) {
+        s.gearSelector = trim(fields[colGearSelector]);
+    }
+    if (colClutch >= 0 && colClutch < static_cast<int>(fields.size()) &&
+        parseDouble(fields[colClutch], v) && v >= 0.0) {
+        s.clutchPct = std::clamp(v / 100.0, 0.0, 1.0);
+    }
+}
+
+void ReplayTelemetryProvider::postProcessSamples() {
     std::stable_sort(samples_.begin(), samples_.end(),
                      [](const Sample& a, const Sample& b) { return a.timeS < b.timeS; });
     // If all timestamps are identical (e.g. vehicle-sim capture tool wrote all
@@ -260,7 +287,6 @@ bool ReplayTelemetryProvider::parseCsv() {
             samples_[i].timeS = static_cast<double>(i) / defaultHz;
         }
     }
-    return true;
 }
 
 const ReplayTelemetryProvider::Sample& ReplayTelemetryProvider::sampleAt(double t) const {
@@ -279,99 +305,31 @@ const ReplayTelemetryProvider::Sample& ReplayTelemetryProvider::sampleAt(double 
 EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
     elapsedS_ += dt;
 
-    // Time slicing: skip samples before startFromS.
-    if (startFromS_ >= 0.0 && elapsedS_ < startFromS_) {
-        elapsedS_ = startFromS_;
-    }
-
-    // Time slicing: stop at endAtS.
-    if (endAtS_ >= 0.0 && elapsedS_ >= endAtS_) {
-        if (session_) session_->stop();
-        EngineInput input;
-        input.ignition = false;
+    EngineInput input;
+    // Apply time slicing (startFromS / endAtS). Returns true if the simulation should stop.
+    if (applyTimeSlicing(input, dt)) {
         return input;
     }
 
-    EngineInput input;
     const Sample& s = sampleAt(elapsedS_);
     currentTimestampS_ = s.timeS;
-    input.replayTimestampS = currentTimestampS_;
-    input.throttle = s.throttle;
-    input.ignition = ignitionOn_;
+    buildBaseEngineInput(input, s);
 
     if (autoGearbox_ && gearbox_) {
-        // Follow the gear stalk. In PARK/NEUTRAL the clutch disengages + the
-        // engine free-revs naturally (no dyno, no pinned RPM, natural idle
-        // variation). Only in DRIVE does the gearbox decide gears + the dyno
-        // tracks road speed.
         bridge::GearSelector sel = s.gearSelector.empty()
             ? bridge::GearSelector::NEUTRAL : parseGearSelector(s.gearSelector);
         gearbox_->setGearSelector(sel);
         input.gearSelector = static_cast<int>(sel);
         input.roadSpeedKmh = s.roadSpeedKmh;
+
+        double speedForBox = (s.roadSpeedKmh >= 0.0) ? s.roadSpeedKmh : 0.0;
         if (sel == bridge::GearSelector::DRIVE) {
-            double speedForBox = (s.roadSpeedKmh >= 0.0) ? s.roadSpeedKmh : 0.0;
-            gearbox_->update(dt, speedForBox, s.throttle, 0.0);
-            input.gearAbsolute = gearbox_->getCurrentGear();
-            input.gearAutoMode = true;
-
-            // SlipLockController — pressure-modulated clutch launch controller
-            // (dyno OFF). Drive the WHEELS to the CSV road speed
-            // (vehicleSpeedTargetKmh) and let the clutch couple them to the
-            // engine via the torque-converter slip characteristic:
-            //   - standstill (road-implied < idle):   pressure 0   (engine free to idle, no stall)
-            //   - launch under throttle (high slip):  partial       (TC slip in power band)
-            //   - road catches up (slip -> 0):        pressure -> 1 (locked, direct coupling)
-            //   - decel (engine slower than road):    pressure 1    (locked, engine braking)
-            // The stall floor (pressure == 0 whenever roadSpeedImpliedRpm < idleRpm)
-            // is the lesson from the stall/redline circle: coupling below idle drags
-            // the engine under idle and stalls it. See twin/SlipLockController.h.
-            input.vehicleSpeedTargetKmh = s.roadSpeedKmh;
-            input.engineRpmFloor = 0.0;  // dyno disabled downstream
-
-            // Road-speed-implied engine RPM: the RPM the engine would be at if the
-            // clutch were locked in the current gear at the current road speed.
-            // engineRpm = wheelRadS * gearRatio * diffRatio,  wheelRadS = v / tireRadius.
-            const int gear = gearbox_->getCurrentGear();
-            double roadSpeedImpliedRpm = gearboxProfile_.idleRpm;  // fallback above the floor
-            if (gear >= 1 && gear <= static_cast<int>(gearboxProfile_.gearRatios.size())) {
-                const double speedMs = speedForBox / 3.6;
-                const double wheelRadS = speedMs / gearboxProfile_.tireRadiusM;
-                roadSpeedImpliedRpm = wheelRadS
-                                      * gearboxProfile_.gearRatios[gear - 1]
-                                      * gearboxProfile_.diffRatio
-                                      * 30.0 / 3.14159265358979;
-            }
-
-            // maxCreepPressure: clutch pressure at full throttle with zero road
-            // speed. Mimics TC fluid coupling — 0.10 = 10% clutch at stall.
-            // Tunable: lower = less creep (engine freer to rev), higher = more
-            // creep (stronger launch feel, but risk of stall at high throttle).
-            constexpr double kMaxCreepPressure = 0.10;
-            const twin::SlipLockOutput slipLock = twin::computeSlipLockPressure(
-                twin::SlipLockInput{
-                    engineRpmFeedback_,
-                    roadSpeedImpliedRpm,
-                    s.throttle,
-                    gearboxProfile_.idleRpm,
-                    gearboxProfile_.redlineRpm},
-                kMaxCreepPressure);
-            input.clutchPressure = slipLock.clutchPressure;
+            handleAutoGearboxDrive(input, s, dt, speedForBox);
         } else {
-            // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
-            // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).
-            input.gearAbsolute = 0;
-            input.gearAutoMode = false;
-            // Make sure any prior vehicle-speed constraint is released.
-            input.vehicleSpeedTargetKmh = -1.0;
+            handleAutoGearboxNonDrive(input);
         }
     } else {
-        // Non-auto (e.g. rev-in-park): no gear forced, clutch disengaged, free-rev.
-        input.roadSpeedKmh = s.roadSpeedKmh;
-        input.gearAbsolute = s.gear;
-        input.gearSelector = (s.gear >= 0) ? s.gear : 0;
-        input.clutchPressure = s.clutchPct;
-        input.gearAutoMode = false;
+        handleNonAutoGearbox(input, s);
     }
 
     // One-shot starter pulse on the first frame so the CrankingController cranks.
@@ -383,6 +341,95 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
     processKeyboardInput(input);
 
     return input;
+}
+
+bool ReplayTelemetryProvider::applyTimeSlicing(EngineInput& input, double /*dt*/) {
+    // Time slicing: skip samples before startFromS.
+    if (startFromS_ >= 0.0 && elapsedS_ < startFromS_) {
+        elapsedS_ = startFromS_;
+    }
+
+    // Time slicing: stop at endAtS.
+    if (endAtS_ >= 0.0 && elapsedS_ >= endAtS_) {
+        if (session_) session_->stop();
+        input.ignition = false;
+        return true;
+    }
+    return false;
+}
+
+void ReplayTelemetryProvider::buildBaseEngineInput(EngineInput& input, const Sample& s) {
+    input.replayTimestampS = currentTimestampS_;
+    input.throttle = s.throttle;
+    input.ignition = ignitionOn_;
+}
+
+void ReplayTelemetryProvider::handleAutoGearboxDrive(EngineInput& input, const Sample& s,
+                                                      double dt, double speedForBox) {
+    gearbox_->update(dt, speedForBox, s.throttle, 0.0);
+    input.gearAbsolute = gearbox_->getCurrentGear();
+    input.gearAutoMode = true;
+
+    // SlipLockController — pressure-modulated clutch launch controller
+    // (dyno OFF). Drive the WHEELS to the CSV road speed
+    // (vehicleSpeedTargetKmh) and let the clutch couple them to the
+    // engine via the torque-converter slip characteristic:
+    //   - standstill (road-implied < idle):   pressure 0   (engine free to idle, no stall)
+    //   - launch under throttle (high slip):  partial       (TC slip in power band)
+    //   - road catches up (slip -> 0):        pressure -> 1 (locked, direct coupling)
+    //   - decel (engine slower than road):    pressure 1    (locked, engine braking)
+    // The stall floor (pressure == 0 whenever roadSpeedImpliedRpm < idleRpm)
+    // is the lesson from the stall/redline circle: coupling below idle drags
+    // the engine under idle and stalls it. See twin/SlipLockController.h.
+    input.vehicleSpeedTargetKmh = s.roadSpeedKmh;
+    input.engineRpmFloor = 0.0;  // dyno disabled downstream
+
+    // Road-speed-implied engine RPM: the RPM the engine would be at if the
+    // clutch were locked in the current gear at the current road speed.
+    // engineRpm = wheelRadS * gearRatio * diffRatio,  wheelRadS = v / tireRadius.
+    const int gear = gearbox_->getCurrentGear();
+    double roadSpeedImpliedRpm = gearboxProfile_.idleRpm;  // fallback above the floor
+    if (gear >= 1 && gear <= static_cast<int>(gearboxProfile_.gearRatios.size())) {
+        const double speedMs = speedForBox / 3.6;
+        const double wheelRadS = speedMs / gearboxProfile_.tireRadiusM;
+        roadSpeedImpliedRpm = wheelRadS
+                              * gearboxProfile_.gearRatios[gear - 1]
+                              * gearboxProfile_.diffRatio
+                              * 30.0 / 3.14159265358979;
+    }
+
+    // maxCreepPressure: clutch pressure at full throttle with zero road
+    // speed. Mimics TC fluid coupling — 0.10 = 10% clutch at stall.
+    // Tunable: lower = less creep (engine freer to rev), higher = more
+    // creep (stronger launch feel, but risk of stall at high throttle).
+    constexpr double kMaxCreepPressure = 0.10;
+    const twin::SlipLockOutput slipLock = twin::computeSlipLockPressure(
+        twin::SlipLockInput{
+            engineRpmFeedback_,
+            roadSpeedImpliedRpm,
+            s.throttle,
+            gearboxProfile_.idleRpm,
+            gearboxProfile_.redlineRpm},
+        kMaxCreepPressure);
+    input.clutchPressure = slipLock.clutchPressure;
+}
+
+void ReplayTelemetryProvider::handleAutoGearboxNonDrive(EngineInput& input) {
+    // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
+    // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).
+    input.gearAbsolute = 0;
+    input.gearAutoMode = false;
+    // Make sure any prior vehicle-speed constraint is released.
+    input.vehicleSpeedTargetKmh = -1.0;
+}
+
+void ReplayTelemetryProvider::handleNonAutoGearbox(EngineInput& input, const Sample& s) {
+    // Non-auto (e.g. rev-in-park): no gear forced, clutch disengaged, free-rev.
+    input.roadSpeedKmh = s.roadSpeedKmh;
+    input.gearAbsolute = s.gear;
+    input.gearSelector = (s.gear >= 0) ? s.gear : 0;
+    input.clutchPressure = s.clutchPct;
+    input.gearAutoMode = false;
 }
 
 void ReplayTelemetryProvider::processKeyboardInput(EngineInput& input) {
