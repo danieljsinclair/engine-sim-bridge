@@ -22,6 +22,19 @@ protected:
         profile_.standstillThresholdKmh = 1.0;
         profile_.minShiftIntervalS = 0.5;
 
+        // Populate a shift table so getShiftSpeed satisfies its populated-table
+        // precondition. The upshift points are set high (> test road speeds) so
+        // the speed-based shift path stays quiet and the tests below isolate the
+        // redline safety behaviour (profiles without a table are no longer
+        // supported: missing table is a programmer error).
+        profile_.separateDownshiftTableEnabled = false;
+        profile_.shiftTableThrottleLevels = {0.1, 0.5, 1.0};
+        profile_.shiftTable = {
+            {200.0, 200.0, 200.0, 200.0, 200.0, 200.0, 200.0},
+            {200.0, 200.0, 200.0, 200.0, 200.0, 200.0, 200.0},
+            {200.0, 200.0, 200.0, 200.0, 200.0, 200.0, 200.0}
+        };
+
         gearbox_ = std::make_unique<twin::AutomaticGearbox>(profile_);
     }
 
