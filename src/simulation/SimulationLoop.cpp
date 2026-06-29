@@ -300,8 +300,6 @@ public:
         , telemetryWriter_(deps.telemetryWriter)
         , telemetryReader_(deps.telemetryReader)
         , logger_(deps.logger)
-        , crankingController_(*deps.crankingController)
-        , stopRequested_(deps.stopRequested)
     {}
 
     ~SimulatorSession() override {
@@ -330,7 +328,7 @@ public:
         SessionDependencies loopDeps{
             audioBuffer_,
             &crankingController_,
-            stopRequested_,
+            &stopRequested_,
             inputProvider_,
             presentation_,
             telemetryWriter_,
@@ -350,7 +348,7 @@ public:
     }
 
     void stop() override {
-        stopRequested_->store(true, std::memory_order_seq_cst);
+        stopRequested_.store(true, std::memory_order_seq_cst);
     }
 
     bool hasDrivetrainMomentum(const BridgeSimulator::DrivetrainSnapshot& snapshot) const {
@@ -417,7 +415,7 @@ public:
         config_.configPath = presetFilePath;
 
         // Reset stopped flag so the loop runs again when session->run() is called
-        stopRequested_->store(false, std::memory_order_seq_cst);
+        stopRequested_.store(false, std::memory_order_seq_cst);
 
         logger_->info(LogMask::BRIDGE, "handoverSession: complete");
         return true;
@@ -449,7 +447,7 @@ private:
     telemetry::ITelemetryReader* telemetryReader_;
     ILogging* logger_;
     CrankingController crankingController_;
-    std::atomic<bool>* stopRequested_{nullptr};
+    std::atomic<bool> stopRequested_{false};
     bool closed_{false};
 };
 
