@@ -648,6 +648,24 @@ if(BUILD_BRIDGE_TESTS)
         add_test(NAME manual_twin_provider_tests COMMAND manual_twin_provider_tests --gtest_color=yes)
     endif()
 
+    # Replay telemetry provider tests - CSV parsing + replay behavior
+    add_executable(replay_telemetry_provider_tests
+        test/input/ReplayTelemetryProviderTest.cpp
+    )
+    target_include_directories(replay_telemetry_provider_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(replay_telemetry_provider_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(replay_telemetry_provider_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME replay_telemetry_provider_tests COMMAND replay_telemetry_provider_tests --gtest_color=yes)
+    endif()
+
     # Demo input tests - tests for DemoThrottleSource and DemoInputProvider
     add_executable(demo_input_tests
         test/input/DemoThrottleSourceTest.cpp
