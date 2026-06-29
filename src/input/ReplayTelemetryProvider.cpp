@@ -123,12 +123,13 @@ void ReplayTelemetryProvider::reconfigureProfile(const std::vector<double>& gear
     gearboxProfile_.separateDownshiftTableEnabled = true;
     gearboxProfile_.downshiftTableThrottleLevels = gearboxProfile_.shiftTableThrottleLevels;
     gearboxProfile_.downshiftTable.clear();
-    for (size_t t = 0; t < gearboxProfile_.shiftTable.size(); ++t) {
+    for (const auto& srcRow : gearboxProfile_.shiftTable) {
         std::vector<double> row;
-        for (double upSpeed : gearboxProfile_.shiftTable[t]) {
+        row.reserve(srcRow.size());
+        for (double upSpeed : srcRow) {
             row.push_back(upSpeed * 0.70);
         }
-        gearboxProfile_.downshiftTable.push_back(row);
+        gearboxProfile_.downshiftTable.push_back(std::move(row));
     }
     gearboxProfile_.hysteresisFactor = 0.85;
     // Reconstruct the gearbox with the matched profile
