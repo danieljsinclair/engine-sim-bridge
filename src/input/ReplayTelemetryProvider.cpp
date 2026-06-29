@@ -154,7 +154,12 @@ bool ReplayTelemetryProvider::parseCsv() {
     }
 
     std::string line;
-    int colTime = -1, colThrottle = -1, colRoad = -1, colGear = -1, colClutch = -1, colGearSelector = -1;
+    int colTime = -1;
+    int colThrottle = -1;
+    int colRoad = -1;
+    int colGear = -1;
+    int colClutch = -1;
+    int colGearSelector = -1;
     bool headerParsed = false;
     bool timeInMs = false;
     double firstTs = -1.0;
@@ -192,7 +197,8 @@ bool ReplayTelemetryProvider::parseCsv() {
             }
             // Detect raw CAN format (undecoded) — clear error instead of silent
             // failure (which would read 0 throttle/speed and the engine sits idle).
-            bool hasCanId = false, hasDataHex = false;
+            bool hasCanId = false;
+            bool hasDataHex = false;
             for (size_t i = 0; i < fields.size(); ++i) {
                 const std::string name = lower(trim(fields[i]));
                 if (name == "can_id") hasCanId = true;
@@ -381,9 +387,10 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
 
 void ReplayTelemetryProvider::processKeyboardInput(EngineInput& input) {
     ASSERT(keyboard_ != nullptr, "keyboard_ must be set before calling processKeyboardInput");
-    int key;
-    while ((key = keyboard_->getKey()) > 0) {
+    int key = keyboard_->getKey();
+    while (key > 0) {
         processReplayKey(key, input);
+        key = keyboard_->getKey();
     }
 }
 
