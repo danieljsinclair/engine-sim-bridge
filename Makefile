@@ -115,8 +115,7 @@ remove-orphans:
 clean: remove-orphans clean-presets clean-test-fixtures sonar-clean coverage-clean
 	@if [ -d $(BUILD_DIR) ]; then cmake --build $(BUILD_DIR) --target clean >/dev/null 2>&1 || true; fi
 	@rm -f $(BUILD_DIR)/*.stamp
-	@rm -rf tmp
-	@rm -rf .scannerwork
+	@rm -rf tmp $(BUILD_COV_DIR)/.scannerwork
 
 # Remove only stamp files so tests can be rerun without full clean.
 clean-test:
@@ -127,7 +126,6 @@ scrub: clean
 	@echo "Scrubbing bridge build..."
 	@rm -rf $(BUILD_DIR) $(BUILD_COV_DIR) preset tmp
 	@$(MAKE) remove-orphans
-	@rm -rf .scannerwork
 
 # Remove runtime-generated preset fixtures so next test run regenerates them.
 # Needed if .mr source scripts change.
@@ -237,9 +235,9 @@ $(SONAR_REPORT): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(
 		fi
 	@echo "=== [engine-sim-bridge] Waiting for SonarCloud Compute Engine to finish ==="
 	@TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}"; \
-		CETASKID=$$(grep -E '^ceTaskId=' .scannerwork/report-task.txt 2>/dev/null | cut -d= -f2); \
+		CETASKID=$$(grep -E '^ceTaskId=' $(BUILD_COV_DIR)/.scannerwork/report-task.txt 2>/dev/null | cut -d= -f2); \
 		if [ -z "$$CETASKID" ]; then \
-			echo "ERROR: no ceTaskId in .scannerwork/report-task.txt; cannot confirm analysis settled"; \
+			echo "ERROR: no ceTaskId in $(BUILD_COV_DIR)/.scannerwork/report-task.txt; cannot confirm analysis settled"; \
 			exit 1; \
 		fi; \
 		echo "  CE task: $$CETASKID"; \
@@ -271,7 +269,7 @@ $(COMPILE_DB): $(BUILD_COV_DIR)/CMakeCache.txt
 
 sonar-clean:
 	@rm -f $(SONAR_REPORT)
-	@rm -rf .scannerwork
+	@rm -rf $(BUILD_COV_DIR)/.scannerwork
 
 coverage-clean:
 	@rm -f $(COVERAGE_REPORT) $(BUILD_COV_DIR)/coverage.profdata $(BUILD_COV_DIR)/lcov.info $(BUILD_COV_DIR)/profraw/*.profraw

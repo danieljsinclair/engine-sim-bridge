@@ -530,9 +530,9 @@ def display(coverage_path, repo_root, verbose=False, label='Local Coverage'):
                     if r[0] not in dead_paths and r[1] > 0]
     live_records.sort(key=lambda r: (r[2] / r[1] if r[1] else 0.0))
     if verbose:
-        print('  src/ per-file (sonar scope, lowest coverage first):')
+        print('  src/ coverage per-file (sonar scope, lowest first):')
     else:
-        print('  src/ top 5 worst (sonar scope, live only): {}--verbose for full list{}'.format(
+        print('  src/ coverage — top 5 worst (sonar scope, live only): {}pass --verbose for full list{}'.format(
             GREY, RESET))
     shown = live_records if verbose else live_records[:5]
     for path, lf, lh in shown:
