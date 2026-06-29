@@ -44,6 +44,10 @@ bool parseDouble(const std::string& s, double& out) {
         size_t used = 0;
         out = std::stod(t, &used);
         return used != 0;
+    } catch (const std::invalid_argument&) {
+        return false;
+    } catch (const std::out_of_range&) {
+        return false;
     } catch (...) {
         return false;
     }
@@ -56,6 +60,10 @@ bool parseInt(const std::string& s, int& out) {
         size_t used = 0;
         out = std::stoi(t, &used);
         return used != 0;
+    } catch (const std::invalid_argument&) {
+        return false;
+    } catch (const std::out_of_range&) {
+        return false;
     } catch (...) {
         return false;
     }
@@ -257,6 +265,8 @@ const ReplayTelemetryProvider::Sample& ReplayTelemetryProvider::sampleAt(double 
     for (size_t i = 1; i < samples_.size(); ++i) {
         if (samples_[i].timeS > t) return samples_[i - 1];
     }
+    // Unreachable: loop returns for all t < samples_.back().timeS, and t >= back() is handled above.
+    // Kept for compiler happiness.
     return samples_.back();
 }
 
