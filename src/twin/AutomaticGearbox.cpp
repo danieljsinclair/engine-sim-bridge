@@ -152,10 +152,9 @@ bool AutomaticGearbox::tryKickdown(double speedKmh) {
         return false;
     }
 
-    if (double downInterval = profile_.downshiftMinIntervalS > 0.0
+    if (lastShiftDirection_ == -1 && timeSinceLastShiftS_ < (profile_.downshiftMinIntervalS > 0.0
         ? profile_.downshiftMinIntervalS
-        : profile_.minShiftIntervalS;
-        lastShiftDirection_ != -1 && timeSinceLastShiftS_ < downInterval) {
+        : profile_.minShiftIntervalS)) {
         return false;
     }
 
@@ -186,10 +185,9 @@ bool AutomaticGearbox::tryTorqueDownshift(double speedKmh) {
         return false;
     }
 
-    if (double downInterval = profile_.downshiftMinIntervalS > 0.0
+    if (lastShiftDirection_ == -1 && timeSinceLastShiftS_ < (profile_.downshiftMinIntervalS > 0.0
         ? profile_.downshiftMinIntervalS
-        : profile_.minShiftIntervalS;
-        lastShiftDirection_ != -1 && timeSinceLastShiftS_ < downInterval) {
+        : profile_.minShiftIntervalS)) {
         return false;
     }
 
