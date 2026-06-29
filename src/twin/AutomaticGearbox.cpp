@@ -327,17 +327,12 @@ double AutomaticGearbox::getShiftSpeed(int fromGear, int toGear, double throttle
     ASSERT(fromGear >= 1 && toGear >= 1 && fromGear < toGear, "getShiftSpeed: gear indexes out of range");
     ASSERT(!profile_.shiftTable.empty(), "getShiftSpeed: shift table must be populated");
 
-    // Use profile throttle levels if available, otherwise fall back to legacy 5-level.
-    static constexpr std::array<double, 5> legacyLevels = {0.1, 0.25, 0.5, 0.75, 1.0};
-
     const size_t tableIndex = static_cast<size_t>(fromGear) - 1;
+    
     ASSERT(tableIndex < profile_.shiftTable[0].size(), "getShiftSpeed: table index out of range for shift table");
+    ASSERT(!profile_.shiftTableThrottleLevels.empty(), "getShiftSpeed: throttle levels must be populated");
 
-    if (!profile_.shiftTableThrottleLevels.empty()) {
-        return interpolateShiftSpeed(profile_.shiftTable, throttle, profile_.shiftTableThrottleLevels, tableIndex);
-    }
-
-    return interpolateShiftSpeed(profile_.shiftTable, throttle, legacyLevels, tableIndex);
+    return interpolateShiftSpeed(profile_.shiftTable, throttle, profile_.shiftTableThrottleLevels, tableIndex);
 }
 
 double AutomaticGearbox::getDownshiftSpeed(int fromGear, int toGear, double throttle) const {
@@ -387,10 +382,6 @@ bool AutomaticGearbox::shouldKickdown(double throttleFraction, [[maybe_unused]] 
 }
 
 int AutomaticGearbox::findSafeGear(double speedKmh, int maxDownshifts) const {
-    if (maxDownshifts < 1) {
-        return currentGear_;
-    }
-
     // Try gears from current-1 down to 1
     for (int gear = currentGear_ - 1; gear >= std::max(1, currentGear_ - maxDownshifts); --gear) {
         double rpm = getEngineRpm(speedKmh, gear);

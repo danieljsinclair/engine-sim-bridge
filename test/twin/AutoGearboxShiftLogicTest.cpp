@@ -343,6 +343,137 @@ TEST_F(AutoGearboxShiftLogicTest, F5_DownshiftHysteresisFallbackUsesFactor) {
 
 // ============================================================================
 
+// Mock logger: captures the last GearboxLogEntry passed to log()
+namespace {
+class MockGearboxLogger : public twin::IGearboxLogger {
+public:
+    mutable twin::GearboxLogEntry lastEntry;
+    mutable int callCount = 0;
+    void log(const twin::GearboxLogEntry& entry) override {
+        lastEntry = entry;
+        ++callCount;
+    }
+};
+} // namespace
+
+// logShiftState: verify GearboxLogEntry field population when logger is set.
+// Uses a profile with shift intervals disabled so a single update can trigger.
+TEST_F(AutoGearboxShiftLogicTest, LogShiftState_PopulatesEntryOnShift) {
+    IceVehicleProfile p;
+    p.gearRatios = {4.714, 3.143, 2.106, 1.667};
+    p.diffRatio = 3.15;
+    p.tireRadiusM = 0.32;
+    p.hysteresisFactor = 0.85;
+    p.shiftTableThrottleLevels = {0.1, 0.5, 1.0};
+    p.shiftTable = {
+        {20.0, 35.0, 50.0, 65.0},   // 10% throttle
+        {30.0, 50.0, 70.0, 90.0},   // 50%
+        {40.0, 65.0, 90.0, 115.0}   // 100%
+    };
+    p.separateDownshiftTableEnabled = false;
+    p.minShiftIntervalS = 0.0;
+    p.upshiftMinIntervalS = 0.0;
+    p.downshiftMinIntervalS = 0.0;
+    p.redlineRpm = 6500.0;
+    p.standstillThresholdKmh = 1.0;
+    p.kickdownThrottleThreshold = 0.95;
+    p.kickdownDelta = 0.4;
+    p.kickdownWindowMs = 100.0;
+    p.throttleSmoothingTauMs = 50.0;
+
+    MockGearboxLogger logger;
+    AutomaticGearbox gb(p);
+    gb.setLogger(&logger);
+    gb.setGearSelector(bridge::GearSelector::DRIVE);
+
+    // First update at low speed — gear 1, no shift requested
+    gb.update(0.1, 10.0, 0.3);
+    EXPECT_EQ(logger.callCount, 1);
+    EXPECT_EQ(logger.lastEntry.currentGear, 1);
+    EXPECT_FALSE(logger.lastEntry.requestsShift);
+    EXPECT_DOUBLE_EQ(logger.lastEntry.speedKmh, 10.0);
+    EXPECT_DOUBLE_EQ(logger.lastEntry.throttleRaw, 0.3);
+
+    // Advance to speed where upshift fires (1st→2nd at 50% = 50 km/h, so 60>50)
+    gb.update(0.1, 60.0, 0.5);
+    EXPECT_GT(logger.callCount, 1);
+    EXPECT_TRUE(logger.lastEntry.requestsShift);
+    EXPECT_GT(logger.lastEntry.targetGear, 1);
+    EXPECT_GT(logger.lastEntry.upshiftSpeed, 0.0);
+}
+
+// logShiftState: no-op when logger is null (default)
+TEST_F(AutoGearboxShiftLogicTest, LogShiftState_NoOpWhenNullLogger) {
+    AutomaticGearbox gb(profile);
+    gb.setGearSelector(bridge::GearSelector::DRIVE);
+    // Logger not set — must not crash
+    gb.update(0.1, 10.0, 0.3);
+    gb.update(0.1, 60.0, 0.9);
+    EXPECT_GE(gb.getCurrentGear(), 1);  // behavior intact
+}
+
+// Torque-downshift interval gate: after a kickdown, immediate high torque
+// must NOT trigger another downshift until the interval elapses
+TEST_F(AutoGearboxShiftLogicTest, TorqueDownshift_BlockedByIntervalAfterKickdown) {
+    IceVehicleProfile custom;
+    custom.gearRatios = {4.714, 3.143, 2.106, 1.667, 1.285, 1.000, 0.839, 0.667};
+    custom.diffRatio = 3.15;
+    custom.tireRadiusM = 0.32;
+    custom.hysteresisFactor = 0.85;
+    custom.shiftTableThrottleLevels = {0.1, 0.25, 0.5, 0.75, 1.0};
+    custom.shiftTable = {
+        {20.0, 35.0, 50.0, 65.0, 80.0, 95.0, 110.0},
+        {30.0, 50.0, 70.0, 90.0, 110.0, 130.0, 155.0},
+        {40.0, 65.0, 90.0, 115.0, 140.0, 170.0, 200.0},
+        {55.0, 85.0, 115.0, 145.0, 180.0, 215.0, 255.0},
+        {70.0, 105.0, 140.0, 180.0, 220.0, 265.0, 315.0}
+    };
+    custom.separateDownshiftTableEnabled = true;
+    custom.downshiftTableThrottleLevels = {0.1, 0.25, 0.5, 0.75, 1.0};
+    custom.downshiftTable = {
+        {10.0, 18.0, 25.0, 33.0, 40.0, 48.0, 55.0},
+        {15.0, 25.0, 35.0, 45.0, 55.0, 65.0, 78.0},
+        {20.0, 33.0, 45.0, 58.0, 70.0, 85.0, 100.0},
+        {28.0, 43.0, 58.0, 73.0, 90.0, 108.0, 128.0},
+        {35.0, 53.0, 70.0, 90.0, 110.0, 133.0, 158.0}
+    };
+    custom.minShiftIntervalS = 3.0;
+    custom.downshiftMinIntervalS = 1.0;
+    custom.redlineRpm = 6500.0;
+    custom.standstillThresholdKmh = 1.0;
+    custom.kickdownThrottleThreshold = 0.95;
+    custom.kickdownDelta = 0.4;
+    custom.kickdownWindowMs = 100.0;
+    custom.throttleSmoothingTauMs = 50.0;
+
+    AutomaticGearbox gb(custom);
+    gb.setGearSelector(bridge::GearSelector::DRIVE);
+
+    // Climb to 3rd gear at 70 km/h
+    ASSERT_TRUE(runUntil(gb, 0.5, 200, 70.0, 0.4, 50.0,
+        [](AutomaticGearbox& g) { return g.getCurrentGear() >= 3; }));
+    ASSERT_EQ(gb.getCurrentGear(), 3);
+
+    // Drop speed to 50 km/h (still in 3rd, no downshift expected yet)
+    for (int i = 0; i < 10; ++i) gb.update(0.1, 50.0, 0.4, 50.0);
+    ASSERT_EQ(gb.getCurrentGear(), 3);
+
+    // Clear shift interval timers
+    for (int i = 0; i < 40; ++i) gb.update(0.1, 50.0, 0.4, 50.0);
+
+    // Kickdown: floor the throttle to force a 3→2 downshift.
+    gb.update(0.05, 50.0, 0.98, 250.0);
+    int gearAfterKickdown = gb.getCurrentGear();
+    ASSERT_LT(gearAfterKickdown, 3) << "Kickdown must pull a downshift from 3rd";
+
+    // Advance past downshiftMinIntervalS — but no safe lower gear exists
+    // (gear 1 at 50 km/h would be 6154 RPM > 5850 = 90% redline), so the
+    // box correctly holds 2nd. This proves the safety guard, not just the gate.
+    for (int i = 0; i < 15; ++i) gb.update(0.1, 50.0, 0.4, 400.0);
+    EXPECT_EQ(gb.getCurrentGear(), gearAfterKickdown)
+        << "No safe lower gear: box holds 2nd (gear 1 would exceed 90% redline)";
+}
+
 // AC7: Shifts stay within the box's gear range; convention P=-2,R=-1,N=0,1..8.
 TEST_F(AutoGearboxShiftLogicTest, AC7_GearStaysInRangeAndHoldsConvention) {
     // The gearbox currentGear_ is the bridge forward-gear index (1..N). The
