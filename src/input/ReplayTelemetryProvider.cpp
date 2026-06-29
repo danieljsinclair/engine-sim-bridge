@@ -48,8 +48,6 @@ bool parseDouble(const std::string& s, double& out) {
         return false;
     } catch (const std::out_of_range&) {
         return false;
-    } catch (...) {
-        return false;
     }
 }
 
@@ -63,8 +61,6 @@ bool parseInt(const std::string& s, int& out) {
     } catch (const std::invalid_argument&) {
         return false;
     } catch (const std::out_of_range&) {
-        return false;
-    } catch (...) {
         return false;
     }
 }
@@ -154,14 +150,8 @@ bool ReplayTelemetryProvider::parseCsv() {
     }
 
     std::string line;
-    int colTime = -1;
-    int colThrottle = -1;
-    int colRoad = -1;
-    int colGear = -1;
-    int colClutch = -1;
-    int colGearSelector = -1;
+    CsvColumns cols;
     bool headerParsed = false;
-    bool timeInMs = false;
     double firstTs = -1.0;
 
     while (std::getline(in, line)) {
@@ -170,25 +160,17 @@ bool ReplayTelemetryProvider::parseCsv() {
 
         auto fields = split(trimmed, ',');
         if (!headerParsed) {
-            if (!parseHeaderLine(fields, colTime, colThrottle, colRoad, colGear,
-                                 colClutch, colGearSelector, timeInMs)) {
+            if (!parseHeaderLine(fields, cols)) {
                 return false;
             }
             headerParsed = true;
-            if (colTime < 0) {
+            if (cols.colTime < 0) {
                 lastError_ = "Telemetry CSV missing time column (time_s): " + csvPath_;
                 return false;
             }
             // Detect raw CAN format (undecoded) — clear error instead of silent
             // failure (which would read 0 throttle/speed and the engine sits idle).
-            bool hasCanId = false;
-            bool hasDataHex = false;
-            for (size_t i = 0; i < fields.size(); ++i) {
-                const std::string name = lower(trim(fields[i]));
-                if (name == "can_id") hasCanId = true;
-                if (name == "data_hex") hasDataHex = true;
-            }
-            if (hasCanId && hasDataHex) {
+            if (isRawCanFormat(fields)) {
                 lastError_ = "This is a RAW CAN capture (can_id + data_hex columns). "
                              "Decode it first with: vehicle-sim --connect file:" +
                              csvPath_ + " --log-csv decoded.csv  "
@@ -199,8 +181,7 @@ bool ReplayTelemetryProvider::parseCsv() {
         }
 
         Sample s;
-        parseDataLine(fields, colTime, colThrottle, colRoad, colGear,
-                      colClutch, colGearSelector, timeInMs, firstTs, s);
+        parseDataLine(fields, cols, firstTs, s);
         if (s.timeS >= 0.0) {
             samples_.push_back(s);
         }
@@ -215,63 +196,83 @@ bool ReplayTelemetryProvider::parseCsv() {
     return true;
 }
 
-bool ReplayTelemetryProvider::parseHeaderLine(const std::vector<std::string>& fields,
-                                              int& colTime, int& colThrottle, int& colRoad, int& colGear,
-                                              int& colClutch, int& colGearSelector, bool& timeInMs) {
+bool ReplayTelemetryProvider::isRawCanFormat(const std::vector<std::string>& fields) const {
+    bool hasCanId = false;
+    bool hasDataHex = false;
+    for (const auto& field : fields) {
+        const std::string name = lower(trim(field));
+        if (name == "can_id") hasCanId = true;
+        if (name == "data_hex") hasDataHex = true;
+    }
+    return hasCanId && hasDataHex;
+}
+
+bool ReplayTelemetryProvider::parseHeaderLine(const std::vector<std::string>& fields, CsvColumns& cols) const {
     for (size_t i = 0; i < fields.size(); ++i) {
         const std::string name = lower(trim(fields[i]));
         if (name == "timestamp_utc_ms" || name == "timestamp_ms" || name == "ts_ms") {
-            colTime = static_cast<int>(i);
-            timeInMs = true;
-        } else if (name == "time_s" || name == "time" || name == "t" || name == "timecode") {
-            colTime = static_cast<int>(i);
-        } else if (name == "throttle_pct" || name == "throttle" || name == "throttle_percent") {
-            colThrottle = static_cast<int>(i);
-        } else if (name == "road_speed_kmh" || name == "road_speed" ||
-                   name == "speed_kmh" || name == "speed") {
-            colRoad = static_cast<int>(i);
-        } else if (name == "gear") {
-            colGear = static_cast<int>(i);
-        } else if (name == "gear_selector" || name == "gearselector") {
-            colGearSelector = static_cast<int>(i);
-        } else if (name == "clutch_pct" || name == "clutch") {
-            colClutch = static_cast<int>(i);
+            cols.colTime = static_cast<int>(i);
+            cols.timeInMs = true;
+            continue;
+        }
+        if (name == "time_s" || name == "time" || name == "t" || name == "timecode") {
+            cols.colTime = static_cast<int>(i);
+            continue;
+        }
+        if (name == "throttle_pct" || name == "throttle" || name == "throttle_percent") {
+            cols.colThrottle = static_cast<int>(i);
+            continue;
+        }
+        if (name == "road_speed_kmh" || name == "road_speed" ||
+            name == "speed_kmh" || name == "speed") {
+            cols.colRoad = static_cast<int>(i);
+            continue;
+        }
+        if (name == "gear") {
+            cols.colGear = static_cast<int>(i);
+            continue;
+        }
+        if (name == "gear_selector" || name == "gearselector") {
+            cols.colGearSelector = static_cast<int>(i);
+            continue;
+        }
+        if (name == "clutch_pct" || name == "clutch") {
+            cols.colClutch = static_cast<int>(i);
         }
     }
     return true;
 }
 
-void ReplayTelemetryProvider::parseDataLine(const std::vector<std::string>& fields,
-                                            int colTime, int colThrottle, int colRoad,
-                                            int colGear, int colClutch, int colGearSelector,
-                                            bool timeInMs, double& firstTs, Sample& s) {
+void ReplayTelemetryProvider::parseDataLine(const std::vector<std::string>& fields, const CsvColumns& cols,
+                                            double& firstTs, Sample& s) const {
     double v = 0.0;
-    if (colTime >= 0 && colTime < static_cast<int>(fields.size()) &&
-        parseDouble(fields[colTime], v)) {
+    if (cols.colTime >= 0 && cols.colTime < static_cast<int>(fields.size()) &&
+        parseDouble(fields[cols.colTime], v)) {
         if (firstTs < 0.0) firstTs = v;
-        s.timeS = (v - firstTs) / (timeInMs ? 1000.0 : 1.0);
+        s.timeS = (v - firstTs) / (cols.timeInMs ? 1000.0 : 1.0);
     } else {
         s.timeS = -1.0;  // invalid
         return;
     }
-    if (colThrottle >= 0 && colThrottle < static_cast<int>(fields.size()) &&
-        parseDouble(fields[colThrottle], v)) {
+    if (cols.colThrottle >= 0 && cols.colThrottle < static_cast<int>(fields.size()) &&
+        parseDouble(fields[cols.colThrottle], v)) {
         s.throttle = std::clamp(v / 100.0, 0.0, 1.0);
     }
-    if (colRoad >= 0 && colRoad < static_cast<int>(fields.size()) &&
-        parseDouble(fields[colRoad], v) && v >= 0.0) {
+    if (cols.colRoad >= 0 && cols.colRoad < static_cast<int>(fields.size()) &&
+        parseDouble(fields[cols.colRoad], v) && v >= 0.0) {
         s.roadSpeedKmh = v;
     }
-    int gi = 0;
-    if (colGear >= 0 && colGear < static_cast<int>(fields.size()) &&
-        parseInt(fields[colGear], gi)) {
+    if (cols.colGear >= 0 && cols.colGear < static_cast<int>(fields.size()) &&
+        [&] { int gi = 0; return parseInt(fields[cols.colGear], gi); }()) {
+        int gi = 0;
+        parseInt(fields[cols.colGear], gi);
         s.gear = gi;
     }
-    if (colGearSelector >= 0 && colGearSelector < static_cast<int>(fields.size())) {
-        s.gearSelector = trim(fields[colGearSelector]);
+    if (cols.colGearSelector >= 0 && cols.colGearSelector < static_cast<int>(fields.size())) {
+        s.gearSelector = trim(fields[cols.colGearSelector]);
     }
-    if (colClutch >= 0 && colClutch < static_cast<int>(fields.size()) &&
-        parseDouble(fields[colClutch], v) && v >= 0.0) {
+    if (cols.colClutch >= 0 && cols.colClutch < static_cast<int>(fields.size()) &&
+        parseDouble(fields[cols.colClutch], v) && v >= 0.0) {
         s.clutchPct = std::clamp(v / 100.0, 0.0, 1.0);
     }
 }
@@ -358,14 +359,14 @@ bool ReplayTelemetryProvider::applyTimeSlicing(EngineInput& input, double /*dt*/
     return false;
 }
 
-void ReplayTelemetryProvider::buildBaseEngineInput(EngineInput& input, const Sample& s) {
+void ReplayTelemetryProvider::buildBaseEngineInput(EngineInput& input, const Sample& s) const {
     input.replayTimestampS = currentTimestampS_;
     input.throttle = s.throttle;
     input.ignition = ignitionOn_;
 }
 
 void ReplayTelemetryProvider::handleAutoGearboxDrive(EngineInput& input, const Sample& s,
-                                                      double dt, double speedForBox) {
+                                                      double dt, double speedForBox) const {
     gearbox_->update(dt, speedForBox, s.throttle, 0.0);
     input.gearAbsolute = gearbox_->getCurrentGear();
     input.gearAutoMode = true;
@@ -414,7 +415,7 @@ void ReplayTelemetryProvider::handleAutoGearboxDrive(EngineInput& input, const S
     input.clutchPressure = slipLock.clutchPressure;
 }
 
-void ReplayTelemetryProvider::handleAutoGearboxNonDrive(EngineInput& input) {
+void ReplayTelemetryProvider::handleAutoGearboxNonDrive(EngineInput& input) const {
     // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
     // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).
     input.gearAbsolute = 0;
@@ -423,7 +424,7 @@ void ReplayTelemetryProvider::handleAutoGearboxNonDrive(EngineInput& input) {
     input.vehicleSpeedTargetKmh = -1.0;
 }
 
-void ReplayTelemetryProvider::handleNonAutoGearbox(EngineInput& input, const Sample& s) {
+void ReplayTelemetryProvider::handleNonAutoGearbox(EngineInput& input, const Sample& s) const {
     // Non-auto (e.g. rev-in-park): no gear forced, clutch disengaged, free-rev.
     input.roadSpeedKmh = s.roadSpeedKmh;
     input.gearAbsolute = s.gear;

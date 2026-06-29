@@ -79,23 +79,31 @@ private:
         std::string gearSelector;    // PRNDL string from vehicle-sim captures
     };
 
+    struct CsvColumns {
+        int colTime = -1;
+        int colThrottle = -1;
+        int colRoad = -1;
+        int colGear = -1;
+        int colClutch = -1;
+        int colGearSelector = -1;
+        bool timeInMs = false;
+    };
+
     bool parseCsv();
 
     // parseCsv helpers
-    bool parseHeaderLine(const std::vector<std::string>& fields,
-                         int& colTime, int& colThrottle, int& colRoad, int& colGear,
-                         int& colClutch, int& colGearSelector, bool& timeInMs);
-    void parseDataLine(const std::vector<std::string>& fields, int colTime, int colThrottle,
-                       int colRoad, int colGear, int colClutch, int colGearSelector,
-                       bool timeInMs, double& firstTs, Sample& s);
+    bool parseHeaderLine(const std::vector<std::string>& fields, CsvColumns& cols) const;
+    bool isRawCanFormat(const std::vector<std::string>& fields) const;
+    void parseDataLine(const std::vector<std::string>& fields, const CsvColumns& cols,
+                       double& firstTs, Sample& s) const;
     void postProcessSamples();
 
     // OnUpdateSimulation helpers
     bool applyTimeSlicing(EngineInput& input, double dt);
-    void buildBaseEngineInput(EngineInput& input, const Sample& s);
-    void handleAutoGearboxDrive(EngineInput& input, const Sample& s, double dt, double speedForBox);
-    void handleAutoGearboxNonDrive(EngineInput& input);
-    void handleNonAutoGearbox(EngineInput& input, const Sample& s);
+    void buildBaseEngineInput(EngineInput& input, const Sample& s) const;
+    void handleAutoGearboxDrive(EngineInput& input, const Sample& s, double dt, double speedForBox) const;
+    void handleAutoGearboxNonDrive(EngineInput& input) const;
+    void handleNonAutoGearbox(EngineInput& input, const Sample& s) const;
 
     const Sample& sampleAt(double t) const;
     void processKeyboardInput(EngineInput& input);
