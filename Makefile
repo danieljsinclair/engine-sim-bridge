@@ -1,5 +1,9 @@
 .DEFAULT_GOAL := all
-.PHONY: all build clean clean-test scrub help remove-orphans check test test-core test-isomorphism             test-deep presets clean-presets          sonar-scan sonar-clean coverage-clean coverage-run coverage-summary sonar-summary test-nosonar          summary test-reset
+.PHONY: all build clean clean-test scrub help remove-orphans \
+		check test test-core test-isomorphism test-deep test-reset \
+		presets clean-presets \
+		sonar-clean coverage-clean coverage-run coverage-summary sonar-summary test-nosonar \
+		summary
 
 BUILD_DIR ?= build
 BUILD_COV_DIR ?= build-cov
@@ -39,7 +43,7 @@ TEST_SUMMARY_LOG := $(BUILD_DIR)/test-summary.log
 
 # Source inputs that affect the bridge build. This ensures the stamp is invalidated
 # when bridge or engine-sim sources change, so rebuilds happen when necessary.
-BUILD_INPUTS := $(shell find Makefile CMakeLists.txt src include test tools engine-sim -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' -o -name '*.h' -o -name '*.hh' -o -name '*.hpp' -o -name '*.cmake' \) | sort)
+BUILD_INPUTS := Makefile CMakeLists.txt $(shell find src include test tools engine-sim -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' -o -name '*.h' -o -name '*.hh' -o -name '*.hpp' -o -name '*.cmake' \) | sort)
 
 ISOMORPHISM_STAMP := $(BUILD_DIR)/.test-isomorphism.stamp
 
