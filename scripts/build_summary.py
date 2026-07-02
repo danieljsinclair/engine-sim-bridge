@@ -359,12 +359,14 @@ def coverage_for(cov_measures_path, local_cov_path, local_type):
 
     Mirrors coverage_block.py's precedence: the live SonarCloud number is the
     headline; local is the secondary source. Here we use the CACHED measures
-    JSON (fast, no live re-query) when present, else fall back to local lcov/
-    xccov so the field is honest even before a scan/token exists.
+    JSON (fast, no live re-query) when present AND non-zero, else fall back
+    to local lcov/xccov so the field is honest even before a scan/token exists
+    or when cached measures are stale (0% with local coverage available).
     """
     cov = _measures_coverage(cov_measures_path)
-    if cov is not None:
+    if cov is not None and cov[2] > 0:
         return cov
+    # Cached measures are missing or show 0% — fall back to local
     return local_coverage(local_cov_path, local_type)
 
 

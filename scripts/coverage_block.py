@@ -212,19 +212,29 @@ def emit_block(project_key, local_cov_path, local_type, exclusions_path, label):
     print('=== {} Coverage ==='.format(label))
     sonar = fetch_sonar_coverage(project_key)
     if sonar is not None:
-        sc_cov = sonar.get('coverage', 0.0)
-        try:
-            sc_cov = float(sc_cov)
-        except (TypeError, ValueError):
-            sc_cov = 0.0
+        sc_cov = float(sonar.get('coverage', 0) or 0)
         sc_ltc = int(sonar.get('lines_to_cover', 0) or 0)
         sc_covd = sc_ltc - int(sonar.get('uncovered_lines', 0) or 0)
-        print('  {}Overall Coverage (SonarCloud): {}{:.1f}%{}  '
-              '{}{}/{}{}'.format(
-                  BOLD, coverage_color(sc_cov), sc_cov, RESET,
-                  GREY, sc_covd, sc_ltc, RESET))
-        print('  {}source: live {} /api/measures/component{}'.format(
-            GREY, SONAR_HOST, RESET))
+        # If SonarCloud headline is stale (0%) but local lcov has real coverage,
+        # promote local to headline so the build output reflects reality, not a
+        # stale remote 0%.
+        if sc_cov == 0.0 and local is not None:
+            hit, total, pct = local
+            print('  {}Overall Coverage (local {}): {}{:.1f}%{}  '
+                  '{}{}/{} lines{}'.format(
+                      BOLD, local_type, coverage_color(pct), pct, RESET,
+                      GREY, hit, total, RESET))
+            print('  {}source: {}{}'.format(GREY, local_cov_path, RESET))
+            print('  {}SonarCloud headline is stale (0%) — showing local '
+                  'coverage; dashboard will update once server processes the '
+                  'latest scan{}'.format(GREY, RESET))
+        else:
+            print('  {}Overall Coverage (SonarCloud): {}{:.1f}%{}  '
+                  '{}{}/{}{}'.format(
+                      BOLD, coverage_color(sc_cov), sc_cov, RESET,
+                      GREY, sc_covd, sc_ltc, RESET))
+            print('  {}source: live {} /api/measures/component{}'.format(
+                GREY, SONAR_HOST, RESET))
     elif local is not None:
         # No token or fetch failed — promote local to the headline with a note
         # so it is never mistaken for the dashboard number.
@@ -242,10 +252,15 @@ def emit_block(project_key, local_cov_path, local_type, exclusions_path, label):
 
     if sonar is not None and local is not None:
         hit, total, pct = local
-        print('  {}local {}: {}{:.1f}%{}  {}{}/{} lines{}'.format(
-            GREY, local_type, coverage_color(pct), pct, RESET,
-            GREY, hit, total, RESET))
-        print('  {}source: {}{}'.format(GREY, local_cov_path, RESET))
+        sc_cov = float(sonar.get('coverage', 0) or 0)
+        if sc_cov == 0.0:
+            # Already promoted local to headline above; omit duplicate here.
+            pass
+        else:
+            print('  {}local {}: {}{:.1f}%{}  {}{}/{} lines{}'.format(
+                GREY, local_type, coverage_color(pct), pct, RESET,
+                GREY, hit, total, RESET))
+            print('  {}source: {}{}'.format(GREY, local_cov_path, RESET))
 
     if exclusions_path:
         print('  {}exclusions applied ({}): {}{}'.format(
