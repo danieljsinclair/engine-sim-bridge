@@ -240,7 +240,7 @@ Each AC below must have a corresponding unit test. Tests are written FIRST, blin
 ## Build Verification
 
 ```bash
-cd /Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/build
+cd ~/vscode/escli.refac7/engine-sim-bridge/build
 cmake --build .
 ctest --output-on-failure -E 'NOT_BUILT'
 

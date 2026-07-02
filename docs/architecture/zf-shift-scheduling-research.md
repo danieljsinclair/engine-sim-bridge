@@ -386,11 +386,11 @@ Based on this research, testable acceptance criteria:
    - Key findings: TCU reflash procedure, CAN protocol, configuration requirements, real-time data availability
 
 4. **Existing web-research-report.md** - Project documentation
-   - Path: /Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/docs/architecture/web-research-report.md
+   - Path: ~/vscode/escli.refac7/engine-sim-bridge/docs/architecture/web-research-report.md
    - Key findings: ZF 8HP45 gear ratios, shift map structure, hysteresis, torque converter behavior
 
 5. **VirtualICE-Twin-Architecture-Plan.md** - Project documentation
-   - Path: /Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/docs/architecture/VirtualICE-Twin-Architecture-Plan.md
+   - Path: ~/vscode/escli.refac7/engine-sim-bridge/docs/architecture/VirtualICE-Twin-Architecture-Plan.md
    - Key findings: Illustrative shift table, shift scheduling algorithm, hysteresis values, kickdown detection
 
 ### Supplemented with Domain Knowledge

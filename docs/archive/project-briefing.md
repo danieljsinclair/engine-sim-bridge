@@ -385,22 +385,22 @@ Deferred: Phase 1's bridge-level gearbox (calling `changeGear()` externally) is 
 ## 14. Key Files for Specialist Agents
 
 ### Architecture Plan (master document)
-- `/Users/danielsinclair/.claude/plans/the-vehicle-sim-repo-has-foamy-dawn.md`
+- `~/.claude/plans/the-vehicle-sim-repo-has-foamy-dawn.md`
 
 ### Architecture Decisions Memory
-- `/Users/danielsinclair/.claude/projects/-Users-danielsinclair-vscode-escli-refac7-engine-sim-bridge/memory/architecture-decisions.md`
+- `~/.claude/projects/-Users-danielsinclair-vscode-escli-refac7-engine-sim-bridge/memory/architecture-decisions.md`
 
 ### Physics Deep-Dive
-- `/Users/danielsinclair/.claude/projects/-Users-danielsinclair-vscode-escli-refac7-engine-sim-bridge/memory/physics-specialist-analysis.md`
+- `~/.claude/projects/-Users-danielsinclair-vscode-escli-refac7-engine-sim-bridge/memory/physics-specialist-analysis.md`
 
 ### Bridge Source (most relevant for implementation)
-- `/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/include/simulator/ISimulator.h`
-- `/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/include/simulator/BridgeSimulator.h`
-- `/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/include/io/IInputProvider.h`
-- `/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/include/simulator/PresetEngineFactory.h`
-- `/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/include/simulator/SimulatorFactory.h`
-- `/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/src/simulator/BridgeSimulator.cpp`
-- `/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/CMakeLists.txt`
+- `~/vscode/escli.refac7/engine-sim-bridge/include/simulator/ISimulator.h`
+- `~/vscode/escli.refac7/engine-sim-bridge/include/simulator/BridgeSimulator.h`
+- `~/vscode/escli.refac7/engine-sim-bridge/include/io/IInputProvider.h`
+- `~/vscode/escli.refac7/engine-sim-bridge/include/simulator/PresetEngineFactory.h`
+- `~/vscode/escli.refac7/engine-sim-bridge/include/simulator/SimulatorFactory.h`
+- `~/vscode/escli.refac7/engine-sim-bridge/src/simulator/BridgeSimulator.cpp`
+- `~/vscode/escli.refac7/engine-sim-bridge/CMakeLists.txt`
 
 ### Engine-Sim Internals (for understanding physics)
 - `engine-sim/include/simulator.h` -- Simulator class with m_dyno, m_vehicleMass, getTransmission()
@@ -412,9 +412,9 @@ Deferred: Phase 1's bridge-level gearbox (calling `changeGear()` externally) is 
 - `engine-sim/src/vehicle_drag_constraint.cpp` -- Aero drag + rolling resistance
 
 ### Existing Tests (patterns to follow)
-- `/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/test/PresetEngineTests.cpp`
-- `/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/test/BridgeUnitTests.cpp`
+- `~/vscode/escli.refac7/engine-sim-bridge/test/PresetEngineTests.cpp`
+- `~/vscode/escli.refac7/engine-sim-bridge/test/BridgeUnitTests.cpp`
 
 ### Reference Docs
-- `/Users/danielsinclair/vscode/escli.refac7/docs/BRIDGE_INTEGRATION_ARCHITECTURE.md`
-- `/Users/danielsinclair/vscode/escli.refac7/docs/BRIDGE_ARCHITECTURE_REVIEW.md`
+- `~/vscode/escli.refac7/docs/BRIDGE_INTEGRATION_ARCHITECTURE.md`
+- `~/vscode/escli.refac7/docs/BRIDGE_ARCHITECTURE_REVIEW.md`
