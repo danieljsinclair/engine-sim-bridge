@@ -14,7 +14,7 @@
 #include "engine-sim/include/simulator.h"
 
 TEST(Phase0Spikes, DynoTracking) {
-    const std::string outDir = "/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/build-test/spikes/dyno_tracking/";
+    const std::string outDir = std::string(std::filesystem::current_path()) + "/../build-test/spikes/dyno_tracking/";
     const std::string csvPath = outDir + "tracking_data.csv";
     system(("mkdir -p " + outDir).c_str());
 
