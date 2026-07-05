@@ -194,35 +194,61 @@ def fetch_sonar_coverage(project_key):
 
 
 def parse_lcov(path):
-    """Parse an lcov.info file into (filepath, lines_found, lines_hit) records."""
+    """Parse an lcov.info into (filepath, lines_found, lines_hit) records.
+
+    ``lines_found``/``lines_hit`` are derived by COUNTING ``DA:`` records (and
+    those with a hit count > 0), NOT from the ``LF:``/``LH:`` header integers.
+    The headers are emitted by ``geninfo``/llvm-cov and are NOT always equal to
+    the actual ``DA:`` record set — they drift by a few lines per file (the
+    SonarCloud upload path ``lcov_to_xml.py`` ingests one ``<lineToCover>`` per
+    ``DA:``, so summing headers here would diverge from the dashboard). Counting
+    DA keeps the local headline on the same basis as the SonarCloud upload, so
+    local-vs-Sonar gaps reflect only genuine scope/line-counting differences,
+    never an LF/LH artefact. xccov-sourced lcov (engine-sim-app) writes LF/LH
+    consistent with its own DA, so this change is a no-op there.
+    """
     records = []
     current = None
-    lf = 0
-    lh = 0
+    da_count = 0
+    da_hits = 0
     try:
         with open(path) as f:
             for line in f:
                 line = line.rstrip('\n')
                 if line.startswith('SF:'):
                     current = line[3:]
-                    lf = 0
-                    lh = 0
-                elif line.startswith('LF:'):
-                    try:
-                        lf = int(line[3:])
-                    except ValueError:
-                        lf = 0
-                elif line.startswith('LH:'):
-                    try:
-                        lh = int(line[3:])
-                    except ValueError:
-                        lh = 0
+                    da_count = 0
+                    da_hits = 0
+                elif line.startswith('DA:'):
+                    counted = _count_da_line(line)
+                    if counted is not None:
+                        da_count += 1
+                        if counted:
+                            da_hits += 1
                 elif line.startswith('end_of_record') and current is not None:
-                    records.append((current, lf, lh))
+                    records.append((current, da_count, da_hits))
                     current = None
     except OSError:
         return []
     return records
+
+
+def _count_da_line(line):
+    """Return True if a ``DA:`` line is hit, False if not, None if unparseable.
+
+    A ``DA:`` record is ``DA:<lineNumber>,<executionCount>[,<checksum>]``. The
+    single DRY parser used by ``parse_lcov`` to derive per-record found/hit from
+    the DA set (rather than trusting the LF/LH headers). ``True``/``False`` mean
+    "this line counts as found, and is hit / not hit"; ``None`` means the record
+    could not be parsed and is skipped (not counted as found).
+    """
+    parts = line[3:].split(',')
+    if len(parts) < 2:
+        return None
+    try:
+        return int(parts[1]) > 0
+    except ValueError:
+        return None
 
 
 def _lcov_pct(path, project_root=None, exclusions_path=None):

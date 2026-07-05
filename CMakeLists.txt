@@ -105,6 +105,22 @@ endif()
 set(CMAKE_CXX_FLAGS ${SAVED_CXX_FLAGS})
 set(CMAKE_C_FLAGS ${SAVED_C_FLAGS})
 
+# Promote -Wnonportable-include-path to a HARD ERROR. Clang emits this warning
+# when an #include's case/path differs from the file name on disk (e.g. writing
+# "config/CLIconfig.h" when the file is "config/CLIconFIG.h"), or when an
+# include ambiguously resolves across -I roots — which is exactly how a bridge
+# stub sharing a path + include guard silently shadowed the real header on the
+# iOS toolchain and shipped a build break. The warning was emitted and ignored;
+# this makes it unignorable. Project-wide (one declaration, DRY): applies to the
+# bridge library and every test target below, but NOT to engine-sim/piranha
+# (their flags were saved/restored into CMAKE_*_FLAGS above, and add_compile_options
+# only reaches targets created after this point in this directory scope).
+# -Werror=nonportable-system-include-path covers the angled-include (<...>) twin.
+add_compile_options(
+    -Werror=nonportable-include-path
+    -Werror=nonportable-system-include-path
+)
+
 # Real bridge library (uses actual engine-sim with polymorphic simulator selection)
 # Phase F: Audio infrastructure moved from CLI into bridge
 
