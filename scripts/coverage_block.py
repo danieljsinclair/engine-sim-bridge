@@ -64,6 +64,80 @@ RESET = '\033[0m'
 SONAR_HOST = 'https://sonarcloud.io'
 
 
+def parse_sonar_properties(path):
+    """Parse sonar-project.properties and return dict of key-value pairs."""
+    props = {}
+    if not path or not os.path.isfile(path):
+        return props
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    props[key.strip()] = value.strip()
+    except OSError:
+        pass
+    return props
+
+
+def derive_project_root(local_cov_path, exclusions_path):
+    """
+    Derive project root from exclusions_path (sonar-project.properties) or local_cov_path.
+    Priority: exclusions_path > local_cov_path (build-cov/ or build/).
+    """
+    if exclusions_path:
+        return os.path.dirname(os.path.abspath(exclusions_path))
+    if not local_cov_path:
+        return None
+    abs_path = os.path.abspath(local_cov_path)
+    if '/build-cov/' in abs_path:
+        return abs_path.split('/build-cov/')[0]
+    if '/build/' in abs_path:
+        return abs_path.split('/build/')[0]
+    return None
+
+
+def get_coverage_scope(project_root, exclusions_path):
+    """
+    Return (include_patterns, exclude_patterns) for coverage scope.
+    Reads from sonar-project.properties to keep a single source of truth.
+    """
+    props = parse_sonar_properties(exclusions_path)
+    includes = []
+    excludes = []
+
+    # Get sources (default to src/)
+    sources = props.get('sonar.sources', 'src')
+    for s in sources.split(','):
+        s = s.strip()
+        if s:
+            includes.append(os.path.join(project_root, s))
+
+    # Get exclusions (sonar.exclusions + sonar.coverage.exclusions)
+    for key in ('sonar.exclusions', 'sonar.coverage.exclusions'):
+        val = props.get(key, '')
+        for e in val.split(','):
+            e = e.strip()
+            if e:
+                # Convert glob patterns to path prefixes
+                # e.g., "engine-sim-bridge/**" -> project_root/engine-sim-bridge/
+                # e.g., "build/**" -> project_root/build/
+                # e.g., "test/**" -> project_root/test/
+                if e.endswith('/**'):
+                    prefix = os.path.join(project_root, e[:-3])
+                    excludes.append(prefix)
+                elif e.endswith('**'):
+                    # Handle patterns like "test/**" (no leading slash)
+                    prefix = os.path.join(project_root, e[:-2])
+                    excludes.append(prefix)
+                elif '*' not in e:
+                    # Exact directory/file
+                    excludes.append(os.path.join(project_root, e))
+
+    return includes, excludes
+
+
 def coverage_color(pct):
     """Return the ANSI color for a coverage percentage (matches the bridge)."""
     if pct >= 80:
@@ -151,13 +225,80 @@ def parse_lcov(path):
     return records
 
 
-def _lcov_pct(path):
-    """Aggregate (hit, found, pct) over /src/ lcov records (fallback: all)."""
+def _lcov_pct(path, project_root=None, exclusions_path=None):
+    """Aggregate (hit, found, pct) over project src/ lcov records (fallback: all)."""
     records = parse_lcov(path)
     if not records:
         return None
-    src_records = [r for r in records if '/src/' in r[0]]
-    scope = src_records if src_records else records
+    scope = _filter_lcov_records(records, project_root, exclusions_path)
+    return _aggregate_lcov(scope)
+
+
+def _filter_lcov_records(records, project_root, exclusions_path):
+    """Filter lcov records to the coverage scope."""
+    if not project_root:
+        return _default_src_filter(records)
+
+    if exclusions_path:
+        includes, excludes = get_coverage_scope(project_root, exclusions_path)
+        return [r for r in records if _in_scope(r[0], includes, excludes, project_root)]
+
+    return _project_src_filter(records, project_root)
+
+
+def _normalize_sf_path(filepath, project_root):
+    """Normalize an lcov SF: path to an absolute form for prefix matching.
+
+    Include/exclude prefixes are always built as absolute paths from
+    ``project_root`` (see get_coverage_scope). SF paths, however, differ by
+    producer: llvm-cov (CLI) writes ABSOLUTE paths, while Apple's xccov_to_lcov
+    (app) writes RELATIVE paths like "EngineSimApp/ContentView.swift" for
+    portability into SonarCloud. A relative SF path never ``startswith`` an
+    absolute prefix, so resolve relative paths against ``project_root`` here;
+    absolute paths are returned unchanged.
+    """
+    if not filepath:
+        return filepath
+    if os.path.isabs(filepath):
+        return filepath
+    if not project_root:
+        return filepath
+    return os.path.join(project_root, filepath)
+
+
+def _in_scope(filepath, includes, excludes, project_root=None):
+    """Check if filepath matches include patterns and not exclude patterns.
+
+    ``filepath`` is normalized to absolute (via ``project_root``) before
+    matching, so both relative (xccov/Apple) and absolute (llvm-cov) SF paths
+    compare correctly against the absolute include/exclude prefixes.
+    """
+    filepath = _normalize_sf_path(filepath, project_root)
+    if not any(filepath.startswith(inc) for inc in includes):
+        return False
+    if any(filepath.startswith(exc) for exc in excludes):
+        return False
+    return True
+
+
+def _project_src_filter(records, project_root):
+    """Filter to project_root/src/ excluding third-party and tests."""
+    prefix = project_root + '/src/'
+    return [r for r in records
+            if r[0].startswith(prefix)
+            and '/.fetchcache/' not in r[0]
+            and '/_deps/' not in r[0]
+            and '/test/' not in r[0]]
+
+
+def _default_src_filter(records):
+    """Fallback: all /src/ records."""
+    scope = [r for r in records if '/src/' in r[0]]
+    return scope if scope else records
+
+
+def _aggregate_lcov(scope):
+    """Aggregate hit/found/pct from filtered scope."""
     found = sum(r[1] for r in scope)
     hit = sum(r[2] for r in scope)
     pct = (100.0 * hit / found) if found else 0.0
@@ -179,34 +320,65 @@ def _xccov_pct(path):
     return int(covered), int(executable), pct
 
 
-def local_coverage(path, local_type):
+def local_coverage(path, local_type, project_root=None, exclusions_path=None):
     """Return (hit, total, pct) for the local source, or None if unavailable.
 
     ``local_type`` is one of lcov|xccov|none. ``none`` and a missing/unreadable
     file both yield None so the caller OMITS the local line rather than
     fabricating a number.
+
+    ``project_root`` and ``exclusions_path`` are passed through to _lcov_pct
+    for scope filtering.
     """
     if local_type == 'none' or not path:
         return None
     if not os.path.isfile(path):
         return None
     if local_type == 'lcov':
-        return _lcov_pct(path)
+        return _lcov_pct(path, project_root, exclusions_path)
     if local_type == 'xccov':
         return _xccov_pct(path)
     return None
 
 
-def emit_block(project_key, local_cov_path, local_type, exclusions_path, label):
-    """Print the shared coverage summary block.
+def _print_headline_sonar(sc_cov, sc_covd, sc_ltc):
+    """Print SonarCloud headline."""
+    print('  {}Overall Coverage (SonarCloud): {}{:.1f}%{}  '
+          '{}{}/{}{}'.format(
+              BOLD, coverage_color(sc_cov), sc_cov, RESET,
+              GREY, sc_covd, sc_ltc, RESET))
+    print('  {}source: live {} /api/measures/component{}'.format(
+        GREY, SONAR_HOST, RESET))
 
-    Headline is the live SonarCloud coverage (matches the dashboard). The
-    ``local <type>`` line follows when a local source is available and its
-    type is not ``none``. The exclusions line follows when a properties path is
-    given. Falls back gracefully: missing token / failed fetch shows the local
-    number as headline with a "sonar unavailable" note.
-    """
-    local = local_coverage(local_cov_path, local_type)
+
+def _print_headline_local(local_type, pct, hit, total, local_cov_path, note):
+    """Print local coverage headline with note."""
+    print('  {}Overall Coverage (local {}): {}{:.1f}%{}  '
+          '{}{}/{} lines{}'.format(
+              BOLD, local_type, coverage_color(pct), pct, RESET,
+              GREY, hit, total, RESET))
+    print('  {}source: {}{}'.format(GREY, local_cov_path, RESET))
+    print('  {}{}'.format(GREY, note))
+
+
+def _print_local_comparison(local_type, pct, hit, total, local_cov_path):
+    """Print local coverage comparison line when SonarCloud is also available."""
+    print('  {}local {}: {}{:.1f}%{}  {}{}/{} lines{}'.format(
+        GREY, local_type, coverage_color(pct), pct, RESET,
+        GREY, hit, total, RESET))
+    print('  {}source: {}{}'.format(GREY, local_cov_path, RESET))
+
+
+def _print_exclusions(exclusions_path):
+    """Print exclusions applied line."""
+    print('  {}exclusions applied ({}): {}{}'.format(
+        GREY, 'sonar scope', RESET, exclusions_path))
+
+
+def emit_block(project_key, local_cov_path, local_type, exclusions_path, label):
+    """Print the shared coverage summary block."""
+    project_root = derive_project_root(local_cov_path, exclusions_path)
+    local = local_coverage(local_cov_path, local_type, project_root, exclusions_path)
 
     print('')
     print('=== {} Coverage ==='.format(label))
@@ -215,56 +387,36 @@ def emit_block(project_key, local_cov_path, local_type, exclusions_path, label):
         sc_cov = float(sonar.get('coverage', 0) or 0)
         sc_ltc = int(sonar.get('lines_to_cover', 0) or 0)
         sc_covd = sc_ltc - int(sonar.get('uncovered_lines', 0) or 0)
-        # If SonarCloud headline is stale (0%) but local lcov has real coverage,
-        # promote local to headline so the build output reflects reality, not a
-        # stale remote 0%.
+
+        # Stale SonarCloud (0%) but local has data → promote local
         if sc_cov == 0.0 and local is not None:
             hit, total, pct = local
-            print('  {}Overall Coverage (local {}): {}{:.1f}%{}  '
-                  '{}{}/{} lines{}'.format(
-                      BOLD, local_type, coverage_color(pct), pct, RESET,
-                      GREY, hit, total, RESET))
-            print('  {}source: {}{}'.format(GREY, local_cov_path, RESET))
-            print('  {}SonarCloud headline is stale (0%) — showing local '
-                  'coverage; dashboard will update once server processes the '
-                  'latest scan{}'.format(GREY, RESET))
+            _print_headline_local(local_type, pct, hit, total, local_cov_path,
+                'SonarCloud headline is stale (0%) — showing local '
+                'coverage; dashboard will update once server processes the '
+                'latest scan')
         else:
-            print('  {}Overall Coverage (SonarCloud): {}{:.1f}%{}  '
-                  '{}{}/{}{}'.format(
-                      BOLD, coverage_color(sc_cov), sc_cov, RESET,
-                      GREY, sc_covd, sc_ltc, RESET))
-            print('  {}source: live {} /api/measures/component{}'.format(
-                GREY, SONAR_HOST, RESET))
+            _print_headline_sonar(sc_cov, sc_covd, sc_ltc)
+
     elif local is not None:
-        # No token or fetch failed — promote local to the headline with a note
-        # so it is never mistaken for the dashboard number.
+        # No token or fetch failed → promote local with note
         hit, total, pct = local
-        print('  {}Overall Coverage (local {}): {}{:.1f}%{}  '
-              '{}{}/{} lines{}'.format(
-                  BOLD, local_type, coverage_color(pct), pct, RESET,
-                  GREY, hit, total, RESET))
-        print('  {}source: {}{}'.format(GREY, local_cov_path, RESET))
-        print('  {}SonarCloud live unavailable — no token or fetch failed; '
-              'showing local only{}'.format(GREY, RESET))
+        _print_headline_local(local_type, pct, hit, total, local_cov_path,
+            'SonarCloud live unavailable — no token or fetch failed; '
+            'showing local only')
     else:
         print('  {}No coverage data yet (no SonarCloud token and no local '
               'coverage file){}'.format(GREY, RESET))
 
+    # Local comparison line when both SonarCloud and local available
     if sonar is not None and local is not None:
         hit, total, pct = local
         sc_cov = float(sonar.get('coverage', 0) or 0)
-        if sc_cov == 0.0:
-            # Already promoted local to headline above; omit duplicate here.
-            pass
-        else:
-            print('  {}local {}: {}{:.1f}%{}  {}{}/{} lines{}'.format(
-                GREY, local_type, coverage_color(pct), pct, RESET,
-                GREY, hit, total, RESET))
-            print('  {}source: {}{}'.format(GREY, local_cov_path, RESET))
+        if sc_cov != 0.0:  # Not stale, show comparison
+            _print_local_comparison(local_type, pct, hit, total, local_cov_path)
 
     if exclusions_path:
-        print('  {}exclusions applied ({}): {}{}'.format(
-            GREY, 'sonar scope', RESET, exclusions_path))
+        _print_exclusions(exclusions_path)
     print('')
 
 

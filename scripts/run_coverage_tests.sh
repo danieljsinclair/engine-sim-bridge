@@ -18,10 +18,21 @@ mkdir -p "$PROFRAW_DIR"
 # *test* (so e.g. build/bridge_unit_tests and build-cov/test/unit/unit_tests both
 # match). Exclude third-party deps (_deps) and source/script files. Symlinks,
 # directories, and non-executable files are skipped by find's predicates.
+# Allow additional binaries via EXTRA_COVERAGE_BINS env var (colon-separated paths)
 mapfile -t TEST_BINS < <(find "$BUILD_DIR" \
     -type d -name "_deps" -prune -o \
     -type f -perm +111 -name "*test*" ! -name "*.py" ! -name "*.sh" \
     ! -name "*.cmake" ! -name "*.json" -print 2>/dev/null || true)
+
+# Add extra coverage binaries from environment variable (open/closed pattern)
+if [ -n "$EXTRA_COVERAGE_BINS" ]; then
+    IFS=':' read -ra EXTRA_BINS <<< "$EXTRA_COVERAGE_BINS"
+    for bin in "${EXTRA_BINS[@]}"; do
+        if [ -x "$bin" ] && [ -f "$bin" ]; then
+            TEST_BINS+=("$bin")
+        fi
+    done
+fi
 
 echo "=== Running tests with coverage instrumentation ==="
 echo "  Found ${#TEST_BINS[@]} test binary candidate(s)"
@@ -60,6 +71,12 @@ for test_bin in "${TEST_BINS[@]}"; do
         fi
     fi
 done
+
+# Also include the CLI binary for coverage if it exists and was built with coverage
+CLI_BIN="$BUILD_DIR/engine-sim-cli"
+if [ -x "$CLI_BIN" ] && [ -f "$CLI_BIN" ]; then
+    OBJECT_ARGS="$OBJECT_ARGS -object $CLI_BIN"
+fi
 
 echo "=== Generating llvm-cov text report ==="
 $LLVM_COV show --show-branches=count \

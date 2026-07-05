@@ -26,6 +26,11 @@
 #include "input/IKeyboardInput.h"
 #include "session/ISimulatorSession.h"
 
+// IReplayTimeline — satisfied by this provider so the CLI's
+// validateReplayTimeSlicing() can depend on the narrow interface, not this
+// whole class. Only durationS()/setEndAtS() are promoted to virtual here.
+#include "input/IReplayTimeline.h"
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -34,7 +39,7 @@ namespace twin { class AutomaticGearbox; }
 
 namespace input {
 
-class ReplayTelemetryProvider : public IInputProvider {
+class ReplayTelemetryProvider : public IInputProvider, public IReplayTimeline {
 public:
     explicit ReplayTelemetryProvider(std::string csvPath, bool autoStart = true,
                                      bool autoGearbox = false);
@@ -53,12 +58,14 @@ public:
     void setSession(ISimulatorSession* session) { session_ = session; }
 
     // Total span of the parsed trace, in seconds (last sample time). 0 if empty.
-    double durationS() const;
+    // virtual via IReplayTimeline (used by the CLI's time-slice validator).
+    double durationS() const override;
 
     // Time slicing: skip samples before startFromS, stop at endAtS.
     // -1 = disabled (play full trace).
+    // setEndAtS is virtual via IReplayTimeline (validator clamps it to play-to-end).
     void setStartFromS(double s) { startFromS_ = s; }
-    void setEndAtS(double s) { endAtS_ = s; }
+    void setEndAtS(double s) override { endAtS_ = s; }
 
     // Current replay timestamp (absolute, from CSV). -1 before first sample.
     double currentTimestampS() const { return currentTimestampS_; }
