@@ -46,6 +46,7 @@ Exit codes: 0 always (a missing token / fetch failure / absent local file is
 reported in-line, never a crash — this is a display helper, not a build step).
 """
 import argparse
+import fnmatch
 import json
 import os
 import sys
@@ -62,6 +63,25 @@ BOLD = '\033[1m'
 RESET = '\033[0m'
 
 SONAR_HOST = 'https://sonarcloud.io'
+
+# Mismatch-warning thresholds (local-vs-SonarCloud percentage gap).
+#
+# SMALL_THRESHOLD (1.0%): gaps at or below this stay SILENT. The CLI's local
+# number is counted on the same DA-record basis as the SonarCloud upload, so
+# the genuine fixed gap there is 0%; anything <=1% is header/rounding noise
+# (SonarCloud rounds coverage to 1 decimal, and the headline covered/total
+# integers are derived separately). Staying quiet here keeps the CLI output
+# clean — a noisy warning on a 0% gap would be the boy crying wolf.
+#
+# LARGE_THRESHOLD (5.0%): gaps above SMALL but at or below LARGE fire a YELLOW
+# warning (likely scope/upload drift — worth a look, not an alarm). Gaps above
+# LARGE fire a RED warning with a re-scan hint: a gap that big means the upload
+# or the scope is genuinely broken (the engine-sim-app silently-showing-0%
+# failure mode). 5% is well above any legitimate rounding/scope-percentage
+# artefact but low enough that the app's 88%-vs-0% catastrophe trips RED, not
+# YELLOW.
+SMALL_THRESHOLD = 1.0
+LARGE_THRESHOLD = 5.0
 
 
 def parse_sonar_properties(path):
@@ -98,10 +118,55 @@ def derive_project_root(local_cov_path, exclusions_path):
     return None
 
 
+def _normalize_glob(pattern, project_root):
+    """Normalize a sonar exclusion glob to an absolute, fnmatch-ready form.
+
+    SonarCloud exclusion patterns come in several shapes that must all be
+    honoured locally so the headline matches the dashboard's scope:
+
+      ``dir/**``        directory tree (e.g. ``engine-sim-bridge/**``)
+      ``**/foo.*``      filename in any directory (e.g. ``**/*Tests*.*``)
+      ``foo/bar.*``     path-qualified file
+      ``exact/dir``     exact directory or file (no wildcards)
+
+    The previous implementation only built absolute *prefixes* for ``dir/**``
+    and exact paths, then matched with ``str.startswith``. That silently
+    ignored filename globs like ``**/*Tests*.*`` (the app's
+    ``sonar.coverage.exclusions``), so test files inflated the local headline.
+
+    Single DRY mechanism: anchor every pattern under ``project_root`` and let
+    :func:`fnmatch.fnmatch` do the wildcard matching against the absolute SF
+    path. ``dir/**`` collapses to ``dir/*`` (fnmatch has no ``**`` semantics —
+    a plain ``*`` matches any character including ``/``, so ``dir/*`` already
+    spans the subtree); other patterns pass through verbatim.
+    """
+    pattern = pattern.strip()
+    if not pattern:
+        return None
+    # fnmatch's `*` matches path separators too, so `dir/**` and `dir/*` are
+    # equivalent — normalize to `dir/*` (drop the redundant second `*`).
+    if pattern.endswith('/**'):
+        pattern = pattern[:-2] + '*'
+    elif pattern.endswith('**'):
+        pattern = pattern[:-1] + '*'
+    # Anchor relative patterns under the project root so they compare against
+    # the absolute SF paths _normalize_sf_path produces. Patterns already
+    # containing a `**/` prefix (e.g. `**/*Tests*.*`) match anywhere, so they
+    # also need anchoring for the leading-segment comparison to work when the
+    # SF path is absolute.
+    if not os.path.isabs(pattern):
+        pattern = os.path.join(project_root, pattern)
+    return pattern
+
+
 def get_coverage_scope(project_root, exclusions_path):
     """
     Return (include_patterns, exclude_patterns) for coverage scope.
     Reads from sonar-project.properties to keep a single source of truth.
+
+    Exclude patterns are normalized through :func:`_normalize_glob` so both
+    directory-prefix globs (``dir/**``) and filename globs (``**/*Tests*.*``)
+    are honoured — matching SonarCloud's own scope semantics.
     """
     props = parse_sonar_properties(exclusions_path)
     includes = []
@@ -118,22 +183,9 @@ def get_coverage_scope(project_root, exclusions_path):
     for key in ('sonar.exclusions', 'sonar.coverage.exclusions'):
         val = props.get(key, '')
         for e in val.split(','):
-            e = e.strip()
-            if e:
-                # Convert glob patterns to path prefixes
-                # e.g., "engine-sim-bridge/**" -> project_root/engine-sim-bridge/
-                # e.g., "build/**" -> project_root/build/
-                # e.g., "test/**" -> project_root/test/
-                if e.endswith('/**'):
-                    prefix = os.path.join(project_root, e[:-3])
-                    excludes.append(prefix)
-                elif e.endswith('**'):
-                    # Handle patterns like "test/**" (no leading slash)
-                    prefix = os.path.join(project_root, e[:-2])
-                    excludes.append(prefix)
-                elif '*' not in e:
-                    # Exact directory/file
-                    excludes.append(os.path.join(project_root, e))
+            norm = _normalize_glob(e, project_root)
+            if norm:
+                excludes.append(norm)
 
     return includes, excludes
 
@@ -149,6 +201,44 @@ def coverage_color(pct):
     if pct > 0:
         return ORANGE
     return RED
+
+
+def _mismatch_warning(local_tuple, sonar_dict):
+    """Return (color, text) for a local-vs-SonarCloud gap, or None if silent.
+
+    Single DRY helper used by ``emit_block`` (and any future caller) to decide
+    whether the local and SonarCloud numbers disagree enough to flag. Returns
+    ``None`` (silent) when either side is missing, the gap is at or below
+    ``SMALL_THRESHOLD`` (header/rounding noise), or the percentage is identical.
+
+    ``local_tuple`` is ``(hit, total, pct)`` (the shape ``local_coverage``
+    returns); ``sonar_dict`` is the measures dict from ``fetch_sonar_coverage``.
+    The returned ``text`` is the human message (no color/indent prefix — the
+    caller wraps it). ``color`` is YELLOW for a small-but-real drift, RED for a
+    large gap. The line-count delta is included for small drifts so the reader
+    sees the magnitude; for large gaps the percentage alone is the headline and
+    the text points at the re-scan/scope diagnosis instead.
+    """
+    if not local_tuple or not sonar_dict:
+        return None
+    _, local_total, local_pct = local_tuple
+    sonar_pct = float(sonar_dict.get('coverage', 0) or 0)
+    sonar_ltc = int(sonar_dict.get('lines_to_cover', 0) or 0)
+
+    pct_delta = abs(local_pct - sonar_pct)
+    if pct_delta <= SMALL_THRESHOLD:
+        return None
+    line_delta = abs(local_total - sonar_ltc)
+
+    if pct_delta <= LARGE_THRESHOLD:
+        return YELLOW, (
+            '⚠ local vs SonarCloud differ by {:.1f}% ({} vs {} lines) '
+            '— possible scope/upload drift.'.format(
+                pct_delta, local_total, sonar_ltc))
+    return RED, (
+        '✗ local vs SonarCloud differ by {:.1f}% — re-run coverage + '
+        'sonar-scan; if persistent, check sonar.sources/exclusions and the '
+        'coverage XML path mapping.'.format(pct_delta))
 
 
 def fetch_sonar_coverage(project_key):
@@ -297,12 +387,16 @@ def _in_scope(filepath, includes, excludes, project_root=None):
 
     ``filepath`` is normalized to absolute (via ``project_root``) before
     matching, so both relative (xccov/Apple) and absolute (llvm-cov) SF paths
-    compare correctly against the absolute include/exclude prefixes.
+    compare correctly against the absolute include/exclude patterns. Include
+    patterns are directory prefixes (``startswith``); exclude patterns are
+    fnmatch globs (see :func:`_normalize_glob`), so filename globs like
+    ``**/*Tests*.*`` exclude test files anywhere in the tree, exactly as
+    SonarCloud's scope does.
     """
     filepath = _normalize_sf_path(filepath, project_root)
     if not any(filepath.startswith(inc) for inc in includes):
         return False
-    if any(filepath.startswith(exc) for exc in excludes):
+    if any(fnmatch.fnmatch(filepath, exc) for exc in excludes):
         return False
     return True
 
@@ -414,13 +508,17 @@ def emit_block(project_key, local_cov_path, local_type, exclusions_path, label):
         sc_ltc = int(sonar.get('lines_to_cover', 0) or 0)
         sc_covd = sc_ltc - int(sonar.get('uncovered_lines', 0) or 0)
 
-        # Stale SonarCloud (0%) but local has data → promote local
+        # Stale SonarCloud (0%) but local has data → promote local. The 0%-vs-
+        # anything case is the exact failure mode that hid the app's broken
+        # upload, so the note is framed as a RED mismatch, not just info.
         if sc_cov == 0.0 and local is not None:
             hit, total, pct = local
             _print_headline_local(local_type, pct, hit, total, local_cov_path,
-                'SonarCloud headline is stale (0%) — showing local '
-                'coverage; dashboard will update once server processes the '
-                'latest scan')
+                '✗ local vs SonarCloud mismatch: SonarCloud reports 0% '
+                'but local shows {:.1f}% — the dashboard upload is stale '
+                'or broken; re-run coverage + sonar-scan, then check '
+                'sonar.sources/exclusions and the coverage XML path '
+                'mapping.'.format(pct))
         else:
             _print_headline_sonar(sc_cov, sc_covd, sc_ltc)
 
@@ -440,6 +538,14 @@ def emit_block(project_key, local_cov_path, local_type, exclusions_path, label):
         sc_cov = float(sonar.get('coverage', 0) or 0)
         if sc_cov != 0.0:  # Not stale, show comparison
             _print_local_comparison(local_type, pct, hit, total, local_cov_path)
+
+            # Mismatch warning after the local comparison line: impossible to
+            # silently have local != SonarCloud. Silent within SMALL_THRESHOLD
+            # (rounding/header noise), YELLOW for a small drift, RED for large.
+            warn = _mismatch_warning(local, sonar)
+            if warn is not None:
+                color, text = warn
+                print('  {}{}{}'.format(color, text, RESET))
 
     if exclusions_path:
         _print_exclusions(exclusions_path)
