@@ -268,12 +268,13 @@ std::unique_ptr<ISimulator> SimulatorFactory::createAndConfigure(
 }
 
 // ============================================================================
-// discoverPresetPaths - Discover presets and find current index
+// discoverPresetPaths - Discover presets (scan a directory) and find the index
+// of a specific current preset file among the results.
 // ============================================================================
 
-SimulatorFactory::PresetDiscoveryResult SimulatorFactory::discoverPresetPaths(const std::string& presetPath) {
+SimulatorFactory::PresetDiscoveryResult SimulatorFactory::discoverPresetPaths(const std::string& dirToScan, std::string_view currentFullPath) {
     PresetDiscoveryResult result;
-    auto rawPaths = discoverPresets(presetPath);
+    auto rawPaths = discoverPresets(dirToScan);
 
     for (auto& path : rawPaths) {
         PresetNames info;
@@ -286,10 +287,12 @@ SimulatorFactory::PresetDiscoveryResult SimulatorFactory::discoverPresetPaths(co
         result.presets.push_back(std::move(info));
     }
 
-    if (result.presets.size() > 1) {
-        // Find current preset index in the sorted list
+    // Resolve the current preset's position in the sorted list. An empty
+    // currentFullPath (no current selection) matches nothing and leaves
+    // currentIndex at its default. Only meaningful when cycling is possible.
+    if (!currentFullPath.empty() && result.presets.size() > 1) {
         for (size_t i = 0; i < result.presets.size(); ++i) {
-            if (result.presets[i].fullPath == presetPath) {
+            if (result.presets[i].fullPath == currentFullPath) {
                 result.currentIndex = i;
                 break;
             }
