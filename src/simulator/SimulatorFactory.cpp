@@ -205,6 +205,13 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
 
     auto bridgeSim = std::make_unique<BridgeSimulator>(std::move(simInit.simulator), simInit.name);
 
+    // Populate engineConfig_ + size the audio buffer so the simulator reports a
+    // correct simulationFrequency and has a usable audio buffer before the
+    // session layer calls create() (which re-runs initAudioConfig — idempotent
+    // — and adds the brake constraint exactly once). initAudioConfig only is
+    // called here; full create() is non-idempotent (addConstraint on brake).
+    bridgeSim->initAudioConfig(config);
+
     return bridgeSim;
 }
 

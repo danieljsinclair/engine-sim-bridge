@@ -21,6 +21,14 @@
 #include <vector>
 
 class BridgeSimulator : public ICombustionEngine {
+    // SimulatorFactory completes audio-config initialization at construction
+    // (initAudioConfig populates engineConfig_ + sizes the audio buffer) so a
+    // freshly-factory-built simulator reports a correct simulationFrequency and
+    // has a sized buffer before the session layer wires the full lifecycle via
+    // create(). create() itself is NOT called here — it is non-idempotent (it
+    // addConstraint's the brake) and the session layer calls it exactly once.
+    friend class SimulatorFactory;
+
 public:
     // Constructor takes an already-initialized Simulator subclass.
     // The factory is responsible for creating and wiring the Simulator.
