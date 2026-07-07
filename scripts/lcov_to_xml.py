@@ -167,6 +167,15 @@ def convert(lcov_path: str, xml_path: str, project_root: str, src_roots) -> None
     root = build_coverage_xml(lcov_text, project_root, src_roots)
     ET.indent(root, space="  ")
     payload = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    # ElementTree single-quotes the XML declaration (<?xml version='1.0' ...?>),
+    # which SonarCloud's generic-coverage parser rejects ("Error during parsing
+    # of the generic coverage report"). Rewrite it with double quotes so the
+    # scan completes.
+    payload = payload.replace(
+        b"<?xml version='1.0' encoding='utf-8'?>",
+        b'<?xml version="1.0" encoding="utf-8"?>',
+        1,
+    )
 
     try:
         with open(xml_path, "wb") as handle:
