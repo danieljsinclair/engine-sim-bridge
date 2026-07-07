@@ -382,6 +382,17 @@ if(BUILD_BRIDGE_TESTS)
         test/twin/SpeedRpmConversionTest.cpp
         test/twin/RedlineClampAndUpshiftTest.cpp
         test/simulation/CommandedSpeedDisplayTest.cpp
+        test/PathNormalizerTests.cpp
+        test/JsonParserTests.cpp
+        test/SimulatorFactoryPresetDiscoveryTests.cpp
+        test/IntakeDeserializerTests.cpp
+        test/CrankingControllerStoppingTests.cpp
+        test/PresetEngineFactoryTests.cpp
+        test/BridgeSimulatorContractTests.cpp
+        test/SyncPullStrategyContractTests.cpp
+        test/InMemoryTelemetryResetTests.cpp
+        test/SimulatorFactoryBoundaryTests.cpp
+        test/ScriptLoadHelpersResolveAssetBasePathTests.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
