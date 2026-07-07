@@ -151,6 +151,8 @@ set(BRIDGE_SOURCES
     src/common/CircularBuffer.cpp
     src/common/JsonParser.cpp
     src/common/PresetSerializer.cpp
+    # ILoopClock (header-only, listed for IDE discovery)
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/simulation/ILoopClock.h>
     # Preset engine factory (JSON-based, for preset compiler output)
     src/simulator/PresetEngineFactory.cpp
     # Preset deserializers (pure JSON -> engine object graph)
@@ -393,6 +395,7 @@ if(BUILD_BRIDGE_TESTS)
         test/InMemoryTelemetryResetTests.cpp
         test/SimulatorFactoryBoundaryTests.cpp
         test/ScriptLoadHelpersResolveAssetBasePathTests.cpp
+        test/simulation/SimulationLoopStepTests.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include

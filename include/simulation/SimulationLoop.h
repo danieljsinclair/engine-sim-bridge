@@ -9,6 +9,7 @@
 
 #include "simulator/EngineSimTypes.h"
 #include "simulation/CrankingController.h"
+#include "simulation/ILoopClock.h"
 #include "io/IInputProvider.h"
 #include "io/IPresentation.h"  // DiagnosticOutputFilter (carried via SimulationConfig)
 #include <atomic>
@@ -44,10 +45,36 @@ struct SessionDependencies {
     telemetry::ITelemetryWriter* telemetryWriter = nullptr;
     telemetry::ITelemetryReader* telemetryReader = nullptr;
     ILogging* logger = nullptr;
+    ILoopClock* clock = nullptr;  // Optional injected clock; null → SteadyClockLoopClock
 };
 
 // Exit code returned by SimulationLoop::run() when preset cycling is requested
 constexpr int EXIT_BUT_CONTINUE_NEXT = 2;
+
+// ============================================================================
+// StepResult - Result type for SimulationLoop::step()
+// Encapsulates the three possible outcomes of a single simulation tick
+// ============================================================================
+
+enum class StepResult {
+    Continue,      // Normal tick, continue the loop
+    PresetCycle,  // Preset cycling requested, exit with EXIT_BUT_CONTINUE_NEXT
+    Stop          // Normal stop condition (duration or stopRequested)
+};
+
+// ============================================================================
+// LoopState - Per-tick state for SimulationLoop::step()
+// Contains all the mutating locals from run()'s loop body
+// ============================================================================
+
+struct LoopState {
+    double currentTime = 0.0;
+    input::EngineInput engineInput;
+    double lastDynoTorqueScale = -1.0;
+    EngineSimStats previousStats = {};
+    bool isFirstTick = true;
+    ICombustionEngine* combustionEngine = nullptr;
+};
 
 // ============================================================================
 // SimulationConfig - Simulation parameters only (no infrastructure deps)
@@ -99,6 +126,10 @@ public:
     // Returns EXIT_BUT_CONTINUE_NEXT on preset cycle, 0 on normal exit.
     int run();
 
+    // Execute a single simulation tick.
+    // Returns the step result (Continue, PresetCycle, or Stop).
+    StepResult step(LoopState& state);
+
 private:
     // Cranking decision — single entry point for combustion/sine-mode fork
     CrankingController::State applyCrankingDecision(
@@ -136,6 +167,11 @@ private:
     telemetry::ITelemetryWriter* telemetryWriter_;
     telemetry::ITelemetryReader* telemetryReader_;
     ILogging* logger_;
+
+    // Clock for loop pacing (injected for testability)
+    // When clock is injected via deps.clock, we use that; otherwise we own steadyClock_
+    ILoopClock* clock_ = nullptr;  // Non-owning pointer, points to either injectedClock_ or steadyClock_
+    std::unique_ptr<ILoopClock> steadyClock_;  // Owning pointer for default steady clock
 };
 
 // ============================================================================

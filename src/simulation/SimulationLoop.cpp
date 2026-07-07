@@ -25,8 +25,6 @@
 #include "common/Verification.h"
 
 #include <cstring>
-#include <thread>
-#include <chrono>
 
 
 namespace {
@@ -34,7 +32,6 @@ namespace {
 // Timed input simulation constants
 constexpr double THROTTLE_RAMP_DURATION_SECONDS = 0.5;  // Time to ramp from 0 to 1
 constexpr double FULL_THROTTLE = 1.0;                     // Maximum throttle value
-constexpr double SECONDS_TO_MICROSECONDS = 1000000.0;
 constexpr double SECONDS_TO_MILLISECONDS = 1000.0;
 
 } // anonymous namespace — constants only
@@ -84,22 +81,6 @@ void SimulationLoop::updatePresentation(
 // File-local helpers — pure functions and internal types
 // ============================================================================
 namespace {
-
-// Timing control for 60Hz loop pacing using sleep_until for accuracy
-struct LoopTimer {
-    std::chrono::steady_clock::time_point nextWakeTime{};
-    std::chrono::microseconds intervalUs{};
-
-    explicit LoopTimer(double intervalSeconds) {
-        nextWakeTime = std::chrono::steady_clock::now();
-        intervalUs = std::chrono::microseconds(static_cast<long long>(intervalSeconds * SECONDS_TO_MICROSECONDS));
-    }
-
-    void waitUntilNextTick() {
-        nextWakeTime += intervalUs;
-        std::this_thread::sleep_until(nextWakeTime);
-    }
-};
 
 // Named audio render callback -- bridges AudioBufferView to strategy->render()
 int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer) {
@@ -471,57 +452,90 @@ SimulationLoop::SimulationLoop(
         , telemetryWriter_(deps.telemetryWriter)
         , telemetryReader_(deps.telemetryReader)
         , logger_(deps.logger)
-    {}
+        , clock_(deps.clock ? deps.clock : nullptr)
+        , steadyClock_(deps.clock ? nullptr : std::make_unique<SteadyClockLoopClock>(config.updateInterval()))
+    {
+        // Point clock_ to steadyClock_ if no clock was injected
+        if (!clock_) {
+            clock_ = steadyClock_.get();
+        }
+    }
 
 int SimulationLoop::run() {
-    double currentTime = 0.0;
-    LoopTimer timer(config_.updateInterval());
-
     logger_->info(LogMask::BRIDGE, __ilog_format("SimulationLoop starting with %s", config_.simulatorLabel.c_str()));
 
-    // Track for the loop lifetime - first tick to trigger auto-start in non-interactive mode
-    bool isFirstTick = true;
-    input::EngineInput engineInput;
+    // Initialize loop state
+    LoopState state;
+    state.currentTime = 0.0;
+    state.isFirstTick = true;
+    state.lastDynoTorqueScale = -1.0;
+    state.combustionEngine = dynamic_cast<ICombustionEngine*>(&simulator_);
 
-    // Initialise and track these mutating values for the loop lifetime
-    double lastDynoTorqueScale = -1.0;
-    EngineSimStats previousStats = {};
-    if (inputProvider_) inputProvider_->provideFeedback(previousStats);
+    // Pre-loop: provide initial feedback to input provider
+    if (inputProvider_) inputProvider_->provideFeedback(state.previousStats);
 
-    auto* combustionEngine = dynamic_cast<ICombustionEngine*>(&simulator_);
-    do {
-        if (config_.duration > 0.0 && currentTime >= config_.duration) break;
+    // Main loop: thin wrapper calling step()
+    for (;;) {
+        // Execute one simulation tick
+        StepResult result = step(state);
 
-        CrankingController::State crankingState = applyCrankingDecision(combustionEngine, engineInput);
+        // Loop control: pacing, input polling, feedback
+        clock_->waitUntilNextTick();
+        state.engineInput = pollInput(state.currentTime, config_.updateInterval(), state.isFirstTick);
+        state.isFirstTick = false;
 
-        applyVehicleControls(combustionEngine, engineInput, crankingState, lastDynoTorqueScale);
+        // Feed stats back to input provider for next tick's decisions
+        if (inputProvider_) inputProvider_->provideFeedback(state.previousStats);
 
-        audioBuffer_.updateSimulation(&simulator_, config_.updateInterval() * SECONDS_TO_MILLISECONDS);
-        audioBuffer_.fillBufferFromEngine(&simulator_, config_.framesPerUpdate());
-
-        writeTelemetry(currentTime, crankingState.startingThrottle, engineInput.ignition, crankingState.starterEngaged);
-
-        EngineSimStats stats = simulator_.getStats();
-        currentTime += config_.updateInterval();
-        updatePresentation(stats, crankingState, engineInput, currentTime);
-
-        // Loop control: sleep until next tick, poll input, track previous stats for edge detection in input providers, check stop flag
-        timer.waitUntilNextTick();
-        engineInput = pollInput(currentTime, config_.updateInterval(), isFirstTick);
-        isFirstTick = false;
-        previousStats = stats;
-
-        // Feed the previous frame's stats back to the input provider so it can
-        // use real engine RPM/speed/torque for decisions (e.g. the SlipLockController
-        // needs engineRpmFeedback to compute clutch pressure from slip).
-        if (inputProvider_) inputProvider_->provideFeedback(previousStats);
-
-        if (engineInput.presetCycle) {
+        // Handle step results (after feedback, matching original behavior)
+        if (result == StepResult::PresetCycle) {
             return EXIT_BUT_CONTINUE_NEXT;
         }
-    } while (!stopRequested_->load(std::memory_order_seq_cst));
+        if (result == StepResult::Stop) {
+            return 0;
+        }
 
-    return 0;
+        // Check stop flag
+        if (stopRequested_->load(std::memory_order_seq_cst)) {
+            return 0;
+        }
+    }
+}
+
+// ============================================================================
+// step() - Per-tick simulation logic (sleep-free, deterministic)
+// Extracted from run() for unit testing
+// ============================================================================
+
+StepResult SimulationLoop::step(LoopState& state) {
+    // Duration check: stop when currentTime reaches or exceeds duration
+    if (config_.duration > 0.0 && state.currentTime >= config_.duration) {
+        return StepResult::Stop;
+    }
+
+    // Per-tick simulation logic
+    CrankingController::State crankingState = applyCrankingDecision(state.combustionEngine, state.engineInput);
+
+    applyVehicleControls(state.combustionEngine, state.engineInput, crankingState, state.lastDynoTorqueScale);
+
+    audioBuffer_.updateSimulation(&simulator_, config_.updateInterval() * SECONDS_TO_MILLISECONDS);
+    audioBuffer_.fillBufferFromEngine(&simulator_, config_.framesPerUpdate());
+
+    writeTelemetry(state.currentTime, crankingState.startingThrottle, state.engineInput.ignition, crankingState.starterEngaged);
+
+    EngineSimStats stats = simulator_.getStats();
+    state.currentTime += config_.updateInterval();
+    updatePresentation(stats, crankingState, state.engineInput, state.currentTime);
+
+    // Update cross-tick state
+    state.previousStats = stats;
+
+    // Check for preset cycle request
+    if (state.engineInput.presetCycle) {
+        return StepResult::PresetCycle;
+    }
+
+    return StepResult::Continue;
 }
 
 // ============================================================================
