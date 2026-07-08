@@ -5,6 +5,7 @@
 // Phase G: Refactored from free function to class with injected dependencies
 
 #include "simulation/SimulationLoop.h"
+#include "simulation/audioRenderCallback.h"
 #include "simulation/CrankingController.h"
 #include "simulation/PresentationStateBuilders.h"
 #include "session/ISimulatorSession.h"
@@ -80,9 +81,10 @@ void SimulationLoop::updatePresentation(
 // ============================================================================
 // File-local helpers — pure functions and internal types
 // ============================================================================
-namespace {
 
-// Named audio render callback -- bridges AudioBufferView to strategy->render()
+// Named audio render callback -- bridges AudioBufferView to strategy->render().
+// Pure function (no session/globals/hardware); declared in
+// simulation/audioRenderCallback.h for direct unit testing.
 int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer) {
     if (!strategy->isPlaying()) {
         if (float* dst = buffer.asFloat(); dst) {
@@ -95,6 +97,8 @@ int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer) {
     strategy->render(buffer);
     return 0;
 }
+
+namespace {
 
 // Create and initialize the audio hardware provider. Throws on failure.
 std::unique_ptr<IAudioHardwareProvider> createHardwareProvider(
@@ -154,7 +158,7 @@ CrankingController::State SimulationLoop::applyCrankingDecision(
 
 void applyDynoControl(ISimulator& simulator, double scale, double& lastScale) {
     if (scale == lastScale) return;  // OK: no-op when unchanged
-    if (scale < 0.0) return;  // OK: negative values are invalid, ignore silently
+    if (scale < 0.0) return;  // OK: -1 is a sentinel for "no change" (keep last scale)
     simulator.setDynoTorqueScale(scale);
     lastScale = scale;
 }
@@ -212,7 +216,7 @@ void SimulationLoop::applyVehicleControls(
 }
 
 void SimulationLoop::writeTelemetry(double currentTime, double throttle, bool ignition, bool starterEngaged) {
-    if (!telemetryWriter_) return;
+    if (!telemetryWriter_) return; // we allow skipping telemetry providers for some reason, so this is an allowed no-op
 
     telemetry::VehicleInputsTelemetry inputs;
     inputs.throttlePosition = throttle;
@@ -290,7 +294,10 @@ public:
     }
 
     int run() override {
-        if (closed_) throw SimulatorException("Session is closed");
+        if (closed_) {
+            logger_->warning(LogMask::BRIDGE, "Session is closed — ignoring run() call");
+            return 0;
+        }
 
         // Start audio only if not already playing (hot-swap keeps audio running)
         if (!audioBuffer_->isPlaying()) {
@@ -546,8 +553,9 @@ std::unique_ptr<ISimulatorSession> createSession(
     const SimulationConfig& config,
     const std::string& scriptPath,
     std::unique_ptr<ISimulator> simulator,
-    const SessionDependencies& deps,
-    std::unique_ptr<ISimulatorSession> existingSession)
+    SessionDependencies& deps,
+    std::unique_ptr<ISimulatorSession> existingSession,
+    std::unique_ptr<IAudioHardwareProvider> audioProvider)
 {
     auto* audioBuffer = deps.audioBuffer;
     auto* inputProvider = deps.inputProvider;
@@ -587,7 +595,16 @@ std::unique_ptr<ISimulatorSession> createSession(
     auto callback = [audioBuffer](AudioBufferView& buffer) {
         return audioRenderCallback(audioBuffer, buffer);
     };
-    auto hardwareProvider = createHardwareProvider(config.sampleRate(), callback, logger);
+
+    // Use an injected provider when supplied (headless/testing); otherwise create
+    // the real platform provider via createHardwareProvider(). Behavior-identical
+    // when audioProvider is null.
+    std::unique_ptr<IAudioHardwareProvider> hardwareProvider;
+    if (audioProvider) {
+        hardwareProvider = std::move(audioProvider);
+    } else {
+        hardwareProvider = createHardwareProvider(config.sampleRate(), callback, logger);
+    }
 
     logger->info(LogMask::AUDIO, __ilog_format("Audio initialized: strategy=%s, sr=%d", audioBuffer->getName(), config.sampleRate()));
 

@@ -12,6 +12,7 @@
 #include "simulation/ILoopClock.h"
 #include "io/IInputProvider.h"
 #include "io/IPresentation.h"  // DiagnosticOutputFilter (carried via SimulationConfig)
+#include "hardware/IAudioHardwareProvider.h"  // IAudioHardwareProvider (complete type: named in createSession signature)
 #include <atomic>
 #include <string>
 #include <memory>
@@ -183,7 +184,8 @@ std::unique_ptr<ISimulatorSession> createSession(
     const SimulationConfig& config,
     const std::string& scriptPath,
     std::unique_ptr<ISimulator> simulator,
-    const SessionDependencies& deps,
-    std::unique_ptr<ISimulatorSession> existingSession = nullptr);
+    SessionDependencies& deps,
+    std::unique_ptr<ISimulatorSession> existingSession = nullptr,
+    std::unique_ptr<IAudioHardwareProvider> audioProvider = nullptr);
 
 #endif // SIMULATION_LOOP_H

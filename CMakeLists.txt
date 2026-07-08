@@ -140,6 +140,7 @@ set(BRIDGE_SOURCES
     src/strategy/IAudioBufferFactory.cpp
     # Audio hardware
     src/hardware/AudioHardwareProviderFactory.cpp
+    src/hardware/NullAudioHardwareProvider.cpp
     # Telemetry
     src/telemetry/InMemoryTelemetry.cpp
     # Simulation loop
@@ -176,7 +177,6 @@ set(BRIDGE_SOURCES
     src/twin/ThrottleSmoother.cpp
     src/twin/VirtualIceTwin.cpp
     src/twin/ManualTwin.cpp
-    src/twin/GearboxCsvLogger.cpp
     src/twin/SlipLockController.cpp
     # Input providers
     src/input/VirtualIceInputProvider.cpp
@@ -396,6 +396,14 @@ if(BUILD_BRIDGE_TESTS)
         test/SimulatorFactoryBoundaryTests.cpp
         test/ScriptLoadHelpersResolveAssetBasePathTests.cpp
         test/simulation/SimulationLoopStepTests.cpp
+        test/simulation/SimulationLoopRunTests.cpp
+        test/simulation/SimulationLoopVehicleControlsTests.cpp
+        test/simulation/SimulationLoopDynoSentinelTests.cpp
+        test/simulation/SimulationLoopPollInputTests.cpp
+        test/simulator/ISimulatorVersionTest.cpp
+        test/input/DemoControlsTargetTest.cpp
+        test/input/LiveTelemetryProviderTest.cpp
+        test/twin/GearboxCsvLoggerTest.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
