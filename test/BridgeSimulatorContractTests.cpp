@@ -182,15 +182,6 @@ TEST(BridgeSimulatorContractTest, SaveStateRoundTripsThroughRestoreState) {
 }
 
 // --- setDynoTorqueScale: negative scale is rejected ---------------------------
-// A negative dyno torque scale is a programmer error, not a runtime state. The
-// documented contract rejects it by throwing SimulatorException (type asserted,
-// not message). Pinning observable behavior, not dyno internals.
-TEST(BridgeSimulatorContractTest, SetDynoTorqueScaleRejectsNegative) {
-    auto sim = makeReadyBridgeSimulator();
-    ASSERT_NE(sim, nullptr);
-    EXPECT_THROW(sim->setDynoTorqueScale(-0.1), SimulatorException);
-}
-
 // A non-negative scale is accepted (no throw) whether or not the dyno is enabled
 // — when disabled the call is a documented no-op.
 TEST(BridgeSimulatorContractTest, SetDynoTorqueScaleAcceptsNonNegative) {

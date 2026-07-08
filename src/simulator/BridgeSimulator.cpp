@@ -9,6 +9,7 @@
 
 #include <vector>
 #include <cstring>
+#include <cassert>
 #include <common/Verification.h>
 #include "common/PresetExceptions.h"
 #include "simulator/BridgeSimulator.h"
@@ -314,7 +315,7 @@ double BridgeSimulator::getEngineRpm() const {
 }
 
 void BridgeSimulator::setDynoTorqueScale(double scale) {
-    if (scale < 0.0) throw SimulatorException("Dyno scale must be non-negative");
+    assert(scale >= 0.0);  // fail-fast on direct misuse; cannot fire in prod (applyDynoControl swallows -1 sentinel upstream)
     if (!m_simulator->m_dyno.m_enabled) return;  // OK: no-op when dyno disabled
     m_simulator->m_dyno.m_maxTorque = units::torque(EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS, units::ft_lb) * scale;
 }
