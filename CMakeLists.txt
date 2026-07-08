@@ -400,6 +400,7 @@ if(BUILD_BRIDGE_TESTS)
         test/simulation/SimulationLoopVehicleControlsTests.cpp
         test/simulation/SimulationLoopDynoSentinelTests.cpp
         test/simulation/SimulationLoopPollInputTests.cpp
+        test/simulation/SimulationLoopHandoverTests.cpp
         test/simulator/ISimulatorVersionTest.cpp
         test/input/DemoControlsTargetTest.cpp
         test/input/LiveTelemetryProviderTest.cpp
