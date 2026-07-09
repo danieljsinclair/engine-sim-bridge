@@ -5,11 +5,13 @@
 #include "io/IInputProvider.h"
 
 #include <algorithm>
+#include <cassert>
 
 namespace input {
 
 DemoControlsTarget::DemoControlsTarget(IDemoControls* controls)
     : controls_(controls) {
+    assert(controls_);  // controls_ is an immutable ctor param; must be non-null
 }
 
 void DemoControlsTarget::setDemoProvider(IInputProvider* provider) {
@@ -17,29 +19,29 @@ void DemoControlsTarget::setDemoProvider(IInputProvider* provider) {
 }
 
 void DemoControlsTarget::quit() {
-    if (controls_) controls_->requestExit();
+    controls_->requestExit();
 }
 
 void DemoControlsTarget::setThrottle(double level) {
     currentThrottle_ = level;
-    if (controls_) controls_->setThrottle(level);
+    controls_->setThrottle(level);
 }
 
 void DemoControlsTarget::adjustThrottle(double delta) {
     currentThrottle_ = std::clamp(currentThrottle_ + delta, 0.0, 1.0);
-    if (controls_) controls_->setThrottle(currentThrottle_);
+    controls_->setThrottle(currentThrottle_);
 }
 
 void DemoControlsTarget::shiftUp() {
-    if (controls_) controls_->shiftUp();
+    controls_->shiftUp();
 }
 
 void DemoControlsTarget::shiftDown() {
-    if (controls_) controls_->shiftDown();
+    controls_->shiftDown();
 }
 
 void DemoControlsTarget::toggleIgnition() {
-    if (controls_) controls_->toggleIgnition();
+    controls_->toggleIgnition();
 }
 
 void DemoControlsTarget::setStarter() {
@@ -47,7 +49,7 @@ void DemoControlsTarget::setStarter() {
 }
 
 void DemoControlsTarget::setBrake(double level) {
-    if (controls_) controls_->setBrake(level);
+    controls_->setBrake(level);
 }
 
 EngineInput DemoControlsTarget::buildEngineInput(double dt) {

@@ -11,6 +11,7 @@
 #include "telemetry/NullTelemetryWriter.h"
 
 #include <cstring>
+#include <memory>
 #include <algorithm>
 #include <chrono>
 #include <vector>
@@ -22,9 +23,9 @@ using namespace std::chrono;
 // ============================================================================
 
 ThreadedStrategy::ThreadedStrategy(ILogging* logger, telemetry::ITelemetryWriter* telemetry)
-    : defaultLogger_(logger ? nullptr : new ConsoleLogger())
+    : defaultLogger_(logger ? nullptr : std::make_unique<ConsoleLogger>())
     , logger_(logger ? logger : defaultLogger_.get())
-    , defaultTelemetry_(telemetry ? nullptr : new NullTelemetryWriter())
+    , defaultTelemetry_(telemetry ? nullptr : std::make_unique<NullTelemetryWriter>())
     , telemetry_(telemetry ? telemetry : defaultTelemetry_.get())
 {
     ASSERT(logger_, "ThreadedStrategy: logger must not be null");
@@ -56,21 +57,21 @@ void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFr
 
     // Calculate current lead distance based on total frames written vs read
     int64_t leadFrames = totalFramesWritten_ - totalFramesRead_;
-    int sampleRate = audioState_.sampleRate;
+    auto sampleRate = audioState_.sampleRate;
 
     // Target lead: derived from configured synth latency
     // Maximum lead: 2x target (prevents buffer from growing too large)
-    int targetLeadFrames = static_cast<int>(sampleRate * synthLatency_);
-    int maxLeadFrames = targetLeadFrames * 2;
+    auto targetLeadFrames = static_cast<int>(sampleRate * synthLatency_);
+    auto maxLeadFrames = targetLeadFrames * 2;
 
     // Self-correction: if lead has drifted too far, reset buffer
-    int bufferSize = static_cast<int>(circularBuffer_.capacity());
+    auto bufferSize = static_cast<int>(circularBuffer_.capacity());
     if (leadFrames > maxLeadFrames * 2) {
         logger_->warning(LogMask::AUDIO,
-                      "ThreadedStrategy: Lead drift detected (%.0fms > 200ms), resetting to target",
-                      leadFrames * 1000.0 / sampleRate);
+                      __ilog_format("ThreadedStrategy: Lead drift detected (%.0fms > 200ms), resetting to target",
+                      static_cast<double>(leadFrames) * 1000.0 / sampleRate));
         // Reset buffer by draining excess
-        int framesToDiscard = static_cast<int>(leadFrames - maxLeadFrames);
+        auto framesToDiscard = static_cast<int>(leadFrames - maxLeadFrames);
         std::vector<float> discard(framesToDiscard * 2);
         circularBuffer_.read(discard.data(), framesToDiscard);
         totalFramesRead_ += framesToDiscard;
@@ -108,7 +109,7 @@ void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFr
         }
     }
     else {
-        logger_->warning(LogMask::AUDIO, "ThreadedStrategy: Skipping buffer fill to prevent overflow (lead=%.0fms > target=%.0fms)", leadFrames * 1000.0 / sampleRate, targetLeadFrames * 1000.0 / sampleRate);
+        logger_->warning(LogMask::AUDIO, __ilog_format("ThreadedStrategy: Skipping buffer fill to prevent overflow (lead=%.0fms > target=%.0fms)", static_cast<double>(leadFrames) * 1000.0 / sampleRate, static_cast<double>(targetLeadFrames) * 1000.0 / sampleRate));
     }
 }
 
@@ -123,10 +124,10 @@ bool ThreadedStrategy::initialize(const AudioBufferConfig& config, int sampleRat
     synthLatency_ = config.synthLatency;
 
     // Initialize circular buffer with appropriate capacity
-    int bufferCapacity = static_cast<int>(sampleRate * EngineSimDefaults::BUFFER_DURATION_SECONDS);
+    auto bufferCapacity = static_cast<int>(sampleRate * EngineSimDefaults::BUFFER_DURATION_SECONDS);
 
     if (!circularBuffer_.initialize(bufferCapacity)) {
-        logger_->error(LogMask::AUDIO, "ThreadedStrategy::initialize: Failed to initialize circular buffer");
+        logger_->error(LogMask::AUDIO, __ilog_format("ThreadedStrategy::initialize: Failed to initialize circular buffer"));
         return false;
     }
 
@@ -136,8 +137,8 @@ bool ThreadedStrategy::initialize(const AudioBufferConfig& config, int sampleRat
     circularBuffer_.reset();
 
     logger_->info(LogMask::AUDIO,
-                  "ThreadedStrategy initialized: bufferCapacity=%d frames (%.2f seconds), synthLatency=%.3fs",
-                  bufferCapacity, bufferCapacity / static_cast<double>(sampleRate), synthLatency_);
+                  __ilog_format("ThreadedStrategy initialized: bufferCapacity=%d frames (%.2f seconds), synthLatency=%.3fs",
+                  bufferCapacity, bufferCapacity / static_cast<double>(sampleRate), synthLatency_));
 
     return true;
 }
@@ -148,8 +149,8 @@ void ThreadedStrategy::prepareBuffer() {
     totalFramesRead_ = 0;
 
     // Pre-fill circular buffer with silence for smooth playback start
-    int preFillFrames = static_cast<int>(audioState_.sampleRate * synthLatency_);
-    int capacity = static_cast<int>(circularBuffer_.capacity());
+    auto preFillFrames = static_cast<int>(audioState_.sampleRate * synthLatency_);
+    auto capacity = static_cast<int>(circularBuffer_.capacity());
     preFillFrames = std::min(preFillFrames, capacity);
 
     std::vector<float> silence(preFillFrames * 2);
@@ -158,18 +159,17 @@ void ThreadedStrategy::prepareBuffer() {
     size_t framesWritten = circularBuffer_.write(silence.data(), preFillFrames);
     totalFramesWritten_ += static_cast<int64_t>(framesWritten);  // Track the pre-fill
 
-    logger_->debug(LogMask::AUDIO, "ThreadedStrategy::prepareBuffer: Pre-filled %d frames with silence", static_cast<int>(framesWritten));
+    logger_->debug(LogMask::AUDIO, __ilog_format("ThreadedStrategy::prepareBuffer: Pre-filled %d frames with silence", static_cast<int>(framesWritten)));
 }
 
 bool ThreadedStrategy::startPlayback(ISimulator* simulator) {
     if (!simulator) {
-        logger_->error(LogMask::AUDIO, "ThreadedStrategy::startPlayback: Invalid simulator");
+        logger_->error(LogMask::AUDIO, __ilog_format("ThreadedStrategy::startPlayback: Invalid simulator"));
         return false;
     }
 
-    bool result = simulator->start();
-    if (!result) {
-        logger_->error(LogMask::AUDIO, "ThreadedStrategy::startPlayback: Failed to start audio thread");
+    if (bool result = simulator->start(); !result) {
+        logger_->error(LogMask::AUDIO, __ilog_format("ThreadedStrategy::startPlayback: Failed to start audio thread"));
         return false;
     }
 
@@ -177,20 +177,20 @@ bool ThreadedStrategy::startPlayback(ISimulator* simulator) {
     audioState_.isPlaying.store(true);
     lastThroughputTime_ = std::chrono::steady_clock::now();
 
-    logger_->info(LogMask::AUDIO, "ThreadedStrategy::startPlayback: Audio thread started");
+    logger_->info(LogMask::AUDIO, __ilog_format("ThreadedStrategy::startPlayback: Audio thread started"));
 
     return true;
 }
 
 void ThreadedStrategy::stopPlayback(ISimulator* simulator) {
     if (simulator) {
-        logger_->debug(LogMask::AUDIO, "ThreadedStrategy::stopPlayback: Audio thread will stop with simulation");
+        logger_->debug(LogMask::AUDIO, __ilog_format("ThreadedStrategy::stopPlayback: Audio thread will stop with simulation"));
     }
 
     simulator_ = nullptr;
     audioState_.isPlaying.store(false);
 
-    logger_->info(LogMask::AUDIO, "ThreadedStrategy::stopPlayback: Playback stopped");
+    logger_->info(LogMask::AUDIO, __ilog_format("ThreadedStrategy::stopPlayback: Playback stopped"));
 }
 
 void ThreadedStrategy::swapSimulator(ISimulator* newSimulator) {
@@ -214,7 +214,7 @@ void ThreadedStrategy::swapSimulator(ISimulator* newSimulator) {
 
     simulator_ = newSimulator;
 
-    logger_->info(LogMask::AUDIO, "ThreadedStrategy::swapSimulator: Audio rendering thread restarted for new simulator");
+    logger_->info(LogMask::AUDIO, __ilog_format("ThreadedStrategy::swapSimulator: Audio rendering thread restarted for new simulator"));
 }
 
 void ThreadedStrategy::resetBufferAfterWarmup() {
@@ -223,7 +223,7 @@ void ThreadedStrategy::resetBufferAfterWarmup() {
     totalFramesWritten_ = 0;
     totalFramesRead_ = 0;
 
-    logger_->info(LogMask::AUDIO, "ThreadedStrategy::resetBufferAfterWarmup: Buffer reset complete");
+    logger_->info(LogMask::AUDIO, __ilog_format("ThreadedStrategy::resetBufferAfterWarmup: Buffer reset complete"));
 }
 
 void ThreadedStrategy::updateSimulation(ISimulator* simulator, double deltaTimeMs) {
@@ -279,18 +279,17 @@ bool ThreadedStrategy::AddFrames(
         return false;
     }
 
-    size_t framesWritten = circularBuffer_.write(buffer, frameCount);
-
-    if (framesWritten != static_cast<size_t>(frameCount)) {
-        logger_->warning(LogMask::AUDIO, "ThreadedStrategy::AddFrames: Only wrote %zu/%d frames",
-                      framesWritten, frameCount);
+    if (size_t framesWritten = circularBuffer_.write(buffer, frameCount);
+        framesWritten != static_cast<size_t>(frameCount)) {
+        logger_->warning(LogMask::AUDIO, __ilog_format("ThreadedStrategy::AddFrames: Only wrote %zu/%d frames",
+                      framesWritten, frameCount));
     }
 
     return true;
 }
 
 void ThreadedStrategy::reset() {
-    logger_->debug(LogMask::AUDIO, "ThreadedStrategy::reset");
+    logger_->debug(LogMask::AUDIO, __ilog_format("ThreadedStrategy::reset"));
 }
 
 std::string ThreadedStrategy::getModeString() const {
@@ -334,8 +333,7 @@ void ThreadedStrategy::publishAudioDiagnostics(int underrunCount, double bufferH
 void ThreadedStrategy::publishAudioTiming() {
     // Update throughput rates once per second
     auto now = std::chrono::steady_clock::now();
-    double elapsedSec = std::chrono::duration<double>(now - lastThroughputTime_).count();
-    if (elapsedSec >= 1.0) {
+    if (double elapsedSec = std::chrono::duration<double>(now - lastThroughputTime_).count(); elapsedSec >= 1.0) {
         diagnostics_.updateThroughput(elapsedSec);
         lastThroughputTime_ = now;
     }

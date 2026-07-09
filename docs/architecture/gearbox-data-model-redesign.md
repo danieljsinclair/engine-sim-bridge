@@ -427,7 +427,7 @@ The data model can be extended for:
 
 ## References
 
-- `/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/docs/architecture/zf-shift-scheduling-research.md`
-- `/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/docs/architecture/shift-execution-research.md`
-- `/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/include/twin/IceVehicleProfile.h`
-- `/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/src/twin/AutomaticGearbox.cpp`
+- `~/vscode/escli.refac7/engine-sim-bridge/docs/architecture/zf-shift-scheduling-research.md`
+- `~/vscode/escli.refac7/engine-sim-bridge/docs/architecture/shift-execution-research.md`
+- `~/vscode/escli.refac7/engine-sim-bridge/include/twin/IceVehicleProfile.h`
+- `~/vscode/escli.refac7/engine-sim-bridge/src/twin/AutomaticGearbox.cpp`

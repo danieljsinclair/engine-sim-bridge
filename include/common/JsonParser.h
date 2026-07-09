@@ -11,6 +11,7 @@
 #define JSON_PARSER_H
 
 #include <string>
+#include <string_view>
 #include <vector>
 #include <map>
 #include <stdexcept>
@@ -77,14 +78,14 @@ public:
     static JsonValue makeNull();
     static JsonValue makeBool(bool v);
     static JsonValue makeNumber(double v);
-    static JsonValue makeString(const std::string& v);
+    static JsonValue makeString(std::string_view v);
     static JsonValue makeArray();
     static JsonValue makeObject();
 
     // Mutable access for building
     Array& arrayRef() { return arrVal_; }
     Object& objectRef() { return objVal_; }
-    void pushBack(JsonValue v);
+    void pushBack(const JsonValue& v);
 
 private:
     JsonType type_;

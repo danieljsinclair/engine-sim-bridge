@@ -352,7 +352,7 @@ static double radPerSecToRpm(double rads) { return std::abs(rads) * 60.0 / (2.0 
 
 TEST(Phase0Spikes, DynoLaunchControl) {
     const std::string outDir =
-        "/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/build-test/spikes/dyno_launch_control/";
+        std::string(std::filesystem::current_path()) + "/../build-test/spikes/dyno_launch_control/";
     const std::string csvPath = outDir + "launch_control_data.csv";
     system(("mkdir -p " + outDir).c_str());
 

@@ -90,13 +90,24 @@ private:
     // Private Helper Methods
     // ================================================================
 
+    void doCleanup();
+    static OSStatus coreAudioCallbackImpl(
+        const CoreAudioHardwareProvider* provider,
+        const AudioUnitRenderActionFlags* actionFlags,
+        const AudioTimeStamp* timeStamp,
+        UInt32 busNumber,
+        UInt32 numberFrames,
+        AudioBufferList* ioData);
     bool setupAudioUnit();
     bool setDeviceSampleRate(Float64 targetRate);
     bool configureAudioFormat(const AudioStreamFormat& format);
     bool registerCallbackWithAudioUnit();
 
+    // Type alias for CoreAudio callback refCon to give semantic meaning to void*
+    using AudioRefCon = void*;
+
     static OSStatus coreAudioCallbackWrapper(
-        void* refCon,
+        AudioRefCon refCon,
         AudioUnitRenderActionFlags* actionFlags,
         const AudioTimeStamp* timeStamp,
         UInt32 busNumber,

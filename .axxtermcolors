@@ -63,4 +63,6 @@ function not_shell_code() {
     fg.preset-engine-config!engine-sim-bridge=#dddddd
 
     bg.virtual-ice-twin=#225566
+
+    bg!vscode/engine-sim-bridge=#1F5A96
 }

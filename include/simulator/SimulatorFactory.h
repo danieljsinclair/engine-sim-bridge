@@ -48,7 +48,6 @@ public:
      * @param assetBasePath Base path for resolving asset files (impulse responses)
      * @param config ISimulator configuration (used for both Simulator subclass init and BridgeSimulator)
      * @param logger Optional logging interface (can be nullptr)
-     * @param telemetryWriter Optional telemetry writer reserved for future factory-level telemetry wiring
      * @return Unique pointer to ready-to-use ISimulator
      */
     static std::unique_ptr<ISimulator> create(
@@ -57,7 +56,7 @@ public:
         const std::string& assetBasePath,
         const ISimulatorConfig& config,
         ILogging* logger = nullptr,
-        telemetry::ITelemetryWriter* telemetryWriter = nullptr);
+        telemetry::ITelemetryWriter* /*telemetryWriter*/ = nullptr);
 
     static SimulatorType getDefaultType();
 
@@ -86,7 +85,17 @@ public:
 
     /**
      * Discover preset paths and find current index.
-     * Returns preset info (short name + full path) and the index of currentPresetPath.
+     * Returns preset info (short name + full path) and the index of currentFullPath.
+     *
+     * dirToScan is the directory scanned for .json presets; currentFullPath is a
+     * specific preset file path matched against the discovered results to resolve
+     * currentIndex. These are SEPARATE arguments because a directory and a file
+     * path are different things: feeding one value to both the directory scan and
+     * the file match (the old single-arg API) made currentIndex dead code (a
+     * directory never equals a discovered .json file) and threw when a file path
+     * was passed (directory_iterator cannot iterate a file). Pass an empty
+     * currentFullPath when there is no current selection; currentIndex then keeps
+     * its default (0).
      */
     struct PresetNames {
         std::string shortName;  // display name (e.g., "V8", "Inline-4")
@@ -97,7 +106,7 @@ public:
         std::vector<PresetNames> presets;
         size_t currentIndex = 0;
     };
-    static PresetDiscoveryResult discoverPresetPaths(const std::string& currentPresetPath);
+    static PresetDiscoveryResult discoverPresetPaths(const std::string& dirToScan, std::string_view currentFullPath);
 
 private:
     SimulatorFactory() = delete;

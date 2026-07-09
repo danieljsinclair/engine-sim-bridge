@@ -9,20 +9,26 @@
 #include "simulator/SimulatorInitHelpers.h"
 #include "simulator/EngineSimTypes.h"
 #include "synthesizer.h"
+#include <array>
 #include <cmath>
 #include <stdexcept>
 
 SineSimulator::~SineSimulator() {
-    destroy();
+    SineSimulator::destroy();
 }
 
 void SineSimulator::loadSimulation(Engine* engine, Vehicle* vehicle, Transmission* transmission) {
-    if (!engine) engine = new SineEngine();
-    if (!vehicle) vehicle = new SineVehicle();
-    if (!transmission) transmission = new SineTransmission();
+    if (!engine) m_sineEngine = std::make_unique<SineEngine>();
+    if (!vehicle) m_sineVehicle = std::make_unique<SineVehicle>();
+    if (!transmission) m_sineTransmission = std::make_unique<SineTransmission>();
+
+    // Use smart pointer get() if owned locally, otherwise use the raw pointer argument
+    Engine* activeEngine = m_sineEngine ? m_sineEngine.get() : engine;
+    Vehicle* activeVehicle = m_sineVehicle ? m_sineVehicle.get() : vehicle;
+    Transmission* activeTransmission = m_sineTransmission ? m_sineTransmission.get() : transmission;
 
     // Store pointers in base class — same as PistonEngineSimulator line 34
-    Simulator::loadSimulation(engine, vehicle, transmission);
+    Simulator::loadSimulation(activeEngine, activeVehicle, activeTransmission);
 
     // Initialize synthesizer — base loadSimulation() doesn't call it.
     // PistonEngineSimulator gets it via placeAndInitialize(); we call directly.
@@ -31,8 +37,8 @@ void SineSimulator::loadSimulation(Engine* engine, Vehicle* vehicle, Transmissio
     // Unit impulse response required to prevent null deref:
     // ConvolutionFilter::f() dereferences m_shiftRegister which is nullptr without this init,
     // even though convolution=0.0f below disables convolution processing.
-    static const int16_t kUnitImpulse[1] = { INT16_MAX };
-    synthesizer().initializeImpulseResponse(kUnitImpulse, 1, 1.0f, 0);
+    static const std::array<int16_t, 1> kUnitImpulse = { INT16_MAX };
+    synthesizer().initializeImpulseResponse(kUnitImpulse.data(), 1, 1.0f, 0);
 
     // Disable all noise and convolution — override defaults (airNoise=1.0,
     // inputSampleNoise=0.5, dF_F_mix=0.01, convolution=1.0f) that add unwanted
@@ -46,12 +52,17 @@ void SineSimulator::loadSimulation(Engine* engine, Vehicle* vehicle, Transmissio
     synthesizer().setAudioParameters(p);
 
     // Shared physics wiring — DRY via SimulatorInitHelpers
-    SimulatorInitHelpers::wirePhysics(
-        engine, transmission, vehicle,
-        m_vehicleMass, m_system,
-        m_dyno, m_starterMotor,
-        m_exhaustFlowStagingBuffer,
-        engine->getExhaustSystemCount());
+    SimulatorInitHelpers::PhysicsWiringParams wiringParams;
+    wiringParams.engine = activeEngine;
+    wiringParams.transmission = activeTransmission;
+    wiringParams.vehicle = activeVehicle;
+    wiringParams.vehicleMass = &m_vehicleMass;
+    wiringParams.system = m_system;
+    wiringParams.dyno = &m_dyno;
+    wiringParams.starterMotor = &m_starterMotor;
+    wiringParams.outStagingBuffer = &m_exhaustFlowStagingBuffer;
+    wiringParams.stagingCount = activeEngine->getExhaustSystemCount();
+    SimulatorInitHelpers::wirePhysics(wiringParams);
 }
 
 void SineSimulator::destroy() {
@@ -60,12 +71,12 @@ void SineSimulator::destroy() {
     // handles audio thread lifecycle before calling the inner simulator's destroy().
 
     // Shared system/staging cleanup — DRY via SimulatorInitHelpers
-    SimulatorInitHelpers::cleanupPhysics(m_system, m_exhaustFlowStagingBuffer);
+    SimulatorInitHelpers::cleanupPhysics(m_system, &m_exhaustFlowStagingBuffer);
 
-    // SineSimulator owns engine/vehicle/transmission (injected by factory in create())
-    if (m_engine)        { m_engine->destroy(); delete m_engine;        m_engine = nullptr; }
-    if (m_vehicle)       { delete m_vehicle;                            m_vehicle = nullptr; }
-    if (m_transmission)  { delete m_transmission;                       m_transmission = nullptr; }
+    // SineSimulator owns engine/vehicle/transmission (created in loadSimulation when not injected)
+    if (m_sineEngine)        { m_sineEngine->destroy(); m_sineEngine.reset(); }
+    if (m_sineVehicle)       { m_sineVehicle.reset(); }
+    if (m_sineTransmission)  { m_sineTransmission.reset(); }
 
     Simulator::destroy();
 }
@@ -90,5 +101,5 @@ void SineSimulator::writeToSynthesizer() {
     }
 
     m_exhaustFlowStagingBuffer[0] = m_sineValue;
-    synthesizer().writeInput(m_exhaustFlowStagingBuffer);
+    synthesizer().writeInput(m_exhaustFlowStagingBuffer.data());
 }

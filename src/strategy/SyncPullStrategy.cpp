@@ -14,15 +14,16 @@
 #include "telemetry/NullTelemetryWriter.h"
 
 #include <cstring>
+#include <memory>
 
 // ============================================================================
 // SyncPullStrategy Implementation
 // ============================================================================
 
 SyncPullStrategy::SyncPullStrategy(ILogging* logger, telemetry::ITelemetryWriter* telemetry)
-    : defaultLogger_(logger ? nullptr : new ConsoleLogger())
+    : defaultLogger_(logger ? nullptr : std::make_unique<ConsoleLogger>())
     , logger_(logger ? logger : defaultLogger_.get())
-    , defaultTelemetry_(telemetry ? nullptr : new NullTelemetryWriter())
+    , defaultTelemetry_(telemetry ? nullptr : std::make_unique<NullTelemetryWriter>())
     , telemetry_(telemetry ? telemetry : defaultTelemetry_.get())
 {
     ASSERT(logger_, "SyncPullStrategy: logger must not be null");
@@ -67,14 +68,14 @@ bool SyncPullStrategy::initialize(const AudioBufferConfig& config, int sampleRat
     diagnostics_.setSampleRate(sampleRate);
 
     logger_->info(LogMask::AUDIO,
-                  "SyncPullStrategy initialized: sampleRate=%dHz, channels=%d",
-                  sampleRate, config.channels);
+                  __ilog_format("SyncPullStrategy initialized: sampleRate=%dHz, channels=%d",
+                  sampleRate, config.channels));
 
     return true;
 }
 
 void SyncPullStrategy::prepareBuffer() {
-    logger_->debug(LogMask::AUDIO, "SyncPullStrategy::prepareBuffer: No-op for sync-pull mode");
+    logger_->debug(LogMask::AUDIO, __ilog_format("SyncPullStrategy::prepareBuffer: No-op for sync-pull mode"));
 }
 
 bool SyncPullStrategy::startPlayback(ISimulator* simulator) {
@@ -88,7 +89,7 @@ bool SyncPullStrategy::startPlayback(ISimulator* simulator) {
     lastRightSample_ = 0.0f;
     crossfadeSamplesRemaining_ = 0;
 
-    logger_->info(LogMask::AUDIO, "SyncPullStrategy::startPlayback: On-demand rendering started");
+    logger_->info(LogMask::AUDIO, __ilog_format("SyncPullStrategy::startPlayback: On-demand rendering started"));
 
     return true;
 }
@@ -98,7 +99,7 @@ void SyncPullStrategy::stopPlayback(ISimulator* /* simulator */) {
     simulator_ = nullptr;
     audioState_.isPlaying.store(false);
 
-    logger_->info(LogMask::AUDIO, "SyncPullStrategy::stopPlayback: On-demand rendering stopped");
+    logger_->info(LogMask::AUDIO, __ilog_format("SyncPullStrategy::stopPlayback: On-demand rendering stopped"));
 }
 
 void SyncPullStrategy::swapSimulator(ISimulator* newSimulator) {
@@ -113,11 +114,50 @@ void SyncPullStrategy::swapSimulator(ISimulator* newSimulator) {
 }
 
 void SyncPullStrategy::resetBufferAfterWarmup() {
-    logger_->debug(LogMask::AUDIO, "SyncPullStrategy::resetBufferAfterWarmup: No-op for sync-pull mode");
+    logger_->debug(LogMask::AUDIO, __ilog_format("SyncPullStrategy::resetBufferAfterWarmup: No-op for sync-pull mode"));
 }
 
 void SyncPullStrategy::updateSimulation(ISimulator* /* simulator */, double /* deltaTimeMs */) {
     // Sync-pull mode updates simulation during render callback
+}
+
+bool SyncPullStrategy::retryRender(float* dst, int offset, int framesNeeded,
+                                    int& framesWritten, int maxRetries) {
+    int retryCount = 0;
+    while (retryCount < maxRetries && !shuttingDown_.load()) {
+        simulator_->update(1.0 / sampleRate_);
+        if (auto result = simulator_->renderOnDemand(
+                dst + (offset * 2),
+                framesNeeded,
+                &framesWritten
+            ); !result) {
+            return false;
+        }
+
+        if (framesWritten > 0) {
+            return true;
+        }
+        retryCount++;
+    }
+    return true;
+}
+
+// ============================================================================
+// Render Helpers
+// ============================================================================
+
+bool SyncPullStrategy::attemptRender(float* dst, int offset, int framesNeeded,
+                                      int32_t& framesWritten) {
+    bool result = simulator_->renderOnDemand(
+        dst + (offset * 2),
+        framesNeeded,
+        &framesWritten
+    );
+
+    if (!result) {
+        logger_->error(LogMask::AUDIO, __ilog_format("SyncPullStrategy::render: renderOnDemand failed, filling silence"));
+    }
+    return result;
 }
 
 bool SyncPullStrategy::render(AudioBufferView& buffer) {
@@ -133,80 +173,73 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
 
     auto callbackStart = std::chrono::high_resolution_clock::now();
 
-    constexpr int MAX_RETRIES = 3;
-
     int framesToGenerate = buffer.frameCount;
-    int framesRendered = 0;
+    int framesRendered = renderChunked(dst, framesToGenerate);
 
+    fillRemainingSilence(dst, framesRendered, framesToGenerate, framesToGenerate - framesRendered);
+    applyCrossfade(dst, framesRendered);
+    resetFrameRender(framesToGenerate, framesRendered, dst, callbackStart);
+    updateTelemetry();
+
+    return true;
+}
+
+int SyncPullStrategy::renderChunked(float* dst, int framesToGenerate) {
+    constexpr int MAX_RETRIES = 3;
+    int framesRendered = 0;
     int remainingFrames = framesToGenerate;
 
     while (remainingFrames > 0 && framesRendered < framesToGenerate && !shuttingDown_.load()) {
         int32_t framesWritten = 0;
-        bool result = simulator_->renderOnDemand(
-            dst + (framesRendered * 2),
-            remainingFrames,
-            &framesWritten
-        );
-
-        if (!result) {
-            logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed, filling silence");
+        if (!attemptRender(dst, framesRendered, remainingFrames, framesWritten)) {
             EngineSimAudio::fillSilence(dst, framesToGenerate);
-            return true;
+            return framesRendered;
         }
 
         framesRendered += framesWritten;
         remainingFrames -= framesWritten;
 
-        // Partial render: advance simulation and retry up to MAX_RETRIES
-        if (framesWritten > 0 && framesWritten < remainingFrames + framesWritten) {
-            // Successfully got some frames but not all -- continue loop naturally
+        if (framesWritten > 0 && remainingFrames > 0) {
             continue;
         }
 
         if (framesWritten == 0 && remainingFrames > 0) {
-            // No frames produced: advance simulation and retry
-            int retryCount = 0;
-            while (retryCount < MAX_RETRIES && !shuttingDown_.load()) {
-                simulator_->update(1.0 / sampleRate_);
-                result = simulator_->renderOnDemand(
-                    dst + (framesRendered * 2),
-                    remainingFrames,
-                    &framesWritten
-                );
-
-                if (!result) {
-                    logger_->error(LogMask::AUDIO, "SyncPullStrategy::render: renderOnDemand failed during retry, filling silence");
-                    EngineSimAudio::fillSilence(dst, framesToGenerate);
-                    return true;
-                }
-
-                if (framesWritten > 0) {
-                    framesRendered += framesWritten;
-                    remainingFrames -= framesWritten;
-                    break;
-                }
-                retryCount++;
+            int32_t retryFrames = 0;
+            if (bool retryOk = retryRender(dst, framesRendered, remainingFrames, retryFrames, MAX_RETRIES); !retryOk) {
+                logger_->error(LogMask::AUDIO, __ilog_format("SyncPullStrategy::render: renderOnDemand failed during retry, filling silence"));
+                EngineSimAudio::fillSilence(dst, framesToGenerate);
+                return framesRendered;
             }
 
-            if (framesWritten == 0 && remainingFrames > 0) {
+            if (retryFrames > 0) {
+                framesRendered += retryFrames;
+                remainingFrames -= retryFrames;
+            } else {
                 logger_->warning(LogMask::AUDIO,
-                    "SyncPullStrategy::render: exhausted %d retries, filling silence for %d frames",
-                    MAX_RETRIES, remainingFrames);
+                    __ilog_format("SyncPullStrategy::render: exhausted %d retries, filling silence for %d frames",
+                    MAX_RETRIES, remainingFrames));
                 break;
             }
         }
     }
 
+    return framesRendered;
+}
+
+void SyncPullStrategy::fillRemainingSilence(float* dst, int framesRendered, int framesToGenerate, int remainingFrames) {
     // Fill remaining buffer with silence on partial render to prevent crackles
     if (framesRendered < framesToGenerate) {
-        // NOTE: Should never happen in practice - could probaly just throw an exception here
+        // NOTE: Should never happen in practice - could probably just throw an exception here
         logger_->warning(LogMask::AUDIO,
-            "SyncPullStrategy::render: rendered %d/%d frames, filling remaining %d with silence",
-            framesRendered, framesToGenerate, remainingFrames);
+            __ilog_format("SyncPullStrategy::render: rendered %d/%d frames, filling remaining %d with silence",
+            framesRendered, framesToGenerate, remainingFrames));
         float* remaining = dst + (framesRendered * 2);
         EngineSimAudio::fillSilence(remaining, framesToGenerate - framesRendered);
     }
+}
 
+
+void SyncPullStrategy::applyCrossfade(float* dst, int framesRendered) {
     // Apply crossfade if hot-swap is in progress
     if (crossfadeSamplesRemaining_ > 0 && framesRendered > 0) {
         int samplesToCrossfade = std::min(framesRendered * 2, crossfadeSamplesRemaining_);
@@ -231,6 +264,9 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
         }
     }
 
+}
+
+void SyncPullStrategy::resetFrameRender(int framesToGenerate, int framesRendered, const float* dst, std::chrono::high_resolution_clock::time_point callbackStart) {
     // Track last sample values for next crossfade (update after crossfade)
     if (framesRendered > 0) {
         lastLeftSample_ = dst[(framesRendered - 1) * 2];
@@ -244,12 +280,14 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
 
     // Update throughput rates once per second
     auto now = std::chrono::steady_clock::now();
-    double elapsedSec = std::chrono::duration<double>(now - lastThroughputTime_).count();
-    if (elapsedSec >= 1.0) {
+    if (double elapsedSec = std::chrono::duration<double>(now - lastThroughputTime_).count(); elapsedSec >= 1.0) {
         diagnostics_.updateThroughput(elapsedSec);
         lastThroughputTime_ = now;
     }
 
+}
+
+void SyncPullStrategy::updateTelemetry() {
     // Push timing diagnostics to telemetry
     auto snap = diagnostics_.getSnapshot();
     telemetry::AudioTimingTelemetry timing;
@@ -262,20 +300,18 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
     timing.generatingRateFps = snap.generatingRateFps;
     timing.trendPct = snap.trendPct;
     telemetry_->writeAudioTiming(timing);
-
-    return true;
 }
 
 bool SyncPullStrategy::AddFrames(
     float* /* buffer */,
     int /* frameCount */
 ) {
-    logger_->debug(LogMask::AUDIO, "SyncPullStrategy::AddFrames: No-op for sync-pull mode");
+    logger_->debug(LogMask::AUDIO, __ilog_format("SyncPullStrategy::AddFrames: No-op for sync-pull mode"));
     return true;
 }
 
 void SyncPullStrategy::reset() {
-    logger_->debug(LogMask::AUDIO, "SyncPullStrategy reset: No-op for sync-pull mode");
+    logger_->debug(LogMask::AUDIO, __ilog_format("SyncPullStrategy reset: No-op for sync-pull mode"));
 }
 
 std::string SyncPullStrategy::getModeString() const {

@@ -1,4 +1,7 @@
 #include "preset/FunctionDeserializer.h"
+#include "common/PresetExceptions.h"
+
+#include <memory>
 
 using json::JsonValue;
 
@@ -9,27 +12,27 @@ std::string FunctionDeserializer::fieldError(const std::string& field, const std
 
 Function* FunctionDeserializer::deserialize(const JsonValue& fnJson, const std::string& context) {
     if (!fnJson.isObject()) {
-        throw std::runtime_error("Expected function object" +
+        throw PresetDeserializationException("Expected function object" +
             (context.empty() ? "" : " in " + context));
     }
 
     if (!fnJson.has("filterRadius")) {
-        throw std::runtime_error(fieldError("filterRadius", context));
+        throw PresetDeserializationException(fieldError("filterRadius", context));
     }
     if (!fnJson.has("samples")) {
-        throw std::runtime_error(fieldError("samples", context));
+        throw PresetDeserializationException(fieldError("samples", context));
     }
 
     const JsonValue& samplesJson = fnJson["samples"];
     if (!samplesJson.isArray() || samplesJson.size() == 0) {
-        throw std::runtime_error("Function 'samples' must be a non-empty array" +
+        throw PresetDeserializationException("Function 'samples' must be a non-empty array" +
             (context.empty() ? "" : " in " + context));
     }
 
-    double filterRadius = fnJson["filterRadius"].asNumber();
-    int n = static_cast<int>(samplesJson.size());
+    auto filterRadius = fnJson["filterRadius"].asNumber();
+    auto n = static_cast<int>(samplesJson.size());
 
-    Function* fn = new Function;
+    auto fn = std::make_unique<Function>();
     fn->initialize(n + 2, filterRadius);
 
     if (fnJson.has("inputScale")) {
@@ -47,5 +50,5 @@ Function* FunctionDeserializer::deserialize(const JsonValue& fnJson, const std::
         }
     }
 
-    return fn;
+    return fn.release();
 }

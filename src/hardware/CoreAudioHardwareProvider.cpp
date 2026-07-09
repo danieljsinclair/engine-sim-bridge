@@ -4,12 +4,14 @@
 // Phase F: Moved to engine-sim-bridge submodule
 
 #include "hardware/CoreAudioHardwareProvider.h"
+#include "common/Verification.h"
 
 #include <cstring>
 #include <thread>
 #include <chrono>
 #include <AudioUnit/AudioComponent.h>
 #include <AudioUnit/AudioUnit.h>
+#include <include/common/PresetExceptions.h>
 
 // ================================================================
 // CoreAudioHardwareProvider Implementation
@@ -22,51 +24,50 @@ CoreAudioHardwareProvider::CoreAudioHardwareProvider(ILogging* logger)
       currentVolume(1.0),
       underrunCount(0),
       overrunCount(0),
-      defaultLogger_(logger ? nullptr : new ConsoleLogger()),
+      defaultLogger_(logger ? nullptr : std::make_unique<ConsoleLogger>()),
       logger_(logger ? logger : defaultLogger_.get()),
       audioCallback_(nullptr) {
 }
 
 CoreAudioHardwareProvider::~CoreAudioHardwareProvider() {
-    cleanup();
+    doCleanup();
 }
 
 bool CoreAudioHardwareProvider::initialize(const AudioStreamFormat& format) {
-    logger_->info(LogMask::AUDIO, "CoreAudioHardwareProvider::initialize() - sr=%d, ch=%d",
-                 format.sampleRate, format.channels);
+    logger_->info(LogMask::AUDIO, __ilog_format("CoreAudioHardwareProvider::initialize() - sr=%d, ch=%d",
+                 format.sampleRate, format.channels));
 
     // Setup AudioUnit
     if (!setupAudioUnit()) {
-        logger_->error(LogMask::AUDIO, "Failed to setup AudioUnit");
+        logger_->error(LogMask::AUDIO, __ilog_format("Failed to setup AudioUnit"));
         return false;
     }
 
     // Configure audio format
     if (!configureAudioFormat(format)) {
-        logger_->error(LogMask::AUDIO, "Failed to configure audio format");
+        logger_->error(LogMask::AUDIO, __ilog_format("Failed to configure audio format"));
         return false;
     }
 
     // Register callback
     if (!registerCallbackWithAudioUnit()) {
-        logger_->error(LogMask::AUDIO, "Failed to register audio callback");
+        logger_->error(LogMask::AUDIO, __ilog_format("Failed to register audio callback"));
         return false;
     }
 
     // Initialize AudioUnit (required before AudioOutputUnitStart)
-    OSStatus initStatus = AudioUnitInitialize(audioUnit);
-    if (initStatus != noErr) {
+    if (OSStatus initStatus = AudioUnitInitialize(audioUnit); initStatus != noErr) {
         logCoreAudioError("AudioUnitInitialize", initStatus, nullptr);
         return false;
     }
 
-    logger_->info(LogMask::AUDIO, "CoreAudioHardwareProvider initialized successfully");
+    logger_->info(LogMask::AUDIO, __ilog_format("CoreAudioHardwareProvider initialized successfully"));
     return true;
 }
 
-void CoreAudioHardwareProvider::cleanup() {
+void CoreAudioHardwareProvider::doCleanup() {
     if (audioUnit) {
-        stopPlayback();
+        CoreAudioHardwareProvider::stopPlayback();
 
         // Allow in-flight CoreAudio render callbacks to drain.
         // AudioOutputUnitStop is asynchronous -- the render thread may still
@@ -78,72 +79,74 @@ void CoreAudioHardwareProvider::cleanup() {
         // Uninitialize AudioUnit
         OSStatus status = AudioUnitUninitialize(audioUnit);
         if (status != noErr) {
-            logger_->warning(LogMask::AUDIO, "AudioUnitUninitialize failed: %s",
-                          getStatusDescription(status));
+            logger_->warning(LogMask::AUDIO, __ilog_format("AudioUnitUninitialize failed: %s",
+                          getStatusDescription(status)));
         }
 
         // Dispose AudioUnit
         status = AudioComponentInstanceDispose(audioUnit);
         if (status != noErr) {
-            logger_->warning(LogMask::AUDIO, "AudioComponentInstanceDispose failed: %s",
-                          getStatusDescription(status));
+            logger_->warning(LogMask::AUDIO, __ilog_format("AudioComponentInstanceDispose failed: %s",
+                          getStatusDescription(status)));
         }
 
         audioUnit = nullptr;
     }
 
     isPlaying = false;
-    logger_->info(LogMask::AUDIO, "CoreAudioHardwareProvider cleaned up");
+    logger_->info(LogMask::AUDIO, __ilog_format("CoreAudioHardwareProvider cleaned up"));
+}
+
+void CoreAudioHardwareProvider::cleanup() {
+    doCleanup();
 }
 
 bool CoreAudioHardwareProvider::startPlayback() {
     if (!audioUnit) {
-        logger_->error(LogMask::AUDIO, "Cannot start playback - AudioUnit not initialized");
+        logger_->error(LogMask::AUDIO, __ilog_format("Cannot start playback - AudioUnit not initialized"));
         return false;
     }
 
-    logger_->debug(LogMask::AUDIO, "Starting AudioUnit playback");
+    logger_->debug(LogMask::AUDIO, __ilog_format("Starting AudioUnit playback"));
 
-    OSStatus status = AudioOutputUnitStart(audioUnit);
-    if (status != noErr) {
+    if (OSStatus status = AudioOutputUnitStart(audioUnit); status != noErr) {
         logCoreAudioError("AudioOutputUnitStart", status, nullptr);
         return false;
     }
 
     isPlaying = true;
-    logger_->info(LogMask::AUDIO, "AudioUnit playback started");
+    logger_->info(LogMask::AUDIO, __ilog_format("AudioUnit playback started"));
     return true;
 }
 
 void CoreAudioHardwareProvider::stopPlayback() {
     if (!audioUnit) {
-        logger_->warning(LogMask::AUDIO, "Cannot stop playback - AudioUnit not initialized");
+        logger_->warning(LogMask::AUDIO, __ilog_format("Cannot stop playback - AudioUnit not initialized"));
         return;
     }
 
     if (isPlaying) {
-        logger_->debug(LogMask::AUDIO, "Stopping AudioUnit playback");
+        logger_->debug(LogMask::AUDIO, __ilog_format("Stopping AudioUnit playback"));
 
-        OSStatus status = AudioOutputUnitStop(audioUnit);
-        if (status != noErr) {
+        if (OSStatus status = AudioOutputUnitStop(audioUnit); status != noErr) {
             logCoreAudioError("AudioOutputUnitStop", status, nullptr);
         }
 
         isPlaying = false;
-        logger_->info(LogMask::AUDIO, "AudioUnit playback stopped");
+        logger_->info(LogMask::AUDIO, __ilog_format("AudioUnit playback stopped"));
     }
 }
 
 void CoreAudioHardwareProvider::setVolume(double volume) {
     if (!audioUnit) {
-        logger_->warning(LogMask::AUDIO, "Cannot set volume - AudioUnit not initialized");
+        logger_->warning(LogMask::AUDIO, __ilog_format("Cannot set volume - AudioUnit not initialized"));
         return;
     }
 
     // Clamp volume to valid range
     double clampedVolume = std::max(0.0, std::min(1.0, volume));
 
-    logger_->debug(LogMask::AUDIO, "Setting volume to %.2f", clampedVolume);
+    logger_->debug(LogMask::AUDIO, __ilog_format("Setting volume to %.2f", clampedVolume));
 
     // Set volume parameter on global scope
     OSStatus status = AudioUnitSetParameter(
@@ -151,7 +154,7 @@ void CoreAudioHardwareProvider::setVolume(double volume) {
         kHALOutputParam_Volume,
         kAudioUnitScope_Global,
         0,  // kAudioUnitElement_Output
-        clampedVolume,
+        static_cast<AudioUnitParameterValue>(clampedVolume),
         0   // AudioUnitElement inBufferOffset
     );
 
@@ -168,12 +171,12 @@ double CoreAudioHardwareProvider::getVolume() const {
 
 bool CoreAudioHardwareProvider::registerAudioCallback(const AudioCallback& callback) {
     if (!callback) {
-        logger_->error(LogMask::AUDIO, "Cannot register null callback");
+        logger_->error(LogMask::AUDIO, __ilog_format("Cannot register null callback"));
         return false;
     }
 
     audioCallback_ = callback;
-    logger_->info(LogMask::AUDIO, "Audio callback registered");
+    logger_->info(LogMask::AUDIO, __ilog_format("Audio callback registered"));
 
     // Callback registration happens in registerCallbackWithAudioUnit()
     return true;
@@ -193,7 +196,7 @@ AudioHardwareState CoreAudioHardwareProvider::getHardwareState() const {
 void CoreAudioHardwareProvider::resetDiagnostics() {
     underrunCount = 0;
     overrunCount = 0;
-    logger_->debug(LogMask::AUDIO, "Hardware diagnostics reset");
+    logger_->debug(LogMask::AUDIO, __ilog_format("Hardware diagnostics reset"));
 }
 
 // ================================================================
@@ -211,13 +214,11 @@ bool CoreAudioHardwareProvider::setupAudioUnit() {
     // Find default output AudioComponent
     AudioComponent component = AudioComponentFindNext(nullptr, &desc);
     if (!component) {
-        logger_->error(LogMask::AUDIO, "Failed to find AudioComponent");
+        logger_->error(LogMask::AUDIO, __ilog_format("Failed to find AudioComponent"));
         return false;
     }
 
-    OSStatus status = AudioComponentInstanceNew(component, &audioUnit);
-
-    if (status != noErr || !audioUnit) {
+    if (OSStatus status = AudioComponentInstanceNew(component, &audioUnit); status != noErr || !audioUnit) {
         logCoreAudioError("AudioComponentInstanceNew", status,
                          "Failed to create AudioUnit - system audio may be unavailable");
         return false;
@@ -256,18 +257,18 @@ bool CoreAudioHardwareProvider::setDeviceSampleRate(Float64 targetRate) {
     }
 
     if (currentRate == targetRate) {
-        logger_->info(LogMask::AUDIO, "Device already at %.0f Hz", targetRate);
+        logger_->info(LogMask::AUDIO, __ilog_format("Device already at %.0f Hz", targetRate));
         return true;
     }
 
     status = AudioObjectSetPropertyData(deviceId, &addr, 0, nullptr, sizeof(targetRate), &targetRate);
     if (status != noErr) {
-        logger_->warning(LogMask::AUDIO, "Could not set device rate to %.0f Hz (status: %d) — will use implicit SRC",
-                        targetRate, status);
+        logger_->warning(LogMask::AUDIO, __ilog_format("Could not set device rate to %.0f Hz (status: %d) — will use implicit SRC",
+                        targetRate, status));
         return false;
     }
 
-    logger_->info(LogMask::AUDIO, "Device sample rate set to %.0f Hz", targetRate);
+    logger_->info(LogMask::AUDIO, __ilog_format("Device sample rate set to %.0f Hz", targetRate));
     return true;
 }
 
@@ -302,16 +303,14 @@ bool CoreAudioHardwareProvider::configureAudioFormat(const AudioStreamFormat& fo
     streamFormat.mChannelsPerFrame = format.channels;
 
     // Set format on AudioUnit
-    OSStatus status = AudioUnitSetProperty(
-        audioUnit,
-        kAudioUnitProperty_StreamFormat,
-        kAudioUnitScope_Input,
-        0,  // kAudioUnitElement_Output
-        &streamFormat,
-        sizeof(streamFormat)
-    );
-
-    if (status != noErr) {
+    if (OSStatus status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioUnitProperty_StreamFormat,
+            kAudioUnitScope_Input,
+            0,  // kAudioUnitElement_Output
+            &streamFormat,
+            sizeof(streamFormat)
+        ); status != noErr) {
         logCoreAudioError("AudioUnitSetProperty (format)", status, "44.1kHz stereo float not supported");
         return false;
     }
@@ -321,24 +320,22 @@ bool CoreAudioHardwareProvider::configureAudioFormat(const AudioStreamFormat& fo
 
 bool CoreAudioHardwareProvider::registerCallbackWithAudioUnit() {
     if (!audioUnit || !audioCallback_) {
-        return false;
+        throw SimulatorException("Cannot register callback - AudioUnit not initialized or callback not set");
     }
 
     // Set up callback structure
     AURenderCallbackStruct callbackStruct;
     callbackStruct.inputProc = &coreAudioCallbackWrapper;
-    callbackStruct.inputProcRefCon = this;  // Pass 'this' to static callback wrapper
+    callbackStruct.inputProcRefCon = this;
 
-    OSStatus status = AudioUnitSetProperty(
-        audioUnit,
-        kAudioUnitProperty_SetRenderCallback,
-        kAudioUnitScope_Input,
-        0,  // kAudioUnitElement_Output
-        &callbackStruct,
-        sizeof(callbackStruct)
-    );
-
-    if (status != noErr) {
+    if (OSStatus status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioUnitProperty_SetRenderCallback,
+            kAudioUnitScope_Input,
+            0,  // kAudioUnitElement_Output
+            &callbackStruct,
+            sizeof(callbackStruct)
+        ); status != noErr) {
         logCoreAudioError("AudioUnitSetProperty (callback)", status);
         return false;
     }
@@ -346,22 +343,21 @@ bool CoreAudioHardwareProvider::registerCallbackWithAudioUnit() {
     return true;
 }
 
-OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
-    void* refCon,
-    AudioUnitRenderActionFlags* actionFlags,
+OSStatus CoreAudioHardwareProvider::coreAudioCallbackImpl(
+    const CoreAudioHardwareProvider* provider,
+    const AudioUnitRenderActionFlags* actionFlags,
     const AudioTimeStamp* timeStamp,
     UInt32 busNumber,
     UInt32 numberFrames,
     AudioBufferList* ioData
 ) {
-    // Extract the CoreAudioHardwareProvider instance from refCon
-    CoreAudioHardwareProvider* provider = static_cast<CoreAudioHardwareProvider*>(refCon);
+    ASSERT(provider, "coreAudioCallbackImpl: null provider");
+    ASSERT(provider->audioCallback_, "coreAudioCallbackImpl: null callback");
 
-    if (!provider || !provider->audioCallback_) {
-        return noErr;  // Should not happen if properly initialized
-    }
+    (void)actionFlags;
+    (void)timeStamp;
+    (void)busNumber;
 
-    // Convert CoreAudio buffer to platform-agnostic AudioBufferView
     float* audioData = ioData->mNumberBuffers > 0
         ? static_cast<float*>(ioData->mBuffers[0].mData)
         : nullptr;
@@ -370,14 +366,19 @@ OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
         : 2;
 
     AudioBufferView buffer(audioData, static_cast<int>(numberFrames), channels);
-
-    // Suppress CoreAudio parameters we don't use
-    (void)actionFlags;
-    (void)timeStamp;
-    (void)busNumber;
-
-    // Invoke the user-provided callback with platform-agnostic buffer
     return static_cast<OSStatus>(provider->audioCallback_(buffer));
+}
+
+OSStatus CoreAudioHardwareProvider::coreAudioCallbackWrapper(
+    AudioRefCon refCon,
+    AudioUnitRenderActionFlags* actionFlags, // NOSONAR S995 — must match CoreAudio AURenderCallback typedef
+    const AudioTimeStamp* timeStamp,
+    UInt32 busNumber,
+    UInt32 numberFrames,
+    AudioBufferList* ioData
+) {
+    auto* const provider = static_cast<const CoreAudioHardwareProvider*>(refCon);
+    return coreAudioCallbackImpl(provider, actionFlags, timeStamp, busNumber, numberFrames, ioData);
 }
 
 const char* CoreAudioHardwareProvider::getStatusDescription(OSStatus status) {
@@ -399,10 +400,10 @@ void CoreAudioHardwareProvider::logCoreAudioError(const char* operation, OSStatu
     const char* description = getStatusDescription(status);
 
     if (additional) {
-        logger_->error(LogMask::AUDIO, "CoreAudio error in %s: %s (%d) - %s",
-                      operation, description, status, additional);
+        logger_->error(LogMask::AUDIO, __ilog_format("CoreAudio error in %s: %s (%d) - %s",
+                      operation, description, status, additional));
     } else {
-        logger_->error(LogMask::AUDIO, "CoreAudio error in %s: %s (%d)",
-                      operation, description, status);
+        logger_->error(LogMask::AUDIO, __ilog_format("CoreAudio error in %s: %s (%d)",
+                      operation, description, status));
     }
 }

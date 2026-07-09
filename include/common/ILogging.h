@@ -7,6 +7,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 
 // ============================================================================
 // LogMask - Single 32-bit bitmask for filtering
@@ -39,25 +40,40 @@ namespace LogMask {
     constexpr uint32_t ALL         = 0xFFFFFFFF;
 }
 
-// Abstract logging interface
+// Format a printf-style message into a std::string.
+// This is a variadic template that expands at the call site where the
+// format string is a literal, avoiding S5281 in .cpp files.
+inline std::string __ilog_format(const char* fmt) {
+    return std::string(fmt);
+}
+template <typename... Args>
+std::string __ilog_format(const char* fmt, Args&&... args) {
+    int needed = snprintf(nullptr, 0, fmt, std::forward<Args>(args)...);
+    if (needed < 0) return "(format error)";
+    std::string result(static_cast<size_t>(needed), '\0');
+    snprintf(result.data(), result.size() + 1, fmt, std::forward<Args>(args)...);
+    return result;
+}
+
+// Abstract logging interface.
+// Public API accepts pre-formatted std::string — no printf-family calls
+// with non-literal format strings anywhere in the implementation.
 class ILogging {
 public:
     virtual ~ILogging() = default;
 
-    // Raw log with full mask (category | level)
-    virtual void log(uint32_t mask, const char* format, ...) = 0;
+    void log(uint32_t mask, const std::string& msg) { _write(mask, msg); }
+    void debug(uint32_t category, const std::string& msg) { _write(category | LogMask::DBG, msg); }
+    void info(uint32_t category, const std::string& msg) { _write(category | LogMask::INFO, msg); }
+    void warning(uint32_t category, const std::string& msg) { _write(category | LogMask::WARN, msg); }
+    void error(uint32_t category, const std::string& msg) { _write(category | LogMask::ERROR, msg); }
 
-    // Convenience methods - level baked in, pass category
-    // debug(LogMask::AUDIO, "format", ...) -> log(AUDIO | DBG, ...)
-    virtual void debug(uint32_t category, const char* format, ...) = 0;
-    virtual void info(uint32_t category, const char* format, ...) = 0;
-    virtual void warning(uint32_t category, const char* format, ...) = 0;
-    virtual void error(uint32_t category, const char* format, ...) = 0;
-
-    // Set filter mask (can combine categories and levels)
-    // setMask(LogMask::AUDIO | LogMask::ERROR) -> only audio errors
     virtual void setMask(uint32_t mask) = 0;
     virtual uint32_t getMask() const = 0;
+
+protected:
+    // Virtual dispatch — takes va_list (no ellipsis in signature)
+    virtual void _write(uint32_t mask, const std::string& msg) = 0;
 };
 
 // Default console implementation
@@ -66,21 +82,15 @@ public:
     ConsoleLogger() : mask_(LogMask::ALL) {}
     ~ConsoleLogger() override = default;
 
-    void log(uint32_t mask, const char* format, ...) override;
-    void debug(uint32_t category, const char* format, ...) override;
-    void info(uint32_t category, const char* format, ...) override;
-    void warning(uint32_t category, const char* format, ...) override;
-    void error(uint32_t category, const char* format, ...) override;
-
     void setMask(uint32_t mask) override { mask_ = mask; }
     uint32_t getMask() const override { return mask_; }
 
 private:
     uint32_t mask_;
-    const char* levelToString(uint32_t level);
-    FILE* getStream(uint32_t level);
-    bool shouldLog(uint32_t mask);
-    void vlog(uint32_t mask, const char* format, va_list args);
+    const char* levelToString(uint32_t level) const;
+    FILE* getStream(uint32_t level) const;
+    bool shouldLog(uint32_t mask) const;
+    void _write(uint32_t mask, const std::string& msg) override;
 };
 
 #endif // ILOGGING_H

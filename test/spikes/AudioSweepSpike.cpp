@@ -88,7 +88,7 @@ TEST(Phase0Spikes, AudioSweep_RecordsWav) {
     bridge->destroy();
     ASSERT_GT(caps.size(),0u);
 
-    std::string outDir="/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/build-test/spikes/audio_sweep/";
+    std::string outDir = std::string(std::filesystem::current_path()) + "/../build-test/spikes/audio_sweep/";
     system(("mkdir -p "+outDir).c_str());
     writeWav(outDir+"audio_sweep.wav",caps,44100);
 

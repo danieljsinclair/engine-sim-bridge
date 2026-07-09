@@ -21,13 +21,15 @@
 
 #include "engine-sim/include/simulator.h"
 
+#include "common/PresetExceptions.h"
+
 #include <memory>
-#include <stdexcept>
 #include <algorithm>
 #include <filesystem>
+#include <string_view>
 
 static void initSimulator(Simulator* sim, const ISimulatorConfig& config);
-static bool endsWith(const std::string& str, const std::string& suffix);
+static bool endsWith(std::string_view str, std::string_view suffix);
 
 namespace {
 
@@ -58,8 +60,8 @@ SimulatorInit createSineWaveSimulator(const ISimulatorConfig& config) {
     return {std::move(sineSim), "SineWave", EnginePhase::Running};
 }
 
-void applyLoadedEngineSettings(Simulator* simulator, Engine* engine) {
-    simulator->setSimulationFrequency(engine->getSimulationFrequency());
+void applyLoadedEngineSettings(Simulator* simulator, const Engine* engine) {
+    simulator->setSimulationFrequency(static_cast<int>(engine->getSimulationFrequency()));
 
     Synthesizer::AudioParameters audioParams = simulator->synthesizer().getAudioParameters();
     audioParams.inputSampleNoise = static_cast<float>(engine->getInitialJitter());
@@ -84,7 +86,7 @@ std::unique_ptr<Simulator> buildPistonEngineSimulator(
 
     if (!ScriptLoadHelpers::loadImpulseResponses(pistonSim.get(), loaded.engine, loaded.resolvedAssetPath, logger)) {
         pistonSim->destroy();
-        throw std::runtime_error("Failed to load impulse responses (asset base: " + loaded.resolvedAssetPath + ")");
+        throw SimulatorException("Failed to load impulse responses (asset base: " + loaded.resolvedAssetPath + ")");
     }
 
     return pistonSim;
@@ -93,7 +95,7 @@ std::unique_ptr<Simulator> buildPistonEngineSimulator(
 LoadedSimulation loadPresetSimulation(const std::string& scriptPath, const std::string& assetBasePath) {
     PresetLoadResult result = PresetEngineFactory::loadFromFile(scriptPath);
     if (!result.success()) {
-        throw std::runtime_error("Failed to load preset: " + scriptPath + " — " + result.error);
+        throw SimulatorException("Failed to load preset: " + scriptPath + " — " + result.error);
     }
 
     LoadedSimulation loaded;
@@ -107,15 +109,15 @@ LoadedSimulation loadPresetSimulation(const std::string& scriptPath, const std::
 }
 
 LoadedSimulation loadScriptSimulation(const std::string& scriptPath, const std::string& assetBasePath) {
-    std::string normalizedPath = ScriptLoadHelpers::normalizeScriptPath(scriptPath);
-    std::string resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath, assetBasePath);
+    std::filesystem::path normalizedPath = ScriptLoadHelpers::normalizeScriptPath(scriptPath);
+    std::string resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath.string(), assetBasePath);
 
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
     const auto simDir = script_compile_helpers::findEngineSimRoot(normalizedPath, resolvedAssetPath);
     const es_script::Compiler::Output output = script_execution_helpers::compileScript(normalizedPath, simDir);
 
     if (!output.engine) {
-        throw std::runtime_error("Script did not create an engine: " + normalizedPath);
+        throw SimulatorException("Script did not create an engine: " + normalizedPath.string());
     }
 
     LoadedSimulation loaded;
@@ -125,7 +127,7 @@ LoadedSimulation loadScriptSimulation(const std::string& scriptPath, const std::
     loaded.resolvedAssetPath = resolvedAssetPath;
     return loaded;
 #else
-    throw std::runtime_error("Script loading not available (Piranha support disabled)");
+    throw SimulatorException("Script loading not available (Piranha support disabled)");
 #endif
 }
 
@@ -169,7 +171,7 @@ static void initSimulator(Simulator* sim, const ISimulatorConfig& config) {
     sim->setTargetSynthesizerLatency(config.targetSynthesizerLatency);
 }
 
-static bool endsWith(const std::string& str, const std::string& suffix) {
+static bool endsWith(std::string_view str, std::string_view suffix) {
     if (suffix.size() > str.size()) return false;
     return std::equal(suffix.rbegin(), suffix.rend(), str.rbegin(),
         [](char a, char b) { return tolower(a) == tolower(b); });
@@ -185,7 +187,7 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
     const std::string& assetBasePath,
     const ISimulatorConfig& config,
     ILogging* logger,
-    telemetry::ITelemetryWriter* telemetryWriter)
+    telemetry::ITelemetryWriter* /*telemetryWriter*/)
 {
     SimulatorInit simInit;
     switch (type) {
@@ -198,10 +200,17 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
             break;
 
         default:
-            throw std::runtime_error("Unknown simulator type in SimulatorFactory::create()");
+            throw SimulatorException("Unknown simulator type in SimulatorFactory::create()");
     }
 
     auto bridgeSim = std::make_unique<BridgeSimulator>(std::move(simInit.simulator), simInit.name);
+
+    // Populate engineConfig_ + size the audio buffer so the simulator reports a
+    // correct simulationFrequency and has a usable audio buffer before the
+    // session layer calls create() (which re-runs initAudioConfig — idempotent
+    // — and adds the brake constraint exactly once). initAudioConfig only is
+    // called here; full create() is non-idempotent (addConstraint on brake).
+    bridgeSim->initAudioConfig(config);
 
     return bridgeSim;
 }
@@ -212,7 +221,7 @@ SimulatorType SimulatorFactory::getDefaultType() {
 
 std::vector<std::string> SimulatorFactory::discoverPresets(const std::string& presetPath) {
     std::vector<std::string> presets;
-    std::filesystem::path presetDir = std::filesystem::path(presetPath);
+    auto presetDir = std::filesystem::path(presetPath);
 
     if (!std::filesystem::exists(presetDir)) {
         return presets;
@@ -242,9 +251,9 @@ bool SimulatorFactory::configureLoadTorque(ISimulator* simulator, double loadFra
     const bool configured = bridgeSim->configureDynoLoad(loadFraction);
 
     if (configured && logger) {
-        logger->info(LogMask::BRIDGE, "Load: %d%% (%d ft*lbs max)",
+        logger->info(LogMask::BRIDGE, __ilog_format("Load: %d%% (%d ft*lbs max)",
                      static_cast<int>(loadFraction * 100),
-                     static_cast<int>(loadFraction * EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS));
+                     static_cast<int>(loadFraction * EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS)));
     }
     return configured;
 }
@@ -266,12 +275,13 @@ std::unique_ptr<ISimulator> SimulatorFactory::createAndConfigure(
 }
 
 // ============================================================================
-// discoverPresetPaths - Discover presets and find current index
+// discoverPresetPaths - Discover presets (scan a directory) and find the index
+// of a specific current preset file among the results.
 // ============================================================================
 
-SimulatorFactory::PresetDiscoveryResult SimulatorFactory::discoverPresetPaths(const std::string& presetPath) {
+SimulatorFactory::PresetDiscoveryResult SimulatorFactory::discoverPresetPaths(const std::string& dirToScan, std::string_view currentFullPath) {
     PresetDiscoveryResult result;
-    auto rawPaths = discoverPresets(presetPath);
+    auto rawPaths = discoverPresets(dirToScan);
 
     for (auto& path : rawPaths) {
         PresetNames info;
@@ -284,10 +294,12 @@ SimulatorFactory::PresetDiscoveryResult SimulatorFactory::discoverPresetPaths(co
         result.presets.push_back(std::move(info));
     }
 
-    if (result.presets.size() > 1) {
-        // Find current preset index in the sorted list
+    // Resolve the current preset's position in the sorted list. An empty
+    // currentFullPath (no current selection) matches nothing and leaves
+    // currentIndex at its default. Only meaningful when cycling is possible.
+    if (!currentFullPath.empty() && result.presets.size() > 1) {
         for (size_t i = 0; i < result.presets.size(); ++i) {
-            if (result.presets[i].fullPath == presetPath) {
+            if (result.presets[i].fullPath == currentFullPath) {
                 result.currentIndex = i;
                 break;
             }

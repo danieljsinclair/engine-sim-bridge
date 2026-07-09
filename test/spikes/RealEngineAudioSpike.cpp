@@ -97,9 +97,9 @@ void loadImpulseResponses(Simulator* sim, Engine* engine, const std::string& eng
 }
 
 TEST(Phase0Spikes, RealEngineAudio_FerrariF136) {
-    const std::string engineSimDir = "/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/engine-sim";
+    const std::string engineSimDir = std::string(std::filesystem::current_path()) + "/../engine-sim";
     const std::string scriptPath = "../es/spike_ferrari_f136.mr";
-    const std::string outDir = "/Users/danielsinclair/vscode/escli.refac7/engine-sim-bridge/build-test/spikes/real_engine_audio/";
+    const std::string outDir = std::string(std::filesystem::current_path()) + "/../build-test/spikes/real_engine_audio/";
     const std::string wavPath = outDir + "ferrari_f136_sweep.wav";
     system(("mkdir -p " + outDir).c_str());
 

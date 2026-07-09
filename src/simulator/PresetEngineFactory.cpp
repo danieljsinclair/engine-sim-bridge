@@ -3,6 +3,7 @@
 #include "simulator/PresetEngineFactory.h"
 #include "preset/PresetDeserializer.h"
 #include "common/JsonParser.h"
+#include "common/PresetExceptions.h"
 
 #include "engine.h"
 #include "exhaust_system.h"
@@ -18,11 +19,11 @@ using json::JsonValue;
 // engine-sim root as the base directory. Paths like "../../es/sound-library/..."
 // are CWD-relative from the engine-sim root (the CWD when the preset compiler
 // ran). weakly_canonical resolves symlinks and normalizes the path.
-static void resolveImpulseResponsePaths(Engine* engine, const std::filesystem::path& assetBase) {
+static void resolveImpulseResponsePaths(const Engine* engine, const std::filesystem::path& assetBase) {
     if (!engine || assetBase.empty()) return;
 
     for (int i = 0; i < engine->getExhaustSystemCount(); i++) {
-        ExhaustSystem* es = engine->getExhaustSystem(i);
+        const ExhaustSystem* es = engine->getExhaustSystem(i);
         if (!es) continue;
 
         ImpulseResponse* ir = es->getImpulseResponse();
@@ -42,10 +43,14 @@ static void resolveImpulseResponsePaths(Engine* engine, const std::filesystem::p
 
 PresetLoadResult PresetEngineFactory::loadFromFile(const std::string& jsonPath,
                                                     const std::string& assetBasePath) {
-    std::ifstream file(jsonPath);
+    std::filesystem::path resolvedPath(jsonPath);
+    if (!resolvedPath.is_absolute()) {
+        resolvedPath = std::filesystem::absolute(resolvedPath);
+    }
+    std::ifstream file(resolvedPath);
     if (!file.is_open()) {
         PresetLoadResult result;
-        result.error = "Cannot open preset file: " + jsonPath;
+        result.error = "Cannot open preset file: " + resolvedPath.string();
         return result;
     }
 
@@ -62,8 +67,11 @@ PresetLoadResult PresetEngineFactory::loadFromString(const std::string& jsonCont
     try {
         JsonValue root = json::parse(jsonContent);
         result = PresetDeserializer::deserialize(root, sourceName);
-    } catch (const std::exception& e) {
+    } catch (const PresetDeserializationException& e) {
         result.error = std::string("JSON parse error: ") + e.what();
+        return result;
+    } catch (const PresetException& e) {
+        result.error = std::string("Preset error: ") + e.what();
         return result;
     }
 

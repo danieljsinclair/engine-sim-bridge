@@ -86,6 +86,18 @@ private:
     // Throughput timing
     std::chrono::steady_clock::time_point lastThroughputTime_;
 
+    // Retry render: advance simulation and retry up to maxRetries times
+    bool retryRender(float* dst, int offset, int framesNeeded,
+                     int& framesWritten, int maxRetries);
+
+    // render helpers
+    int renderChunked(float* dst, int framesToGenerate);
+    bool attemptRender(float* dst, int offset, int framesNeeded, int32_t& framesWritten);
+    void applyCrossfade(float* dst, int framesRendered);
+    void fillRemainingSilence(float* dst, int framesRendered, int framesToGenerate, int remainingFrames);
+    void resetFrameRender(int framesToGenerate, int framesRendered, const float* dst, std::chrono::high_resolution_clock::time_point callbackStart);
+    void updateTelemetry();
+
     // Crossfade state for hot-swap (prevents clicks/pops)
     float lastLeftSample_ = 0.0f;
     float lastRightSample_ = 0.0f;

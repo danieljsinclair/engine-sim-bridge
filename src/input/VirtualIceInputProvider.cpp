@@ -1,13 +1,15 @@
 #include "input/VirtualIceInputProvider.h"
+#include "common/PresetExceptions.h"
 
 namespace input {
 
-VirtualIceInputProvider::VirtualIceInputProvider(const twin::IceVehicleProfile& profile)
-    : profile_(profile), isInitialized_(false) {
+VirtualIceInputProvider::VirtualIceInputProvider(twin::IceVehicleProfile profile)
+    : profile_(std::move(profile)), isInitialized_(false) {
 }
 
 VirtualIceInputProvider::~VirtualIceInputProvider() {
-    Shutdown();
+    twin_.reset();
+    isInitialized_ = false;
 }
 
 bool VirtualIceInputProvider::Initialize() {
@@ -23,8 +25,14 @@ bool VirtualIceInputProvider::Initialize() {
         }
         isInitialized_ = true;
         return true;
-    } catch (const std::exception& e) {
-        lastError_ = std::string("Failed to create twin: ") + e.what();
+    } catch (const PresetException& e) {
+        lastError_ = std::string("Failed to create twin (preset error): ") + e.what();
+        return false;
+    } catch (const SimulatorException& e) {
+        lastError_ = std::string("Failed to create twin (simulator error): ") + e.what();
+        return false;
+    } catch (const std::bad_alloc& e) {
+        lastError_ = std::string("Failed to create twin (out of memory): ") + e.what();
         return false;
     }
 }
@@ -85,6 +93,11 @@ void VirtualIceInputProvider::setIgnition(bool on) {
     }
 }
 
+void VirtualIceInputProvider::reconfigureProfile(const std::vector<double>& gearRatios,
+                                                  double diffRatio, double tireRadiusM) {
+    if (twin_) twin_->reconfigureProfile(gearRatios, diffRatio, tireRadiusM);
+}
+
 void VirtualIceInputProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
     pendingLogger_ = logger;
     if (twin_) {
@@ -96,6 +109,7 @@ void VirtualIceInputProvider::provideFeedback(const EngineSimStats& stats) {
     if (twin_) {
         twin_->setEngineRpmFeedback(stats.currentRPM);
         twin_->setVehicleSpeedFeedback(stats.vehicleSpeedKmh);
+        twin_->setDrivetrainTorqueFeedback(stats.drivetrainTorqueNm);
     }
 }
 

@@ -30,8 +30,8 @@ AVAudioEngineHardwareProvider::~AVAudioEngineHardwareProvider() {
 }
 
 bool AVAudioEngineHardwareProvider::initialize(const AudioStreamFormat& format) {
-    logger_->info(LogMask::AUDIO, "AVAudioEngineHardwareProvider::initialize() - sr=%d, ch=%d",
-                 format.sampleRate, format.channels);
+    logger_->info(LogMask::AUDIO, __ilog_format("AVAudioEngineHardwareProvider::initialize() - sr=%d, ch=%d",
+                 format.sampleRate, format.channels));
 
     // Setup AudioUnit (RemoteIO)
     if (!setupAudioUnit()) {
@@ -72,12 +72,12 @@ void AVAudioEngineHardwareProvider::cleanup() {
         // Uninitialize and dispose AudioUnit
         OSStatus status = AudioUnitUninitialize(audioUnit_);
         if (status != noErr) {
-            logger_->warning(LogMask::AUDIO, "AudioUnitUninitialize failed: %d", status);
+            logger_->warning(LogMask::AUDIO, __ilog_format("AudioUnitUninitialize failed: %d", status));
         }
 
         status = AudioComponentInstanceDispose(audioUnit_);
         if (status != noErr) {
-            logger_->warning(LogMask::AUDIO, "AudioComponentInstanceDispose failed: %d", status);
+            logger_->warning(LogMask::AUDIO, __ilog_format("AudioComponentInstanceDispose failed: %d", status));
         }
 
         audioUnit_ = nullptr;
@@ -132,7 +132,7 @@ void AVAudioEngineHardwareProvider::setVolume(double volume) {
     }
 
     double clampedVolume = std::max(0.0, std::min(1.0, volume));
-    logger_->debug(LogMask::AUDIO, "Setting volume to %.2f", clampedVolume);
+    logger_->debug(LogMask::AUDIO, __ilog_format("Setting volume to %.2f", clampedVolume));
 
     OSStatus status = AudioUnitSetParameter(
         audioUnit_,
@@ -237,8 +237,8 @@ bool AVAudioEngineHardwareProvider::configureAudioFormat(const AudioStreamFormat
         return false;
     }
 
-    logger_->info(LogMask::AUDIO, "Audio format configured: %dHz, %d channels, float32 interleaved",
-                  format.sampleRate, format.channels);
+    logger_->info(LogMask::AUDIO, __ilog_format("Audio format configured: %dHz, %d channels, float32 interleaved",
+                  format.sampleRate, format.channels));
     return true;
 }
 
@@ -310,11 +310,11 @@ void AVAudioEngineHardwareProvider::logAudioError(const char* operation, OSStatu
     }
 
     if (additional) {
-        logger_->error(LogMask::AUDIO, "AudioUnit error in %s: %s (%d) - %s",
-                      operation, description, status, additional);
+        logger_->error(LogMask::AUDIO, __ilog_format("AudioUnit error in %s: %s (%d) - %s",
+                      operation, description, status, additional));
     } else {
-        logger_->error(LogMask::AUDIO, "AudioUnit error in %s: %s (%d)",
-                      operation, description, status);
+        logger_->error(LogMask::AUDIO, __ilog_format("AudioUnit error in %s: %s (%d)",
+                      operation, description, status));
     }
 }
 

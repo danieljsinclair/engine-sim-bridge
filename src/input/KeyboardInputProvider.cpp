@@ -17,7 +17,11 @@ KeyboardInputProvider::KeyboardInputProvider(
 KeyboardInputProvider::~KeyboardInputProvider() = default;
 
 bool KeyboardInputProvider::Initialize() { return true; }
-void KeyboardInputProvider::Shutdown() {}
+// Keyboard input is polled per-frame in processKeys(); nothing to tear down.
+void KeyboardInputProvider::Shutdown() {
+    // No-op: keyboard state is transient; each OnUpdateSimulation() call
+    // reads fresh input from the device, so there is nothing to tear down.
+}
 bool KeyboardInputProvider::IsConnected() const { return true; }
 
 EngineInput KeyboardInputProvider::OnUpdateSimulation(double dt) {
@@ -25,14 +29,33 @@ EngineInput KeyboardInputProvider::OnUpdateSimulation(double dt) {
     return target_->buildEngineInput(dt);
 }
 
+void KeyboardInputProvider::provideFeedback(const EngineSimStats& stats) {
+    // Close the feedback loop: forward real RPM/speed/torque to the target,
+    // which routes it to the demo enhancer -> twin -> gearbox. Without this the
+    // autobox's rpmFeedback_ stays 0 and the redline safety never upshifts.
+    if (target_) target_->provideFeedback(stats);
+}
+
 void KeyboardInputProvider::processKeys(double dt) {
     keyHold_.drainInput([this]() { return keyboard_->getKey(); }, dt * 1000.0);
 
-    // Quit: edge-triggered (pressed only)
+    if (processQuitAndThrottle()) {
+        return;
+    }
+
+    processMomentaryThrottle();
+    processGearAndIgnition();
+    processDynoAndBrake();
+    processSpeedControl();
+    processPresetKeys();
+}
+
+bool KeyboardInputProvider::processQuitAndThrottle() {
+    // Quit: edge-triggered (pressed only) — terminates the frame
     if (keyHold_.isKeyPressed('q') || keyHold_.isKeyPressed('Q') || keyHold_.isKeyPressed(27)) {
         target_->quit();
         if (session_) session_->stop();
-        return;
+        return true;
     }
 
     // Throttle ramp up: active (pressed or repeating)
@@ -44,18 +67,6 @@ void KeyboardInputProvider::processKeys(double dt) {
         target_->adjustThrottle(-0.05);
     }
 
-    // Momentary throttle: level-triggered (keyDown) (1-9 = 10%-90%, 0 = 100%)
-    // Uses isKeyDown (not isKeyActive) so setThrottleMomentary fires EVERY FRAME
-    // while the key is held, preventing snap-back between OS repeat events.
-    for (int k = '1'; k <= '9'; ++k) {
-        if (keyHold_.isKeyDown(k)) {
-            target_->setThrottleMomentary(static_cast<double>(k - '0') / 10.0);
-        }
-    }
-    if (keyHold_.isKeyDown('0')) {
-        target_->setThrottleMomentary(1.0);
-    }
-
     // Space: zero throttle (edge-triggered)
     if (keyHold_.isKeyPressed(' ')) {
         target_->setThrottle(0.0);
@@ -65,6 +76,23 @@ void KeyboardInputProvider::processKeys(double dt) {
         target_->setThrottle(0.2);
     }
 
+    return false;
+}
+
+void KeyboardInputProvider::processMomentaryThrottle() {
+    // Level-triggered throttle slots: fires every frame while held so the
+    // value stays pinned without OS-repeat transitions causing snap-backs.
+    for (int k = '1'; k <= '9'; ++k) {
+        if (keyHold_.isKeyDown(k)) {
+            target_->setThrottleMomentary(static_cast<double>(k - '0') / 10.0);
+        }
+    }
+    if (keyHold_.isKeyDown('0')) {
+        target_->setThrottleMomentary(1.0);
+    }
+}
+
+void KeyboardInputProvider::processGearAndIgnition() {
     // Gear: edge-triggered
     if (keyHold_.isKeyPressed(']')) target_->shiftUp();
     if (keyHold_.isKeyPressed('[')) target_->shiftDown();
@@ -78,8 +106,10 @@ void KeyboardInputProvider::processKeys(double dt) {
     if (keyHold_.isKeyPressed('s') || keyHold_.isKeyPressed('S')) {
         target_->setStarter();
     }
+}
 
-    // Dyno torque: active (pressed or repeating)
+void KeyboardInputProvider::processDynoAndBrake() {
+    // Dyno torque: active (held for ramp)
     if (keyHold_.isKeyActive('e')) {
         target_->adjustDynoTorque(-0.1);
     }
@@ -91,24 +121,28 @@ void KeyboardInputProvider::processKeys(double dt) {
         target_->releaseDynoTorque();
     }
 
-    // Preset: edge-triggered
-    if (keyHold_.isKeyPressed('p') || keyHold_.isKeyPressed('P')) {
-        target_->cyclePreset();
-    }
-
-    // Brake: level-triggered (keyDown), also fire on release edge
+    // Brake: level-triggered (keyDown), fire 0.0 on release edge
     if (keyHold_.isKeyDown('b')) {
         target_->setBrake(1.0);
     } else if (keyHold_.isKeyReleased('b')) {
         target_->setBrake(0.0);
     }
+}
 
+void KeyboardInputProvider::processSpeedControl() {
     // Speed control: active (hold to ramp)
     if (keyHold_.isKeyActive(',')) {
         target_->adjustSpeed(-2.0);
     }
     if (keyHold_.isKeyActive('.')) {
         target_->adjustSpeed(2.0);
+    }
+}
+
+void KeyboardInputProvider::processPresetKeys() {
+    // Preset: edge-triggered
+    if (keyHold_.isKeyPressed('p') || keyHold_.isKeyPressed('P')) {
+        target_->cyclePreset();
     }
 }
 

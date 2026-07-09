@@ -10,7 +10,7 @@ class Piston;
 class ConnectingRodDeserializer {
 public:
     static void deserialize(const json::JsonValue& json, ConnectingRod* rod,
-                            Crankshaft* crankshaft, Piston* piston, int defaultJournal,
+                            Crankshaft* crankshaft, Piston* piston, int /*defaultJournal*/,
                             const std::string& context = "");
 };
 

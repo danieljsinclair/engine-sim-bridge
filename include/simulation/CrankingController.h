@@ -23,8 +23,8 @@ public:
     };
 
     // Decision methods (return TransitionDecision instead of mutating engine)
-    TransitionDecision engageStarter(ICombustionEngine& engine, bool startStopButton, bool inputIgnition);
-    TransitionDecision step(ICombustionEngine& engine, double userThrottle, bool ignition);
+    TransitionDecision engageStarter(const ICombustionEngine& engine, bool startStopButton, bool inputIgnition);
+    TransitionDecision step(const ICombustionEngine& engine, double userThrottle, bool ignition);
 
     void reset();
 

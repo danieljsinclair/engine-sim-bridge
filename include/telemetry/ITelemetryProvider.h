@@ -5,8 +5,7 @@
 #ifndef I_TELEMETRY_PROVIDER_H
 #define I_TELEMETRY_PROVIDER_H
 
-#include <atomic>
-#include <cstdint>
+#include "common/RelaxedAtomic.h"
 #include "simulation/EnginePhase.h"
 
 namespace telemetry {
@@ -129,46 +128,48 @@ public:
     SimulatorMetricsTelemetry getSimulatorMetrics() const override;
 
 private:
-    // Per-concern atomic sub-structs mirror the ISP structs
+    // Per-concern atomic sub-structs mirror the ISP structs.
+    // RelaxedDouble/Int/Bool use memory_order_relaxed internally
+    // (implementation in .cpp) to avoid unnecessary barriers on ARM.
     struct AtomicEngineState {
-        std::atomic<double> currentRPM{0.0};
-        std::atomic<double> currentLoad{0.0};
-        std::atomic<double> exhaustFlow{0.0};
-        std::atomic<double> manifoldPressure{0.0};
-        std::atomic<int32_t> activeChannels{0};
-        std::atomic<int32_t> gear{0};
-        std::atomic<double> speedMph{0.0};
-        std::atomic<int> enginePhase{0};
+        RelaxedDouble currentRPM{0.0};
+        RelaxedDouble currentLoad{0.0};
+        RelaxedDouble exhaustFlow{0.0};
+        RelaxedDouble manifoldPressure{0.0};
+        RelaxedInt activeChannels{0};
+        RelaxedInt gear{0};
+        RelaxedDouble speedMph{0.0};
+        RelaxedInt enginePhase{0};
     };
 
     struct AtomicFramePerformance {
-        std::atomic<double> processingTimeMs{0.0};
+        RelaxedDouble processingTimeMs{0.0};
     };
 
     struct AtomicAudioDiagnostics {
-        std::atomic<int32_t> underrunCount{0};
-        std::atomic<double> bufferHealthPct{0.0};
+        RelaxedInt underrunCount{0};
+        RelaxedDouble bufferHealthPct{0.0};
     };
 
     struct AtomicAudioTiming {
-        std::atomic<double> renderMs{0.0};
-        std::atomic<double> headroomMs{0.0};
-        std::atomic<double> budgetPct{0.0};
-        std::atomic<int32_t> framesRequested{0};
-        std::atomic<int32_t> framesRendered{0};
-        std::atomic<double> callbackRateHz{0.0};
-        std::atomic<double> generatingRateFps{0.0};
-        std::atomic<double> trendPct{0.0};
+        RelaxedDouble renderMs{0.0};
+        RelaxedDouble headroomMs{0.0};
+        RelaxedDouble budgetPct{0.0};
+        RelaxedInt framesRequested{0};
+        RelaxedInt framesRendered{0};
+        RelaxedDouble callbackRateHz{0.0};
+        RelaxedDouble generatingRateFps{0.0};
+        RelaxedDouble trendPct{0.0};
     };
 
     struct AtomicVehicleInputs {
-        std::atomic<double> throttlePosition{0.0};
-        std::atomic<bool> ignitionOn{false};
-        std::atomic<bool> starterMotorEngaged{false};
+        RelaxedDouble throttlePosition{0.0};
+        RelaxedBool ignitionOn{false};
+        RelaxedBool starterMotorEngaged{false};
     };
 
     struct AtomicSimulatorMetrics {
-        std::atomic<double> timestamp{0.0};
+        RelaxedDouble timestamp{0.0};
     };
 
     AtomicEngineState engineState_;

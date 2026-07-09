@@ -2,6 +2,7 @@
 // Recursive descent parser for preset JSON files
 
 #include "common/JsonParser.h"
+#include "common/PresetExceptions.h"
 
 #include <fstream>
 #include <sstream>
@@ -55,13 +56,13 @@ size_t JsonValue::size() const {
 JsonValue JsonValue::makeNull() { JsonValue v; v.type_ = JsonType::Null; return v; }
 JsonValue JsonValue::makeBool(bool v) { JsonValue r; r.type_ = JsonType::Bool; r.boolVal_ = v; return r; }
 JsonValue JsonValue::makeNumber(double v) { JsonValue r; r.type_ = JsonType::Number; r.numVal_ = v; return r; }
-JsonValue JsonValue::makeString(const std::string& v) { JsonValue r; r.type_ = JsonType::String; r.strVal_ = v; return r; }
+JsonValue JsonValue::makeString(std::string_view v) { JsonValue r; r.type_ = JsonType::String; r.strVal_ = v; return r; }
 JsonValue JsonValue::makeArray() { JsonValue r; r.type_ = JsonType::Array; return r; }
 JsonValue JsonValue::makeObject() { JsonValue r; r.type_ = JsonType::Object; return r; }
 
-void JsonValue::pushBack(JsonValue v) {
+void JsonValue::pushBack(const JsonValue& v) {
     if (type_ == JsonType::Array) {
-        arrVal_.push_back(std::move(v));
+        arrVal_.push_back(v);
     }
 }
 
@@ -71,7 +72,7 @@ void JsonValue::pushBack(JsonValue v) {
 
 class Parser {
 public:
-    Parser(const std::string& input) : input_(input), pos_(0) {}
+    explicit Parser(const std::string& input) : input_(input) {}
 
     JsonValue parse() {
         skipWhitespace();
@@ -82,9 +83,9 @@ public:
 
 private:
     const std::string& input_;
-    size_t pos_;
+    size_t pos_ = 0;
 
-    char peek() {
+    char peek() const {
         return pos_ < input_.size() ? input_[pos_] : '\0';
     }
 
@@ -95,7 +96,7 @@ private:
     void expect(char c) {
         skipWhitespace();
         if (peek() != c) {
-            throw std::runtime_error("Expected '" + std::string(1, c) +
+            throw PresetDeserializationException("Expected '" + std::string(1, c) +
                 "' at position " + std::to_string(pos_) + ", got '" +
                 std::string(1, peek()) + "'");
         }
@@ -119,7 +120,7 @@ private:
         if (c == 't' || c == 'f') return parseBool();
         if (c == 'n') return parseNull();
         if (c == '-' || (c >= '0' && c <= '9')) return parseNumber();
-        throw std::runtime_error("Unexpected character '" + std::string(1, c) +
+        throw PresetDeserializationException("Unexpected character '" + std::string(1, c) +
             "' at position " + std::to_string(pos_));
     }
 
@@ -152,7 +153,7 @@ private:
         expect(':');
         skipWhitespace();
         JsonValue value = parseValue();
-        obj.objectRef()[keyVal.asString()] = std::move(value);
+        obj.objectRef()[keyVal.asString()] = value;
     }
 
     JsonValue parseArray() {
@@ -176,34 +177,38 @@ private:
         return result;
     }
 
+    void parseEscapeChar(std::string& result) {
+        pos_++;
+        if (pos_ >= input_.size()) throw PresetDeserializationException("Unterminated string escape");
+        switch (input_[pos_]) {
+            case '"':  result += '"'; break;
+            case '\\': result += '\\'; break;
+            case '/':  result += '/'; break;
+            case 'b':  result += '\b'; break;
+            case 'f':  result += '\f'; break;
+            case 'n':  result += '\n'; break;
+            case 'r':  result += '\r'; break;
+            case 't':  result += '\t'; break;
+            case 'u': {
+                // Skip 4 hex digits (basic Unicode escape)
+                pos_++;
+                // Just skip \\uXXXX for now -- preset strings are ASCII
+                for (int i = 0; i < 4 && pos_ < input_.size(); i++) pos_++;
+                result += '?'; // Placeholder
+                break;
+            }
+            default:
+                result += input_[pos_];
+                break;
+        }
+    }
+
     JsonValue parseString() {
         expect('"');
         std::string result;
         while (pos_ < input_.size() && input_[pos_] != '"') {
             if (input_[pos_] == '\\') {
-                pos_++;
-                if (pos_ >= input_.size()) throw std::runtime_error("Unterminated string escape");
-                switch (input_[pos_]) {
-                    case '"':  result += '"'; break;
-                    case '\\': result += '\\'; break;
-                    case '/':  result += '/'; break;
-                    case 'b':  result += '\b'; break;
-                    case 'f':  result += '\f'; break;
-                    case 'n':  result += '\n'; break;
-                    case 'r':  result += '\r'; break;
-                    case 't':  result += '\t'; break;
-                    case 'u': {
-                        // Skip 4 hex digits (basic Unicode escape)
-                        pos_++;
-                        // Just skip \uXXXX for now -- preset strings are ASCII
-                        for (int i = 0; i < 4 && pos_ < input_.size(); i++) pos_++;
-                        result += '?'; // Placeholder
-                        break;
-                    }
-                    default:
-                        result += input_[pos_];
-                        break;
-                }
+                parseEscapeChar(result);
             } else {
                 result += input_[pos_];
             }
@@ -241,7 +246,7 @@ private:
             pos_ += 5;
             return JsonValue::makeBool(false);
         }
-        throw std::runtime_error("Invalid boolean at position " + std::to_string(pos_));
+        throw PresetDeserializationException("Invalid boolean at position " + std::to_string(pos_));
     }
 
     JsonValue parseNull() {
@@ -249,7 +254,7 @@ private:
             pos_ += 4;
             return JsonValue::makeNull();
         }
-        throw std::runtime_error("Invalid null at position " + std::to_string(pos_));
+        throw PresetDeserializationException("Invalid null at position " + std::to_string(pos_));
     }
 };
 
@@ -265,7 +270,7 @@ JsonValue parse(const std::string& json) {
 JsonValue parseFile(const std::string& path) {
     std::ifstream file(path);
     if (!file.is_open()) {
-        throw std::runtime_error("Cannot open JSON file: " + path);
+        throw PresetDeserializationException("Cannot open JSON file: " + path);
     }
     std::ostringstream ss;
     ss << file.rdbuf();

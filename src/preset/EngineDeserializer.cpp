@@ -17,8 +17,8 @@
 #include "preset/CylinderHeadDeserializer.h"
 #include "preset/ConnectingRodDeserializer.h"
 #include "preset/FunctionDeserializer.h"
+#include "common/PresetExceptions.h"
 
-#include <stdexcept>
 #include <memory>
 
 using json::JsonValue;
@@ -27,38 +27,38 @@ Engine::Parameters EngineDeserializer::readParams(const JsonValue& json, const s
     Engine::Parameters params;
 
     if (!json.has("name")) {
-        throw std::runtime_error("Missing required field 'name' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'name' in " + ctx);
     }
     params.name = json["name"].asString();
 
     if (!json.has("cylinderBankCount")) {
-        throw std::runtime_error("Missing required field 'cylinderBankCount' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'cylinderBankCount' in " + ctx);
     }
     params.cylinderBanks = json["cylinderBankCount"].asInt();
 
     if (!json.has("cylinderCount")) {
-        throw std::runtime_error("Missing required field 'cylinderCount' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'cylinderCount' in " + ctx);
     }
     params.cylinderCount = json["cylinderCount"].asInt();
 
     if (!json.has("crankshaftCount")) {
-        throw std::runtime_error("Missing required field 'crankshaftCount' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'crankshaftCount' in " + ctx);
     }
     params.crankshaftCount = json["crankshaftCount"].asInt();
 
     if (!json.has("exhaustSystemCount")) {
-        throw std::runtime_error("Missing required field 'exhaustSystemCount' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'exhaustSystemCount' in " + ctx);
     }
     params.exhaustSystemCount = json["exhaustSystemCount"].asInt();
 
     if (!json.has("intakeCount")) {
-        throw std::runtime_error("Missing required field 'intakeCount' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'intakeCount' in " + ctx);
     }
     params.intakeCount = json["intakeCount"].asInt();
 
     auto requireField = [&](const char* field) {
         if (!json.has(field)) {
-            throw std::runtime_error(std::string("Missing required field '") + field + "' in " + ctx);
+            throw PresetDeserializationException(std::string("Missing required field '") + field + "' in " + ctx);
         }
     };
 
@@ -88,25 +88,25 @@ Engine::Parameters EngineDeserializer::readParams(const JsonValue& json, const s
 
 void EngineDeserializer::validateRequiredSections(const JsonValue& json, const Engine::Parameters& params, const std::string& ctx) {
     if (params.cylinderCount <= 0 || params.cylinderBanks <= 0 || params.crankshaftCount <= 0) {
-        throw std::runtime_error("Invalid engine configuration in " + ctx);
+        throw PresetDeserializationException("Invalid engine configuration in " + ctx);
     }
     if (!json.has("crankshafts") || !json["crankshafts"].isArray()) {
-        throw std::runtime_error("Missing required field 'crankshafts' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'crankshafts' in " + ctx);
     }
     if (!json.has("cylinderBanks") || !json["cylinderBanks"].isArray()) {
-        throw std::runtime_error("Missing required field 'cylinderBanks' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'cylinderBanks' in " + ctx);
     }
     if (params.exhaustSystemCount > 0 &&
         (!json.has("exhaustSystems") || !json["exhaustSystems"].isArray())) {
-        throw std::runtime_error("Missing required field 'exhaustSystems' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'exhaustSystems' in " + ctx);
     }
     if (params.intakeCount > 0 &&
         (!json.has("intakes") || !json["intakes"].isArray())) {
-        throw std::runtime_error("Missing required field 'intakes' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'intakes' in " + ctx);
     }
 }
 
-void EngineDeserializer::deserializeCrankshafts(const JsonValue& json, Engine* engine, const std::string& ctx) {
+void EngineDeserializer::deserializeCrankshafts(const JsonValue& json, const Engine* engine, const std::string& ctx) {
     const JsonValue& arr = json["crankshafts"];
     for (size_t i = 0; i < arr.size() &&
          i < static_cast<size_t>(engine->getCrankshaftCount()); i++) {
@@ -116,7 +116,7 @@ void EngineDeserializer::deserializeCrankshafts(const JsonValue& json, Engine* e
     }
 }
 
-void EngineDeserializer::deserializeExhaustSystems(const JsonValue& json, Engine* engine, const std::string& ctx) {
+void EngineDeserializer::deserializeExhaustSystems(const JsonValue& json, const Engine* engine, const std::string& ctx) {
     const JsonValue& arr = json["exhaustSystems"];
     if (!arr.isArray()) return;
     for (size_t i = 0; i < arr.size() &&
@@ -127,7 +127,7 @@ void EngineDeserializer::deserializeExhaustSystems(const JsonValue& json, Engine
     }
 }
 
-void EngineDeserializer::deserializeIntakes(const JsonValue& json, Engine* engine, const std::string& ctx) {
+void EngineDeserializer::deserializeIntakes(const JsonValue& json, const Engine* engine, const std::string& ctx) {
     const JsonValue& arr = json["intakes"];
     if (!arr.isArray()) return;
     for (size_t i = 0; i < arr.size() &&
@@ -138,61 +138,59 @@ void EngineDeserializer::deserializeIntakes(const JsonValue& json, Engine* engin
     }
 }
 
-void EngineDeserializer::deserializeCylinders(const JsonValue& bankJson, CylinderBank* bank,
-        Engine* engine, Crankshaft* mainCrank, int bankIdx,
-        int globalCylIdx, int cylCount, const std::string& ctx, size_t bankIndex) {
-    const JsonValue& cylinders = bankJson["cylinders"];
+void EngineDeserializer::deserializeCylinders(const CylinderDeserializationParams& p) {
+    const JsonValue& cylinders = (*p.bankJson)["cylinders"];
     if (!cylinders.isArray()) return;
 
     for (size_t ci = 0; ci < cylinders.size() &&
-         ci < static_cast<size_t>(cylCount); ci++) {
+         ci < static_cast<size_t>(p.cylCount); ci++) {
         const JsonValue& cylJson = cylinders[ci];
-        int pidx = globalCylIdx + static_cast<int>(ci);
-        if (pidx >= engine->getCylinderCount()) break;
+        int pidx = p.globalCylIdx + static_cast<int>(ci);
+        if (pidx >= p.engine->getCylinderCount()) break;
 
-        ConnectingRod* rod = engine->getConnectingRod(pidx);
+        ConnectingRod* rod = p.engine->getConnectingRod(pidx);
         int journalIdx = cylJson.has("rodJournalIndex")
             ? cylJson["rodJournalIndex"].asInt() : pidx;
 
         if (cylJson.has("connectingRod")) {
             ConnectingRodDeserializer::deserialize(
-                cylJson["connectingRod"], rod, mainCrank,
-                engine->getPiston(pidx), journalIdx,
-                ctx + ".cylinderBanks[" + std::to_string(bankIndex) +
+                cylJson["connectingRod"], rod, p.mainCrank,
+                p.engine->getPiston(pidx), journalIdx,
+                *p.ctx + ".cylinderBanks[" + std::to_string(p.bankIndex) +
                 "].cylinders[" + std::to_string(ci) + "].connectingRod");
         }
 
-        Piston* piston = engine->getPiston(pidx);
+        Piston* piston = p.engine->getPiston(pidx);
         Piston::Parameters pParams;
-        pParams.Bank = bank;
+        pParams.Bank = p.bank;
         pParams.Rod = rod;
         pParams.CylinderIndex = static_cast<int>(ci);
 
-        const std::string cylCtx = ctx + ".cylinderBanks[" + std::to_string(bankIndex) +
+        const std::string cylCtx = *p.ctx + ".cylinderBanks[" + std::to_string(p.bankIndex) +
                                    "].cylinders[" + std::to_string(ci) + "]";
 
         if (!cylJson.has("blowbyK")) {
-            throw std::runtime_error("Missing required field 'blowbyK' in " + cylCtx);
+            throw PresetDeserializationException("Missing required field 'blowbyK' in " + cylCtx);
         }
         pParams.BlowbyFlowCoefficient = cylJson["blowbyK"].asNumber();
 
         if (!cylJson.has("compressionHeight")) {
-            throw std::runtime_error("Missing required field 'compressionHeight' in " + cylCtx);
+            throw PresetDeserializationException("Missing required field 'compressionHeight' in " + cylCtx);
         }
         pParams.CompressionHeight = cylJson["compressionHeight"].asNumber();
 
         if (!cylJson.has("wristPinPosition")) {
-            throw std::runtime_error("Missing required field 'wristPinPosition' in " + cylCtx);
+            throw PresetDeserializationException("Missing required field 'wristPinPosition' in " + cylCtx);
         }
         pParams.WristPinPosition = cylJson["wristPinPosition"].asNumber();
 
         if (!cylJson.has("displacement")) {
-            throw std::runtime_error("Missing required field 'displacement' in " + cylCtx);
+            throw PresetDeserializationException("Missing required field 'displacement' in " + cylCtx);
         }
         pParams.Displacement = cylJson["displacement"].asNumber();
 
         if (!cylJson.has("pistonMass")) {
-            throw std::runtime_error("Missing required field 'pistonMass' in " + cylCtx);
+            throw PresetDeserializationException("Missing required field 'pistonMass' in " + cylCtx);
         }
         pParams.mass = cylJson["pistonMass"].asNumber();
 
@@ -209,14 +207,24 @@ void EngineDeserializer::deserializeCylinderBanks(const JsonValue& json, Engine*
          bi < static_cast<size_t>(engine->getCylinderBankCount()); bi++) {
         const JsonValue& bankJson = banksJson[bi];
         CylinderBank* bank = engine->getCylinderBank(static_cast<int>(bi));
-        int bankIdx = static_cast<int>(bi);
+        auto bankIdx = static_cast<int>(bi);
 
         CylinderBankDeserializer::deserialize(
             bankJson, bank, mainCrank, bankIdx,
             ctx + ".cylinderBanks[" + std::to_string(bi) + "]");
 
         int cylCount = bank->getCylinderCount();
-        deserializeCylinders(bankJson, bank, engine, mainCrank, bankIdx, globalCylIdx, cylCount, ctx, bi);
+        CylinderDeserializationParams cylParams;
+        cylParams.bankJson = &bankJson;
+        cylParams.bank = bank;
+        cylParams.engine = engine;
+        cylParams.mainCrank = mainCrank;
+        cylParams.bankIdx = bankIdx;
+        cylParams.globalCylIdx = globalCylIdx;
+        cylParams.cylCount = cylCount;
+        cylParams.ctx = &ctx;
+        cylParams.bankIndex = bi;
+        deserializeCylinders(cylParams);
 
         if (bankJson.has("cylinderHead")) {
             CylinderHeadDeserializer::deserialize(
@@ -231,7 +239,7 @@ void EngineDeserializer::deserializeCylinderBanks(const JsonValue& json, Engine*
 
 void EngineDeserializer::initializeCombustionChambers(const JsonValue& json, Engine* engine, const std::string& ctx) {
     if (!json.has("combustionChambers") || !json["combustionChambers"].isArray()) {
-        throw std::runtime_error("Missing required field 'combustionChambers' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'combustionChambers' in " + ctx);
     }
     const JsonValue& chambersArr = json["combustionChambers"];
 
@@ -242,7 +250,7 @@ void EngineDeserializer::initializeCombustionChambers(const JsonValue& json, Eng
 
         // Deserialize turbulence function
         if (!ccJson.has("meanPistonSpeedToTurbulence")) {
-            throw std::runtime_error("Missing required field 'meanPistonSpeedToTurbulence' in " + ccCtx);
+            throw PresetDeserializationException("Missing required field 'meanPistonSpeedToTurbulence' in " + ccCtx);
         }
         Function* turbFn = FunctionDeserializer::deserialize(
             ccJson["meanPistonSpeedToTurbulence"], ccCtx + ".meanPistonSpeedToTurbulence");
@@ -255,17 +263,17 @@ void EngineDeserializer::initializeCombustionChambers(const JsonValue& json, Eng
         ccParams.MeanPistonSpeedToTurbulence = turbFn;
 
         if (!ccJson.has("crankcasePressure")) {
-            throw std::runtime_error("Missing required field 'crankcasePressure' in " + ccCtx);
+            throw PresetDeserializationException("Missing required field 'crankcasePressure' in " + ccCtx);
         }
         ccParams.CrankcasePressure = ccJson["crankcasePressure"].asNumber();
 
         if (!ccJson.has("startingPressure")) {
-            throw std::runtime_error("Missing required field 'startingPressure' in " + ccCtx);
+            throw PresetDeserializationException("Missing required field 'startingPressure' in " + ccCtx);
         }
         ccParams.StartingPressure = ccJson["startingPressure"].asNumber();
 
         if (!ccJson.has("startingTemperature")) {
-            throw std::runtime_error("Missing required field 'startingTemperature' in " + ccCtx);
+            throw PresetDeserializationException("Missing required field 'startingTemperature' in " + ccCtx);
         }
         ccParams.StartingTemperature = ccJson["startingTemperature"].asNumber();
 
@@ -274,22 +282,22 @@ void EngineDeserializer::initializeCombustionChambers(const JsonValue& json, Eng
 
         // Friction model (flat fields in the chamber object, applied after init)
         if (!ccJson.has("frictionCoeff")) {
-            throw std::runtime_error("Missing required field 'frictionCoeff' in " + ccCtx);
+            throw PresetDeserializationException("Missing required field 'frictionCoeff' in " + ccCtx);
         }
         engine->getChamber(i)->m_frictionModel.frictionCoeff = ccJson["frictionCoeff"].asNumber();
 
         if (!ccJson.has("breakawayFriction")) {
-            throw std::runtime_error("Missing required field 'breakawayFriction' in " + ccCtx);
+            throw PresetDeserializationException("Missing required field 'breakawayFriction' in " + ccCtx);
         }
         engine->getChamber(i)->m_frictionModel.breakawayFriction = ccJson["breakawayFriction"].asNumber();
 
         if (!ccJson.has("breakawayFrictionVelocity")) {
-            throw std::runtime_error("Missing required field 'breakawayFrictionVelocity' in " + ccCtx);
+            throw PresetDeserializationException("Missing required field 'breakawayFrictionVelocity' in " + ccCtx);
         }
         engine->getChamber(i)->m_frictionModel.breakawayFrictionVelocity = ccJson["breakawayFrictionVelocity"].asNumber();
 
         if (!ccJson.has("viscousFrictionCoefficient")) {
-            throw std::runtime_error("Missing required field 'viscousFrictionCoefficient' in " + ccCtx);
+            throw PresetDeserializationException("Missing required field 'viscousFrictionCoefficient' in " + ccCtx);
         }
         engine->getChamber(i)->m_frictionModel.viscousFrictionCoefficient = ccJson["viscousFrictionCoefficient"].asNumber();
     }
@@ -303,7 +311,7 @@ Engine* EngineDeserializer::deserialize(const JsonValue& json, const std::string
     auto throttle = std::make_unique<DirectThrottleLinkage>();
     DirectThrottleLinkage::Parameters throttleParams;
     if (!json.has("throttleGamma")) {
-        throw std::runtime_error("Missing required field 'throttleGamma' in " + ctx);
+        throw PresetDeserializationException("Missing required field 'throttleGamma' in " + ctx);
     }
     throttleParams.gamma = json["throttleGamma"].asNumber();
     throttle->initialize(throttleParams);
@@ -312,31 +320,26 @@ Engine* EngineDeserializer::deserialize(const JsonValue& json, const std::string
     params.throttle = throttle.get();
     validateRequiredSections(json, params, ctx);
 
-    Engine* engine = new Engine();
+    auto engine = std::make_unique<Engine>();
     engine->initialize(params);
     throttle.release(); // Engine owns it now
 
-    try {
-        deserializeCrankshafts(json, engine, ctx);
-        deserializeExhaustSystems(json, engine, ctx);
-        deserializeIntakes(json, engine, ctx);
-        deserializeCylinderBanks(json, engine, ctx);
+    deserializeCrankshafts(json, engine.get(), ctx);
+    deserializeExhaustSystems(json, engine.get(), ctx);
+    deserializeIntakes(json, engine.get(), ctx);
+    deserializeCylinderBanks(json, engine.get(), ctx);
 
-        if (json.has("fuel")) {
-            FuelDeserializer::deserialize(json["fuel"], engine->getFuel(), ctx + ".fuel");
-        }
-
-        if (json.has("ignitionModule")) {
-            IgnitionModuleDeserializer::deserialize(
-                json["ignitionModule"], engine->getIgnitionModule(),
-                engine->getCrankshaft(0), engine->getCylinderCount(), ctx + ".ignitionModule");
-        }
-
-        initializeCombustionChambers(json, engine, ctx);
-    } catch (...) {
-        delete engine;
-        throw;
+    if (json.has("fuel")) {
+        FuelDeserializer::deserialize(json["fuel"], engine->getFuel(), ctx + ".fuel");
     }
 
-    return engine;
+    if (json.has("ignitionModule")) {
+        IgnitionModuleDeserializer::deserialize(
+            json["ignitionModule"], engine->getIgnitionModule(),
+            engine->getCrankshaft(0), engine->getCylinderCount(), ctx + ".ignitionModule");
+    }
+
+    initializeCombustionChambers(json, engine.get(), ctx);
+
+    return engine.release();
 }

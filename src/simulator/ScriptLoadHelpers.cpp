@@ -17,8 +17,7 @@ static std::string buildFullPath(const std::string& assetBasePath, const std::st
     if (filename[0] == '/' || (filename.length() > 1 && filename[1] == ':')) {
         return filename;
     }
-    size_t firstSlash = filename.find('/');
-    if (firstSlash != std::string::npos) {
+    if (size_t firstSlash = filename.find('/'); firstSlash != std::string::npos) {
         size_t lastSlash = assetBasePath.find_last_of('/');
         std::string lastComponent = assetBasePath.substr(lastSlash + 1);
         if (filename.find(lastComponent + "/") == 0) {
@@ -30,7 +29,7 @@ static std::string buildFullPath(const std::string& assetBasePath, const std::st
 
 bool loadImpulseResponses(
     Simulator* simulator,
-    Engine* engine,
+    const Engine* engine,
     const std::string& assetBasePath,
     ILogging* logger)
 {
@@ -40,10 +39,10 @@ bool loadImpulseResponses(
 
     const int exhaustCount = engine->getExhaustSystemCount();
     for (int i = 0; i < exhaustCount; ++i) {
-        ExhaustSystem* exhaust = engine->getExhaustSystem(i);
+        const ExhaustSystem* exhaust = engine->getExhaustSystem(i);
         if (!exhaust) continue;
 
-        ImpulseResponse* impulse = exhaust->getImpulseResponse();
+        const ImpulseResponse* impulse = exhaust->getImpulseResponse();
         if (!impulse) continue;
 
         std::string filename = impulse->getFilename();
@@ -61,14 +60,14 @@ bool loadImpulseResponses(
 
         if (!wavResult.valid) {
             if (logger) {
-                logger->error(LogMask::ASSET, "Failed to load required audio file: %s", fullPath.c_str());
-                logger->error(LogMask::ASSET, "(asset base: %s, from script: %s)", assetBasePath.c_str(), filename.c_str());
+                logger->error(LogMask::ASSET, __ilog_format("Failed to load required audio file: %s", fullPath.c_str()));
+                logger->error(LogMask::ASSET, __ilog_format("(asset base: %s, from script: %s)", assetBasePath.c_str(), filename.c_str()));
             }
             return false;
         }
 
         if (logger) {
-            logger->info(LogMask::ASSET, "Loaded impulse response: %s (%zu samples)", fullPath.c_str(), wavResult.getSampleCount());
+            logger->info(LogMask::ASSET, __ilog_format("Loaded impulse response: %s (%zu samples)", fullPath.c_str(), wavResult.getSampleCount()));
         }
 
         simulator->synthesizer().initializeImpulseResponse(

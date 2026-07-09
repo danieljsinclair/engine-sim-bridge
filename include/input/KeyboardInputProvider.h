@@ -28,6 +28,7 @@ public:
     void Shutdown() override;
     bool IsConnected() const override;
     EngineInput OnUpdateSimulation(double dt) override;
+    void provideFeedback(const EngineSimStats& stats) override;
     std::string GetProviderName() const override;
     std::string GetLastError() const override;
 
@@ -35,6 +36,12 @@ public:
 
 private:
     void processKeys(double dt);
+    bool processQuitAndThrottle();
+    void processMomentaryThrottle();
+    void processGearAndIgnition();
+    void processDynoAndBrake();
+    void processSpeedControl();
+    void processPresetKeys();
 
     std::unique_ptr<IKeyboardInput> keyboard_;
     IKeyActionTarget* target_;

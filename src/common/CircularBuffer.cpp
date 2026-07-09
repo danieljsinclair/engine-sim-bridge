@@ -22,12 +22,12 @@ bool CircularBuffer::initialize(size_t frameCapacity) {
     cleanup();
 
     bufferCapacity_ = frameCapacity;
-    buffer_ = new float[frameCapacity * 2];  // Stereo = 2 channels
+    buffer_ = std::make_unique<float[]>(frameCapacity * 2);  // Stereo = 2 channels
     if (!buffer_) {
         return false;
     }
 
-    std::memset(buffer_, 0, frameCapacity * 2 * sizeof(float));
+    std::memset(buffer_.get(), 0, frameCapacity * 2 * sizeof(float));
     writePointer_.store(0);
     readPointer_.store(0);
 
@@ -35,10 +35,7 @@ bool CircularBuffer::initialize(size_t frameCapacity) {
 }
 
 void CircularBuffer::cleanup() {
-    if (buffer_) {
-        delete[] buffer_;
-        buffer_ = nullptr;
-    }
+    buffer_.reset();
     bufferCapacity_ = 0;
     writePointer_.store(0);
     readPointer_.store(0);
@@ -48,7 +45,7 @@ size_t CircularBuffer::calculateDistance(int write, int read) const {
     if (write >= read) {
         return static_cast<size_t>(write - read);
     }
-    return static_cast<size_t>(bufferCapacity_ - read + write);
+    return bufferCapacity_ - read + write;
 }
 
 size_t CircularBuffer::write(const float* samples, size_t frameCount) {
@@ -74,7 +71,7 @@ size_t CircularBuffer::write(const float* samples, size_t frameCount) {
         }
     } else {
         // Complex case: write spans buffer boundary
-        size_t firstSegment = static_cast<size_t>(bufferCapacity_ - writePtr);
+        size_t firstSegment = bufferCapacity_ - writePtr;
 
         // First segment: from current position to end of buffer
         for (size_t i = 0; i < firstSegment; i++) {
@@ -83,7 +80,7 @@ size_t CircularBuffer::write(const float* samples, size_t frameCount) {
         }
 
         // Second segment: from beginning of buffer
-        size_t secondSegment = toWrite - firstSegment;
+        auto secondSegment = toWrite - firstSegment;
         for (size_t i = 0; i < secondSegment; i++) {
             buffer_[i * 2] = samples[(firstSegment + i) * 2];
             buffer_[i * 2 + 1] = samples[(firstSegment + i) * 2 + 1];
@@ -91,7 +88,7 @@ size_t CircularBuffer::write(const float* samples, size_t frameCount) {
     }
 
     // Commit write with wrap-around
-    int newWritePtr = static_cast<int>((writePtr + toWrite) % bufferCapacity_);
+    auto newWritePtr = static_cast<int>((writePtr + toWrite) % bufferCapacity_);
     writePointer_.store(newWritePtr);
 
     return toWrite;
@@ -120,7 +117,7 @@ size_t CircularBuffer::read(float* output, size_t frameCount) {
         }
     } else {
         // Complex case: read spans buffer boundary
-        size_t firstSegment = static_cast<size_t>(bufferCapacity_ - readPtr);
+        size_t firstSegment = bufferCapacity_ - readPtr;
 
         // First segment: from current position to end of buffer
         for (size_t i = 0; i < firstSegment; i++) {
@@ -129,7 +126,7 @@ size_t CircularBuffer::read(float* output, size_t frameCount) {
         }
 
         // Second segment: from beginning of buffer
-        size_t secondSegment = toRead - firstSegment;
+        auto secondSegment = toRead - firstSegment;
         for (size_t i = 0; i < secondSegment; i++) {
             output[(firstSegment + i) * 2] = buffer_[i * 2];
             output[(firstSegment + i) * 2 + 1] = buffer_[i * 2 + 1];
@@ -137,7 +134,7 @@ size_t CircularBuffer::read(float* output, size_t frameCount) {
     }
 
     // Update read pointer with wrap-around
-    int newReadPtr = static_cast<int>((readPtr + toRead) % bufferCapacity_);
+    auto newReadPtr = static_cast<int>((readPtr + toRead) % bufferCapacity_);
     readPointer_.store(newReadPtr);
 
     return toRead;
@@ -148,7 +145,7 @@ size_t CircularBuffer::readFromPosition(float* output, size_t frameCount, int po
         return 0;
     }
 
-    size_t toRead = std::min(frameCount, static_cast<size_t>(bufferCapacity_));
+    size_t toRead = std::min(frameCount, bufferCapacity_);
 
     // Handle wrap-around read from specific position
     if (position + static_cast<int>(toRead) <= static_cast<int>(bufferCapacity_)) {
@@ -159,7 +156,7 @@ size_t CircularBuffer::readFromPosition(float* output, size_t frameCount, int po
         }
     } else {
         // Complex case: read spans buffer boundary
-        size_t firstSegment = static_cast<size_t>(bufferCapacity_ - position);
+        size_t firstSegment = bufferCapacity_ - position;
 
         // First segment: from current position to end of buffer
         for (size_t i = 0; i < firstSegment; i++) {
@@ -168,7 +165,7 @@ size_t CircularBuffer::readFromPosition(float* output, size_t frameCount, int po
         }
 
         // Second segment: from beginning of buffer
-        size_t secondSegment = toRead - firstSegment;
+        auto secondSegment = toRead - firstSegment;
         for (size_t i = 0; i < secondSegment; i++) {
             output[(firstSegment + i) * 2] = buffer_[i * 2];
             output[(firstSegment + i) * 2 + 1] = buffer_[i * 2 + 1];
@@ -201,7 +198,7 @@ void CircularBuffer::reset() {
 
 void CircularBuffer::clear() {
     if (buffer_) {
-        std::memset(buffer_, 0, bufferCapacity_ * 2 * sizeof(float));
+        std::memset(buffer_.get(), 0, bufferCapacity_ * 2 * sizeof(float));
     }
     reset();
 }

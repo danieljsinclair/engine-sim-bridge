@@ -8,69 +8,62 @@
 #include "simulator.h"
 #include "engine.h"
 #include "synthesizer.h"
+
+#include <array>
+#include <memory>
 // simulator.h transitively includes: engine.h, transmission.h, vehicle.h,
 // dynamometer.h, starter_motor.h, scs.h (RigidBody, RigidBodySystem, etc.)
 
 namespace SimulatorInitHelpers {
 
-void wirePhysics(
-    Engine* engine,
-    Transmission* transmission,
-    Vehicle* vehicle,
-    atg_scs::RigidBody& vehicleMass,
-    atg_scs::RigidBodySystem* system,
-    Dynamometer& dyno,
-    StarterMotor& starterMotor,
-    double*& outStagingBuffer,
-    int stagingCount)
+void wirePhysics(const PhysicsWiringParams& p)
 {
     // reset() clears position/velocity but also zeros mass and inertia (m=0, I=0).
     // m=0 causes division-by-zero in the physics solver's energy calculation.
     // Values are arbitrary for sine (no real physics) but must be nonzero.
     // 1.0 matches PistonEngine and is the simplest valid value.
-    vehicleMass.reset();
-    vehicleMass.m = 1.0;
-    vehicleMass.I = 1.0;
-    system->addRigidBody(&vehicleMass);
+    p.vehicleMass->reset();
+    p.vehicleMass->m = 1.0;
+    p.vehicleMass->I = 1.0;
+    p.system->addRigidBody(p.vehicleMass);
 
     // Wire transmission and vehicle into physics system
-    transmission->addToSystem(system, &vehicleMass, vehicle, engine);
-    vehicle->addToSystem(system, &vehicleMass);
+    p.transmission->addToSystem(p.system, p.vehicleMass, p.vehicle, p.engine);
+    p.vehicle->addToSystem(p.system, p.vehicleMass);
 
     // Dynamometer constraint
-    dyno.connectCrankshaft(engine->getOutputCrankshaft());
-    system->addConstraint(&dyno);
+    p.dyno->connectCrankshaft(p.engine->getOutputCrankshaft());
+    p.system->addConstraint(p.dyno);
 
     // Starter motor constraint
-    starterMotor.connectCrankshaft(engine->getOutputCrankshaft());
-    starterMotor.m_maxTorque = engine->getStarterTorque();
-    starterMotor.m_rotationSpeed = -engine->getStarterSpeed();
-    system->addConstraint(&starterMotor);
+    p.starterMotor->connectCrankshaft(p.engine->getOutputCrankshaft());
+    p.starterMotor->m_maxTorque = p.engine->getStarterTorque();
+    p.starterMotor->m_rotationSpeed = -p.engine->getStarterSpeed();
+    p.system->addConstraint(p.starterMotor);
 
     // Exhaust flow staging buffer — mirrors PistonEngineSimulator::placeAndInitialize()
-    outStagingBuffer = new double[stagingCount];
+    p.outStagingBuffer->resize(p.stagingCount);
 }
 
 void cleanupPhysics(
     atg_scs::RigidBodySystem*& system,
-    double*& stagingBuffer)
+    std::vector<double>* stagingBuffer)
 {
     if (system != nullptr) {
         system->reset();
-        delete system;
+        std::unique_ptr<atg_scs::RigidBodySystem> systemDeleter(system);
         system = nullptr;
     }
 
     if (stagingBuffer != nullptr) {
-        delete[] stagingBuffer;
-        stagingBuffer = nullptr;
+        stagingBuffer->clear();
     }
 }
 
 void initializeConvolutionFilters(Simulator* simulator) {
     if (!simulator) return;
 
-    Engine* engine = simulator->getEngine();
+    const Engine* engine = simulator->getEngine();
     if (!engine) return;
 
     const int exhaustCount = engine->getExhaustSystemCount();
@@ -78,13 +71,13 @@ void initializeConvolutionFilters(Simulator* simulator) {
 
     // Unit impulse: [INT16_MAX] represents a single sample at full scale
     // This initializes the ConvolutionFilter's m_shiftRegister to prevent null deref
-    static const int16_t kUnitImpulse[1] = { INT16_MAX };
+    static const std::array<int16_t, 1> kUnitImpulse = { INT16_MAX };
 
     for (int i = 0; i < exhaustCount; ++i) {
         // Only initialize if not already initialized (avoid double-init)
         // We can't easily check m_shiftRegister here, but unit impulse is safe to re-init
         simulator->synthesizer().initializeImpulseResponse(
-            kUnitImpulse,
+            kUnitImpulse.data(),
             1,
             1.0f,
             i

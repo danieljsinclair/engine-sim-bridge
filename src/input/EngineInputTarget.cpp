@@ -3,6 +3,7 @@
 
 #include "input/EngineInputTarget.h"
 #include "input/IDemoSpeedEnhancer.h"
+#include "input/IDemoControls.h"
 #include "common/ILogging.h"
 #include <algorithm>
 
@@ -28,6 +29,14 @@ void EngineInputTarget::setSpeedEnhancer(IDemoSpeedEnhancer* enhancer) {
     speedEnhancer_ = enhancer;
 }
 
+void EngineInputTarget::setGearAutoMode(bool autoMode) {
+    gearAutoMode_ = autoMode;
+}
+
+void EngineInputTarget::setDemoControls(IDemoControls* controls) {
+    demoControls_ = controls;
+}
+
 void EngineInputTarget::quit() { quitRequested_ = true; }
 void EngineInputTarget::setThrottle(double level) {
     throttle_ = level;
@@ -46,19 +55,44 @@ void EngineInputTarget::setThrottleMomentary(double level) {
     momentaryActive_ = true;
     throttleTouched_ = true;
 }
-void EngineInputTarget::shiftUp() { gearDelta_ = 1; gearSelector_++; }
-void EngineInputTarget::shiftDown() { gearDelta_ = -1; gearSelector_--; }
+void EngineInputTarget::shiftUp() {
+    // Demo mode: advance the demo provider's PRNDL selector (P/R/N/D) so the
+    // keyboard can drive it into DRIVE for the automatic gearbox. Still emit a
+    // gearDelta so downstream consumers see the shift request.
+    if (demoControls_) {
+        demoControls_->shiftUp();
+        gearDelta_ = 1;
+        return;
+    }
+    // Pure auto mode (--auto, no demo): the box shifts itself; ]/[ disabled.
+    if (gearAutoMode_) return;
+    // Manual mode: ]/[ step the manual gear counter. Clamp to the valid
+    // selector range (REVERSE=-1 .. EIGHTH=8) so the display can never render
+    // a stray 'P' (PARK=-2) or '?' (>8).
+    gearDelta_ = 1;
+    gearSelector_ = std::min(gearSelector_ + 1, 8);
+}
+void EngineInputTarget::shiftDown() {
+    if (demoControls_) {
+        demoControls_->shiftDown();
+        gearDelta_ = -1;
+        return;
+    }
+    if (gearAutoMode_) return;
+    gearDelta_ = -1;
+    gearSelector_ = std::max(gearSelector_ - 1, -1);
+}
 void EngineInputTarget::toggleIgnition() { ignition_ = !ignition_; }
 void EngineInputTarget::setStarter() { starterButton_ = true; }
 void EngineInputTarget::cyclePreset() { presetCycle_ = true; }
 void EngineInputTarget::adjustDynoTorque(double delta) {
     if (dynoTorqueScale_ < 0.0) dynoTorqueScale_ = 0.0;
     dynoTorqueScale_ = std::clamp(dynoTorqueScale_ + delta, 0.0, 1.0);
-    if (logger_) logger_->info(LogMask::BRIDGE, "Dyno torque: %.2f", dynoTorqueScale_);
+    if (logger_) logger_->info(LogMask::BRIDGE, __ilog_format("Dyno torque: %.2f", dynoTorqueScale_));
 }
 void EngineInputTarget::releaseDynoTorque() {
     dynoTorqueScale_ = 0.0;
-    if (logger_) logger_->info(LogMask::BRIDGE, "Dyno torque released");
+    if (logger_) logger_->info(LogMask::BRIDGE, __ilog_format("Dyno torque released"));
 }
 void EngineInputTarget::setBrake(double level) { brakeLevel_ = level; }
 void EngineInputTarget::adjustSpeed(double delta) {
@@ -84,7 +118,7 @@ EngineInput EngineInputTarget::buildInput() {
     input.dynoTorqueScale = dynoTorqueScale_;
     input.brakeLevel = brakeLevel_;
     input.presetCycle = presetCycle_;
-    input.gearAutoMode = false;
+    input.gearAutoMode = gearAutoMode_;
     input.roadSpeedKmh = roadSpeedKmh_;
 
     gearDelta_ = 0;
@@ -105,6 +139,11 @@ EngineInput EngineInputTarget::buildEngineInput(double dt) {
     }
 
     return input;
+}
+
+void EngineInputTarget::provideFeedback(const EngineSimStats& stats) {
+    // Route simulator feedback to the speed enhancer (twin/gearbox) when present.
+    if (speedEnhancer_) speedEnhancer_->provideFeedback(stats);
 }
 
 } // namespace input

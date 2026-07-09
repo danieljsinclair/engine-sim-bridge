@@ -6,6 +6,9 @@
 #ifndef ENGINE_SIM_BRIDGE_SIMULATOR_INIT_HELPERS_H
 #define ENGINE_SIM_BRIDGE_SIMULATOR_INIT_HELPERS_H
 
+#include <cstddef>
+#include <vector>
+
 // Forward declarations (avoid pulling full engine-sim headers here)
 class Engine;
 class Transmission;
@@ -21,29 +24,23 @@ namespace atg_scs {
 
 namespace SimulatorInitHelpers {
 
+/// Physics wiring parameters — groups the common constraint graph wiring arguments.
+struct PhysicsWiringParams {
+    Engine* engine = nullptr;
+    Transmission* transmission = nullptr;
+    Vehicle* vehicle = nullptr;
+    atg_scs::RigidBody* vehicleMass = nullptr;
+    atg_scs::RigidBodySystem* system = nullptr;
+    Dynamometer* dyno = nullptr;
+    StarterMotor* starterMotor = nullptr;
+    std::vector<double>* outStagingBuffer = nullptr;
+    int stagingCount = 0;
+};
+
 /// Shared physics wiring: vehicleMass, transmission, vehicle, dyno, starter motor, staging buffer.
 /// Called after loadSimulation() — wires the common constraint graph that all Simulator
 /// subclasses need regardless of engine type.
-///
-/// @param engine           The loaded Engine (for crankshaft/starter torque/speed)
-/// @param transmission     The loaded Transmission
-/// @param vehicle          The loaded Vehicle
-/// @param vehicleMass      The vehicle rigid body (m_vehicleMass)
-/// @param system           The physics system (m_system)
-/// @param dyno             The dynamometer constraint (m_dyno)
-/// @param starterMotor     The starter motor constraint (m_starterMotor)
-/// @param outStagingBuffer Receives the newly allocated staging buffer (caller manages lifetime)
-/// @param stagingCount     Number of exhaust systems (staging buffer element count)
-void wirePhysics(
-    Engine* engine,
-    Transmission* transmission,
-    Vehicle* vehicle,
-    atg_scs::RigidBody& vehicleMass,
-    atg_scs::RigidBodySystem* system,
-    Dynamometer& dyno,
-    StarterMotor& starterMotor,
-    double*& outStagingBuffer,
-    int stagingCount);
+void wirePhysics(const PhysicsWiringParams& params);
 
 /// Shared cleanup: system reset/delete, staging buffer delete.
 /// Does NOT delete engine/vehicle/transmission — ownership is subclass-specific.
@@ -53,7 +50,7 @@ void wirePhysics(
 /// @param stagingBuffer    Ref to staging buffer pointer (will be deleted and nulled)
 void cleanupPhysics(
     atg_scs::RigidBodySystem*& system,
-    double*& stagingBuffer);
+    std::vector<double>* stagingBuffer);
 
 /// Initialize convolution filters with unit impulses to prevent null pointer crashes.
 /// Required when loading presets (no WAV impulse response files) because ConvolutionFilter::f()
