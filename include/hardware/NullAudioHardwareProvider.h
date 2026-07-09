@@ -11,18 +11,18 @@
 
 class NullAudioHardwareProvider : public IAudioHardwareProvider {
 public:
-    bool initialize(const AudioStreamFormat&) override { return true; }
+    bool initialize(const AudioStreamFormat&) override;
     void cleanup() override {}
 
-    bool startPlayback() override { return true; }
+    bool startPlayback() override;
     void stopPlayback() override {}
 
     void setVolume(double) override {}
-    double getVolume() const override { return 0.0; }
+    double getVolume() const override;
 
-    bool registerAudioCallback(const AudioCallback&) override { return true; }
+    bool registerAudioCallback(const AudioCallback&) override;
 
-    AudioHardwareState getHardwareState() const override { return AudioHardwareState{}; }
+    AudioHardwareState getHardwareState() const override;
     void resetDiagnostics() override {}
 };
 
