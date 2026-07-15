@@ -3494,7 +3494,7 @@ void PrettyUnitTestResultPrinter::OnTestEnd(const TestInfo& test_info) {
   if (test_info.result()->Passed()) {
     ColoredPrintf(GTestColor::kGreen, "[       OK ] ");
   } else if (test_info.result()->Skipped()) {
-    ColoredPrintf(GTestColor::kGreen, "[  SKIPPED ] ");
+    ColoredPrintf(GTestColor::kYellow, "[  SKIPPED ] ");
   } else {
     ColoredPrintf(GTestColor::kRed, "[  FAILED  ] ");
   }
@@ -3607,7 +3607,7 @@ void PrettyUnitTestResultPrinter::PrintSkippedTests(const UnitTest& unit_test) {
       if (!test_info.should_run() || !test_info.result()->Skipped()) {
         continue;
       }
-      ColoredPrintf(GTestColor::kGreen, "[  SKIPPED ] ");
+      ColoredPrintf(GTestColor::kYellow, "[  SKIPPED ] ");
       printf("%s.%s", test_suite.name(), test_info.name());
       printf("\n");
     }
@@ -3630,7 +3630,7 @@ void PrettyUnitTestResultPrinter::OnTestIterationEnd(const UnitTest& unit_test,
 
   const int skipped_test_count = unit_test.skipped_test_count();
   if (skipped_test_count > 0) {
-    ColoredPrintf(GTestColor::kGreen, "[  SKIPPED ] ");
+    ColoredPrintf(GTestColor::kYellow, "[  SKIPPED ] ");
     printf("%s, listed below:\n", FormatTestCount(skipped_test_count).c_str());
     PrintSkippedTests(unit_test);
   }
