@@ -76,6 +76,7 @@ public:
     std::vector<uint8_t> saveState() const override;
     void restoreState(const std::vector<uint8_t>& data) override;
 
+    // DUPLICATE: TECH DEBT — see DrivetrainSnapshot triplication (EngineSimBridge.h / EngineSimWrapperProtocol.swift / BridgeSimulator.h). Field mismatches: enginePhase int-vs-enum, valid-only-in-#1, ignition-only-in-#2. Consolidate before adding new hot-swap fields.
     // Drivetrain state transfer for engine hot-swap (preserves road speed)
     struct DrivetrainSnapshot {
         double vehicleMassVtheta = 0.0;
