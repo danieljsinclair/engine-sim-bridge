@@ -113,7 +113,11 @@ LoadedSimulation loadScriptSimulation(const std::string& scriptPath, const std::
     std::string resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath.string(), assetBasePath);
 
 #ifdef ATG_ENGINE_SIM_PIRANHA_ENABLED
-    const auto simDir = script_compile_helpers::findEngineSimRoot(normalizedPath, resolvedAssetPath);
+    const auto simDirOpt = script_compile_helpers::findEngineSimRoot(normalizedPath, resolvedAssetPath);
+    if (!simDirOpt.has_value()) {
+        throw SimulatorException("Unable to locate engine-sim root for script: " + normalizedPath.string());
+    }
+    const auto& simDir = simDirOpt.value();
     const es_script::Compiler::Output output = script_execution_helpers::compileScript(normalizedPath, simDir);
 
     if (!output.engine) {

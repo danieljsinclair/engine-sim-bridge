@@ -2,11 +2,13 @@
 
 #include <filesystem>
 #include <fstream>
-#include <stdexcept>
+#include <optional>
 #include <string>
 #include <sstream>
 #include <iostream>
 #include <unistd.h>
+
+#include "common/PresetExceptions.h"
 
 namespace script_compile_helpers {
 
@@ -80,7 +82,7 @@ private:
     }
 };
 
-inline std::filesystem::path findEngineSimRoot(
+inline std::optional<std::filesystem::path> findEngineSimRoot(
     const std::filesystem::path& scriptPath,
     const std::filesystem::path& resolvedAssetPath = {}) {
     namespace fs = std::filesystem;
@@ -106,7 +108,7 @@ inline std::filesystem::path findEngineSimRoot(
         }
     }
 
-    throw std::runtime_error("Unable to locate engine-sim root for script: " + fs::absolute(scriptPath).string());
+    return std::nullopt;
 }
 
 inline bool scriptInvokesMain(const std::filesystem::path& scriptPath) {
@@ -136,11 +138,11 @@ inline ScriptCompileTarget prepareScriptCompileTarget(
     const fs::path absScriptPath = fs::absolute(scriptPath);
 
     if (!fs::exists(target.simDir / "es" / "engine_sim.mr")) {
-        throw std::runtime_error("engine_sim.mr not found under: " + (target.simDir / "es").string());
+        throw SimulatorException("engine_sim.mr not found under: " + (target.simDir / "es").string());
     }
 
     if (!fs::exists(absScriptPath)) {
-        throw std::runtime_error("Script not found: " + absScriptPath.string());
+        throw SimulatorException("Script not found: " + absScriptPath.string());
     }
 
     const fs::path relFromAssets = fs::relative(absScriptPath, target.assetsDir);
@@ -160,7 +162,7 @@ inline ScriptCompileTarget prepareScriptCompileTarget(
         target.wrapperPath = fs::temp_directory_path() / ("_bridge_wrapper_" + std::to_string(getpid()) + ".mr");
         std::ofstream wrapper(target.wrapperPath);
         if (!wrapper.is_open()) {
-            throw std::runtime_error("Cannot create wrapper script: " + target.wrapperPath.string());
+            throw SimulatorException("Cannot create wrapper script: " + target.wrapperPath.string());
         }
 
         wrapper << "import \"engine_sim.mr\"\n";

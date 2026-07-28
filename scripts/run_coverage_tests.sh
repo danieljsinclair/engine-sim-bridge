@@ -12,6 +12,18 @@ PROFRAW_DIR="$BUILD_DIR/profraw"
 LLVM_COV="${LLVM_COV:-$(xcrun --find llvm-cov 2>/dev/null || which llvm-cov 2>/dev/null)}"
 LLVM_PROFDATA="${LLVM_PROFDATA:-$(xcrun --find llvm-profdata 2>/dev/null || which llvm-profdata 2>/dev/null)}"
 
+# Optional source-path exclusion, forwarded to llvm-cov as
+# --ignore-filename-regex. Empty by default so this script's OWN project
+# (the bridge) keeps its full src/ in scope. Consumers that LINK a submodule
+# (e.g. the CLI links engine-sim-bridge statically) set COVERAGE_IGNORE_REGEX
+# to keep their coverage DISJOINT from the submodule's own project — each
+# repo reports only its own source lines (no cross-project double counting).
+IGNORE_REGEX="${COVERAGE_IGNORE_REGEX:-}"
+IGNORE_ARGS=""
+if [ -n "$IGNORE_REGEX" ]; then
+    IGNORE_ARGS="--ignore-filename-regex=$IGNORE_REGEX"
+fi
+
 mkdir -p "$PROFRAW_DIR"
 
 # Discover test binaries: executable regular files whose BASENAME matches
@@ -83,6 +95,7 @@ $LLVM_COV show --show-branches=count \
     -instr-profile "$BUILD_DIR/coverage.profdata" \
     "$MAIN_BIN" \
     $OBJECT_ARGS \
+    $IGNORE_ARGS \
     > "$BUILD_DIR/coverage.txt" 2>/dev/null || true
 
 echo "=== Generating lcov report (for coverage-gutters + SonarCloud) ==="
@@ -90,6 +103,7 @@ $LLVM_COV export -format=lcov \
     -instr-profile "$BUILD_DIR/coverage.profdata" \
     "$MAIN_BIN" \
     $OBJECT_ARGS \
+    $IGNORE_ARGS \
     > "$BUILD_DIR/lcov.info" 2>/dev/null || true
 
 echo "=== Generating SonarCloud generic coverage XML (lcov -> XML) ==="

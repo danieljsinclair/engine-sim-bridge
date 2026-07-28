@@ -128,9 +128,15 @@ PresetCompilerArgs parseArgs(int argc, char* argv[]) {
     PresetCompilerArgs args;
     args.scriptPath = argv[1];
     args.outputPath = argv[2];
-    args.simDir = (argc >= 4)
-        ? std::filesystem::absolute(argv[3])
-        : script_compile_helpers::findEngineSimRoot(args.scriptPath);
+    if (argc >= 4) {
+        args.simDir = std::filesystem::absolute(argv[3]);
+    } else {
+        const auto simDirOpt = script_compile_helpers::findEngineSimRoot(args.scriptPath);
+        if (!simDirOpt.has_value()) {
+            throw std::runtime_error("Unable to locate engine-sim root for script");
+        }
+        args.simDir = simDirOpt.value();
+    }
     return args;
 }
 
