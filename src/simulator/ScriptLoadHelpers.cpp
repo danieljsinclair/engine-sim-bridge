@@ -1,0 +1,84 @@
+// ScriptLoadHelpers.cpp - Implementation of shared script loading helpers
+// DRY: Shared helpers for engine simulation setup
+
+#define DR_WAV_IMPLEMENTATION
+#include "simulator/ScriptLoadHelpers.h"
+#include "common/wav_loader.h"
+
+namespace ScriptLoadHelpers {
+
+/**
+ * Build the full path for a relative filename against an asset base path.
+ * Handles absolute paths, and detects when the filename already starts with
+ * the last path component of the asset base (e.g. "Presets/sound-library/...")
+ * to avoid double-prefixing.
+ */
+static std::string buildFullPath(const std::string& assetBasePath, const std::string& filename) {
+    if (filename[0] == '/' || (filename.length() > 1 && filename[1] == ':')) {
+        return filename;
+    }
+    if (size_t firstSlash = filename.find('/'); firstSlash != std::string::npos) {
+        size_t lastSlash = assetBasePath.find_last_of('/');
+        std::string lastComponent = assetBasePath.substr(lastSlash + 1);
+        if (filename.find(lastComponent + "/") == 0) {
+            return filename;
+        }
+    }
+    return assetBasePath + "/" + filename;
+}
+
+bool loadImpulseResponses(
+    Simulator* simulator,
+    const Engine* engine,
+    const std::string& assetBasePath,
+    ILogging* logger)
+{
+    if (!engine) {
+        return false;
+    }
+
+    const int exhaustCount = engine->getExhaustSystemCount();
+    for (int i = 0; i < exhaustCount; ++i) {
+        const ExhaustSystem* exhaust = engine->getExhaustSystem(i);
+        if (!exhaust) continue;
+
+        const ImpulseResponse* impulse = exhaust->getImpulseResponse();
+        if (!impulse) continue;
+
+        std::string filename = impulse->getFilename();
+        if (filename.empty()) {
+            continue;
+        }
+
+        // Construct full path deterministically.
+        // The deserializer normalizes the filename to "sound-library/..." (no "es/" prefix).
+        // resolveAssetBasePath returns the directory containing "sound-library/" on both
+        // macOS (<root>/es/) and iOS (<bundle>/). No fallbacks needed.
+        std::string fullPath = buildFullPath(assetBasePath, filename);
+
+        WavLoader::Result wavResult = WavLoader::load(fullPath);
+
+        if (!wavResult.valid) {
+            if (logger) {
+                logger->error(LogMask::ASSET, __ilog_format("Failed to load required audio file: %s", fullPath.c_str()));
+                logger->error(LogMask::ASSET, __ilog_format("(asset base: %s, from script: %s)", assetBasePath.c_str(), filename.c_str()));
+            }
+            return false;
+        }
+
+        if (logger) {
+            logger->info(LogMask::ASSET, __ilog_format("Loaded impulse response: %s (%zu samples)", fullPath.c_str(), wavResult.getSampleCount()));
+        }
+
+        simulator->synthesizer().initializeImpulseResponse(
+            wavResult.getData(),
+            static_cast<unsigned int>(wavResult.getSampleCount()),
+            static_cast<float>(impulse->getVolume()),
+            i
+        );
+    }
+
+    return true;
+}
+
+} // namespace ScriptLoadHelpers

@@ -1,6 +1,7 @@
 # Build directories
 build/
-cmake-build-*/
+build-*/
+spikes/
 
 # CMake
 CMakeCache.txt
@@ -8,13 +9,21 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 *.cmake
+_deps/
+# FetchContent cache (kept outside build/ so scrub doesn't force re-download)
+.fetchcache/
 
-# Compiled libraries
+# Compiled libraries and binaries
 *.dylib
 *.so
 *.dll
 *.a
 *.lib
+bridge_unit_tests
+preset_engine_tests
+engine-sim-preset-codegen
+engine-sim-preset-compiler
+sine_wave_regression_tests
 
 # IDE
 .vscode/
@@ -26,3 +35,26 @@ Makefile
 # OS
 .DS_Store
 Thumbs.db
+
+# Temporary files
+*.log
+*.dat
+*.tmp
+.cache/
+/**/Temporary/
+.claude/scheduled_tasks.lock
+.cache/
+
+# Python
+__pycache__/
+*.pyc
+
+# Generated JSON presets (rebuilt by 'make presets')
+/preset/
+
+# Sonar scanner working directory
+.scannerwork/
+codeql-db/
+
+# Coverage artifacts
+*.profraw

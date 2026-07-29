@@ -1,8 +1,21 @@
 cmake_minimum_required(VERSION 3.20)
+
+# Prevent in-source builds that overwrite hand-written Makefiles
+if(CMAKE_BINARY_DIR STREQUAL CMAKE_SOURCE_DIR)
+    message(FATAL_ERROR
+        "In-source builds not allowed. Run 'make' from the repo root instead. "
+        "Or: cmake -B build && cmake --build build")
+endif()
+
 project(engine-sim-bridge VERSION 1.0.0 LANGUAGES C CXX)
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Bridge always builds as static library
+set(LIB_TYPE STATIC)
 
 # Find engine-sim (expected as a submodule at ./engine-sim)
 # Use ENGINE_SIM_PATH if set by parent project for override
@@ -14,17 +27,215 @@ if(NOT EXISTS "${ENGINE_SIM_PATH}/CMakeLists.txt")
     message(FATAL_ERROR "engine-sim not found at ${ENGINE_SIM_PATH}")
 endif()
 
+# Keep FetchContent's download cache OUTSIDE build/ so `make scrub` (which
+# removes build/) does NOT force a fresh network re-fetch of googletest on the
+# next configure. A fresh configure that must hit the network can stall/hang
+# (DNS, captive portal, throttled github reachability, credential prompt).
+# Pinning the cache to .fetchcache means the tarball is downloaded once and
+# reused across scrubs, so configure is deterministic and offline-capable.
+set(FETCHCONTENT_BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.fetchcache" CACHE PATH
+    "FetchContent download/build cache (kept outside build/ to survive scrub)")
+# Never let a git operation inside FetchContent block on an interactive
+# credential prompt — fail fast instead of hanging indefinitely.
+set(ENV{GIT_TERMINAL_PROMPT} "0")
+
 # Add engine-sim as a subdirectory (it's a submodule of this repo)
 # Disable the GUI app and bridge from engine-sim's own CMakeLists
+# Also disable engine-sim's own tests to avoid phantom test entries
 set(BUILD_ENGINE_SIM_APP OFF CACHE BOOL "Build engine-sim GUI app" FORCE)
 set(BUILD_BRIDGE OFF CACHE BOOL "Build bridge from engine-sim (we are the bridge)" FORCE)
 set(DISCORD_ENABLED OFF CACHE BOOL "Enable Discord Rich Presence" FORCE)
+# Disable engine-sim's internal testing
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ENGINE_SIM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+# iOS builds disable script interpreter (piranha needs Boost, not available for iOS arm64)
+# Piranha's CMakeLists unconditionally calls find_package(Boost REQUIRED).
+# We can't cross-compile Boost for iOS, so we must skip the entire piranha subdirectory.
+# The approach: override add_subdirectory to skip piranha when building for iOS.
+# ESP32: same issue — Boost unavailable, piranha Bison/Flex toolchain not cross-compilable.
+if(IOS OR ESP_PLATFORM)
+    set(PIRANHA_ENABLED OFF CACHE BOOL "Disable scripting for ${PLATFORM}" FORCE)
+endif()
+
+# Isolate submodule compiler flags: do not inherit our strict warnings/Werror
+# This is standard practice when including 3rd party submodules
+set(SAVED_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+set(SAVED_C_FLAGS ${CMAKE_C_FLAGS})
+set(CMAKE_CXX_FLAGS "")
+set(CMAKE_C_FLAGS "")
+
+# EXCLUDE_FROM_ALL: Do not build every single target from the submodule.
+# Only build targets that we actually depend on (engine-sim, not tests, not app, not tools)
+# As of CMake 3.21+ this CORRECTLY still rebuilds when source files change.
+# The old bug where this would permanently cache binaries was fixed in 2022.
+
+# Pin GoogleTest to the vendored local copy so configure NEVER does a network
+# download. engine-sim and its subdeps (piranha, csv-io, simple-2d-constraint-solver)
+# each unconditionally FetchContent_Declare(googletest URL <github tarball>) and
+# FetchContent_MakeAvailable it on every configure. On a fresh `make scrub` with
+# .fetchcache wiped, that is a network download that can stall indefinitely
+# (throttled github reachability, captive portal, offline). GIT_TERMINAL_PROMPT=0
+# (set above) does NOT prevent that — it only kills credential-prompt hangs.
+# FETCHCONTENT_SOURCE_DIR_<name> is the official FetchContent override: when set,
+# MakeAvailable uses this directory and performs NO download. Because all the
+# nested declares share the content name "googletest", one override covers them all.
+# The vendored copy ships in-tree (third_party/googletest), so this is fully
+# offline and deterministic.
+set(FETCHCONTENT_SOURCE_DIR_GOOGLETEST "${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest"
+    CACHE PATH "Vendored GoogleTest source (prevents network download at configure time)")
+
 add_subdirectory(${ENGINE_SIM_PATH} ${CMAKE_BINARY_DIR}/engine-sim EXCLUDE_FROM_ALL)
 
-# Bridge library
-add_library(engine-sim-bridge SHARED
-    src/engine_sim_bridge.cpp
+# engine-sim is EXCLUDE_FROM_ALL above (don't build its app/discord/tools by
+# default), but it self-registers its physics safety-net tests via
+# gtest_discover_tests (DELEGATION model). For those tests to run, the
+# engine-sim-test binary MUST build — otherwise ctest sees a phantom
+# engine-sim-test_NOT_BUILT entry. Un-exclude just that one target.
+if(TARGET engine-sim-test)
+    set_target_properties(engine-sim-test PROPERTIES EXCLUDE_FROM_ALL OFF)
+endif()
+
+# Keep third-party piranha warnings out of normal build output.
+# We keep piranha enabled, but suppress known noisy warnings from that submodule.
+if(TARGET piranha)
+    target_compile_options(piranha PRIVATE -Wno-unused-parameter)
+endif()
+
+# Restore our original compiler flags after including submodules
+set(CMAKE_CXX_FLAGS ${SAVED_CXX_FLAGS})
+set(CMAKE_C_FLAGS ${SAVED_C_FLAGS})
+
+# Promote -Wnonportable-include-path to a HARD ERROR. Clang emits this warning
+# when an #include's case/path differs from the file name on disk (e.g. writing
+# "config/CLIconfig.h" when the file is "config/CLIconFIG.h"), or when an
+# include ambiguously resolves across -I roots — which is exactly how a bridge
+# stub sharing a path + include guard silently shadowed the real header on the
+# iOS toolchain and shipped a build break. The warning was emitted and ignored;
+# this makes it unignorable. Project-wide (one declaration, DRY): applies to the
+# bridge library and every test target below, but NOT to engine-sim/piranha
+# (their flags were saved/restored into CMAKE_*_FLAGS above, and add_compile_options
+# only reaches targets created after this point in this directory scope).
+# -Werror=nonportable-system-include-path covers the angled-include (<...>) twin.
+add_compile_options(
+    -Werror=nonportable-include-path
+    -Werror=nonportable-system-include-path
 )
+
+# Real bridge library (uses actual engine-sim with polymorphic simulator selection)
+# Phase F: Audio infrastructure moved from CLI into bridge
+
+# Bridge source files (shared between macOS and iOS)
+set(BRIDGE_SOURCES
+    # Simulator core
+    src/simulator/SineSimulator.cpp
+    src/simulator/SimulatorInitHelpers.cpp
+    src/simulator/SimulatorFactory.cpp
+    src/simulator/BridgeSimulator.cpp
+    src/simulator/BrakeConstraint.cpp
+    src/simulator/ScriptLoadHelpers.cpp
+    src/simulator/ISimulator.cpp
+    # Audio strategies
+    src/strategy/ThreadedStrategy.cpp
+    src/strategy/SyncPullStrategy.cpp
+    src/strategy/IAudioBufferFactory.cpp
+    # Audio hardware
+    src/hardware/AudioHardwareProviderFactory.cpp
+    src/hardware/NullAudioHardwareProvider.cpp
+    # Telemetry
+    src/telemetry/InMemoryTelemetry.cpp
+    # Simulation loop
+    src/simulation/CrankingController.cpp
+    src/simulation/PresentationStateBuilders.cpp
+    src/simulation/SimulationLoop.cpp
+    # Common utilities
+    src/common/ConsoleLogger.cpp
+    src/common/CircularBuffer.cpp
+    src/common/JsonParser.cpp
+    src/common/PresetSerializer.cpp
+    # ILoopClock (header-only, listed for IDE discovery)
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/simulation/ILoopClock.h>
+    # Preset engine factory (JSON-based, for preset compiler output)
+    src/simulator/PresetEngineFactory.cpp
+    # Preset deserializers (pure JSON -> engine object graph)
+    src/preset/PresetDeserializer.cpp
+    src/preset/FunctionDeserializer.cpp
+    src/preset/EngineDeserializer.cpp
+    src/preset/CrankshaftDeserializer.cpp
+    src/preset/ConnectingRodDeserializer.cpp
+    src/preset/CamshaftDeserializer.cpp
+    src/preset/CylinderBankDeserializer.cpp
+    src/preset/CylinderHeadDeserializer.cpp
+    src/preset/ExhaustSystemDeserializer.cpp
+    src/preset/IntakeDeserializer.cpp
+    src/preset/FuelDeserializer.cpp
+    src/preset/IgnitionModuleDeserializer.cpp
+    src/preset/VehicleDeserializer.cpp
+    src/preset/TransmissionDeserializer.cpp
+    # Twin components
+    src/twin/AutomaticGearbox.cpp
+    src/twin/GearboxCsvLogger.cpp
+    src/twin/ThrottleSmoother.cpp
+    src/twin/VirtualIceTwin.cpp
+    src/twin/ManualTwin.cpp
+    src/twin/SlipLockController.cpp
+    # Input providers
+    src/input/VirtualIceInputProvider.cpp
+    src/input/ManualTwinProvider.cpp
+    src/input/DemoThrottleSource.cpp
+    src/input/GearSelectorInput.cpp
+    src/input/IgnitionInput.cpp
+    src/input/DemoInputProvider.cpp
+    src/input/BrakeInput.cpp
+    src/input/KeyHoldBridge.cpp
+    src/input/KeyboardInputProvider.cpp
+    src/input/EngineInputTarget.cpp
+    src/input/DemoControlsTarget.cpp
+    src/input/ReplayTelemetryProvider.cpp
+    src/input/LiveTelemetryProvider.cpp
+    # IO
+    src/io/LiveTelemetryParser.cpp
+)
+
+# Platform-specific audio hardware and factory
+if(ESP_PLATFORM)
+    # ESP32: Use I2S hardware provider
+    list(APPEND BRIDGE_SOURCES
+        src/hardware/ESP32I2SHardwareProvider.cpp
+    )
+elseif(IOS)
+    # iOS: Use AVAudioEngine-based hardware provider (ObjC++)
+    # Factory must be .mm to include AVAudioEngine headers
+    list(APPEND BRIDGE_SOURCES
+        src/hardware/AVAudioEngineHardwareProvider.mm
+        src/hardware/AudioHardwareProviderFactory.mm
+    )
+    # Remove the .cpp factory (replaced by .mm version above)
+    list(REMOVE_ITEM BRIDGE_SOURCES
+        src/hardware/AudioHardwareProviderFactory.cpp
+    )
+else()
+    # macOS: Use CoreAudio AudioQueue-based hardware provider
+    list(APPEND BRIDGE_SOURCES
+        src/hardware/CoreAudioHardwareProvider.cpp
+    )
+endif()
+
+# Bridge is always static; coverage uses llvm-cov instrumentation
+option(ENABLE_COVERAGE "Enable llvm-cov coverage instrumentation" OFF)
+if(ENABLE_COVERAGE)
+    add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
+    add_link_options(-fprofile-instr-generate)
+endif()
+add_library(engine-sim-bridge ${LIB_TYPE} ${BRIDGE_SOURCES})
+
+# Platform-specific audio libraries
+if(IOS)
+    set(AUDIO_LIBRARY "-framework AudioToolbox -framework CoreAudio -framework CoreFoundation -framework AVFoundation")
+elseif(APPLE)
+    set(AUDIO_LIBRARY "-framework AudioToolbox -framework CoreAudio -framework CoreFoundation")
+elseif(ESP_PLATFORM)
+    set(AUDIO_LIBRARY "")
+endif()
 
 target_include_directories(engine-sim-bridge
     PUBLIC
@@ -38,7 +249,10 @@ target_include_directories(engine-sim-bridge
 target_link_libraries(engine-sim-bridge
     PRIVATE
         engine-sim
+        ${AUDIO_LIBRARY}
 )
+
+target_compile_options(engine-sim-bridge PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags -Wno-unused-private-field -g)
 
 if(TARGET engine-sim-script-interpreter)
     target_link_libraries(engine-sim-bridge
@@ -51,21 +265,724 @@ endif()
 # Set library output properties
 set_target_properties(engine-sim-bridge PROPERTIES
     OUTPUT_NAME "enginesim"
-    VERSION ${PROJECT_VERSION}
-    SOVERSION 1
-    PUBLIC_HEADER include/engine_sim_bridge.h
+    PUBLIC_HEADER include/simulator/EngineSimTypes.h
 )
 
-# Platform-specific settings
-if(APPLE)
+# Platform-specific settings (not for iOS static lib)
+if(APPLE AND NOT IOS)
     set_target_properties(engine-sim-bridge PROPERTIES
+        VERSION ${PROJECT_VERSION}
+        SOVERSION 1
         MACOSX_RPATH TRUE
         INSTALL_NAME_DIR "@rpath"
     )
+
 endif()
 
-# Installation
-install(TARGETS engine-sim-bridge
-    LIBRARY DESTINATION lib
-    PUBLIC_HEADER DESTINATION include
-)
+# Critical fix for iOS cross compilation:
+# Never install native binaries into system paths, never reuse binaries across architectures
+# This prevents macOS arm64 binaries getting accidentally linked into iOS simulator builds
+if(IOS)
+    set(CMAKE_SKIP_INSTALL_ALL_DEPENDENCY ON)
+    # Copy the bridge library to the parent build directory for Xcode to find
+    # Xcode expects the library at ../build-$(PLATFORM_NAME)/libenginesim.a
+    add_custom_command(TARGET engine-sim-bridge POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/libenginesim.a ${CMAKE_BINARY_DIR}/libenginesim.a
+        COMMENT "Copying libenginesim.a for Xcode linking"
+    )
+endif()
+
+# Installation (skip for iOS static lib builds)
+if(NOT IOS)
+    install(TARGETS engine-sim-bridge
+        LIBRARY DESTINATION lib
+        PUBLIC_HEADER DESTINATION include
+    )
+endif()
+
+# -----------------------------------------------------------------------------
+# Preset Compiler (macOS build-time tool only)
+# Compiles .mr scripts to JSON presets for iOS consumption
+# Piranha/Boost required -- not available on iOS
+# -----------------------------------------------------------------------------
+if(NOT IOS AND TARGET engine-sim-script-interpreter)
+    add_executable(engine-sim-preset-compiler
+        tools/preset_compiler.cpp
+        src/common/PresetSerializer.cpp
+    )
+    target_include_directories(engine-sim-preset-compiler
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${ENGINE_SIM_PATH}/dependencies/dr_libs
+            ${ENGINE_SIM_PATH}/include
+            ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(engine-sim-preset-compiler
+        PRIVATE
+            engine-sim
+            engine-sim-script-interpreter
+    )
+    target_compile_options(engine-sim-preset-compiler PRIVATE -Wno-unused-parameter)
+    target_compile_definitions(engine-sim-preset-compiler PRIVATE ATG_ENGINE_SIM_PIRANHA_ENABLED)
+endif()
+
+# -----------------------------------------------------------------------------
+# Unit tests (bridge owns its own tests)
+# Standalone build: `make test` works directly
+# As CLI subdirectory: CLI registers bridge_unit_tests with its own CTest
+# iOS builds skip tests entirely
+# -----------------------------------------------------------------------------
+option(BUILD_BRIDGE_TESTS "Build engine-sim-bridge unit tests" ON)
+if(IOS OR ESP_PLATFORM)
+    set(BUILD_BRIDGE_TESTS OFF CACHE BOOL "Skip tests for embedded build" FORCE)
+endif()
+if(BUILD_BRIDGE_TESTS)
+    # GoogleTest: prefer the vendored local copy (third_party/googletest) so
+    # configure NEVER does a network git clone. A fresh `make scrub` (or a
+    # clone on a throttled / captive-portaled / offline network) previously
+    # stalled indefinitely inside FetchContent's `git clone` of
+    # https://github.com/google/googletest.git. GIT_TERMINAL_PROMPT=0 (set
+    # above) only kills credential-prompt hangs, not network stalls, so the
+    # deterministic fix is to remove the network op from the normal path:
+    # use SOURCE_DIR when the vendor copy is present, and only fall back to
+    # the git download if the vendor copy is missing.
+    include(FetchContent)
+    include(GoogleTest)
+    set(_bridge_gtest_vendor "${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest")
+    if(EXISTS "${_bridge_gtest_vendor}/CMakeLists.txt")
+        FetchContent_Declare(
+            googletest
+            SOURCE_DIR "${_bridge_gtest_vendor}"
+        )
+    else()
+        FetchContent_Declare(
+            googletest
+            GIT_REPOSITORY https://github.com/google/googletest.git
+            GIT_TAG release-1.12.1
+        )
+    endif()
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    # Only register with CTest when building standalone (not as a subdirectory)
+    # This prevents double-registration when CLI includes us
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        enable_testing()
+    endif()
+
+    add_executable(bridge_unit_tests
+        test/BridgeUnitTests.cpp
+        test/CrankingControllerTests.cpp
+        test/simulator/BrakeConstraintTest.cpp
+        test/simulator/SpeedTrackingTest.cpp
+        test/simulator/NeutralAtStandstillTest.cpp
+        test/simulation/SpeedTrackingIntegrationTest.cpp
+        test/GearClutchBugTest.cpp
+        test/GearRefactorTest.cpp
+        test/SineWaveRegressionTests.cpp
+        test/twin/SpeedRpmConversionTest.cpp
+        test/twin/RedlineClampAndUpshiftTest.cpp
+        test/simulation/CommandedSpeedDisplayTest.cpp
+        test/PathNormalizerTests.cpp
+        test/JsonParserTests.cpp
+        test/SimulatorFactoryPresetDiscoveryTests.cpp
+        test/IntakeDeserializerTests.cpp
+        test/CrankingControllerStoppingTests.cpp
+        test/PresetEngineFactoryTests.cpp
+        test/BridgeSimulatorContractTests.cpp
+        test/SyncPullStrategyContractTests.cpp
+        test/InMemoryTelemetryResetTests.cpp
+        test/SimulatorFactoryBoundaryTests.cpp
+        test/ScriptLoadHelpersResolveAssetBasePathTests.cpp
+        test/simulation/SimulationLoopStepTests.cpp
+        test/simulation/SimulationLoopRunTests.cpp
+        test/simulation/SimulationLoopVehicleControlsTests.cpp
+        test/simulation/SimulationLoopDynoSentinelTests.cpp
+        test/simulation/SimulationLoopPollInputTests.cpp
+        test/simulation/SimulationLoopHandoverTests.cpp
+        test/simulator/ISimulatorVersionTest.cpp
+        test/input/DemoControlsTargetTest.cpp
+        test/input/LiveTelemetryProviderTest.cpp
+        test/twin/GearboxCsvLoggerTest.cpp
+    )
+    target_include_directories(bridge_unit_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/dependencies/submodules/simple-2d-constraint-solver/include
+    )
+    target_link_libraries(bridge_unit_tests
+        PRIVATE
+            engine-sim-bridge
+            GTest::gtest_main
+    )
+    target_compile_options(bridge_unit_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME bridge_unit_tests COMMAND bridge_unit_tests --gtest_color=yes)
+    endif()
+
+    # Preset engine tests - verifies C++ factory engines match Piranha scripts
+    option(BUILD_PRESET_ENGINE_TESTS "Build preset engine tests" OFF)
+    if(BUILD_PRESET_ENGINE_TESTS)
+        # Isomorphism tests - proves .mr and JSON paths produce identical engines
+        add_executable(preset_isomorphism_tests
+            test/PresetIsomorphismTests.cpp
+        )
+        target_include_directories(preset_isomorphism_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${ENGINE_SIM_PATH}/include
+        )
+        target_compile_definitions(preset_isomorphism_tests PRIVATE
+            TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
+            TEST_ENGINE_SIM_ASSETS="${ENGINE_SIM_PATH}/assets"
+            TEST_ENGINE_SIM_ROOT="${ENGINE_SIM_PATH}"
+            TEST_PRESET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/preset"
+            TEST_ES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/es"
+        )
+        if(TARGET engine-sim-script-interpreter)
+            target_compile_definitions(preset_isomorphism_tests PRIVATE
+                ENGINE_SIM_PIRANHA_ENABLED
+                TEST_PRESET_COMPILER_PATH="$<TARGET_FILE:engine-sim-preset-compiler>"
+            )
+            add_dependencies(preset_isomorphism_tests engine-sim-preset-compiler)
+        endif()
+        target_link_libraries(preset_isomorphism_tests
+            PRIVATE
+                GTest::gtest_main
+                engine-sim-bridge
+        )
+        if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+            gtest_discover_tests(
+                preset_isomorphism_tests
+                DISCOVERY_MODE PRE_TEST
+                DISCOVERY_TIMEOUT 30
+                EXTRA_ARGS --gtest_color=yes
+            )
+        endif()
+    endif()
+
+    # Sine wave regression tests - proves the int16/float buffer aliasing bug
+    # These tests link against engine-sim-bridge (unlike bridge_unit_tests
+    # which is standalone). They exercise SineWaveSimulator::renderOnDemand().
+    add_executable(sine_wave_regression_tests
+        test/SineWaveRegressionTests.cpp
+    )
+    target_include_directories(sine_wave_regression_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${ENGINE_SIM_PATH}/dependencies/dr_libs
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(sine_wave_regression_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+            ${AUDIO_LIBRARY}
+    )
+    target_compile_options(sine_wave_regression_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME sine_wave_regression_tests COMMAND sine_wave_regression_tests --gtest_color=yes)
+    endif()
+
+    # Strategy tests - moved from engine-sim-cli/test/unit to exercise bridge
+    # strategy/buffer code under coverage instrumentation (ThreadedStrategy,
+    # SyncPullStrategy, IAudioBuffer, CircularBuffer telemetry).
+    add_executable(strategy_tests
+        test/strategy/ThreadedStrategyIntegrationTest.cpp
+        test/strategy/StrategyPipelineTest.cpp
+        test/strategy/BufferContextEradicationTest.cpp
+        test/strategy/IAudioBufferTest.cpp
+        test/strategy/CircularBufferTelemetryTest.cpp
+        test/mocks/MockAudioUnit.cpp
+        test/AudioTestConstants.cpp
+    )
+    target_include_directories(strategy_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/mocks
+        ${ENGINE_SIM_PATH}/dependencies/dr_libs
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(strategy_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+            ${AUDIO_LIBRARY}
+    )
+    target_compile_options(strategy_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME strategy_tests COMMAND strategy_tests --gtest_color=yes)
+    endif()
+
+    # ISimulator strategy tests - extracted from engine-sim-cli/test/unit/ISimulatorTest.cpp
+    # Moves the ISimulatorStrategyTest fixture + cases (ThreadedStrategy/SyncPullStrategy
+    # driving ISimulator) into the bridge so coverage exercises them. ISimulator.cpp was
+    # 0% — tested only in the cli. CLI retains the original file (duplication accepted).
+    add_executable(simulator_strategy_tests
+        test/strategy/ISimulatorStrategyTest.cpp
+        test/AudioTestConstants.cpp
+    )
+    target_include_directories(simulator_strategy_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/mocks
+        ${ENGINE_SIM_PATH}/dependencies/dr_libs
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(simulator_strategy_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+            ${AUDIO_LIBRARY}
+    )
+    target_compile_options(simulator_strategy_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME simulator_strategy_tests COMMAND simulator_strategy_tests --gtest_color=yes)
+    endif()
+
+    # Integration audio tests - moved from engine-sim-cli/test/unit to exercise bridge
+    # CoreAudio hardware code under coverage instrumentation (CoreAudioHardwareProvider,
+    # AudioHardwareProviderFactory). CoreAudio requires macOS, so the target is
+    # APPLE && NOT IOS guarded (mirrors the CoreAudioHardwareProvider.cpp guard above).
+    if(APPLE AND NOT IOS)
+        add_executable(integration_audio_tests
+            test/IntegrationAudioPlayerTest.cpp
+            test/AudioTestConstants.cpp
+        )
+        target_include_directories(integration_audio_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/test
+            ${CMAKE_CURRENT_SOURCE_DIR}/test/mocks
+            ${ENGINE_SIM_PATH}/dependencies/dr_libs
+            ${ENGINE_SIM_PATH}/include
+            ${ENGINE_SIM_PATH}/scripting/include
+        )
+        target_link_libraries(integration_audio_tests
+            PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+            ${AUDIO_LIBRARY}
+        )
+        target_compile_options(integration_audio_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+        if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+            add_test(NAME integration_audio_tests COMMAND integration_audio_tests --gtest_color=yes)
+        endif()
+    endif()
+
+    # iOS adapter tests - only built when AudioBufferView and
+    # AVAudioEngineHardwareProvider headers exist (after Phase 1 and Phase 2)
+    option(BUILD_IOS_ADAPTER_TESTS "Build iOS adapter tests" OFF)
+    if(BUILD_IOS_ADAPTER_TESTS)
+        add_executable(ios_adapter_tests
+            test/iOSAdapterTests.cpp
+        )
+        target_include_directories(ios_adapter_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+        )
+        target_link_libraries(ios_adapter_tests
+            PRIVATE
+                GTest::gtest_main
+                engine-sim-bridge
+                ${AUDIO_LIBRARY}
+        )
+        if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+            add_test(NAME ios_adapter_tests COMMAND ios_adapter_tests --gtest_color=yes)
+        endif()
+    endif()
+
+    # Twin foundation tests - tests for UpstreamSignal and IceVehicleProfile
+    add_executable(twin_foundation_tests
+        test/twin/UpstreamSignalTest.cpp
+        test/twin/IceVehicleProfileTest.cpp
+    )
+    target_include_directories(twin_foundation_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_foundation_tests
+        PRIVATE
+            GTest::gtest_main
+    )
+    target_compile_options(twin_foundation_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_foundation_tests COMMAND twin_foundation_tests --gtest_color=yes)
+    endif()
+
+    # Twin gearbox tests - tests for AutomaticGearbox
+    add_executable(twin_gearbox_tests
+        test/twin/AutomaticGearboxTest.cpp
+        test/twin/AutoGearboxShiftLogicTest.cpp
+    )
+    target_include_directories(twin_gearbox_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_gearbox_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(twin_gearbox_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_gearbox_tests COMMAND twin_gearbox_tests --gtest_color=yes)
+    endif()
+
+    # Twin core tests - tests for ThrottleSmoother, VirtualIceTwin, and ManualTwin
+    add_executable(twin_core_tests
+        test/twin/ThrottleSmootherTest.cpp
+        test/twin/VirtualIceTwinTest.cpp
+        test/twin/ManualTwinTest.cpp
+        test/twin/SlipLockControllerTest.cpp
+    )
+    target_include_directories(twin_core_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_core_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(twin_core_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_core_tests COMMAND twin_core_tests --gtest_color=yes)
+    endif()
+
+    # Twin input provider tests - tests for VirtualIceInputProvider
+    add_executable(twin_input_tests
+        test/input/VirtualIceInputProviderTest.cpp
+    )
+    target_include_directories(twin_input_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_input_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(twin_input_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_input_tests COMMAND twin_input_tests --gtest_color=yes)
+    endif()
+
+    # Manual twin provider tests - tests for ManualTwinProvider
+    add_executable(manual_twin_provider_tests
+        test/input/ManualTwinProviderTest.cpp
+    )
+    target_include_directories(manual_twin_provider_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(manual_twin_provider_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(manual_twin_provider_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME manual_twin_provider_tests COMMAND manual_twin_provider_tests --gtest_color=yes)
+    endif()
+
+    # Replay telemetry provider tests - CSV parsing + replay behavior
+    add_executable(replay_telemetry_provider_tests
+        test/input/ReplayTelemetryProviderTest.cpp
+    )
+    target_include_directories(replay_telemetry_provider_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(replay_telemetry_provider_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(replay_telemetry_provider_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME replay_telemetry_provider_tests COMMAND replay_telemetry_provider_tests --gtest_color=yes)
+    endif()
+
+    # Demo input tests - tests for DemoThrottleSource and DemoInputProvider
+    add_executable(demo_input_tests
+        test/input/DemoThrottleSourceTest.cpp
+        test/input/DemoInputProviderTest.cpp
+        test/input/GearSelectorInputTest.cpp
+        test/input/IgnitionInputTest.cpp
+        test/input/BrakeInputTest.cpp
+        test/input/KeyHoldBridgeTest.cpp
+        test/input/BrakeChainTest.cpp
+        test/input/DemoChainIntegrationTest.cpp
+    )
+    target_include_directories(demo_input_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(demo_input_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(demo_input_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME demo_input_tests COMMAND demo_input_tests --gtest_color=yes)
+    endif()
+
+    # Live telemetry parser tests - tests for vehicle-sim JSON telemetry parser
+    add_executable(live_telemetry_parser_tests
+        test/input/LiveTelemetryParserTest.cpp
+    )
+    target_include_directories(live_telemetry_parser_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(live_telemetry_parser_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(live_telemetry_parser_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME live_telemetry_parser_tests COMMAND live_telemetry_parser_tests --gtest_color=yes)
+    endif()
+
+    # Keyboard consolidation tests - consolidated KeyboardInputProvider + EngineInputTarget
+    add_executable(keyboard_consolidation_tests
+        test/input/KeyboardInputProviderTest.cpp
+    )
+    target_include_directories(keyboard_consolidation_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(keyboard_consolidation_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(keyboard_consolidation_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME keyboard_consolidation_tests COMMAND keyboard_consolidation_tests --gtest_color=yes)
+    endif()
+
+    # Runtime bugs integration tests - reproduces LIVE integration-path bugs
+    # that pass in isolation but fail end-to-end (keyboard -> EngineInput ->
+    # SimulationLoop gate -> BridgeSimulator dyno).
+    add_executable(runtime_bugs_integration_tests
+        test/simulation/RuntimeBugsIntegrationTest.cpp
+    )
+    target_include_directories(runtime_bugs_integration_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(runtime_bugs_integration_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(runtime_bugs_integration_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME runtime_bugs_integration_tests COMMAND runtime_bugs_integration_tests --gtest_color=yes)
+    endif()
+
+    # Twin scenario tests - Phase 1 acceptance criteria tests
+    add_executable(twin_scenario_tests
+        test/scenarios/AccelerationScenarioTest.cpp
+        test/scenarios/CruiseScenarioTest.cpp
+        test/scenarios/DecelerationScenarioTest.cpp
+        test/scenarios/KickdownScenarioTest.cpp
+        test/scenarios/StandstillScenarioTest.cpp
+        test/scenarios/LaunchScenarioTest.cpp
+        test/scenarios/TelemetrySequenceBuilder.cpp
+    )
+    target_include_directories(twin_scenario_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(twin_scenario_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(twin_scenario_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_scenario_tests COMMAND twin_scenario_tests --gtest_color=yes)
+    endif()
+
+    # Twin physics integration tests - requires engine-sim linkage
+    option(BUILD_INTEGRATION_TESTS "Build integration tests that require engine-sim" OFF)
+    if(BUILD_INTEGRATION_TESTS)
+        add_executable(twin_integration_tests
+            test/scenarios/TwinPhysicsIntegrationTest.cpp
+            test/scenarios/TelemetrySequenceBuilder.cpp
+        )
+        target_include_directories(twin_integration_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/test
+        )
+        target_link_libraries(twin_integration_tests
+            PRIVATE
+                GTest::gtest_main
+                engine-sim-bridge
+        )
+        target_compile_definitions(twin_integration_tests PRIVATE BUILD_INTEGRATION_TESTS=ON)
+        target_compile_options(twin_integration_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+        if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+            add_test(NAME twin_integration_tests COMMAND twin_integration_tests --gtest_color=yes)
+        endif()
+    endif()
+endif()
+
+# ============================================================================
+# Phase 0 Evidence-Gathering Spikes
+# These are GTest-based spike executables that output deterministically
+# collect signal measurements for Phase 0 decisions.
+# ============================================================================
+option(BUILD_PHASE0_SPIKES "Build Phase 0 spike executables" OFF)
+if(BUILD_PHASE0_SPIKES)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes")
+
+    # ---- Audio Sweep Spike ----
+    add_executable(audio_sweep_spike
+        test/spikes/AudioSweepSpike.cpp
+    )
+    target_include_directories(audio_sweep_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/dependencies/dr_libs
+        ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(audio_sweep_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    set_target_properties(audio_sweep_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME audio_sweep_spike COMMAND audio_sweep_spike)
+    set_tests_properties(audio_sweep_spike PROPERTIES LABELS "spike")
+
+    # ---- Clutch Parameter Sweep Spike ----
+    add_executable(clutch_sweep_spike
+        test/spikes/ClutchParameterSweepSpike.cpp
+    )
+    target_include_directories(clutch_sweep_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+    )
+    target_compile_definitions(clutch_sweep_spike PRIVATE
+        TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures"
+    )
+    target_link_libraries(clutch_sweep_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    set_target_properties(clutch_sweep_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME clutch_sweep_spike COMMAND clutch_sweep_spike)
+    set_tests_properties(clutch_sweep_spike PROPERTIES LABELS "spike")
+
+    # ---- Telemetry Jitter Spike ----
+    add_executable(jitter_test_spike
+        test/spikes/TelemetryJitterSpike.cpp
+    )
+    target_include_directories(jitter_test_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/dependencies/dr_libs
+        ${ENGINE_SIM_PATH}/scripting/include
+    )
+    target_link_libraries(jitter_test_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    set_target_properties(jitter_test_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME jitter_test_spike COMMAND jitter_test_spike)
+    set_tests_properties(jitter_test_spike PROPERTIES LABELS "spike")
+
+    # ---- Dyno Tracking Spike ----
+    add_executable(dyno_tracking_spike
+        test/spikes/DynoTrackingSpike.cpp
+    )
+    target_include_directories(dyno_tracking_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+    )
+    target_link_libraries(dyno_tracking_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    set_target_properties(dyno_tracking_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME dyno_tracking_spike COMMAND dyno_tracking_spike)
+    set_tests_properties(dyno_tracking_spike PROPERTIES LABELS "spike")
+
+    # ---- Dyno Launch Control Spike ----
+    add_executable(dyno_launch_control_spike
+        test/spikes/DynoLaunchControlSpike.cpp
+    )
+    target_include_directories(dyno_launch_control_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+    )
+    target_link_libraries(dyno_launch_control_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    set_target_properties(dyno_launch_control_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME dyno_launch_control_spike COMMAND dyno_launch_control_spike)
+    set_tests_properties(dyno_launch_control_spike PROPERTIES LABELS "spike")
+
+    # ---- Real Engine Audio Spike (Subaru EJ25) ----
+    add_executable(real_engine_audio_spike
+        test/spikes/RealEngineAudioSpike.cpp
+    )
+    target_include_directories(real_engine_audio_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+        ${ENGINE_SIM_PATH}/scripting/include
+        ${ENGINE_SIM_PATH}/dependencies/submodules/piranha
+    )
+    target_link_libraries(real_engine_audio_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+            engine-sim-script-interpreter
+    )
+    set_target_properties(real_engine_audio_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME real_engine_audio_spike COMMAND real_engine_audio_spike)
+    set_tests_properties(real_engine_audio_spike PROPERTIES LABELS "spike")
+
+    # ---- Gearbox Diagnostic Spike ----
+    add_executable(gearbox_diagnostic_spike
+        test/spikes/GearboxDiagnosticSpike.cpp
+    )
+    target_include_directories(gearbox_diagnostic_spike PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${ENGINE_SIM_PATH}/include
+    )
+    target_link_libraries(gearbox_diagnostic_spike
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    set_target_properties(gearbox_diagnostic_spike PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/spikes"
+    )
+    add_test(NAME gearbox_diagnostic_spike COMMAND gearbox_diagnostic_spike)
+    set_tests_properties(gearbox_diagnostic_spike PROPERTIES LABELS "spike")
+endif()
+
