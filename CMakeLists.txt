@@ -191,6 +191,7 @@ set(BRIDGE_SOURCES
     src/input/EngineInputTarget.cpp
     src/input/DemoControlsTarget.cpp
     src/input/ReplayTelemetryProvider.cpp
+    src/input/CsvTelemetryParser.cpp
     src/input/LiveTelemetryProvider.cpp
     # IO
     src/io/LiveTelemetryParser.cpp
@@ -730,6 +731,24 @@ if(BUILD_BRIDGE_TESTS)
         add_test(NAME demo_input_tests COMMAND demo_input_tests --gtest_color=yes)
     endif()
 
+    # CSV telemetry parser tests - shared parser for replay + live providers
+    add_executable(csv_telemetry_parser_tests
+        test/input/CsvTelemetryParserTest.cpp
+    )
+    target_include_directories(csv_telemetry_parser_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/test
+    )
+    target_link_libraries(csv_telemetry_parser_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(csv_telemetry_parser_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME csv_telemetry_parser_tests COMMAND csv_telemetry_parser_tests --gtest_color=yes)
+    endif()
+
     # Live telemetry parser tests - tests for vehicle-sim JSON telemetry parser
     add_executable(live_telemetry_parser_tests
         test/input/LiveTelemetryParserTest.cpp
@@ -746,6 +765,10 @@ if(BUILD_BRIDGE_TESTS)
     if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME live_telemetry_parser_tests COMMAND live_telemetry_parser_tests --gtest_color=yes)
     endif()
+
+    # Live telemetry input tests — archived: CSV stdin provider was superseded by
+    # master's JSON network feed provider (LiveTelemetryParser + submitSignal).
+    # Test moved to test/archive/LiveTelemetryProviderTest.cpp.
 
     # Keyboard consolidation tests - consolidated KeyboardInputProvider + EngineInputTarget
     add_executable(keyboard_consolidation_tests

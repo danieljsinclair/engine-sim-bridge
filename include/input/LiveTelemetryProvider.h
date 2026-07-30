@@ -24,11 +24,13 @@
 
 #include "io/IInputProvider.h"
 #include "io/UpstreamSignal.h"
+#include "input/CsvTelemetryParser.h"
 #include "input/VirtualIceInputProvider.h"
 #include "twin/IceVehicleProfile.h"
 #include "simulator/EngineSimTypes.h"
 
 #include <atomic>
+#include <istream>
 #include <memory>
 #include <string>
 
@@ -39,6 +41,10 @@ public:
     /// Create a live telemetry provider with the given vehicle profile.
     /// The profile defines gear ratios, shift tables, and vehicle dynamics.
     explicit LiveTelemetryProvider(const twin::IceVehicleProfile& profile);
+
+    /// Create a live telemetry provider that reads CSV from an input stream
+    /// (e.g. stdin pipe from vehicle-sim --stdout-csv). Step-holds latest sample.
+    LiveTelemetryProvider(std::istream& stream, bool autoStart);
 
     ~LiveTelemetryProvider() override;
 
@@ -73,7 +79,12 @@ public:
     UpstreamSignal getCurrentSignal() const;
 
 private:
-    const twin::IceVehicleProfile& profile_;
+    // CSV stdin path helpers
+    bool tryReadNextRow();
+
+    // JSON mode: external profile ref. CSV mode: owned profile + istream.
+    twin::IceVehicleProfile ownedProfile_;          // used only in CSV mode
+    const twin::IceVehicleProfile& profile_;        // points to ownedProfile_ or external
     std::unique_ptr<VirtualIceInputProvider> twinProvider_;
     std::atomic<UpstreamSignal> currentSignal_;
     std::atomic<bool> signalReceived_;
@@ -82,6 +93,16 @@ private:
 
     /// Non-virtual cleanup. Called by destructor and Shutdown().
     void doShutdown();
+
+    // CSV stdin members (unused in JSON mode)
+    std::istream* stream_ = nullptr;
+    CsvTelemetryParser csvParser_;
+    CsvSample currentSample_{};
+    bool hasSample_ = false;
+    double elapsedS_ = 0.0;
+    bool startFired_ = false;
+    bool eofSeen_ = false;
+    bool autoStart_ = true;
 };
 
 } // namespace input

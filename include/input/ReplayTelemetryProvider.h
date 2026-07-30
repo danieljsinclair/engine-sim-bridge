@@ -24,6 +24,7 @@
 #include "simulator/EngineSimTypes.h"
 #include "twin/IceVehicleProfile.h"
 #include "input/IKeyboardInput.h"
+#include "input/CsvTelemetryParser.h"
 #include "session/ISimulatorSession.h"
 
 // IReplayTimeline — satisfied by this provider so the CLI's
@@ -77,14 +78,7 @@ public:
                              double diffRatio, double tireRadiusM);
 
 private:
-    struct Sample {
-        double timeS = 0.0;
-        double throttle = 0.0;       // 0..1
-        double roadSpeedKmh = -2.0;  // -2 sentinel = not commanded (dyno off)
-        int gear = -1;               // -1 = unchanged; 0 = neutral; 1..8 = forward
-        double clutchPct = -1.0;     // -1 = unchanged; 0..1
-        std::string gearSelector;    // PRNDL string from vehicle-sim captures
-    };
+    using Sample = CsvSample;
 
     struct CsvColumns {
         int colTime = -1;
@@ -121,6 +115,7 @@ private:
     bool autoGearbox_;
     bool connected_ = false;
     std::string lastError_;
+    CsvTelemetryParser csvParser_;
     std::vector<Sample> samples_;
     double elapsedS_ = 0.0;
     bool startFired_ = false;
