@@ -19,6 +19,7 @@ public:
     virtual void update(double deltaTime) = 0;
     virtual EngineSimStats getStats() const = 0;
     virtual void setThrottle(double position) = 0;
+    virtual void setStarterMotor(bool /* on */) {}  // no-op default; combustion simulators override via ICombustionEngine
     virtual bool renderOnDemand(float* buffer, int32_t frames, int32_t* written) = 0;
 
     // Twin-specific control methods

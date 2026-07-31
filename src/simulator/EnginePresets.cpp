@@ -20,8 +20,6 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-static const double TWO_PI = 2.0 * M_PI;
-
 namespace EnginePresetsHelper {
 
 Function* generateHarmonicCamLobe(double durationAt50Thou, double gamma,

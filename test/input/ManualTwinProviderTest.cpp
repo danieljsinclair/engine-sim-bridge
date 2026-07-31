@@ -28,12 +28,13 @@ public:
     void update(double) override {}
     EngineSimStats getStats() const override { return {}; }
     void setThrottle(double) override {}
-    void setIgnition(bool) override {}
+    void setIgnition(bool) {}  // ICombustionEngine method, not ISimulator
     void setStarterMotor(bool) override {}
     bool renderOnDemand(float*, int32_t, int32_t*) override { return false; }
     bool readAudioBuffer(float*, int32_t, int32_t*) override { return false; }
     bool start() override { return true; }
     void stop() override {}
+    int getSimulationFrequency() const override { return 0; }
 
     double getEngineRpm() const override { return rpm; }
     double rpm = 0.0;

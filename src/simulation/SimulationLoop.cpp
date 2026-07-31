@@ -251,12 +251,6 @@ void cleanupSimulation(IAudioHardwareProvider* hardwareProvider, ISimulator& sim
     simulator.destroy();
 }
 
-void warnWavExportNotSupported(bool outputWavRequested, ILogging* logger) {
-    if (outputWavRequested) {
-        logger->warning(LogMask::AUDIO, "WAV export not supported in unified mode - use the old engine mode code path");
-    }
-}
-
 // ============================================================================
 // SimulatorSession - Concrete session managing audio hardware + simulator lifecycle
 // Owns audio hardware for session lifetime. Reuses runUnifiedAudioLoop() for the main tick loop.

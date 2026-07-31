@@ -6,6 +6,9 @@
 #include "simulation/SimulationLoop.h"
 #include "simulator/BridgeSimulator.h"
 #include "simulator/SineSimulator.h"
+#include "simulator/SineEngine.h"
+#include "simulator/SineVehicle.h"
+#include "simulator/SineTransmission.h"
 #include "simulator/ScriptCompileHelpers.h"
 #include "simulator/ScriptExecutionHelpers.h"
 #include "simulator/ScriptLoadHelpers.h"
@@ -51,7 +54,11 @@ SimulatorInit createSineWaveSimulator(const ISimulatorConfig& config) {
     }
     auto sineSim = std::make_unique<SineSimulator>();
     initSimulator(sineSim.get(), sineConfig);
-    sineSim->loadSimulation(nullptr, nullptr, nullptr);
+    // SineSimulator::loadSimulation dereferences engine (wirePhysics reads
+    // getExhaustSystemCount()) and enforces a non-null precondition; the
+    // self-contained sine mode must supply its own minimal Sine* stubs.
+    // SineSimulator takes ownership and deletes them in destroy().
+    sineSim->loadSimulation(new SineEngine(), new SineVehicle(), new SineTransmission());
     return {std::move(sineSim), "SineWave", EnginePhase::Running};
 }
 

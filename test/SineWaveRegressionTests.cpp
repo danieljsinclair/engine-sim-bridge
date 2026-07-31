@@ -287,7 +287,13 @@ protected:
         sineSim->setSimulationFrequency(EngineSimDefaults::SIMULATION_FREQUENCY);
         sineSim->setFluidSimulationSteps(EngineSimDefaults::FLUID_SIMULATION_STEPS);
         sineSim->setTargetSynthesizerLatency(EngineSimDefaults::TARGET_SYNTH_LATENCY);
-        sineSim->loadSimulation(nullptr, nullptr, nullptr);
+        // GearChangeTest exercises changeGear() against a real (minimal sine) transmission:
+        // SineTransmission defaults to Park (m_gear = -1) with gearCount = 1, so the valid
+        // gear range is [-1, 1) -> Park(-1) <-> Neutral(0). Loading nullptr contradicts the
+        // test's own ASSERT_EQ(currentGear(), -1) (currentGear() returns -999 when null) and
+        // is rejected by SineSimulator::loadSimulation's non-null precondition. Mirror the
+        // SineWaveRenderTest fixture (line 88) instead.
+        sineSim->loadSimulation(new SineEngine(), new SineVehicle(), new SineTransmission());
         simulator_ = std::make_unique<BridgeSimulator>(std::move(sineSim));
 
         ISimulatorConfig config;

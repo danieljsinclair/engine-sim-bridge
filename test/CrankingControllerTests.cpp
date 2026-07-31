@@ -189,7 +189,7 @@ TEST(CrankingControllerTest, EngineDoesNotCatch_WithoutIgnition) {
     engine.stats_.exhaustFlow = 1.0;
     engine.stats_.currentRPM = 800.0;
 
-    auto state = controller.step(engine, 0.5, false, nullptr);
+    controller.step(engine, 0.5, false, nullptr);
 
     EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Cranking);  // Still cranking
 }
@@ -342,7 +342,7 @@ TEST(CrankingControllerTest, Rollover_DoesNotCatch_WithoutIgnition) {
     engine.setEnginePhase(EnginePhase::Rollover);
     engine.stats_.currentRPM = 600.0;
 
-    auto state = controller.step(engine, 0.3, false, nullptr);
+    controller.step(engine, 0.3, false, nullptr);
 
     EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Rollover);
 }
@@ -397,6 +397,6 @@ TEST(CrankingControllerTest, Rollover_DoesNotFallBackImmediately_ZeroRPMTick1) {
     engine.stats_.currentRPM = 0.0;
 
     // First tick at 0 RPM — should NOT fall back immediately
-    auto state = controller.step(engine, 0.3, true, nullptr);
+    controller.step(engine, 0.3, true, nullptr);
     EXPECT_EQ(engine.getEnginePhase(), EnginePhase::Rollover);
 }

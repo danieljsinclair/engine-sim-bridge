@@ -22,6 +22,8 @@ struct EngineInput {
     double throttle = 0.0;       // 0.0 - 1.0 (from keyboard/upstream)
     bool ignition = true;        // true = on (from keyboard/upstream)
     bool starterButton = false;  // momentary: true for one frame when pressed
+    bool starterMotor = false;   // sustained: twin-controlled starter engagement
+    bool shouldContinue = true;  // false = simulation loop should exit
 
     // Gear control
     int gearDelta = 0;           // +1 = shift up, -1 = shift down, 0 = no change
