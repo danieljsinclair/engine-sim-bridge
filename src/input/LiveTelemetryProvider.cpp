@@ -179,8 +179,8 @@ bool LiveTelemetryProvider::tryReadNextRow() {
         if (std::find_if(line.begin(), line.end(), notSpace) == line.end()) continue;
         CsvSample sample;
         std::string parseError;
-        double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
-        if (csvParser_.parseRow(line, timeDivisor, sample, parseError)) {
+        if (double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
+            csvParser_.parseRow(line, timeDivisor, sample, parseError)) {
             currentSample_ = sample;
             hasSample_ = true;
             return true;

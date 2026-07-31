@@ -92,9 +92,9 @@ void ReplayTelemetryProvider::reconfigureProfile(const std::vector<double>& gear
     gearboxProfile_.separateDownshiftTableEnabled = true;
     gearboxProfile_.downshiftTableThrottleLevels = gearboxProfile_.shiftTableThrottleLevels;
     gearboxProfile_.downshiftTable.clear();
-    for (size_t t = 0; t < gearboxProfile_.shiftTable.size(); ++t) {
+    for (const auto& ups : gearboxProfile_.shiftTable) {
         std::vector<double> row;
-        for (double upSpeed : gearboxProfile_.shiftTable[t]) {
+        for (double upSpeed : ups) {
             row.push_back(upSpeed * 0.70);
         }
         gearboxProfile_.downshiftTable.push_back(row);

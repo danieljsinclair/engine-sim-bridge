@@ -36,7 +36,9 @@ bool parseDouble(const std::string& s, double& out) {
         size_t used = 0;
         out = std::stod(t, &used);
         return used != 0;
-    } catch (...) {
+    } catch (const std::invalid_argument&) {
+        return false;
+    } catch (const std::out_of_range&) {
         return false;
     }
 }
@@ -48,7 +50,9 @@ bool parseInt(const std::string& s, int& out) {
         size_t used = 0;
         out = std::stoi(t, &used);
         return used != 0;
-    } catch (...) {
+    } catch (const std::invalid_argument&) {
+        return false;
+    } catch (const std::out_of_range&) {
         return false;
     }
 }
@@ -92,9 +96,10 @@ bool CsvTelemetryParser::parseHeader(const std::string& headerLine, std::string&
     }
 
     // Detect raw CAN format (undecoded).
-    bool hasCanId = false, hasDataHex = false;
-    for (size_t i = 0; i < fields.size(); ++i) {
-        const std::string name = lower(trim(fields[i]));
+    bool hasCanId = false;
+    bool hasDataHex = false;
+    for (const auto& field : fields) {
+        const std::string name = lower(trim(field));
         if (name == "can_id") hasCanId = true;
         if (name == "data_hex") hasDataHex = true;
     }
@@ -108,7 +113,7 @@ bool CsvTelemetryParser::parseHeader(const std::string& headerLine, std::string&
 }
 
 bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
-                                   CsvSample& out, std::string& errorMsg) const {
+                                   CsvSample& out, const std::string& errorMsg) const {
     (void)errorMsg;
     const std::string trimmed = trim(row);
     if (trimmed.empty()) return false;
@@ -134,8 +139,7 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
         s.roadSpeedKmh = v;
     }
 
-    int gi = 0;
-    if (header_.colGear >= 0 && header_.colGear < static_cast<int>(fields.size()) &&
+    if (int gi; header_.colGear >= 0 && header_.colGear < static_cast<int>(fields.size()) &&
         parseInt(fields[header_.colGear], gi)) {
         s.gear = gi;
     }

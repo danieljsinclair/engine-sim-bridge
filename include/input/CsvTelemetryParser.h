@@ -53,7 +53,7 @@ public:
     // in out.timeS; callers that need zero-based time must subtract the first
     // timestamp themselves.
     bool parseRow(const std::string& row, double timeDivisor,
-                  CsvSample& out, std::string& errorMsg) const;
+                  CsvSample& out, const std::string& errorMsg) const;
 
     // Access the parsed header info.
     const CsvHeader& header() const { return header_; }
