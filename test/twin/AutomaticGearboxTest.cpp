@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <twin/AutomaticGearbox.h>
 #include <twin/IceVehicleProfile.h>
+#include <algorithm>
 #include <cmath>
 
 using namespace twin;
@@ -857,4 +858,161 @@ TEST_F(AutomaticGearboxTest, TipCorrection_ClearsWhenGradientStabilizes) {
 
     EXPECT_GT(gearbox.getCurrentGear(), 1)
         << "Upshift should proceed after tip-in gradient stabilizes";
+}
+
+// ============================================================
+// Bug: "gearbox never upshifts" — transient tip-correction
+// (x-engineer ch6 s4.4). The original tip gate was level-sensitive
+// per frame on the RAW throttle gradient with no decay, so any
+// sustained ramp or sub-percent CAN jitter fired it every frame and
+// permanently suppressed upshifts. These tests assert the gearbox
+// upshifts under realistic throttle input (RED on the per-frame
+// gate; GREEN once the gate is a short transient inhibit window).
+// ============================================================
+
+TEST_F(AutomaticGearboxTest, SustainedThrottleRamp_upshifts) {
+    // A driver smoothly ramps throttle while accelerating. The raw per-frame
+    // gradient (~20 %/s) exceeds the old 10 %/s tip threshold every frame, so
+    // the level-sensitive gate pins the gearbox in 1st for the whole ramp.
+    AutomaticGearbox gearbox(profile);
+    constexpr double dt = 1.0 / 60.0;
+    const int frames = 120;  // 2.0 s
+    const double startSpeed = 10.0, endSpeed = 60.0;
+    const double startThrottle = 0.20, endThrottle = 0.60;
+    int maxGear = 1;
+    for (int i = 0; i < frames; ++i) {
+        const double frac = static_cast<double>(i) / (frames - 1);
+        const double speed = startSpeed + (endSpeed - startSpeed) * frac;
+        const double throttle = startThrottle + (endThrottle - startThrottle) * frac;
+        gearbox.update(dt, speed, throttle);
+        maxGear = std::max(maxGear, gearbox.getCurrentGear());
+    }
+    EXPECT_GE(maxGear, 2) << "Gearbox must upshift during a sustained gentle throttle ramp";
+}
+
+TEST_F(AutomaticGearboxTest, NoisyThrottle_Upshifts) {
+    // Real CAN throttle carries sub-percent jitter on a steady command. At
+    // 60 fps the raw gradient of +-0.5% jitter is ~+-30 %/s, above the old
+    // 10 %/s threshold, so once the tip gate arms it stays armed and the
+    // gearbox cannot upshift as speed rises past the 1->2 point.
+    AutomaticGearbox gearbox(profile);
+    constexpr double dt = 1.0 / 60.0;
+    const double baseThrottle = 0.5;
+    int maxGear = 1;
+    // Ramp speed 18 -> 45 kph (across the 1->2 upshift ~27 kph at 0.5 throttle)
+    // over 3 s with +-0.5% jitter on every frame. Frame 0 starts below the
+    // upshift point so the gate is armed before speed crosses it.
+    const int frames = 3 * 60;
+    const double startSpeed = 18.0, endSpeed = 45.0;
+    for (int i = 0; i < frames; ++i) {
+        const double frac = static_cast<double>(i) / (frames - 1);
+        const double speed = startSpeed + (endSpeed - startSpeed) * frac;
+        const double jitter = (i % 2 == 0) ? 0.005 : -0.005;
+        gearbox.update(dt, speed, baseThrottle + jitter);
+        maxGear = std::max(maxGear, gearbox.getCurrentGear());
+    }
+    EXPECT_GE(maxGear, 2) << "Gearbox must upshift despite sub-percent throttle jitter";
+}
+
+TEST_F(AutomaticGearboxTest, FullThrottleRamp_SequentialUpshifts) {
+    // Full-throttle acceleration with continuous CAN jitter overlaid. The
+    // jitter spikes the raw gradient above threshold every frame, pinning the
+    // gearbox in 1st on the buggy gate; transient tip-correction lets it step
+    // cleanly through the gears.
+    AutomaticGearbox gearbox(profile);
+    constexpr double dt = 1.0 / 60.0;
+    const int frames = 30 * 60;  // 30 s
+    const double startSpeed = 8.0, endSpeed = 220.0;
+    const double startThrottle = 0.0, endThrottle = 0.94;  // below kickdown (0.95)
+    int maxGear = 1;
+    int upshiftCount = 0;
+    int prevGear = 1;
+    double gear2Speed = -1.0;
+    for (int i = 0; i < frames; ++i) {
+        const double frac = static_cast<double>(i) / (frames - 1);
+        const double speed = startSpeed + (endSpeed - startSpeed) * frac;
+        const double throttle = startThrottle + (endThrottle - startThrottle) * frac;
+        const double jitter = (i % 2 == 0) ? 0.005 : -0.005;
+        gearbox.update(dt, speed, std::clamp(throttle + jitter, 0.0, 1.0));
+        const int g = gearbox.getCurrentGear();
+        if (g > prevGear) {
+            ++upshiftCount;
+            if (g == 2 && gear2Speed < 0.0) gear2Speed = speed;
+        }
+        maxGear = std::max(maxGear, g);
+        prevGear = g;
+    }
+    EXPECT_GE(upshiftCount, 4) << "Should complete several sequential upshifts over a full-throttle run";
+    EXPECT_GE(maxGear, 5) << "Should reach a high gear by 220 kph";
+    ASSERT_GE(gear2Speed, 0.0) << "Should reach 2nd gear";
+    EXPECT_GE(gear2Speed, 10.0) << "1->2 should not happen at standstill";
+    EXPECT_LE(gear2Speed, 55.0) << "1->2 should happen well before redline push";
+}
+
+TEST_F(AutomaticGearboxTest, TipCorrection_BlocksOnlyForShortWindow) {
+    // A tip event arms a TRANSIENT inhibit window, not a permanent block: the
+    // upshift is held for ~tipInhibitWindowS, then proceeds.
+    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
+    ASSERT_GT(custom.tipInhibitWindowS, 0.0);
+    ASSERT_LE(custom.tipInhibitWindowS, 0.5);  // must be short / transient
+    const double window = custom.tipInhibitWindowS;
+
+    AutomaticGearbox gearbox(custom);
+    constexpr double dt = 1.0 / 60.0;
+
+    // Settle in 1st at high throttle: the 1->2 upshift at 0.80 throttle is
+    // ~40 kph, so 35 kph holds 1st with no tip event (throttle is stable).
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(dt, 35.0, 0.80);
+    }
+    ASSERT_EQ(gearbox.getCurrentGear(), 1) << "precondition: held in 1st below the 0.80 upshift speed";
+
+    // Tip-out stab: a sharp throttle drop gives a large negative smoothed
+    // gradient that arms the inhibit window. At the new low throttle the 1->2
+    // threshold (~20 kph) is below the current speed (35), so the ONLY thing
+    // holding the upshift back is the transient window.
+    gearbox.update(dt, 35.0, 0.30);
+    ASSERT_EQ(gearbox.getCurrentGear(), 1) << "tip event should hold the upshift";
+
+    double upshiftAt = -1.0;
+    double t = 0.0;
+    for (int i = 0; i < 90; ++i) {  // up to 1.5 s
+        gearbox.update(dt, 35.0, 0.30);
+        t += dt;
+        if (gearbox.getCurrentGear() > 1 && upshiftAt < 0.0) {
+            upshiftAt = t;
+        }
+    }
+    ASSERT_GE(upshiftAt, 0.0) << "upshift should fire once the window decays";
+    EXPECT_GE(upshiftAt, window - 0.10) << "window must hold the upshift for ~tipInhibitWindowS";
+    EXPECT_LE(upshiftAt, window + 0.20) << "upshift must proceed shortly after the window decays";
+}
+
+TEST_F(AutomaticGearboxTest, SteadyThrottleWithJitter_DoesNotBlockUpshift) {
+    // Sub-percent jitter on a STEADY throttle must NOT arm the inhibit window
+    // (the smoothed gradient stays small), so higher-gear upshifts still proceed.
+    AutomaticGearbox gearbox(profile);
+    constexpr double dt = 1.0 / 60.0;
+
+    // Reach 2nd at 0.5 throttle (1->2 ~27 kph; 2->3 ~43 kph, so 35 holds 2nd).
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(dt, 35.0, 0.50);
+    }
+    ASSERT_EQ(gearbox.getCurrentGear(), 2) << "precondition: in 2nd gear";
+
+    // Clear the upshift interval (upshiftMinIntervalS = 2.0 s).
+    for (int i = 0; i < 150; ++i) {
+        gearbox.update(dt, 35.0, 0.50);
+    }
+
+    // Raise speed above the 2->3 upshift (~43 kph) with continuous +-0.5%
+    // jitter: the smoothed gradient stays below threshold, no window arms, and
+    // the 2->3 upshift proceeds.
+    int maxGear = 2;
+    for (int i = 0; i < 5 * 60; ++i) {
+        const double jitter = (i % 2 == 0) ? 0.005 : -0.005;
+        gearbox.update(dt, 55.0, 0.50 + jitter);
+        maxGear = std::max(maxGear, gearbox.getCurrentGear());
+    }
+    EXPECT_GE(maxGear, 3) << "Steady throttle with jitter must still upshift";
 }

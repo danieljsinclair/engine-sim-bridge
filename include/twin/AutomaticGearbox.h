@@ -56,8 +56,10 @@ private:
     double throttleDeltaTimeS_ = 0.0;
     bool kickdownActive_ = false;
     double throttleGradient_ = 0.0;       // %/s, for tip-in/tip-out detection
-    bool tipBlocksUpshift_ = false;       // true when gradient exceeds threshold
+    bool tipBlocksUpshift_ = false;       // true while the transient inhibit window is active
     bool hadPreviousThrottle_ = false;    // skip gradient on first frame
+    double previousSmoothedThrottle_ = -1.0;  // prior frame's smoothed throttle (tip gradient)
+    double tipInhibitTimerS_ = 0.0;       // remaining upshift-inhibit time after a tip event
 
     IGearboxLogger* logger_ = nullptr;
     int twinState_ = 0;
@@ -84,7 +86,7 @@ private:
     // Throttle pre-processing (smoothing + delta tracking + tip correction).
     void smoothThrottleInput(double throttleFraction, double dt);
     void trackThrottleDelta(double throttleFraction, double dt);
-    void applyTipCorrection(double throttleDelta, double dt);
+    void applyTipCorrection(double dt);
 
     // Engine-brake gate: true when coasting conditions block upshifts only.
     bool isEngineBrakingActive(double throttleFraction, double speedKmh) const;

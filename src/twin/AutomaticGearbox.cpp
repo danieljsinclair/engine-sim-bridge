@@ -76,6 +76,8 @@ void AutomaticGearbox::update(double dt, double speedKmh, double throttleFractio
         targetGear_ = currentGear_;
         kickdownActive_ = false;
         tipBlocksUpshift_ = false;
+        previousSmoothedThrottle_ = smoothedThrottle_;
+        tipInhibitTimerS_ = 0.0;
         hadPreviousThrottle_ = true;
         return;
     }
@@ -84,13 +86,20 @@ void AutomaticGearbox::update(double dt, double speedKmh, double throttleFractio
 }
 
 void AutomaticGearbox::runShiftLogic(double dt, double speedKmh, double throttleFraction) {
+    // Zero-time calls (the SHIFTING placeholder update(0,0,0) from VirtualIceTwin)
+    // must be a no-op: with dt == 0 they would corrupt throttle-tracking state
+    // (previousThrottle_, smoothed/throttle-delta history) and produce phantom
+    // tip/kickdown events on the next real frame, making shift timing depend on
+    // the shift-execution cadence instead of the throttle/speed input.
+    if (dt <= 0.0) {
+        return;
+    }
     throttleFraction = std::clamp(throttleFraction, 0.0, 1.0);
     timeSinceLastShiftS_ += dt;
 
-    double throttleDelta = throttleFraction - previousThrottle_;
     smoothThrottleInput(throttleFraction, dt);
     trackThrottleDelta(throttleFraction, dt);
-    applyTipCorrection(throttleDelta, dt);
+    applyTipCorrection(dt);
 
     requestsShift_ = false;
     targetGear_ = currentGear_;
@@ -161,16 +170,32 @@ void AutomaticGearbox::trackThrottleDelta(double throttleFraction, double dt) {
     previousThrottle_ = throttleFraction;
 }
 
-void AutomaticGearbox::applyTipCorrection(double throttleDelta, double dt) {
+void AutomaticGearbox::applyTipCorrection(double dt) {
+    // TRANSIENT: a genuine pedal "stab" (large gradient on the SMOOTHED
+    // throttle, which rejects sub-percent CAN jitter) arms a short,
+    // non-retriggerable upshift-inhibit window that then decays. This replaces
+    // the old per-frame level-sensitive block that pinned the gearbox in gear
+    // during any sustained ramp or jitter. smoothedThrottle_ is already updated
+    // for this frame by smoothThrottleInput() before this runs.
     tipBlocksUpshift_ = false;
-    if (profile_.tipCorrectionEnabled && hadPreviousThrottle_ && dt > 0.0) {
-        throttleGradient_ = throttleDelta / dt * 100.0;  // %/s
-        if (throttleGradient_ > profile_.tipInGradientThreshold ||
-            throttleGradient_ < profile_.tipOutGradientThreshold) {
-            tipBlocksUpshift_ = true;
+    if (profile_.tipCorrectionEnabled && hadPreviousThrottle_ && dt > 0.0 &&
+        previousSmoothedThrottle_ >= 0.0) {
+        throttleGradient_ = (smoothedThrottle_ - previousSmoothedThrottle_) / dt * 100.0;
+        if ((throttleGradient_ > profile_.tipInGradientThreshold ||
+             throttleGradient_ < profile_.tipOutGradientThreshold) &&
+            tipInhibitTimerS_ <= 0.0) {
+            tipInhibitTimerS_ = profile_.tipInhibitWindowS;
         }
     }
     hadPreviousThrottle_ = true;
+    previousSmoothedThrottle_ = smoothedThrottle_;
+    if (tipInhibitTimerS_ > 0.0) {
+        tipBlocksUpshift_ = true;
+        tipInhibitTimerS_ -= dt;
+        if (tipInhibitTimerS_ < 0.0) {
+            tipInhibitTimerS_ = 0.0;
+        }
+    }
 }
 
 bool AutomaticGearbox::isEngineBrakingActive(double throttleFraction, double speedKmh) const {

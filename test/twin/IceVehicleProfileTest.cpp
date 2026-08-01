@@ -47,10 +47,11 @@ TEST(IceVehicleProfile, Zf8hp45FactoryDefaults)
     EXPECT_DOUBLE_EQ(profile.engineBrakingMaxThrottle, 0.01);
     EXPECT_DOUBLE_EQ(profile.engineBrakingMinSpeedKmh, 10.0);
 
-    // Tip-in/tip-out correction
+    // Tip-in/tip-out correction (transient inhibit on the smoothed gradient)
     EXPECT_TRUE(profile.tipCorrectionEnabled);
-    EXPECT_DOUBLE_EQ(profile.tipInGradientThreshold, 10.0);
-    EXPECT_DOUBLE_EQ(profile.tipOutGradientThreshold, -10.0);
+    EXPECT_DOUBLE_EQ(profile.tipInGradientThreshold, 50.0);
+    EXPECT_DOUBLE_EQ(profile.tipOutGradientThreshold, -50.0);
+    EXPECT_DOUBLE_EQ(profile.tipInhibitWindowS, 0.4);
 
     // Separate downshift table
     EXPECT_TRUE(profile.separateDownshiftTableEnabled);
