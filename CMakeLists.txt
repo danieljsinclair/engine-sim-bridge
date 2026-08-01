@@ -125,6 +125,8 @@ set(BRIDGE_SOURCES
     src/input/GearSelectorInput.cpp
     src/input/IgnitionInput.cpp
     src/input/DemoInputProvider.cpp
+    src/input/LiveTelemetryProvider.cpp
+    src/input/CsvTelemetryParser.cpp
 )
 
 # Platform-specific audio hardware and factory
@@ -513,6 +515,7 @@ if(BUILD_BRIDGE_TESTS)
     # Twin input provider tests - tests for VirtualIceInputProvider
     add_executable(twin_input_tests
         test/input/VirtualIceInputProviderTest.cpp
+        test/input/CsvTelemetryParserTest.cpp
     )
     target_include_directories(twin_input_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include

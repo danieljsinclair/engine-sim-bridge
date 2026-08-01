@@ -38,6 +38,7 @@ struct EngineInput {
     int gearAbsolute = -1;          // -1 = use gearDelta logic, 0+ = set this gear directly
     double clutchPressure = -1.0;   // -1 = unchanged, 0.0-1.0 = set clutch pressure
     double vehicleSpeedTargetKmh = -1.0; // -1 = unchanged, for future SpeedTrackingForce
+    double roadSpeedKmh = -1.0;     // actual upstream road speed (CSV/telemetry feed); -1 = not commanded
     int gearSelector = 0;           // GearSelector value for display
     bool gearAutoMode = false;      // true=auto(ZF), false=manual
 
