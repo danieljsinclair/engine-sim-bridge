@@ -34,6 +34,7 @@ struct IceVehicleProfile {
     bool tipCorrectionEnabled = false;
     double tipInGradientThreshold = 10.0;    // %/s positive gradient blocks upshifts
     double tipOutGradientThreshold = -10.0;  // %/s negative gradient blocks upshifts
+    double tipInhibitWindowS = 0.4;          // transient upshift-inhibit after a tip event
     double redlineRpm = 6500.0;
     double idleRpm = 750.0;
     double throttleIdleThreshold = 0.05;     // IDLE → RUNNING transition (5%)
@@ -139,10 +140,14 @@ struct IceVehicleProfile {
         p.engineBrakingMaxThrottle = 0.01;
         p.engineBrakingMinSpeedKmh = 10.0;
 
-        // Tip-in/tip-out correction
+        // Tip-in/tip-out correction: transient inhibit on the SMOOTHED throttle
+        // gradient. Threshold sits above gentle ramps (~20 %/s) and the residual
+        // of sub-percent CAN jitter after smoothing, but below a genuine pedal
+        // stab (~hundreds of %/s); the inhibit decays over tipInhibitWindowS.
         p.tipCorrectionEnabled = true;
-        p.tipInGradientThreshold = 10.0;    // %/s
-        p.tipOutGradientThreshold = -10.0;  // %/s
+        p.tipInGradientThreshold = 50.0;    // %/s
+        p.tipOutGradientThreshold = -50.0;  // %/s
+        p.tipInhibitWindowS = 0.4;          // s
 
         // Engine parameters
         p.redlineRpm = 6500.0;
