@@ -4,6 +4,8 @@
 #include <io/UpstreamSignal.h>
 #include <simulator/GearConventions.h>
 #include <input/DemoVehiclePhysics.h>
+#include <algorithm>
+#include <cmath>
 
 using namespace twin;
 using namespace input;
@@ -534,4 +536,95 @@ TEST_F(VirtualIceTwinTest, EngineStartIsDeterministicAcrossRuns_AC15) {
     // physics catch (RPM is sub-threshold). 3s at 1/60s == 180 frames.
     EXPECT_GE(firstRunningTick, 180) << "Should not catch before the 3s fallback (RPM < threshold)";
     EXPECT_LT(firstRunningTick, kBudget) << "Should not be stuck in CRANKING";
+}
+
+// ============================================================================
+// AC-16 (RED — hypothesis-driven, pending bench confirmation):
+// The engine must SUSTAIN running through the CRANKING->IDLE handoff when the
+// CSV throttle ramps in late (driver hasn't pressed the pedal yet).
+//
+// Failure mode under test: during CRANKING the twin forces throttle=0.6 and the
+// starter on, so the engine RPM rises. The fast-path catch fires at RPM>500
+// (well before a late CSV throttle ramp arrives). At that handoff the twin
+// releases the starter AND swaps the forced 0.6 for the smoothed CSV throttle
+// (~0 if the ramp hasn't started) — the engine is then left with no throttle
+// and no starter, stalls to a stop, and (a real stalled engine needing the
+// starter to restart) cannot recover when the throttle ramp finally arrives.
+// This is the suspected second cause of the live-CSV flakiness; it is NOT
+// covered by the CRANKING->IDLE ==0.0 fix (AC-15).
+//
+// This test runs the twin against a small first-order plant model that captures
+// the essential physics: RPM rises under the starter, runs on throttle once
+// caught, and — critically — latches STOPPED once it sags to ~0, from which
+// throttle alone cannot restart it (only the starter can). The assertion is on
+// the twin's CONTROL keeping the plant alive through the handoff, not on any
+// particular mechanism — so any sensible idle-sustain fix (hold sustain
+// throttle, keep the starter through early IDLE, or delay the catch until the
+// driver demands throttle) turns this GREEN.
+// ============================================================================
+
+TEST_F(VirtualIceTwinTest, EngineSustainsThroughCrankToIdleHandoffWithLateCsvThrottle_AC16) {
+    twin_->setGearSelector(bridge::GearSelector::DRIVE);
+
+    // --- Plant model: engine RPM response + an unrecoverable-from-throttle STOPPED latch.
+    constexpr double CRANK_TARGET_RPM = 800.0;     // starter cranks toward this
+    constexpr double RUNNING_IDLE_RPM = 750.0;
+    constexpr double REDLINE_RPM = 6500.0;
+    constexpr double STOPPED_RPM = 50.0;           // below this -> engine has stopped
+    constexpr double SUSTAIN_THROTTLE = 0.02;      // throttle that holds a running engine
+    constexpr double RPM_TAU_S = 0.15;             // RPM first-order response time
+    double engineRpm = 0.0;
+    bool stopped = true;                            // engine starts stopped (OFF)
+
+    auto stepPlant = [&](double throttleCmd, bool starter, double dt) {
+        double target;
+        if (starter) {
+            target = CRANK_TARGET_RPM;             // cranking raises RPM, un-latches stopped
+            stopped = false;
+        } else if (!stopped && throttleCmd >= SUSTAIN_THROTTLE) {
+            target = RUNNING_IDLE_RPM + throttleCmd * (REDLINE_RPM - RUNNING_IDLE_RPM);
+        } else if (!stopped) {
+            target = 0.0;                          // no throttle, no starter -> decays toward stall
+        } else {
+            target = 0.0;                          // stopped: throttle ALONE cannot restart
+        }
+        const double alpha = 1.0 - std::exp(-dt / RPM_TAU_S);
+        engineRpm += (target - engineRpm) * alpha;
+        if (engineRpm < STOPPED_RPM) stopped = true;
+        return engineRpm;
+    };
+
+    // --- Drive: CSV throttle is 0 until 3.5s (after the catch), then ramps in.
+    const double dt = 1.0 / 60.0;
+    double csvThrottle = 0.0;
+    bool reachedRunning = false;
+    int runningAliveFrames = 0;  // RUNNING frames where the engine is still alive (>500 RPM)
+
+    for (int frame = 0; frame < static_cast<int>(8.0 / dt); ++frame) {
+        const double t = frame * dt;
+        if (t > 3.5) csvThrottle = std::min(0.5, csvThrottle + dt * 0.5);  // 0 -> 0.5 over 1s
+
+        UpstreamSignal sig = makeValidSignal(csvThrottle, 0.0);
+        twin_->setEngineRpmFeedback(engineRpm);
+        const auto out = twin_->update(dt, sig);
+
+        stepPlant(out.throttle, out.starterMotor, dt);
+
+        if (twin_->getState() == TwinState::RUNNING) {
+            reachedRunning = true;
+            if (engineRpm > 500.0) ++runningAliveFrames;  // twin RUNNING AND engine alive
+        }
+    }
+
+    EXPECT_TRUE(reachedRunning)
+        << "Engine should reach RUNNING once the CSV throttle ramp arrives";
+
+    // SUSTAIN: once RUNNING, the engine must stay alive (RPM > 500) for a real
+    // window (>= 2 s), not stall through the CRANKING->IDLE handoff. Currently
+    // FAILS: the catch drops the forced throttle + releases the starter before
+    // the late CSV ramp, the plant stalls and latches STOPPED, and the later
+    // RUNNING transition finds a dead engine (throttle can't restart it).
+    EXPECT_GE(runningAliveFrames, static_cast<int>(2.0 / dt))
+        << "Engine must sustain running through the CRANKING->IDLE handoff even "
+        << "when the CSV throttle ramps in late";
 }
