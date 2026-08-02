@@ -24,6 +24,7 @@
 
 #include <gtest/gtest.h>
 #include <sstream>
+#include <vector>
 
 namespace {
 
@@ -296,6 +297,43 @@ TEST(LiveTelemetryStreamTest, EngineStartsFromCsvWhenRpmPlateausBelowThreshold) 
     EXPECT_TRUE(starterFired) << "Twin must crank when valid CSV telemetry arrives";
     EXPECT_TRUE(starterReleased)
         << "Engine must start from CSV via the 3s fallback even when cranking RPM < threshold";
+}
+
+// T8: EVERY CSV data row is consumed and surfaces — no row is dropped.
+//
+// Regression guard for a row-dropping bug in tryReadNextRow: the 2nd+ call
+// getline'd the next data row but then ran it through parseHeader, which
+// resets the header (header_ = {}) and returns false on a data row (it has no
+// time-column name). So row #1 surfaced and EVERY later row was consumed-and-
+// discarded, currentSample_ frozen at row #1 for the whole run.
+//
+// The gear_selector column is the clean row-varying observable (echoed in
+// EngineInput.gearSelector, NOT masked by the CRANKING throttle). A 4-row CSV
+// with selectors P,R,N,D must surface all four in order, one per pump —
+// proving each row is consumed.
+TEST(LiveTelemetryStreamTest, EveryCsvRowIsConsumedAndSurfaces) {
+    StreamHarness h(
+        "time_s,throttle_pct,road_speed_kmh,gear_selector\n"
+        "0.0,10,5,P\n"
+        "1.0,20,10,R\n"
+        "2.0,30,15,N\n"
+        "3.0,40,20,D\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    const int kP = static_cast<int>(bridge::GearSelector::PARK);
+    const int kR = static_cast<int>(bridge::GearSelector::REVERSE);
+    const int kN = static_cast<int>(bridge::GearSelector::NEUTRAL);
+    const int kD = static_cast<int>(bridge::GearSelector::DRIVE);
+
+    std::vector<int> seen;
+    seen.reserve(4);
+    for (int i = 0; i < 4; ++i) {
+        h.provider->provideFeedback(EngineSimStats{});
+        seen.push_back(h.provider->OnUpdateSimulation(0.05).gearSelector);
+    }
+
+    EXPECT_EQ(seen, (std::vector<int>{kP, kR, kN, kD}))
+        << "Each CSV row must surface in order (was: row #1 frozen, later rows dropped)";
 }
 
 }  // namespace
