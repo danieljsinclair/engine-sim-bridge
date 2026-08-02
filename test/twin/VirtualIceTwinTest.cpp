@@ -636,3 +636,54 @@ TEST_F(VirtualIceTwinTest, EngineSustainsThroughCrankToIdleHandoffWithLateCsvThr
         << "Engine must sustain running through the CRANKING->IDLE handoff even "
         << "when the CSV throttle ramps in late";
 }
+
+// ============================================================================
+// AC-17: Gearbox logger survives reconfigureProfile (no silent wipe)
+// ============================================================================
+// Bug: VirtualIceTwin::reconfigureProfile rebuilds the gearbox and calls
+// setLogger(nullptr), which drops any logger attached via setGearboxLogger().
+// This caused --gearbox-log to produce an empty CSV even though the gearbox
+// ran and shifted correctly.
+//
+// Fix: preserve the logger pointer across the gearbox reconstruction.
+// ============================================================================
+
+TEST_F(VirtualIceTwinTest, LoggerSurvivesReconfigureProfile_AC17) {
+    // Local mock: records every entry passed to log().
+    class MockGearboxLogger : public IGearboxLogger {
+    public:
+        std::vector<GearboxLogEntry> entries;
+        void log(const GearboxLogEntry& entry) override {
+            entries.push_back(entry);
+        }
+    };
+
+    MockGearboxLogger mockLogger;
+    twin_->setGearboxLogger(&mockLogger);
+
+    // Advance to RUNNING so gearbox_->update() is called every frame,
+    // which invokes logShiftState() when a logger is attached.
+    advanceThroughCranking();
+    auto sig = makeValidSignal(0.1, 0.0);
+    twin_->update(0.016, sig);  // IDLE -> RUNNING
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    // Run frames to generate baseline log entries
+    for (int i = 0; i < 5; ++i) {
+        twin_->update(0.016, sig);
+    }
+    const size_t entriesBefore = mockLogger.entries.size();
+    ASSERT_GT(entriesBefore, 0u) << "Logger must receive entries before reconfigure";
+
+    // Reconfigure the profile — this is where the bug wiped the logger.
+    // Use a different gear ratio set to force a real reconstruction.
+    twin_->reconfigureProfile({3.0, 2.0, 1.5}, 3.42, 0.3);
+
+    // Resume running; selector is still DRIVE, state is still RUNNING
+    for (int i = 0; i < 5; ++i) {
+        twin_->update(0.016, sig);
+    }
+
+    EXPECT_GT(mockLogger.entries.size(), entriesBefore)
+        << "Logger must survive reconfigureProfile — entries must continue after gearbox rebuild";
+}

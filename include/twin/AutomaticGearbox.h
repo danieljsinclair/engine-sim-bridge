@@ -29,6 +29,7 @@ public:
     bool isInKickdown() const;
 
     void setLogger(IGearboxLogger* logger) { logger_ = logger; }
+    IGearboxLogger* getLogger() const { return logger_; }
     void setTwinContext(int twinState, double clutchPressure, double speedFeedbackKmh, double rpmFeedback) {
         twinState_ = twinState;
         clutchPressureFeedback_ = clutchPressure;
