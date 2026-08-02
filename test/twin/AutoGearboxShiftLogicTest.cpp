@@ -1,11 +1,13 @@
 // AutoGearboxShiftLogicTest.cpp
-// Acceptance tests for the Virtual ICE Twin automatic shift logic spec:
-//   "upshift before redline or when drivetrain torque is low; downshift on
-//    kickdown (high throttle) or high drivetrain torque; throttle biases the
-//    decision; hysteresis prevents hunting; neutral holds gear."
+// Acceptance tests for the declarative Virtual ICE Twin automatic shift logic:
+//   the shift tables are the sole authority (upshift when speed exceeds the
+//   upshift table for the current gear/throttle; downshift when it falls below
+//   the separate downshift table), the only override is kickdown, hysteresis is
+//   by construction so the box never hunts, and neutral/park hold gear.
 //
-// Each AC is provable from inputs (speed/RPM/torque/throttle/selector) alone.
-// These exercise the torque- and selector-aware update() overload.
+// Drivetrain torque is accepted by the selector-aware update() for closed-loop
+// parity but does NOT influence the decision — only the tables and kickdown do.
+// Each AC is provable from inputs (speed/RPM/throttle/selector) alone.
 
 #include <gtest/gtest.h>
 #include <twin/AutomaticGearbox.h>
@@ -131,8 +133,11 @@ TEST_F(AutoGearboxShiftLogicTest, AC3_DownshiftsOnKickdownHighThrottle) {
         << "High throttle (kickdown) must downshift to a lower gear";
 }
 
-// AC4: High drivetrain torque (load) -> downshifts even without a throttle spike.
-TEST_F(AutoGearboxShiftLogicTest, AC4_DownshiftsOnHighDrivetrainTorque) {
+// AC4: Drivetrain torque is NOT a shift authority. The declarative gearbox
+// shifts only from the tables and kickdown, so sustained high load at unchanged
+// light throttle and steady speed must NOT pull a downshift. (The old
+// torque-driven downshift is gone — it fought the tables and caused hunting.)
+TEST_F(AutoGearboxShiftLogicTest, AC4_HighDrivetrainTorqueAlone_DoesNotDownshift) {
     AutomaticGearbox gb(profile);
     gb.setGearSelector(bridge::GearSelector::DRIVE);
 
@@ -142,15 +147,15 @@ TEST_F(AutoGearboxShiftLogicTest, AC4_DownshiftsOnHighDrivetrainTorque) {
     int cruiseGear = gb.getCurrentGear();
     ASSERT_GE(cruiseGear, 3);
 
-    // Clear interval timers.
+    // Clear dwell.
     for (int i = 0; i < 40; ++i) gb.update(0.1, 70.0, 0.15, 40.0);
 
-    // High load suddenly applied (e.g. towing/grade) at unchanged light throttle.
-    // Sustained high torque should pull a downshift.
+    // High load suddenly applied (e.g. towing/grade) at unchanged light throttle
+    // and steady speed: torque must not move the gear.
     bool downshifted = runUntil(gb, 0.5, 40, 70.0, 0.15, /*torqueNm*/ 400.0,
         [&](AutomaticGearbox& g) { return g.getCurrentGear() < cruiseGear; });
-    EXPECT_TRUE(downshifted)
-        << "Sustained high drivetrain torque (load) must downshift";
+    EXPECT_FALSE(downshifted)
+        << "Torque alone must not downshift — only the tables and kickdown decide";
 }
 
 // AC5: Hysteresis — at the threshold the box does not oscillate on every step.
@@ -412,9 +417,11 @@ TEST_F(AutoGearboxShiftLogicTest, LogShiftState_NoOpWhenNullLogger) {
     EXPECT_GE(gb.getCurrentGear(), 1);  // behavior intact
 }
 
-// Torque-downshift interval gate: after a kickdown, immediate high torque
-// must NOT trigger another downshift until the interval elapses
-TEST_F(AutoGearboxShiftLogicTest, TorqueDownshift_BlockedByIntervalAfterKickdown) {
+// After a kickdown the box will not drop into a gear that would over-rev the
+// engine, even under sustained high load. This is the RPM safety guard
+// (findSafeGear), which the declarative model retains; torque itself is not a
+// shift input.
+TEST_F(AutoGearboxShiftLogicTest, Kickdown_HoldsWhenNoSafeLowerGear) {
     IceVehicleProfile custom;
     custom.gearRatios = {4.714, 3.143, 2.106, 1.667, 1.285, 1.000, 0.839, 0.667};
     custom.diffRatio = 3.15;
@@ -458,17 +465,16 @@ TEST_F(AutoGearboxShiftLogicTest, TorqueDownshift_BlockedByIntervalAfterKickdown
     for (int i = 0; i < 10; ++i) gb.update(0.1, 50.0, 0.4, 50.0);
     ASSERT_EQ(gb.getCurrentGear(), 3);
 
-    // Clear shift interval timers
+    // Clear dwell
     for (int i = 0; i < 40; ++i) gb.update(0.1, 50.0, 0.4, 50.0);
 
-    // Kickdown: floor the throttle to force a 3→2 downshift.
+    // Kickdown: floor the throttle to force a 3->2 downshift.
     gb.update(0.05, 50.0, 0.98, 250.0);
     int gearAfterKickdown = gb.getCurrentGear();
     ASSERT_LT(gearAfterKickdown, 3) << "Kickdown must pull a downshift from 3rd";
 
-    // Advance past downshiftMinIntervalS — but no safe lower gear exists
-    // (gear 1 at 50 km/h would be 6154 RPM > 5850 = 90% redline), so the
-    // box correctly holds 2nd. This proves the safety guard, not just the gate.
+    // Advance time under high load. No safe lower gear exists (gear 1 at 50 km/h
+    // would be 6154 RPM > 5850 = 90% redline), so the box correctly holds 2nd.
     for (int i = 0; i < 15; ++i) gb.update(0.1, 50.0, 0.4, 400.0);
     EXPECT_EQ(gb.getCurrentGear(), gearAfterKickdown)
         << "No safe lower gear: box holds 2nd (gear 1 would exceed 90% redline)";

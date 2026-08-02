@@ -7,19 +7,27 @@
 
 namespace twin {
 
+// A declarative automatic gearbox modelled on a 1960s hydraulic unit: a speed
+// governor, a throttle valve and a spring-detented shift valve. The shift
+// tables are the sole authority — given speed and throttle they interpolate the
+// next-gear threshold — and the separate downshift table provides hysteresis by
+// construction (its thresholds sit below the upshift thresholds for every gear
+// and throttle, so a single speed can never satisfy both and hunting is
+// impossible). The only override is kickdown: a sudden large throttle increase
+// forces one RPM-safe downshift. A short dwell after any shift suppresses
+// sub-frame oscillation; kickdown is exempt.
 class AutomaticGearbox {
 public:
     explicit AutomaticGearbox(const IceVehicleProfile& profile);
 
-    // Legacy 3-arg update (throttle/speed only). Equivalent to torque-aware
+    // Legacy 3-arg update (throttle/speed only). Equivalent to the torque-aware
     // update with drivetrainTorqueNm = 0 and selector = DRIVE.
     void update(double dt, double speedKmh, double throttleFraction);
 
-    // Torque- and selector-aware update per the Virtual ICE Twin shift spec:
-    // upshift when approaching redline or under low drivetrain load; downshift
-    // on kickdown (high throttle) or high drivetrain torque. Throttle biases
-    // the decision; hysteresis prevents hunting. In NEUTRAL/PARK/REVERSE no
-    // shift is requested and the current gear holds.
+    // Torque- and selector-aware update. Torque is accepted for API symmetry
+    // with the closed-loop twin but does not influence the declarative shift
+    // decision — the tables and kickdown fully specify behaviour. In
+    // NEUTRAL/PARK/REVERSE no shift is requested and the current gear holds.
     void update(double dt, double speedKmh, double throttleFraction,
                 double drivetrainTorqueNm);
 
@@ -44,6 +52,13 @@ public:
     int getLastShiftDirection() const { return lastShiftDirection_; }
 
 private:
+    // A single frame's declarative shift verdict.
+    struct ShiftDecision {
+        int gear;        // resolved target gear
+        int direction;   // +1 upshift, -1 downshift, 0 hold
+        bool kickdown;   // true when the shift was a kickdown override
+    };
+
     const IceVehicleProfile& profile_;
     int currentGear_ = 1;
     int targetGear_ = 1;
@@ -51,16 +66,18 @@ private:
     double timeSinceLastShiftS_ = 0.0;
     bool hasShiftedBefore_ = false;
     int lastShiftDirection_ = 0;
+
+    // Throttle input conditioning: a one-pole low-pass rejects sub-percent CAN
+    // jitter so the table input is stable, and a rolling delta within the
+    // kickdown window detects sudden pedal stabs.
     double smoothedThrottle_ = -1.0;
     double previousThrottle_ = 0.0;
     double throttleDeltaHistory_ = 0.0;
     double throttleDeltaTimeS_ = 0.0;
     bool kickdownActive_ = false;
-    double throttleGradient_ = 0.0;       // %/s, for tip-in/tip-out detection
-    bool tipBlocksUpshift_ = false;       // true while the transient inhibit window is active
-    bool hadPreviousThrottle_ = false;    // skip gradient on first frame
-    double previousSmoothedThrottle_ = -1.0;  // prior frame's smoothed throttle (tip gradient)
-    double tipInhibitTimerS_ = 0.0;       // remaining upshift-inhibit time after a tip event
+
+    // Stored for parity with the closed-loop twin / logger; not used to shift.
+    double drivetrainTorqueNm_ = 0.0;
 
     IGearboxLogger* logger_ = nullptr;
     int twinState_ = 0;
@@ -69,34 +86,27 @@ private:
     double rpmFeedback_ = 0.0;
     uint64_t frame_ = 0;
 
-    // Torque-driven shift logic state (Virtual ICE Twin spec).
     bridge::GearSelector selector_ = bridge::GearSelector::DRIVE;
-    double drivetrainTorqueNm_ = 0.0;        // last commanded drivetrain torque
-    double highLoadTorqueThresholdNm_ = 300.0;  // above this = high load (downshift bias)
-    double lowLoadTorqueThresholdNm_ = 120.0;   // below this = low load (upshift bias)
-    int torqueLoadBandStableFrames_ = 0;     // sustained-load frames before a torque-driven shift
 
+    // Table lookups (pure interpolation over the profile shift tables).
     double getShiftSpeed(int fromGear, int toGear, double throttle) const;
     double getDownshiftSpeed(int fromGear, int toGear, double throttle) const;
     double getEngineRpm(double speedKmh, int gear) const;
-    bool shouldKickdown(double throttleFraction, double dt) const;
+
+    // Declarative shift decision helpers.
+    bool shouldKickdown(double throttleFraction) const;
     int findSafeGear(double speedKmh, int maxDownshifts) const;
+    bool speedExceedsUpshift(double speedKmh, int gear) const;
+    bool speedBelowDownshift(double speedKmh, int gear) const;
+    ShiftDecision decideGear(double speedKmh) const;
+    void applyShift(const ShiftDecision& decision);
+
     // True when the selector is in a forward position that allows shifting.
     bool isShifterInDrive() const;
 
-    // Throttle pre-processing (smoothing + delta tracking + tip correction).
+    // Throttle pre-processing (smoothing + kickdown-delta tracking).
     void smoothThrottleInput(double throttleFraction, double dt);
     void trackThrottleDelta(double throttleFraction, double dt);
-    void applyTipCorrection(double dt);
-
-    // Engine-brake gate: true when coasting conditions block upshifts only.
-    bool isEngineBrakingActive(double throttleFraction, double speedKmh) const;
-
-    // Shift decision passes — each returns true if a shift was committed.
-    bool tryKickdown(double speedKmh);
-    bool tryTorqueDownshift(double speedKmh);
-    bool trySpeedUpshift(double speedKmh);
-    bool trySpeedDownshift(double speedKmh);
 
     // Logger snapshot: populate and emit a GearboxLogEntry when logger_ is set.
     void logShiftState(double throttleFraction, double dt, double speedKmh);
