@@ -172,6 +172,13 @@ void LiveTelemetryProvider::provideFeedback(const EngineSimStats& stats) {
     }
 }
 
+void LiveTelemetryProvider::reconfigureProfile(const std::vector<double>& gearRatios,
+                                               double diffRatio, double tireRadiusM) {
+    if (twinProvider_) {
+        twinProvider_->reconfigureProfile(gearRatios, diffRatio, tireRadiusM);
+    }
+}
+
 UpstreamSignal LiveTelemetryProvider::getCurrentSignal() const {
     return currentSignal_.load(std::memory_order_seq_cst);
 }

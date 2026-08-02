@@ -33,6 +33,7 @@
 #include <istream>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace input {
 
@@ -76,6 +77,13 @@ public:
 
     /// Forward simulator RPM feedback to the twin for cranking transition.
     void provideFeedback(const EngineSimStats& stats) override;
+
+    /// Reconfigure the twin's gearbox to match the loaded engine preset's
+    /// transmission ratios. Forwards to the owned VirtualIceTwin so the live
+    /// CSV-driven box shifts against the actual engine (e.g. a C63) instead of
+    /// the default ZF profile. Mirrors ReplayTelemetryProvider/DemoInputProvider.
+    void reconfigureProfile(const std::vector<double>& gearRatios,
+                            double diffRatio, double tireRadiusM);
 
     /// Get the current upstream signal (for diagnostics/debugging).
     UpstreamSignal getCurrentSignal() const;
