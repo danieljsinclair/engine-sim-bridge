@@ -74,6 +74,7 @@ namespace EngineSimDefaults {
     // Twin state machine thresholds
     constexpr double  TELEMETRY_TIMEOUT_S         = 5.0;   // Seconds without valid telemetry before OFF transition
     constexpr double  CRANKING_THROTTLE           = 0.6;   // Throttle fraction during cranking
+    constexpr double  IDLE_SUSTAIN_THROTTLE       = 0.05;  // Minimum throttle to sustain combustion at idle; floor applied in IDLE so the engine never coasts through the Stopped latch at the CRANKING->IDLE handoff before the driver throttle arrives
     constexpr double  STANDSTILL_SPEED_MS         = 0.001; // Below this speed (m/s), vehicle is considered stopped
 
     // Display thresholds

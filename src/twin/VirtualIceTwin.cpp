@@ -1,3 +1,5 @@
+#include <algorithm>
+
 #include <twin/VirtualIceTwin.h>
 #include <simulator/GearConventions.h>
 #include <simulator/EngineSimTypes.h>
@@ -128,7 +130,17 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
         }
 
         case TwinState::IDLE:
-            output.throttle = throttleSmoother_.getCurrentValue();
+            // Idle-sustain floor: hold a minimum throttle through IDLE so the engine
+            // never coasts through the engine-sim's Stopped latch during the
+            // CRANKING->IDLE handoff (the catch releases the forced cranking throttle
+            // + starter simultaneously; without a floor the engine decays to Stopped
+            // before the driver's throttle arrives, and throttle alone can't restart
+            // it). Real engines need idle throttle to sustain combustion; the prior
+            // "idles on physics alone" model stalled at the handoff. The IDLE->RUNNING
+            // transition is gated on the raw driver signal, so this floor does not
+            // false-trigger RUNNING.
+            output.throttle = std::max(throttleSmoother_.getCurrentValue(),
+                                       EngineSimDefaults::IDLE_SUSTAIN_THROTTLE);
             output.ignition = true;
             output.gear = static_cast<int>(bridge::BridgeGear::NEUTRAL);
             clutchPressure_ = 0.0;
