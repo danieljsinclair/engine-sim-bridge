@@ -270,4 +270,32 @@ TEST(LiveTelemetryStreamTest, GearSelectorColumnForwardedAndDelegatesSafe) {
     EXPECT_TRUE(h.provider->IsConnected());
 }
 
+// T7: deterministic engine start from CSV when cranking RPM plateaus below the
+// catch threshold — the failing bench condition. Real-time CSV pacing + the
+// 1-tick feedback lag mean the cranking RPM fed back to the twin frequently
+// stays below the 500 RPM fast-path threshold. The twin's 3s cranking fallback
+// MUST still release the starter so the engine starts, deterministically.
+TEST(LiveTelemetryStreamTest, EngineStartsFromCsvWhenRpmPlateausBelowThreshold) {
+    StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,50,5\n");
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setGearSelector(kDrive);
+
+    // Sub-threshold RPM feedback every tick — the closed loop never crosses the
+    // 500 RPM fast-path catch. dt=0.05s, so the 3s fallback lands at tick 60.
+    bool starterFired = false;
+    bool starterReleased = false;
+    for (int i = 0; i < 80 && !starterReleased; ++i) {
+        EngineSimStats stats;
+        stats.currentRPM = 250.0;  // plateau below the 500 RPM catch threshold
+        h.provider->provideFeedback(stats);
+        bool starter = h.provider->OnUpdateSimulation(0.05).starterButton;
+        if (starter) starterFired = true;
+        else if (starterFired) starterReleased = true;
+    }
+
+    EXPECT_TRUE(starterFired) << "Twin must crank when valid CSV telemetry arrives";
+    EXPECT_TRUE(starterReleased)
+        << "Engine must start from CSV via the 3s fallback even when cranking RPM < threshold";
+}
+
 }  // namespace

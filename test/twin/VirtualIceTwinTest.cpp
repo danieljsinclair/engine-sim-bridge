@@ -457,3 +457,81 @@ TEST_F(VirtualIceTwinTest, GentleAcceleration_20PercentThrottle_ShiftsToGear2) {
         << "At 20% throttle with DemoVehiclePhysics, gearbox should shift to gear 2 within 60 seconds. "
         << "Final speed: " << physics.getSpeedKmh() << " kph";
 }
+
+// ============================================================================
+// AC-15: Deterministic engine start from CSV-style input
+//
+// The CSV->twin path paces one telemetry row per sim frame in real-time, and
+// the engine-sim's cranking RPM is fed back one tick in arrears. Whether the
+// feedback RPM crosses the 500 RPM catch threshold depends on closed-loop
+// timing jitter (tick alignment, real-time pacing), so in ~3/4 of bench runs
+// the cranking RPM plateaus BELOW the threshold and the engine never "starts".
+//
+// The twin MUST still reach IDLE deterministically in that condition: the
+// cranking state has a time-based fallback (CRANK_FALLBACK_DURATION_S) that
+// releases the starter after a fixed cranking duration regardless of the RPM
+// feedback value. Same input frames -> same outcome every run.
+// ============================================================================
+
+// Models the failing bench condition: cranking RPM plateaus below the catch
+// threshold. The engine MUST still leave CRANKING via the time fallback.
+TEST_F(VirtualIceTwinTest, CrankingReachesIdleViaTimeFallbackWhenRpmPlateausLow_AC15) {
+    auto sig = makeValidSignal(0.6, 0.0);
+    twin_->update(0.016, sig);  // OFF -> CRANKING
+    ASSERT_EQ(twin_->getState(), TwinState::CRANKING);
+
+    // Sub-threshold RPM feedback (250 RPM) — the engine is spinning under the
+    // starter but the fast-path catch (>500 RPM) never fires. Feed 4s of frames
+    // (well past the 3s fallback) and assert the starter releases to IDLE.
+    const double dt = 1.0 / 60.0;
+    const int kFourSecondsOfFrames = 240;
+    bool starterReleased = false;
+    for (int i = 0; i < kFourSecondsOfFrames; ++i) {
+        twin_->setEngineRpmFeedback(250.0);  // plateau below threshold
+        auto output = twin_->update(dt, sig);
+        if (!output.starterMotor) { starterReleased = true; break; }
+    }
+
+    EXPECT_TRUE(starterReleased)
+        << "Sub-threshold cranking RPM must still catch via the 3s time fallback";
+    EXPECT_NE(twin_->getState(), TwinState::CRANKING)
+        << "Twin must leave CRANKING after the fallback duration even when RPM stays low";
+}
+
+// Determinism: the same CSV-style input frames must reach RUNNING on the same
+// tick every run. Encodes the "run it 5x, same outcome" guarantee as a unit.
+TEST_F(VirtualIceTwinTest, EngineStartIsDeterministicAcrossRuns_AC15) {
+    // Scenario: OFF -> CRANKING (sub-threshold RPM plateau) -> IDLE via fallback
+    // -> DRIVE + throttle -> RUNNING. Returns the tick RUNNING is first reached,
+    // or -1 if it never starts within budget.
+    auto runOnce = [this](int budgetTicks) {
+        // Fresh twin per run (mirrors a clean process/bench invocation).
+        twin_ = std::make_unique<VirtualIceTwin>(profile_);
+        twin_->setGearSelector(bridge::GearSelector::DRIVE);
+
+        UpstreamSignal sig = makeValidSignal(0.5, 0.0);  // throttle > idle threshold
+        const double dt = 1.0 / 60.0;
+
+        for (int i = 0; i < budgetTicks; ++i) {
+            twin_->setEngineRpmFeedback(250.0);  // plateau below catch threshold
+            twin_->update(dt, sig);
+            if (twin_->getState() == TwinState::RUNNING) return i;
+        }
+        return -1;
+    };
+
+    const int kBudget = 300;
+    int firstRunningTick = runOnce(kBudget);
+    ASSERT_GE(firstRunningTick, 0) << "Engine must start (reach RUNNING) from CSV-style input";
+
+    // Same input -> same transition tick, every run (5x).
+    for (int run = 1; run <= 5; ++run) {
+        EXPECT_EQ(runOnce(kBudget), firstRunningTick)
+            << "Engine start must be deterministic: same tick on run " << run;
+    }
+
+    // The start must be via the ~3s time fallback, not stuck and not an instant
+    // physics catch (RPM is sub-threshold). 3s at 1/60s == 180 frames.
+    EXPECT_GE(firstRunningTick, 180) << "Should not catch before the 3s fallback (RPM < threshold)";
+    EXPECT_LT(firstRunningTick, kBudget) << "Should not be stuck in CRANKING";
+}

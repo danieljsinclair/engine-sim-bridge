@@ -101,12 +101,24 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             output.starterMotor = true;
             output.ignition = true;
 
-            // CRANKING->IDLE: engine catches at relatively low RPM
+            // CRANKING -> IDLE: the engine catches via EITHER
+            //   (a) the physics fast-path — fed-back RPM exceeds the catch
+            //       threshold (the closed loop confirms combustion is sustained), OR
+            //   (b) the deterministic time fallback — the starter has cranked for
+            //       CRANK_FALLBACK_DURATION_S of sim-time. (b) is decoupled from the
+            //       RPM value on purpose: with live CSV pacing (one row per frame,
+            //       real-time) the fed-back cranking RPM is one tick in arrears and
+            //       frequently plateaus below the threshold, so gating the fallback
+            //       on the RPM reading (the old `engineRpmFeedback_ == 0.0` guard)
+            //       left the twin stuck in CRANKING whenever the plateau was
+            //       non-zero-but-low. The time fallback guarantees a deterministic
+            //       start: same input frames -> same outcome every run.
             const double CRANK_IDLE_RPM_THRESHOLD = 500.0;
             const double CRANK_FALLBACK_DURATION_S = 3.0;
-            bool rpmCaught = engineRpmFeedback_ > CRANK_IDLE_RPM_THRESHOLD;
+            const bool rpmCaught = engineRpmFeedback_ > CRANK_IDLE_RPM_THRESHOLD;
 
-            if (bool timerExpired = (engineRpmFeedback_ == 0.0) && (crankingTimerS_ >= CRANK_FALLBACK_DURATION_S); rpmCaught || timerExpired) {
+            if (const bool fallbackExpired = crankingTimerS_ >= CRANK_FALLBACK_DURATION_S;
+                rpmCaught || fallbackExpired) {
                 state_ = TwinState::IDLE;
                 output.starterMotor = false;
             }
