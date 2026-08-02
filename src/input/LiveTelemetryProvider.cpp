@@ -4,6 +4,7 @@
 #include "common/PresetExceptions.h"
 
 #include <cctype>
+#include <string_view>
 
 namespace input {
 
@@ -39,6 +40,7 @@ bool LiveTelemetryProvider::Initialize() {
     if (stream_) {
         hasSample_ = false;
         eofSeen_ = false;
+        headerParsed_ = false;
         elapsedS_ = 0.0;
     }
 
@@ -180,21 +182,34 @@ UpstreamSignal LiveTelemetryProvider::getCurrentSignal() const {
 
 bool LiveTelemetryProvider::tryReadNextRow() {
     if (eofSeen_ || !stream_) return false;
-    if (!stream_->good()) { eofSeen_ = true; return false; }
 
-    std::string line;
-    if (!std::getline(*stream_, line)) { eofSeen_ = true; return false; }
-
-    // Skip empty/whitespace-only lines
     const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
-    if (std::find_if(line.begin(), line.end(), notSpace) == line.end()) return false;
+    const auto isBlank = [&](std::string_view s) {
+        return std::find_if(s.begin(), s.end(), notSpace) == s.end();
+    };
 
-    // First non-empty line is the header (parseHeader trims internally)
-    if (!csvParser_.parseHeader(line, lastError_)) return false;
+    // Parse the header once (the first non-blank line). Previously every call
+    // ran its first getline'd line through parseHeader, which resets the header
+    // (header_ = {}) and returns false on a data row (no time-column name) — so
+    // row #1 surfaced and EVERY later row was consumed-and-discarded, leaving
+    // currentSample_ frozen at row #1 for the whole run.
+    if (!headerParsed_) {
+        std::string line;
+        while (std::getline(*stream_, line)) {
+            if (isBlank(line)) continue;
+            if (csvParser_.parseHeader(line, lastError_)) {
+                headerParsed_ = true;
+                break;
+            }
+            return false;  // first non-blank line was not a usable header
+        }
+        if (!headerParsed_) { eofSeen_ = true; return false; }  // no header before EOF
+    }
 
-    // Now read the first data row
+    // Read exactly one data row and surface it (one row per call).
+    std::string line;
     while (std::getline(*stream_, line)) {
-        if (std::find_if(line.begin(), line.end(), notSpace) == line.end()) continue;
+        if (isBlank(line)) continue;
         CsvSample sample;
         std::string parseError;
         if (double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
@@ -203,10 +218,10 @@ bool LiveTelemetryProvider::tryReadNextRow() {
             hasSample_ = true;
             return true;
         }
-        return false;  // malformed first data row
+        return false;  // malformed data row
     }
     eofSeen_ = true;
-    return false;
+    return false;  // EOF — no more rows
 }
 
 bridge::GearSelector LiveTelemetryProvider::csvGearSelector() const {

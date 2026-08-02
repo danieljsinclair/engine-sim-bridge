@@ -112,6 +112,7 @@ private:
     bool hasSample_ = false;
     double elapsedS_ = 0.0;
     bool eofSeen_ = false;
+    bool headerParsed_ = false;  // header parsed once; later calls read data rows only
 };
 
 } // namespace input
