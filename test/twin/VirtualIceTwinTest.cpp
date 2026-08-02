@@ -492,18 +492,22 @@ TEST_F(VirtualIceTwinTest, CrankingReachesIdleViaTimeFallbackWhenRpmPlateausLow_
 
     // Sub-threshold RPM feedback (250 RPM) — the engine is spinning under the
     // starter but the fast-path catch (>500 RPM) never fires. Feed 4s of frames
-    // (well past the 3s fallback) and assert the starter releases to IDLE.
+    // (well past the 3s fallback) and assert the twin reaches IDLE via the time
+    // fallback. Detection is on the STATE (reaching IDLE), not the starter
+    // signal: since AC18 the twin emits starterMotor as a one-tick edge, so the
+    // starter is not held during CRANKING and its level no longer marks the
+    // CRANKING->IDLE transition.
     const double dt = 1.0 / 60.0;
     const int kFourSecondsOfFrames = 240;
-    bool starterReleased = false;
+    bool reachedIdle = false;
     for (int i = 0; i < kFourSecondsOfFrames; ++i) {
         twin_->setEngineRpmFeedback(250.0);  // plateau below threshold
-        auto output = twin_->update(dt, sig);
-        if (!output.starterMotor) { starterReleased = true; break; }
+        twin_->update(dt, sig);
+        if (twin_->getState() == TwinState::IDLE) { reachedIdle = true; break; }
     }
 
-    EXPECT_TRUE(starterReleased)
-        << "Sub-threshold cranking RPM must still catch via the 3s time fallback";
+    EXPECT_TRUE(reachedIdle)
+        << "Sub-threshold cranking RPM must still reach IDLE via the 3s time fallback";
     EXPECT_NE(twin_->getState(), TwinState::CRANKING)
         << "Twin must leave CRANKING after the fallback duration even when RPM stays low";
 }
@@ -635,6 +639,52 @@ TEST_F(VirtualIceTwinTest, EngineSustainsThroughCrankToIdleHandoffWithLateCsvThr
     EXPECT_GE(runningAliveFrames, static_cast<int>(2.0 / dt))
         << "Engine must sustain running through the CRANKING->IDLE handoff even "
         << "when the CSV throttle ramps in late";
+}
+
+// ============================================================================
+// AC-18: the twin must emit starterMotor as a ONE-TICK EDGE on OFF->CRANKING,
+// not hold it high through CRANKING.
+//
+// Why: the bridge's CrankingController::engageStarter is a momentary toggle --
+// a held starterButton=true while the engine is Cranking FORCES the phase back
+// to Stopped and cuts the starter (CrankingController.cpp:27-31, pinned as spec
+// by CrankingControllerTests EngageStarter_FromCranking_ReturnsStoppedDecision).
+// The keyboard path honours this edge contract (EngineInputTarget consumes the
+// button after one read). The twin MUST do the same: VirtualIceInputProvider
+// maps output.starterMotor straight to engineInput.starterButton with no edge
+// detection, so holding starterMotor=true for the whole CRANKING state re-toggles
+// engageStarter every tick. That structurally disables the fast-path catch
+// (engageStarter's Stopped case calls reset() on every Stopped->Cranking, so the
+// 10-tick exhaustFlowBaseline never accumulates) and is the root cause of the
+// Stopped<->Cranking oscillation seen in every bench run. The bridge's step()
+// already owns cranking duration via its own tick counter, so a held starter is
+// redundant for engagement and only feeds the harmful toggle.
+// ============================================================================
+
+TEST_F(VirtualIceTwinTest, CrankingEmitsStarterAsOneTickEdgeNotHeld_AC18) {
+    // OFF -> CRANKING: the transition tick carries the starter edge (the request
+    // to begin cranking). Restated here to pin the edge contract the loop below
+    // depends on (also covered by AC11_1).
+    auto sig = makeValidSignal(0.6, 0.0);
+    auto first = twin_->update(0.016, sig);
+    ASSERT_EQ(twin_->getState(), TwinState::CRANKING);
+    EXPECT_TRUE(first.starterMotor)
+        << "OFF->CRANKING must pulse the starter (the one-tick edge request)";
+
+    // Subsequent CRANKING ticks: RPM below the catch threshold and well inside
+    // the 3s time fallback, so the twin stays CRANKING. The starter must NOT be
+    // held high -- a held starter re-toggles engageStarter every tick, forcing
+    // the engine to Stopped. Only the bridge controller should command the
+    // starter during cranking, via its own tick counter.
+    twin_->setEngineRpmFeedback(200.0);  // below the 500 RPM catch threshold
+    for (int i = 0; i < 5; ++i) {
+        auto held = twin_->update(0.016, sig);
+        ASSERT_EQ(twin_->getState(), TwinState::CRANKING)
+            << "should remain CRANKING (RPM below threshold, fallback not expired)";
+        EXPECT_FALSE(held.starterMotor)
+            << "Starter must not be held across CRANKING ticks -- it would "
+            << "re-toggle engageStarter and force the engine to Stopped";
+    }
 }
 
 // ============================================================================

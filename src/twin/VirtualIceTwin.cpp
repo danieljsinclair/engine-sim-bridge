@@ -104,7 +104,17 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
         case TwinState::CRANKING: {
             crankingTimerS_ += dt;
             output.throttle = EngineSimDefaults::CRANKING_THROTTLE;
-            output.starterMotor = true;
+            // Starter is NOT held here. The twin emits starterMotor as a one-tick
+            // EDGE on the OFF->CRANKING transition (the OFF case above pulses it);
+            // it must not hold it through CRANKING. The bridge's
+            // CrankingController::engageStarter is a momentary toggle -- a held
+            // starterButton=true while Cranking forces the phase to Stopped and
+            // cuts the starter -- so holding it would re-toggle engageStarter
+            // every tick, structurally disable the fast-path catch (its Stopped
+            // case resets the exhaust-flow baseline on every Stopped->Cranking),
+            // and drive the Stopped<->Cranking oscillation. The bridge's step()
+            // owns cranking duration via its own tick counter, so a held starter
+            // is redundant for engagement. See AC18.
             output.ignition = true;
 
             // CRANKING -> IDLE: the engine catches via EITHER
