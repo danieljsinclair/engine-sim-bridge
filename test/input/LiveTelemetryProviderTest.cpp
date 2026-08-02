@@ -336,4 +336,40 @@ TEST(LiveTelemetryStreamTest, EveryCsvRowIsConsumedAndSurfaces) {
         << "Each CSV row must surface in order (was: row #1 frozen, later rows dropped)";
 }
 
+// T9: reconfigureProfile forwards the loaded engine's transmission ratios to the
+// twin, so a CSV-driven box shifts against the ACTUAL engine (e.g. a C63), not
+// the default ZF profile. Differential observable: the default zf8hp45 (8
+// forward gears) upshifts out of 1st at 80 km/h WOT (see T2), but after
+// reconfiguring to a SINGLE forward gear the twin caps at gear 1 — its upshift
+// loop is bounded by gearRatios.size() (AutomaticGearbox.cpp). A reconfigure
+// that did NOT reach the twin would still upshift.
+TEST(LiveTelemetryStreamTest, ReconfigureProfileForwardsRatiosToTwin) {
+    // Baseline: default 8-gear profile upshifts past 1st at 80 km/h WOT.
+    {
+        StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,100,80\n");
+        ASSERT_TRUE(h.provider->Initialize());
+        h.provider->setGearSelector(kDrive);
+        ASSERT_GT(runUntilGearAbove(*h.provider, /*target*/ 1, /*ticks*/ 200), 1)
+            << "baseline: default zf8hp45 must upshift at 80 km/h WOT";
+    }
+    // Reconfigured to one forward gear: the twin cannot upshift (ratio count 1).
+    {
+        StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,100,80\n");
+        ASSERT_TRUE(h.provider->Initialize());
+        h.provider->setGearSelector(kDrive);
+        h.provider->reconfigureProfile({3.5}, 3.15, 0.32);
+        EXPECT_EQ(runUntilGearAbove(*h.provider, /*target*/ 1, /*ticks*/ 200), 1)
+            << "reconfigureProfile must reach the twin so the gearbox honours the "
+               "supplied ratio count (1 gear => no upshift)";
+    }
+}
+
+// Empty ratios is a no-op (the twin guards on empty): provider stays healthy.
+TEST(LiveTelemetryStreamTest, ReconfigureProfileEmptyRatiosIsNoOp) {
+    StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,50,30\n");
+    ASSERT_TRUE(h.provider->Initialize());
+    EXPECT_NO_THROW(h.provider->reconfigureProfile({}, 3.15, 0.32));
+    EXPECT_TRUE(h.provider->IsConnected());
+}
+
 }  // namespace
