@@ -3,6 +3,7 @@
 #include <twin/IceVehicleProfile.h>
 #include <io/UpstreamSignal.h>
 #include <simulator/GearConventions.h>
+#include <simulator/EngineSimTypes.h>
 #include <input/DemoVehiclePhysics.h>
 #include <algorithm>
 #include <cmath>
@@ -266,17 +267,24 @@ TEST_F(VirtualIceTwinTest, IdleThrottle_PassesThroughUserInput_AC11) {
     EXPECT_GT(output.throttle, 0.3) << "Throttle should pass through in IDLE/NEUTRAL";
 }
 
-TEST_F(VirtualIceTwinTest, IdleThrottle_IsZeroWhenNoInput_AC12) {
+TEST_F(VirtualIceTwinTest, IdleThrottle_HoldsSustainFloorWhenNoInput_AC12) {
     advanceThroughCranking();
     ASSERT_EQ(twin_->getState(), TwinState::IDLE);
 
-    // No throttle input — output should be 0 (engine idles on physics alone)
+    // No driver throttle — the twin must still hold the idle-sustain floor so the
+    // engine doesn't coast through the engine-sim's Stopped latch at the
+    // CRANKING->IDLE handoff (see AC-16). The prior "idles on physics alone ->
+    // zero throttle" model stalled on real progressing CSV data (bench: catch
+    // then die ~3-4s post-handoff); a real engine needs minimum throttle to idle.
+    // The floor is applied only in IDLE (NEUTRAL, clutch disengaged) so it cannot
+    // propel the vehicle — it sustains RPM, not motion.
     auto sig = makeValidSignal(0.0, 0.0);
     for (int i = 0; i < 20; ++i) {
         twin_->update(0.016, sig);
     }
     auto output = twin_->update(0.016, sig);
-    EXPECT_NEAR(output.throttle, 0.0, 0.01) << "Idle throttle should be 0% when no input";
+    EXPECT_NEAR(output.throttle, EngineSimDefaults::IDLE_SUSTAIN_THROTTLE, 1e-6)
+        << "Idle throttle should hold the sustain floor when no driver input";
 }
 
 TEST_F(VirtualIceTwinTest, IdleClutchIsDisengaged) {
