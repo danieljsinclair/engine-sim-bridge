@@ -3,6 +3,8 @@
 #include "input/LiveTelemetryProvider.h"
 #include "common/PresetExceptions.h"
 
+#include <cctype>
+
 namespace input {
 
 LiveTelemetryProvider::LiveTelemetryProvider(const twin::IceVehicleProfile& profile)
@@ -15,8 +17,10 @@ LiveTelemetryProvider::LiveTelemetryProvider(const twin::IceVehicleProfile& prof
 LiveTelemetryProvider::LiveTelemetryProvider(std::istream& stream, bool autoStart)
     : ownedProfile_(twin::IceVehicleProfile::zf8hp45())
     , profile_(ownedProfile_)
-    , stream_(&stream)
-    , autoStart_(autoStart) {
+    , stream_(&stream) {
+    // autoStart is retained in the signature for callers; the twin owns the
+    // engine cranking lifecycle (OFF->CRANKING) once valid telemetry arrives.
+    (void)autoStart;
 }
 
 LiveTelemetryProvider::~LiveTelemetryProvider() {
@@ -29,16 +33,23 @@ bool LiveTelemetryProvider::Initialize() {
         return false;
     }
 
-    // CSV stdin path: no twin provider needed
+    // Both the CSV stdin path and the JSON network path drive the twin; the twin
+    // is mandatory — it owns gearbox/clutch/throttle processing and the cranking
+    // lifecycle. The CSV sample becomes the twin's upstream signal.
     if (stream_) {
         hasSample_ = false;
-        startFired_ = false;
         eofSeen_ = false;
         elapsedS_ = 0.0;
-        initialized_.store(true);
-        return true;
     }
 
+    if (!initTwinProvider()) {
+        return false;
+    }
+    initialized_.store(true);
+    return true;
+}
+
+bool LiveTelemetryProvider::initTwinProvider() {
     try {
         twinProvider_ = std::make_unique<VirtualIceInputProvider>(profile_);
         if (!twinProvider_->Initialize()) {
@@ -46,7 +57,6 @@ bool LiveTelemetryProvider::Initialize() {
             twinProvider_.reset();
             return false;
         }
-        initialized_.store(true);
         return true;
     } catch (const std::bad_alloc& e) {
         lastError_ = std::string("Out of memory creating twin provider: ") + e.what();
@@ -78,23 +88,31 @@ bool LiveTelemetryProvider::IsConnected() const {
 }
 
 EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
-    // CSV stdin path
+    // CSV stdin path: route the latest CSV sample THROUGH the twin (mirrors the
+    // JSON network path below). The twin owns gearbox/clutch/throttle processing
+    // and the cranking lifecycle; the CSV sample becomes its upstream signal.
     if (stream_) {
         elapsedS_ += dt;
         tryReadNextRow();
 
-        EngineInput input;
+        if (!initialized_.load() || !twinProvider_) {
+            lastError_ = "Provider not initialized";
+            return EngineInput{};
+        }
+
+        UpstreamSignal signal;
         if (hasSample_) {
-            input.throttle = currentSample_.throttle;
-            input.roadSpeedKmh = currentSample_.roadSpeedKmh;
-            input.gearAbsolute = currentSample_.gear;
-            input.clutchPressure = currentSample_.clutchPct;
+            signal.throttleFraction = currentSample_.throttle;
+            signal.speedKmh = currentSample_.roadSpeedKmh;
+            // The row is valid telemetry even when speed is blank (dyno off); a
+            // non-zero timestamp keeps the twin's telemetry-timeout guard happy.
+            signal.isValid = true;
+            signal.timestampUtcMs = streamTimestampUtcMs();
         }
-        if (autoStart_ && !startFired_) {
-            input.starterButton = true;
-            startFired_ = true;
-        }
-        return input;
+
+        twinProvider_->setUpstreamSignal(signal);
+        twinProvider_->setGearSelector(static_cast<int>(csvGearSelector()));
+        return twinProvider_->OnUpdateSimulation(dt);
     }
 
     // JSON network path (master)
@@ -189,6 +207,27 @@ bool LiveTelemetryProvider::tryReadNextRow() {
     }
     eofSeen_ = true;
     return false;
+}
+
+bridge::GearSelector LiveTelemetryProvider::csvGearSelector() const {
+    // No selector commanded (no column / blank) defaults to DRIVE so the twin
+    // reaches RUNNING and the auto box can shift.
+    if (!hasSample_ || currentSample_.gearSelector.empty()) {
+        return bridge::GearSelector::DRIVE;
+    }
+    switch (std::toupper(static_cast<unsigned char>(currentSample_.gearSelector.front()))) {
+        case 'P': return bridge::GearSelector::PARK;
+        case 'R': return bridge::GearSelector::REVERSE;
+        case 'N': return bridge::GearSelector::NEUTRAL;
+        default:  return bridge::GearSelector::DRIVE;  // 'D' or unrecognised
+    }
+}
+
+uint64_t LiveTelemetryProvider::streamTimestampUtcMs() const {
+    // Monotonic non-zero ms: the twin treats timestampUtcMs == 0 as invalid and
+    // times out to OFF, so never return zero.
+    const auto ms = static_cast<uint64_t>(elapsedS_ * 1000.0);
+    return ms > 0 ? ms : 1;
 }
 
 } // namespace input
