@@ -47,9 +47,13 @@ void VirtualIceTwin::reconfigureProfile(const std::vector<double>& gearRatios,
         for (double upSpeed : srcRow) row.push_back(upSpeed * 0.70);
         profile_.downshiftTable.push_back(row);
     }
+    // Preserve logger across gearbox reconstruction (bug: prior code called
+    // setLogger(nullptr) here, which dropped the logger attached at startup
+    // and produced empty --gearbox-log CSVs even though the gearbox shifted).
+    IGearboxLogger* preservedLogger = gearbox_ ? gearbox_->getLogger() : nullptr;
     gearbox_ = std::make_unique<AutomaticGearbox>(profile_);
     gearbox_->setGearSelector(selector_);
-    gearbox_->setLogger(nullptr);  // logger not preserved across reconstruct
+    gearbox_->setLogger(preservedLogger);
 }
 
 void VirtualIceTwin::setGearboxLogger(IGearboxLogger* logger) {
