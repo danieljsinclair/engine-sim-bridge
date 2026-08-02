@@ -146,6 +146,11 @@ bool ReplayTelemetryProvider::parseCsv() {
         if (!headerParsed) lastError_ = "Empty telemetry CSV: " + csvPath_;
         return true;
     }
+    postProcessSamples();
+    return true;
+}
+
+void ReplayTelemetryProvider::postProcessSamples() {
     std::stable_sort(samples_.begin(), samples_.end(),
                      [](const Sample& a, const Sample& b) { return a.timeS < b.timeS; });
     // If all timestamps are identical (e.g. vehicle-sim capture tool wrote all
@@ -156,7 +161,6 @@ bool ReplayTelemetryProvider::parseCsv() {
             samples_[i].timeS = static_cast<double>(i) / defaultHz;
         }
     }
-    return true;
 }
 
 const ReplayTelemetryProvider::Sample& ReplayTelemetryProvider::sampleAt(double t) const {
@@ -171,101 +175,32 @@ const ReplayTelemetryProvider::Sample& ReplayTelemetryProvider::sampleAt(double 
 }
 
 EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
-    elapsedS_ += dt;
-
-    // Time slicing: skip samples before startFromS.
-    if (startFromS_ >= 0.0 && elapsedS_ < startFromS_) {
-        elapsedS_ = startFromS_;
-    }
-
-    // Time slicing: stop at endAtS.
-    if (endAtS_ >= 0.0 && elapsedS_ >= endAtS_) {
-        if (session_) session_->stop();
-        EngineInput input;
-        input.ignition = false;
-        return input;
-    }
-
     EngineInput input;
+    if (applyTimeSlicing(input, dt)) return input;
+
     const Sample& s = sampleAt(elapsedS_);
     currentTimestampS_ = s.timeS;
-    input.replayTimestampS = currentTimestampS_;
-    input.throttle = s.throttle;
-    input.ignition = ignitionOn_;
+    buildBaseEngineInput(input, s);
 
     if (autoGearbox_ && gearbox_) {
         // Follow the gear stalk. In PARK/NEUTRAL the clutch disengages + the
         // engine free-revs naturally (no dyno, no pinned RPM, natural idle
         // variation). Only in DRIVE does the gearbox decide gears + the dyno
         // tracks road speed.
-        bridge::GearSelector sel = s.gearSelector.empty()
+        const bridge::GearSelector sel = s.gearSelector.empty()
             ? bridge::GearSelector::NEUTRAL : parseGearSelector(s.gearSelector);
         gearbox_->setGearSelector(sel);
         input.gearSelector = static_cast<int>(sel);
         input.roadSpeedKmh = s.roadSpeedKmh;
         if (sel == bridge::GearSelector::DRIVE) {
-            double speedForBox = (s.roadSpeedKmh >= 0.0) ? s.roadSpeedKmh : 0.0;
-            gearbox_->update(dt, speedForBox, s.throttle, 0.0);
-            input.gearAbsolute = gearbox_->getCurrentGear();
-            input.gearAutoMode = true;
-
-            // SlipLockController — pressure-modulated clutch launch controller
-            // (dyno OFF). Drive the WHEELS to the CSV road speed
-            // (vehicleSpeedTargetKmh) and let the clutch couple them to the
-            // engine via the torque-converter slip characteristic:
-            //   - standstill (road-implied < idle):   pressure 0   (engine free to idle, no stall)
-            //   - launch under throttle (high slip):  partial       (TC slip in power band)
-            //   - road catches up (slip -> 0):        pressure -> 1 (locked, direct coupling)
-            //   - decel (engine slower than road):    pressure 1    (locked, engine braking)
-            // The stall floor (pressure == 0 whenever roadSpeedImpliedRpm < idleRpm)
-            // is the lesson from the stall/redline circle: coupling below idle drags
-            // the engine under idle and stalls it. See twin/SlipLockController.h.
-            input.vehicleSpeedTargetKmh = s.roadSpeedKmh;
-            input.engineRpmFloor = 0.0;  // dyno disabled downstream
-
-            // Road-speed-implied engine RPM: the RPM the engine would be at if the
-            // clutch were locked in the current gear at the current road speed.
-            // engineRpm = wheelRadS * gearRatio * diffRatio,  wheelRadS = v / tireRadius.
-            const int gear = gearbox_->getCurrentGear();
-            double roadSpeedImpliedRpm = gearboxProfile_.idleRpm;  // fallback above the floor
-            if (gear >= 1 && gear <= static_cast<int>(gearboxProfile_.gearRatios.size())) {
-                const double speedMs = speedForBox / 3.6;
-                const double wheelRadS = speedMs / gearboxProfile_.tireRadiusM;
-                roadSpeedImpliedRpm = wheelRadS
-                                      * gearboxProfile_.gearRatios[gear - 1]
-                                      * gearboxProfile_.diffRatio
-                                      * 30.0 / 3.14159265358979;
-            }
-
-            // maxCreepPressure: clutch pressure at full throttle with zero road
-            // speed. Mimics TC fluid coupling — 0.10 = 10% clutch at stall.
-            // Tunable: lower = less creep (engine freer to rev), higher = more
-            // creep (stronger launch feel, but risk of stall at high throttle).
-            constexpr double kMaxCreepPressure = 0.10;
-            const twin::SlipLockOutput slipLock = twin::computeSlipLockPressure(
-                twin::SlipLockInput{
-                    engineRpmFeedback_,
-                    roadSpeedImpliedRpm,
-                    s.throttle,
-                    gearboxProfile_.idleRpm,
-                    gearboxProfile_.redlineRpm},
-                kMaxCreepPressure);
-            input.clutchPressure = slipLock.clutchPressure;
+            const double speedForBox = (s.roadSpeedKmh >= 0.0) ? s.roadSpeedKmh : 0.0;
+            handleAutoGearboxDrive(input, s, dt, speedForBox);
         } else {
-            // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
-            // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).
-            input.gearAbsolute = 0;
-            input.gearAutoMode = false;
-            // Make sure any prior vehicle-speed constraint is released.
-            input.vehicleSpeedTargetKmh = -1.0;
+            handleAutoGearboxNonDrive(input);
         }
     } else {
         // Non-auto (e.g. rev-in-park): no gear forced, clutch disengaged, free-rev.
-        input.roadSpeedKmh = s.roadSpeedKmh;
-        input.gearAbsolute = s.gear;
-        input.gearSelector = (s.gear >= 0) ? s.gear : 0;
-        input.clutchPressure = s.clutchPct;
-        input.gearAutoMode = false;
+        handleNonAutoGearbox(input, s);
     }
 
     // One-shot starter pulse on the first frame so the CrankingController cranks.
@@ -274,23 +209,120 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
         startFired_ = true;
     }
 
-    // Q (quit) + P (preset cycle) during replay.
-    if (keyboard_) {
-        int key;
-        while ((key = keyboard_->getKey()) > 0) {
-            if (key == 'q' || key == 'Q' || key == 27) {
-                if (session_) session_->stop();
-            } else if (key == 'p' || key == 'P') {
-                input.presetCycle = true;
-            } else if (key == 's' || key == 'S') {
-                input.starterButton = true;
-            } else if (key == 'i' || key == 'I') {
-                ignitionOn_ = !ignitionOn_;
-            }
-        }
+    processKeyboardInput(input);
+    return input;
+}
+
+bool ReplayTelemetryProvider::applyTimeSlicing(EngineInput& input, double dt) {
+    elapsedS_ += dt;
+
+    // Time slicing: skip samples before startFromS.
+    if (startFromS_ >= 0.0 && elapsedS_ < startFromS_) {
+        elapsedS_ = startFromS_;
     }
 
-    return input;
+    // Time slicing: stop at endAtS — emit an ignition-off frame and signal the
+    // caller to return it immediately (no further processing this frame).
+    if (endAtS_ >= 0.0 && elapsedS_ >= endAtS_) {
+        if (session_) session_->stop();
+        input.ignition = false;
+        return true;
+    }
+    return false;
+}
+
+void ReplayTelemetryProvider::buildBaseEngineInput(EngineInput& input, const Sample& s) const {
+    input.replayTimestampS = currentTimestampS_;
+    input.throttle = s.throttle;
+    input.ignition = ignitionOn_;
+}
+
+void ReplayTelemetryProvider::handleAutoGearboxDrive(EngineInput& input, const Sample& s,
+                                                     double dt, double speedForBox) const {
+    gearbox_->update(dt, speedForBox, s.throttle, 0.0);
+    input.gearAbsolute = gearbox_->getCurrentGear();
+    input.gearAutoMode = true;
+
+    // SlipLockController — pressure-modulated clutch launch controller
+    // (dyno OFF). Drive the WHEELS to the CSV road speed
+    // (vehicleSpeedTargetKmh) and let the clutch couple them to the
+    // engine via the torque-converter slip characteristic:
+    //   - standstill (road-implied < idle):   pressure 0   (engine free to idle, no stall)
+    //   - launch under throttle (high slip):  partial       (TC slip in power band)
+    //   - road catches up (slip -> 0):        pressure -> 1 (locked, direct coupling)
+    //   - decel (engine slower than road):    pressure 1    (locked, engine braking)
+    // The stall floor (pressure == 0 whenever roadSpeedImpliedRpm < idleRpm)
+    // is the lesson from the stall/redline circle: coupling below idle drags
+    // the engine under idle and stalls it. See twin/SlipLockController.h.
+    input.vehicleSpeedTargetKmh = s.roadSpeedKmh;
+    input.engineRpmFloor = 0.0;  // dyno disabled downstream
+
+    // Road-speed-implied engine RPM: the RPM the engine would be at if the
+    // clutch were locked in the current gear at the current road speed.
+    // engineRpm = wheelRadS * gearRatio * diffRatio,  wheelRadS = v / tireRadius.
+    const int gear = gearbox_->getCurrentGear();
+    double roadSpeedImpliedRpm = gearboxProfile_.idleRpm;  // fallback above the floor
+    if (gear >= 1 && gear <= static_cast<int>(gearboxProfile_.gearRatios.size())) {
+        const double speedMs = speedForBox / 3.6;
+        const double wheelRadS = speedMs / gearboxProfile_.tireRadiusM;
+        roadSpeedImpliedRpm = wheelRadS
+                              * gearboxProfile_.gearRatios[gear - 1]
+                              * gearboxProfile_.diffRatio
+                              * 30.0 / 3.14159265358979;
+    }
+
+    // maxCreepPressure: clutch pressure at full throttle with zero road
+    // speed. Mimics TC fluid coupling — 0.10 = 10% clutch at stall.
+    // Tunable: lower = less creep (engine freer to rev), higher = more
+    // creep (stronger launch feel, but risk of stall at high throttle).
+    constexpr double kMaxCreepPressure = 0.10;
+    const twin::SlipLockOutput slipLock = twin::computeSlipLockPressure(
+        twin::SlipLockInput{
+            engineRpmFeedback_,
+            roadSpeedImpliedRpm,
+            s.throttle,
+            gearboxProfile_.idleRpm,
+            gearboxProfile_.redlineRpm},
+        kMaxCreepPressure);
+    input.clutchPressure = slipLock.clutchPressure;
+}
+
+void ReplayTelemetryProvider::handleAutoGearboxNonDrive(EngineInput& input) const {
+    // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
+    // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).
+    input.gearAbsolute = 0;
+    input.gearAutoMode = false;
+    // Make sure any prior vehicle-speed constraint is released.
+    input.vehicleSpeedTargetKmh = -1.0;
+}
+
+void ReplayTelemetryProvider::handleNonAutoGearbox(EngineInput& input, const Sample& s) const {
+    input.roadSpeedKmh = s.roadSpeedKmh;
+    input.gearAbsolute = s.gear;
+    input.gearSelector = (s.gear >= 0) ? s.gear : 0;
+    input.clutchPressure = s.clutchPct;
+    input.gearAutoMode = false;
+}
+
+void ReplayTelemetryProvider::processKeyboardInput(EngineInput& input) {
+    if (!keyboard_) return;
+    // Q (quit) + P (preset cycle) + S (starter) + I (ignition) during replay.
+    int key;
+    while ((key = keyboard_->getKey()) > 0) {
+        processReplayKey(key, input);
+    }
+}
+
+void ReplayTelemetryProvider::processReplayKey(int key, EngineInput& input) {
+    if (key == 'q' || key == 'Q' || key == 27) {
+        if (session_) session_->stop();
+    } else if (key == 'p' || key == 'P') {
+        input.presetCycle = true;
+    } else if (key == 's' || key == 'S') {
+        input.starterButton = true;
+    } else if (key == 'i' || key == 'I') {
+        ignitionOn_ = !ignitionOn_;
+    }
 }
 
 } // namespace input
