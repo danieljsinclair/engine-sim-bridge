@@ -20,8 +20,10 @@
 #include "input/LiveTelemetryProvider.h"
 #include "twin/IceVehicleProfile.h"
 #include "simulator/EngineSimTypes.h"
+#include "simulator/GearConventions.h"
 
 #include <gtest/gtest.h>
+#include <sstream>
 
 namespace {
 
@@ -125,6 +127,147 @@ TEST_F(LiveTelemetryProviderTest, DelegatesForwardToTwin) {
     });
 
     EXPECT_TRUE(provider_->IsConnected());
+}
+
+}  // namespace
+
+// ============================================================================
+// Stream (CSV stdin) mode — the twin is mandatory.
+//
+// The stream ctor LiveTelemetryProvider(istream, autoStart) MUST route CSV
+// telemetry THROUGH the VirtualIceTwin, which owns gearbox/clutch/throttle
+// processing. The historical bypass mapped CSV columns straight to EngineInput
+// (src/input/LiveTelemetryProvider.cpp Initialize/OnUpdateSimulation stream
+// branches), skipping the twin entirely: gearAutoMode was never set, the box
+// never auto-shifted, the engine never cranked. These tests prove the twin is
+// in the loop.
+// ============================================================================
+
+namespace {
+
+// Owns the istringstream for the provider's lifetime (the ctor takes istream&).
+struct StreamHarness {
+    std::istringstream stream;
+    std::unique_ptr<input::LiveTelemetryProvider> provider;
+    explicit StreamHarness(const std::string& csv, bool autoStart = true)
+        : stream(csv) {
+        provider = std::make_unique<input::LiveTelemetryProvider>(stream, autoStart);
+    }
+};
+
+constexpr int kDrive = static_cast<int>(bridge::GearSelector::DRIVE);
+constexpr int kReverse = static_cast<int>(bridge::GearSelector::REVERSE);
+
+// Pump RPM feedback so the twin's engine catches quickly (CRANKING->IDLE), then
+// run until gear advances past `target` or the budget is exhausted.
+int runUntilGearAbove(input::LiveTelemetryProvider& p, int target, int maxTicks) {
+    int gear = -1;
+    for (int i = 0; i < maxTicks; ++i) {
+        EngineSimStats stats;
+        stats.currentRPM = 900.0;  // > CRANK_IDLE_RPM_THRESHOLD -> engine catches
+        p.provideFeedback(stats);
+        gear = p.OnUpdateSimulation(0.05).gearAbsolute;
+        if (gear > target) break;
+    }
+    return gear;
+}
+
+// T1: routing through the twin sets gearAutoMode=true (the bypass left it false).
+TEST(LiveTelemetryStreamTest, TwinInLoopSetsGearAutoMode) {
+    StreamHarness h("time_s,throttle_pct,road_speed_kmh\n1.0,50,30\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_TRUE(in.gearAutoMode)
+        << "Stream mode must route through the twin, which sets gearAutoMode=true";
+}
+
+// T2: the twin's gearbox upshifts at sustained high road speed (redline guard).
+// 80 km/h in 1st implies an engine speed past redline -> upshift (see AC1/F3 in
+// AutoGearboxShiftLogicTest). The bypass mapped gear straight from the CSV and
+// never shifted.
+TEST(LiveTelemetryStreamTest, GearboxUpshiftsAtSustainedHighSpeed) {
+    StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,100,80\n");
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setGearSelector(kDrive);
+
+    int gear = runUntilGearAbove(*h.provider, /*target*/ 1, /*ticks*/ 200);
+    EXPECT_GT(gear, 1)
+        << "At 80 km/h WOT the twin must upshift out of 1st (redline guard)";
+}
+
+// T3: provideFeedback is wired. RPM feedback (>500) catches the engine so the
+// starter releases (CRANKING->IDLE) within a fraction of a second. With no twin
+// feedback path the bypass (autoStart off) never cranks at all, and even a twin
+// without feedback takes the 3s crank fallback — releasing inside 10 ticks
+// proves the RPM feedback actually reached the twin.
+TEST(LiveTelemetryStreamTest, FeedbackWiredReleasesStarterOnCatch) {
+    StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,30,5\n", /*autoStart=*/false);
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setGearSelector(kDrive);
+
+    bool starterFired = false;
+    bool starterReleased = false;
+    for (int i = 0; i < 10 && !starterReleased; ++i) {
+        EngineSimStats stats;
+        stats.currentRPM = 900.0;
+        h.provider->provideFeedback(stats);
+        bool starter = h.provider->OnUpdateSimulation(0.05).starterButton;
+        if (starter) starterFired = true;
+        else if (starterFired) starterReleased = true;
+    }
+    EXPECT_TRUE(starterFired) << "Twin must crank (starter on) when telemetry is valid";
+    EXPECT_TRUE(starterReleased)
+        << "RPM feedback must catch the engine (starter off -> IDLE) inside the 3s fallback";
+}
+
+// T4: with no gear_selector column and no explicit setGearSelector, the provider
+// must default to DRIVE so the twin reaches RUNNING and upshifts.
+TEST(LiveTelemetryStreamTest, DefaultSelectorIsDriveReachesRunning) {
+    StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,100,80\n");
+    ASSERT_TRUE(h.provider->Initialize());
+    // Intentionally NO setGearSelector — the default selector is under test.
+
+    int gear = runUntilGearAbove(*h.provider, /*target*/ 1, /*ticks*/ 200);
+    EXPECT_GT(gear, 1)
+        << "With no gear_selector column the twin must default to DRIVE and upshift";
+}
+
+// T5: validity/timestamp guard. A blank road_speed_kmh leaves speed at the -2
+// sentinel (dyno off), but the row is still valid telemetry — the provider must
+// mark the signal valid with a non-zero timestamp so the twin's telemetry-timeout
+// guard never fires and the engine cranks. autoStart=false isolates the twin's
+// own starter from the historical bypass hack.
+TEST(LiveTelemetryStreamTest, ValidityTimestampGuardKeepsTwinAlive) {
+    StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,50,\n", /*autoStart=*/false);
+    ASSERT_TRUE(h.provider->Initialize());
+
+    bool cranked = false;
+    for (int i = 0; i < 5 && !cranked; ++i) {
+        if (h.provider->OnUpdateSimulation(0.05).starterButton) cranked = true;
+    }
+    EXPECT_TRUE(cranked)
+        << "Blank speed must still be valid telemetry (non-zero ts) so the twin cranks, not time out to OFF";
+}
+
+// T6: the gear_selector column is parsed and forwarded to the twin (observable
+// as the selector echoed in EngineInput), and the delegation seams are safe.
+TEST(LiveTelemetryStreamTest, GearSelectorColumnForwardedAndDelegatesSafe) {
+    StreamHarness h("time_s,throttle_pct,road_speed_kmh,gear_selector\n0.0,40,20,R\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_EQ(in.gearSelector, kReverse)
+        << "gear_selector=R must be parsed and forwarded to the twin";
+
+    EXPECT_NO_THROW({
+        h.provider->setGearSelector(static_cast<int>(bridge::GearSelector::PARK));
+        h.provider->setIgnition(false);
+        EngineSimStats stats;
+        h.provider->provideFeedback(stats);
+    });
+    // Before EOF the live stream is still connected.
+    EXPECT_TRUE(h.provider->IsConnected());
 }
 
 }  // namespace

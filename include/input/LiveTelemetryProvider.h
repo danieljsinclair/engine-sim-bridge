@@ -43,7 +43,9 @@ public:
     explicit LiveTelemetryProvider(const twin::IceVehicleProfile& profile);
 
     /// Create a live telemetry provider that reads CSV from an input stream
-    /// (e.g. stdin pipe from vehicle-sim --stdout-csv). Step-holds latest sample.
+    /// (e.g. stdin pipe from vehicle-sim --stdout-csv) and routes each sample
+    /// through the VirtualIceTwin (gearbox/clutch/throttle + cranking). The
+    /// autoStart flag is retained for callers; the twin owns the start lifecycle.
     LiveTelemetryProvider(std::istream& stream, bool autoStart);
 
     ~LiveTelemetryProvider() override;
@@ -82,6 +84,15 @@ private:
     // CSV stdin path helpers
     bool tryReadNextRow();
 
+    /// Create + initialise twinProvider_ (shared by the CSV and JSON paths).
+    bool initTwinProvider();
+
+    /// Map the CSV gear_selector column to a GearSelector (default DRIVE).
+    bridge::GearSelector csvGearSelector() const;
+
+    /// Monotonic non-zero ms so the twin's telemetry-timeout guard never fires.
+    uint64_t streamTimestampUtcMs() const;
+
     // JSON mode: external profile ref. CSV mode: owned profile + istream.
     twin::IceVehicleProfile ownedProfile_;          // used only in CSV mode
     const twin::IceVehicleProfile& profile_;        // points to ownedProfile_ or external
@@ -100,9 +111,7 @@ private:
     CsvSample currentSample_{};
     bool hasSample_ = false;
     double elapsedS_ = 0.0;
-    bool startFired_ = false;
     bool eofSeen_ = false;
-    bool autoStart_ = true;
 };
 
 } // namespace input
