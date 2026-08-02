@@ -198,27 +198,34 @@ TEST_F(AutomaticGearboxTest, NoDownshiftBelowFirstGear_AC_10_3)
     EXPECT_FALSE(gearbox.requestsShift());
 }
 
-TEST_F(AutomaticGearboxTest, MinShiftIntervalBetweenSameDirectionShifts_AC_10_5)
+// Declarative minimal dwell: after any shift a short lockout (~shiftDwellS)
+// blocks further table-driven shifts so a single speed sample cannot thrash the
+// shift valve sub-frame. Once the dwell elapses the next legitimate shift
+// proceeds. (The old multi-second up/downshift intervals are gone — hysteresis
+// by construction, via the separate downshift table, replaces them.)
+TEST_F(AutomaticGearboxTest, Dwell_BlocksRapidRepeatedShiftThenAllows)
 {
-    AutomaticGearbox gearbox(profile);
+    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
+    ASSERT_GT(custom.shiftDwellS, 0.0);
+    const double dwell = custom.shiftDwellS;
+    AutomaticGearbox gearbox(custom);
 
-    // Perform two consecutive upshifts: 1->2 then 2->3
-    // First upshift at 25% throttle: 1->2 at 19 kph
+    // First upshift: 1->2 at 25% throttle (19 kph).
     gearbox.update(0.1, 20.0, 0.25);
     EXPECT_EQ(gearbox.getCurrentGear(), 2);
 
-    // Speed high enough for 2->3 at 25% throttle (28 kph)
-    // But second upshift within upshiftMinIntervalS (2.0s) should be blocked
+    // Speed now exceeds the 2->3 upshift (28 kph), but within the dwell window
+    // the shift must be suppressed.
     gearbox.update(0.1, 30.0, 0.25);
-    EXPECT_EQ(gearbox.getCurrentGear(), 2);
+    EXPECT_EQ(gearbox.getCurrentGear(), 2) << "Sub-dwell upshift must be blocked";
 
-    // Advance 1.8 seconds (total 1.9 from first shift) - still blocked
-    gearbox.update(1.8, 30.0, 0.25);
-    EXPECT_EQ(gearbox.getCurrentGear(), 2);
+    // Still inside the dwell.
+    gearbox.update(dwell * 0.5, 30.0, 0.25);
+    EXPECT_EQ(gearbox.getCurrentGear(), 2) << "Still inside dwell, must hold";
 
-    // Advance past 2.0 seconds total - upshift allowed
-    gearbox.update(0.2, 30.0, 0.25);
-    EXPECT_EQ(gearbox.getCurrentGear(), 3);
+    // Past the dwell: the table-driven 2->3 upshift proceeds.
+    gearbox.update(dwell, 30.0, 0.25);
+    EXPECT_EQ(gearbox.getCurrentGear(), 3) << "Once dwell elapses the upshift fires";
 }
 
 TEST_F(AutomaticGearboxTest, KickdownDetectionThresholds_AC_10_4)
@@ -399,201 +406,124 @@ TEST_F(AutomaticGearboxTest, SeparateDownshiftTableDisabledFallsBackToHysteresis
 }
 
 // ============================================================
-// F2: Engine Braking Inhibitor
+// Coast & cruise (declarative): the tables handle deceleration and steady-state
+// without any engine-braking inhibit gate. Zero throttle simply lowers the
+// table thresholds via the smoothed throttle; downshifts follow the table.
 // ============================================================
 
-TEST_F(AutomaticGearboxTest, EngineBrakingInhibitorDoesNotBlockDownshift)
+TEST_F(AutomaticGearboxTest, CoastDown_AllowsDownshiftThroughTable)
 {
-    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
-    ASSERT_TRUE(custom.engineBrakingInhibitorEnabled);
+    AutomaticGearbox gearbox(profile);
 
-    AutomaticGearbox gearbox(custom);
-
-    // Get to a high gear at moderate throttle
+    // Climb to a high gear at moderate throttle.
     gearbox.update(0.1, 100.0, 0.4);
     int topGear = gearbox.getCurrentGear();
     ASSERT_GT(topGear, 1);
 
-    // Clear interval timers
-    for (int i = 0; i < 30; ++i) {
-        gearbox.update(0.1, 100.0, 0.4);
-    }
-
-    // Coast at highway speed (throttle = 0, speed = 80 kph)
-    // Per x-engineer ch6 s4.3: inhibitor blocks UPHIFTS ONLY, downshifts are free
-    gearbox.update(0.1, 80.0, 0.0);
-
-    // Coast down further — downshift should be allowed
-    for (int speed = 70; speed >= 10; speed -= 5) {
+    // Coast down with zero throttle; the downshift table pulls gears in.
+    for (int speed = 90; speed >= 10; speed -= 5) {
         gearbox.update(0.5, static_cast<double>(speed), 0.0);
     }
-
-    // Should have downshifted — inhibitor only blocks upshifts
     EXPECT_LT(gearbox.getCurrentGear(), topGear)
-        << "Downshifts should be allowed even with engine braking inhibitor active";
+        << "Coasting down must downshift via the table";
 }
 
-TEST_F(AutomaticGearboxTest, EngineBrakingInhibitorAllowsDownshiftBelowMinSpeed)
+TEST_F(AutomaticGearboxTest, Kickdown_AtHighwaySpeed_Fires)
 {
-    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
-    ASSERT_TRUE(custom.engineBrakingInhibitorEnabled);
-    ASSERT_DOUBLE_EQ(custom.engineBrakingMinSpeedKmh, 10.0);
+    AutomaticGearbox gearbox(profile);
 
-    AutomaticGearbox gearbox(custom);
-
-    // Get to a high gear
-    gearbox.update(0.1, 100.0, 0.4);
-    int topGear = gearbox.getCurrentGear();
-    ASSERT_GT(topGear, 1);
-
-    // Clear interval timers then coast below min speed
-    for (int speed = 90; speed >= 5; speed -= 5) {
-        gearbox.update(0.5, static_cast<double>(speed), 0.0);
-    }
-
-    // Should have downshifted since we're below min speed
-    EXPECT_LT(gearbox.getCurrentGear(), topGear);
-}
-
-TEST_F(AutomaticGearboxTest, EngineBrakingInhibitorDoesNotBlockKickdown)
-{
-    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
-    ASSERT_TRUE(custom.engineBrakingInhibitorEnabled);
-
-    AutomaticGearbox gearbox(custom);
-
-    // Cruise at highway speed in a higher gear
+    // Cruise at highway speed in a higher gear.
     gearbox.update(0.1, 80.0, 0.3);
     int initialGear = gearbox.getCurrentGear();
     ASSERT_GT(initialGear, 1);
 
-    // Clear interval timers
+    // Settle, then floor it — kickdown overrides and pulls a downshift.
     for (int i = 0; i < 30; ++i) {
         gearbox.update(0.1, 80.0, 0.3);
     }
     initialGear = gearbox.getCurrentGear();
-
-    // Floor it — kickdown should override the inhibitor
     gearbox.update(0.05, 80.0, 0.98);
 
-    // Kickdown should still fire even with inhibitor active
     EXPECT_TRUE(gearbox.requestsShift());
     EXPECT_LT(gearbox.getTargetGear(), initialGear);
 }
 
-TEST_F(AutomaticGearboxTest, EngineBrakingInhibitorBlocksUpshiftAtHighwaySpeed)
+// ============================================================
+// Declarative shift-table spec: hysteresis by construction, multi-gear climb,
+// steady-state hold. Anti-hunting comes from the separate downshift table
+// (its thresholds sit below the upshift thresholds), not from interval gates.
+// ============================================================
+
+// Dead band: between the downshift and upshift thresholds the box HOLDS gear.
+// At 5% throttle the 1->2 upshift is 11 kph and the 2->1 downshift is 9 kph;
+// holding 10 kph in 2nd must never oscillate to 1st or 3rd.
+TEST_F(AutomaticGearboxTest, DeadBand_HoldsGear_NoOscillation)
 {
-    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
-    ASSERT_TRUE(custom.engineBrakingInhibitorEnabled);
+    AutomaticGearbox gearbox(profile);
 
-    AutomaticGearbox gearbox(custom);
+    // Upshift into 2nd (1->2 at 5% throttle is 11 kph).
+    gearbox.update(0.1, 12.0, 0.05);
+    ASSERT_EQ(gearbox.getCurrentGear(), 2);
 
-    // Get to a moderate gear at moderate throttle
-    gearbox.update(0.1, 60.0, 0.25);
-    int gear = gearbox.getCurrentGear();
-    ASSERT_GE(gear, 2);
-
-    // Clear interval timers so next upshift isn't interval-blocked
-    for (int i = 0; i < 30; ++i) {
-        gearbox.update(0.1, 60.0, 0.25);
+    // Sit in the dead band for many frames — gear must stay at 2.
+    int minGear = 2, maxGear = 2;
+    for (int i = 0; i < 80; ++i) {
+        gearbox.update(0.1, 10.0, 0.05);
+        minGear = std::min(minGear, gearbox.getCurrentGear());
+        maxGear = std::max(maxGear, gearbox.getCurrentGear());
     }
-    gear = gearbox.getCurrentGear();
-
-    // Coast at 70 kph with zero throttle — activates engine braking inhibitor
-    gearbox.update(0.1, 70.0, 0.0);
-
-    int gearAfterCoast = gearbox.getCurrentGear();
-    // With inhibitor active, upshifts should be blocked even if speed increases
-    gearbox.update(0.1, 120.0, 0.0);
-    EXPECT_EQ(gearbox.getCurrentGear(), gearAfterCoast);
+    EXPECT_EQ(minGear, 2) << "Must not downshift to 1st inside the dead band";
+    EXPECT_EQ(maxGear, 2) << "Must not upshift to 3rd inside the dead band";
 }
 
-// ============================================================
-// F3: Asymmetric Shift Intervals
-// ============================================================
-
-TEST_F(AutomaticGearboxTest, AsymmetricShiftInterval_UpshiftUsesUpshiftInterval)
+// Multi-gear climb: accelerate from rest and the box steps up through the gears.
+TEST_F(AutomaticGearboxTest, MultiGearClimb_ReachesHighGear)
 {
-    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
-    // zf8hp45 has upshiftMinIntervalS=2.0
-    ASSERT_DOUBLE_EQ(custom.upshiftMinIntervalS, 2.0);
+    AutomaticGearbox gearbox(profile);
+    int maxGear = 1;
+    for (int i = 0; i < 600; ++i) {  // 60 s
+        const double speed = 10.0 + (200.0 - 10.0) * (static_cast<double>(i) / 599.0);
+        gearbox.update(0.1, speed, 0.5);
+        maxGear = std::max(maxGear, gearbox.getCurrentGear());
+    }
+    EXPECT_GE(maxGear, 5) << "A sustained acceleration must climb well into the gear range";
+    EXPECT_LE(maxGear, static_cast<int>(profile.gearRatios.size()));
+}
 
-    AutomaticGearbox gearbox(custom);
+// Cruise: a constant operating point must settle and then hold — no hunting.
+TEST_F(AutomaticGearboxTest, Cruise_HoldsGear_NoHunting)
+{
+    AutomaticGearbox gearbox(profile);
 
-    // Start in gear 1, below upshift threshold
+    // Reach a steady cruise gear at 60 kph / 30% throttle.
+    for (int i = 0; i < 60; ++i) {
+        gearbox.update(0.1, 60.0, 0.30);
+    }
+    const int settled = gearbox.getCurrentGear();
+    ASSERT_GT(settled, 1);
+
+    // Hold the exact same operating point; the gear must not change.
+    for (int i = 0; i < 200; ++i) {
+        gearbox.update(0.1, 60.0, 0.30);
+        ASSERT_EQ(gearbox.getCurrentGear(), settled) << "Cruise must not hunt";
+    }
+}
+
+// After an upshift, a legitimate downshift is permitted once the dwell elapses
+// (the dwell is direction-agnostic; there is no cross-direction interval).
+TEST_F(AutomaticGearboxTest, DownshiftPermitted_AfterUpshift_OnceDwellElapses)
+{
+    AutomaticGearbox gearbox(profile);
+
     gearbox.update(0.1, 10.0, 0.25);
     ASSERT_EQ(gearbox.getCurrentGear(), 1);
 
-    // First upshift: 1->2 at 25% throttle (19 kph)
+    // Upshift 1->2 (19 kph at 25% throttle).
     gearbox.update(2.1, 20.0, 0.25);
     ASSERT_EQ(gearbox.getCurrentGear(), 2);
 
-    // Second upshift: 2->3 at 25% throttle (28 kph)
-    // Wait just under upshift interval (2.0s) — should be blocked
-    gearbox.update(1.9, 30.0, 0.25);
-    EXPECT_EQ(gearbox.getCurrentGear(), 2);
-
-    // Advance past 2.0s total — upshift should be allowed
-    gearbox.update(0.2, 30.0, 0.25);
-    EXPECT_EQ(gearbox.getCurrentGear(), 3);
-}
-
-TEST_F(AutomaticGearboxTest, AsymmetricShiftInterval_DownshiftUsesDownshiftInterval)
-{
-    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
-    // zf8hp45 has downshiftMinIntervalS=1.0 per x-engineer ch6 s4.2
-    ASSERT_DOUBLE_EQ(custom.downshiftMinIntervalS, 1.0);
-
-    AutomaticGearbox gearbox(custom);
-
-    // Get to 4th gear at 40% throttle
-    gearbox.update(0.1, 60.0, 0.40);
-    ASSERT_GE(gearbox.getCurrentGear(), 4);
-
-    // Clear interval timers
-    for (int i = 0; i < 30; ++i) {
-        gearbox.update(0.1, 60.0, 0.40);
-    }
-    int topGear = gearbox.getCurrentGear();
-
-    // Drop to speed that triggers one downshift but not two
-    // Gear 4->3 at 5% = 25 kph, gear 3->2 at 5% = 13 kph
-    // Use speed 20: only 4->3 triggers, 3->2 doesn't (20 > 13).
-    gearbox.update(1.6, 20.0, 0.05);
-    int gearAfterFirst = gearbox.getCurrentGear();
-
-    if (gearAfterFirst < topGear) {
-        // Try for second consecutive downshift before 1.0s — should be blocked
-        gearbox.update(0.9, 8.0, 0.05);
-        EXPECT_EQ(gearbox.getCurrentGear(), gearAfterFirst);
-
-        // Advance past 1.0s total — downshift should be allowed
-        gearbox.update(0.2, 8.0, 0.05);
-        EXPECT_LT(gearbox.getCurrentGear(), gearAfterFirst);
-    }
-}
-
-TEST_F(AutomaticGearboxTest, CrossResetResetsOppositeDirectionTimer)
-{
-    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
-    ASSERT_DOUBLE_EQ(custom.upshiftMinIntervalS, 2.0);
-    ASSERT_DOUBLE_EQ(custom.downshiftMinIntervalS, 1.0);
-
-    AutomaticGearbox gearbox(custom);
-
-    // Start below upshift threshold
-    gearbox.update(0.1, 10.0, 0.25);
-    ASSERT_EQ(gearbox.getCurrentGear(), 1);
-
-    // Get to 2nd gear via upshift (wait for interval)
-    gearbox.update(2.1, 20.0, 0.25);
-    ASSERT_EQ(gearbox.getCurrentGear(), 2);
-
-    // Immediately try to downshift — the upshift just happened, so downshift timer
-    // should be cross-reset (it starts fresh from the upshift).
-    // Since we just upshifted, the downshift timer starts at 0.
-    // Wait 1.1s (> downshift interval 1.0s) and try to downshift
-    gearbox.update(1.1, 9.0, 0.05);
+    // Dwell elapses (0.5 s > shiftDwellS), then the 2->1 downshift (9 kph) fires.
+    gearbox.update(0.5, 9.0, 0.05);
     EXPECT_EQ(gearbox.getCurrentGear(), 1);
 }
 
@@ -662,85 +592,6 @@ TEST_F(AutomaticGearboxTest, TenThrottleLevels_DownshiftGapVariesWithThrottle)
         gearbox.update(1.6, 32.0, 0.90);
         EXPECT_EQ(gearbox.getCurrentGear(), 1);
     }
-}
-
-// ============================================================
-// F4: Tip-In / Tip-Out Correction (x-engineer ch6 s4.4)
-// ============================================================
-
-TEST_F(AutomaticGearboxTest, TipIn_BlocksUpshift) {
-    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
-    ASSERT_TRUE(custom.tipCorrectionEnabled);
-
-    AutomaticGearbox gearbox(custom);
-
-    // Start in gear 1, accelerate to just above 1->2 upshift speed at low throttle
-    gearbox.update(0.1, 12.0, 0.10);
-
-    // Now tip-in: rapid throttle increase should produce gradient > 10 %/s
-    // From 0.10 to 0.50 in 0.016s = 25.0 %/s (well above 10 threshold)
-    gearbox.update(0.016, 15.0, 0.50);
-
-    // Tip-in should block the upshift even though speed exceeds threshold
-    // (speed 15 > upshift speed ~13 at 50% throttle, but tip correction blocks it)
-    EXPECT_EQ(gearbox.getCurrentGear(), 1)
-        << "Tip-in correction should block upshift during rapid throttle increase";
-}
-
-TEST_F(AutomaticGearboxTest, TipOut_BlocksUpshift) {
-    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
-    ASSERT_TRUE(custom.tipCorrectionEnabled);
-
-    AutomaticGearbox gearbox(custom);
-
-    // Start in gear 1, get to gear 3+
-    gearbox.update(0.1, 10.0, 0.30);
-    gearbox.update(2.1, 40.0, 0.30);
-    int gearBeforeTipOut = gearbox.getCurrentGear();
-    ASSERT_GE(gearBeforeTipOut, 2);
-
-    // Clear interval timers
-    for (int i = 0; i < 30; ++i) {
-        gearbox.update(0.1, 40.0, 0.30);
-    }
-
-    // Tip-out: rapid throttle release produces gradient < -10 %/s
-    // From 0.30 to 0.05 in 0.016s = -15.6 %/s (below -10 threshold)
-    gearbox.update(0.016, 55.0, 0.05);
-
-    // Tip-out should block the next upshift even though speed is above threshold
-    EXPECT_LE(gearbox.getCurrentGear(), gearBeforeTipOut)
-        << "Tip-out correction should block upshift during rapid throttle release";
-}
-
-TEST_F(AutomaticGearboxTest, TipCorrection_DoesNotBlockDownshift) {
-    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
-    ASSERT_TRUE(custom.tipCorrectionEnabled);
-
-    AutomaticGearbox gearbox(custom);
-
-    // Get to a high gear at moderate throttle
-    gearbox.update(0.1, 80.0, 0.40);
-    int topGear = gearbox.getCurrentGear();
-    ASSERT_GE(topGear, 3) << "Should reach gear 3+ at 80 kph 40% throttle";
-
-    // Clear interval timers
-    for (int i = 0; i < 30; ++i) {
-        gearbox.update(0.1, 80.0, 0.40);
-    }
-
-    // Tip-out: rapid throttle release (triggers tip-out correction)
-    gearbox.update(0.016, 80.0, 0.05);
-
-    // Now slow down below downshift thresholds
-    // At 5% throttle, downshift thresholds are low but sequential downshifts should occur
-    for (int speed = 70; speed >= 5; speed -= 5) {
-        gearbox.update(0.5, static_cast<double>(speed), 0.05);
-    }
-
-    // Downshift should be allowed even with tip-out active
-    EXPECT_LT(gearbox.getCurrentGear(), topGear)
-        << "Tip-out should NOT block downshifts — gearbox should have downshifted during coast";
 }
 
 // ============================================================
@@ -818,62 +669,16 @@ TEST_F(AutomaticGearboxTest, RedlineSafety_DoesNotOverrideKickdown) {
         << "Kickdown should override redline safety";
 }
 
-// RedlineSafety_BypassesIntervalTimer removed: the redline safety is now folded
-// into the speed-based upshift pass (coherent with the speed model), so it no
-// longer bypasses the shift interval. The bypass premise was tied to the old
-// real-RPM redline that could hunt; see RedlineSafetyUpshift_*ImpliedRpm* above.
-
-// RED: NoOscillation_AfterUpshift_DownshiftRequiresInterval
-// Stashed — requires gearbox interval logic redesign (lastShiftDirection_ vs hasShiftedBefore_)
-// See: circle-back stash review
-
 // ============================================================
-// F4: Tip-In / Tip-Out Correction (x-engineer ch6 s4.4)
-// ============================================================
-
-TEST_F(AutomaticGearboxTest, TipCorrection_ClearsWhenGradientStabilizes) {
-    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
-    ASSERT_TRUE(custom.tipCorrectionEnabled);
-
-    AutomaticGearbox gearbox(custom);
-
-    // Start with a moderate throttle (no tip-in on first frame due to skip)
-    gearbox.update(0.1, 10.0, 0.10);
-
-    // Tip-in: rapid throttle increase from 0.10 to 0.50
-    // Gradient = 0.40/0.016 * 100 = 2500 %/s (way above 10 threshold)
-    gearbox.update(0.016, 15.0, 0.50);
-
-    // Tip correction should block upshift here
-    EXPECT_EQ(gearbox.getCurrentGear(), 1);
-
-    // Stabilize throttle (gradient returns to ~0, tip correction clears)
-    // Also let smoothed throttle catch up, AND wait for upshift interval
-    for (int i = 0; i < 25; ++i) {
-        gearbox.update(0.1, 20.0, 0.50);
-    }
-
-    // Now accelerate past upshift threshold — tip correction should be clear
-    gearbox.update(0.1, 30.0, 0.50);
-
-    EXPECT_GT(gearbox.getCurrentGear(), 1)
-        << "Upshift should proceed after tip-in gradient stabilizes";
-}
-
-// ============================================================
-// Bug: "gearbox never upshifts" — transient tip-correction
-// (x-engineer ch6 s4.4). The original tip gate was level-sensitive
-// per frame on the RAW throttle gradient with no decay, so any
-// sustained ramp or sub-percent CAN jitter fired it every frame and
-// permanently suppressed upshifts. These tests assert the gearbox
-// upshifts under realistic throttle input (RED on the per-frame
-// gate; GREEN once the gate is a short transient inhibit window).
+// Realistic-throttle upshifts: the declarative gearbox has no gradient/tip
+// gate, so it follows the tables under sustained ramps and sub-percent CAN
+// jitter. (These were originally RED tests for a level-sensitive tip gate that
+// pinned the box in 1st; the gate is gone, the behaviour is now the default.)
 // ============================================================
 
 TEST_F(AutomaticGearboxTest, SustainedThrottleRamp_upshifts) {
-    // A driver smoothly ramps throttle while accelerating. The raw per-frame
-    // gradient (~20 %/s) exceeds the old 10 %/s tip threshold every frame, so
-    // the level-sensitive gate pins the gearbox in 1st for the whole ramp.
+    // A driver smoothly ramps throttle while accelerating; the box must follow
+    // the table and upshift as speed rises.
     AutomaticGearbox gearbox(profile);
     constexpr double dt = 1.0 / 60.0;
     const int frames = 120;  // 2.0 s
@@ -891,17 +696,14 @@ TEST_F(AutomaticGearboxTest, SustainedThrottleRamp_upshifts) {
 }
 
 TEST_F(AutomaticGearboxTest, NoisyThrottle_Upshifts) {
-    // Real CAN throttle carries sub-percent jitter on a steady command. At
-    // 60 fps the raw gradient of +-0.5% jitter is ~+-30 %/s, above the old
-    // 10 %/s threshold, so once the tip gate arms it stays armed and the
-    // gearbox cannot upshift as speed rises past the 1->2 point.
+    // Real CAN throttle carries sub-percent jitter on a steady command; the
+    // box must still upshift as speed rises past the 1->2 point.
     AutomaticGearbox gearbox(profile);
     constexpr double dt = 1.0 / 60.0;
     const double baseThrottle = 0.5;
     int maxGear = 1;
     // Ramp speed 18 -> 45 kph (across the 1->2 upshift ~27 kph at 0.5 throttle)
-    // over 3 s with +-0.5% jitter on every frame. Frame 0 starts below the
-    // upshift point so the gate is armed before speed crosses it.
+    // over 3 s with +-0.5% jitter on every frame.
     const int frames = 3 * 60;
     const double startSpeed = 18.0, endSpeed = 45.0;
     for (int i = 0; i < frames; ++i) {
@@ -915,10 +717,8 @@ TEST_F(AutomaticGearboxTest, NoisyThrottle_Upshifts) {
 }
 
 TEST_F(AutomaticGearboxTest, FullThrottleRamp_SequentialUpshifts) {
-    // Full-throttle acceleration with continuous CAN jitter overlaid. The
-    // jitter spikes the raw gradient above threshold every frame, pinning the
-    // gearbox in 1st on the buggy gate; transient tip-correction lets it step
-    // cleanly through the gears.
+    // Full-throttle acceleration with continuous CAN jitter overlaid: the box
+    // must step cleanly up through the gears.
     AutomaticGearbox gearbox(profile);
     constexpr double dt = 1.0 / 60.0;
     const int frames = 30 * 60;  // 30 s
@@ -949,48 +749,9 @@ TEST_F(AutomaticGearboxTest, FullThrottleRamp_SequentialUpshifts) {
     EXPECT_LE(gear2Speed, 55.0) << "1->2 should happen well before redline push";
 }
 
-TEST_F(AutomaticGearboxTest, TipCorrection_BlocksOnlyForShortWindow) {
-    // A tip event arms a TRANSIENT inhibit window, not a permanent block: the
-    // upshift is held for ~tipInhibitWindowS, then proceeds.
-    IceVehicleProfile custom = IceVehicleProfile::zf8hp45();
-    ASSERT_GT(custom.tipInhibitWindowS, 0.0);
-    ASSERT_LE(custom.tipInhibitWindowS, 0.5);  // must be short / transient
-    const double window = custom.tipInhibitWindowS;
-
-    AutomaticGearbox gearbox(custom);
-    constexpr double dt = 1.0 / 60.0;
-
-    // Settle in 1st at high throttle: the 1->2 upshift at 0.80 throttle is
-    // ~40 kph, so 35 kph holds 1st with no tip event (throttle is stable).
-    for (int i = 0; i < 30; ++i) {
-        gearbox.update(dt, 35.0, 0.80);
-    }
-    ASSERT_EQ(gearbox.getCurrentGear(), 1) << "precondition: held in 1st below the 0.80 upshift speed";
-
-    // Tip-out stab: a sharp throttle drop gives a large negative smoothed
-    // gradient that arms the inhibit window. At the new low throttle the 1->2
-    // threshold (~20 kph) is below the current speed (35), so the ONLY thing
-    // holding the upshift back is the transient window.
-    gearbox.update(dt, 35.0, 0.30);
-    ASSERT_EQ(gearbox.getCurrentGear(), 1) << "tip event should hold the upshift";
-
-    double upshiftAt = -1.0;
-    double t = 0.0;
-    for (int i = 0; i < 90; ++i) {  // up to 1.5 s
-        gearbox.update(dt, 35.0, 0.30);
-        t += dt;
-        if (gearbox.getCurrentGear() > 1 && upshiftAt < 0.0) {
-            upshiftAt = t;
-        }
-    }
-    ASSERT_GE(upshiftAt, 0.0) << "upshift should fire once the window decays";
-    EXPECT_GE(upshiftAt, window - 0.10) << "window must hold the upshift for ~tipInhibitWindowS";
-    EXPECT_LE(upshiftAt, window + 0.20) << "upshift must proceed shortly after the window decays";
-}
-
 TEST_F(AutomaticGearboxTest, SteadyThrottleWithJitter_DoesNotBlockUpshift) {
-    // Sub-percent jitter on a STEADY throttle must NOT arm the inhibit window
-    // (the smoothed gradient stays small), so higher-gear upshifts still proceed.
+    // Sub-percent jitter on a STEADY throttle must not block higher-gear
+    // upshifts; the smoothed throttle stays stable and the table decides.
     AutomaticGearbox gearbox(profile);
     constexpr double dt = 1.0 / 60.0;
 
@@ -1000,14 +761,13 @@ TEST_F(AutomaticGearboxTest, SteadyThrottleWithJitter_DoesNotBlockUpshift) {
     }
     ASSERT_EQ(gearbox.getCurrentGear(), 2) << "precondition: in 2nd gear";
 
-    // Clear the upshift interval (upshiftMinIntervalS = 2.0 s).
+    // Clear the dwell.
     for (int i = 0; i < 150; ++i) {
         gearbox.update(dt, 35.0, 0.50);
     }
 
     // Raise speed above the 2->3 upshift (~43 kph) with continuous +-0.5%
-    // jitter: the smoothed gradient stays below threshold, no window arms, and
-    // the 2->3 upshift proceeds.
+    // jitter: the 2->3 upshift proceeds.
     int maxGear = 2;
     for (int i = 0; i < 5 * 60; ++i) {
         const double jitter = (i % 2 == 0) ? 0.005 : -0.005;
@@ -1015,4 +775,24 @@ TEST_F(AutomaticGearboxTest, SteadyThrottleWithJitter_DoesNotBlockUpshift) {
         maxGear = std::max(maxGear, gearbox.getCurrentGear());
     }
     EXPECT_GE(maxGear, 3) << "Steady throttle with jitter must still upshift";
+}
+
+// ============================================================
+// Kickdown is the sole override of the tables: a sudden large throttle increase
+// forces one RPM-safe downshift even inside the dwell window — a legitimate
+// power demand cannot wait.
+// ============================================================
+
+TEST_F(AutomaticGearboxTest, Kickdown_OverridesDwell) {
+    AutomaticGearbox gearbox(profile);
+
+    // Upshift into 2nd (1->2 at 25% throttle is 19 kph).
+    gearbox.update(0.1, 20.0, 0.25);
+    ASSERT_EQ(gearbox.getCurrentGear(), 2);
+
+    // One frame later — still well inside the dwell window (0.05 s < 0.4 s) —
+    // floor the throttle. Kickdown must fire and pull a downshift anyway.
+    gearbox.update(0.05, 20.0, 0.95);
+    EXPECT_TRUE(gearbox.requestsShift()) << "Kickdown must override the dwell";
+    EXPECT_LT(gearbox.getCurrentGear(), 2) << "Kickdown must downshift despite sub-dwell timing";
 }

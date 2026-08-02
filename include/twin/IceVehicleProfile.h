@@ -26,6 +26,10 @@ struct IceVehicleProfile {
     double minShiftIntervalS = 3.0;
     double upshiftMinIntervalS = 0.0;      // 0 = use minShiftIntervalS
     double downshiftMinIntervalS = 0.0;    // 0 = use minShiftIntervalS
+    // Declarative gearbox: short lockout after ANY shift to suppress sub-frame
+    // oscillation. Anti-hunting is provided by the separate downshift table
+    // (hysteresis by construction), so this need only cover a couple of frames.
+    double shiftDwellS = 0.4;
     // Engine braking inhibitor
     bool engineBrakingInhibitorEnabled = false;
     double engineBrakingMaxThrottle = 0.01;
@@ -134,6 +138,9 @@ struct IceVehicleProfile {
         // Asymmetric shift intervals (ZF 8HP45 per x-engineer ch6 s4.2)
         p.upshiftMinIntervalS = 2.0;
         p.downshiftMinIntervalS = 1.0;
+
+        // Declarative minimal dwell (sub-frame oscillation guard only).
+        p.shiftDwellS = 0.4;
 
         // Engine braking inhibitor
         p.engineBrakingInhibitorEnabled = true;
