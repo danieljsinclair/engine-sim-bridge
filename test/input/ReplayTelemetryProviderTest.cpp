@@ -390,6 +390,68 @@ TEST_F(ReplayTelemetryProviderTest, ManualGearPropagatesCsvGear) {
     EXPECT_EQ(input.gearAbsolute, 3);
 }
 
+// --- DRIVE-branch output characterization (protects the auto-gearbox split) ---
+// These pin the computed outputs of the DRIVE path that the existing tests
+// don't assert: the vehicle-speed target, the disabled dyno floor, and the
+// slip-lock clutch coupling. They are the safety net for decomposing
+// OnUpdateSimulation, so they assert the public contract, not internal math.
+
+TEST_F(ReplayTelemetryProviderTest, AutoGearboxDrivePinsVehicleSpeedAndFloor) {
+    // DRIVE with a positive road speed: the auto-gearbox commands the wheels to
+    // the CSV road speed (vehicleSpeedTargetKmh) and disables the downstream
+    // dyno floor (engineRpmFloor == 0). The raw road speed also propagates.
+    makeProvider("time_s,speed_kmh,gear_selector\n0.0,80.0,D\n", true, true);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EngineInput input = provider_->OnUpdateSimulation(0.016);
+    ASSERT_TRUE(input.gearAutoMode);
+    EXPECT_DOUBLE_EQ(input.vehicleSpeedTargetKmh, 80.0);
+    EXPECT_DOUBLE_EQ(input.engineRpmFloor, 0.0);
+    EXPECT_DOUBLE_EQ(input.roadSpeedKmh, 80.0);
+}
+
+TEST_F(ReplayTelemetryProviderTest, AutoGearboxDriveEngagesClutchControl) {
+    // DRIVE routes through the SlipLock clutch controller, so clutchPressure is
+    // a real 0..1 coupling value — not the -1 "unchanged" sentinel. The exact
+    // value depends on slip-lock math + the selected gear, so assert the
+    // engagement contract (set + in range), not a specific number.
+    makeProvider("time_s,throttle_pct,speed_kmh,gear_selector\n0.0,50.0,30.0,D\n", true, true);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EngineInput input = provider_->OnUpdateSimulation(0.016);
+    ASSERT_TRUE(input.gearAutoMode);
+    EXPECT_NE(input.clutchPressure, -1.0);  // DRIVE overrode the sentinel
+    EXPECT_GE(input.clutchPressure, 0.0);
+    EXPECT_LE(input.clutchPressure, 1.0);
+}
+
+TEST_F(ReplayTelemetryProviderTest, AutoGearboxNonDriveReleasesVehicleSpeed) {
+    // PARK/NEUTRAL/REVERSE must release any prior vehicle-speed constraint
+    // (vehicleSpeedTargetKmh -> -1 sentinel) and force neutral, so the dyno
+    // doesn't hold the engine at the last commanded road speed.
+    makeProvider("time_s,speed_kmh,gear_selector\n0.0,0.0,P\n", true, true);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_EQ(input.gearAbsolute, 0);
+    EXPECT_FALSE(input.gearAutoMode);
+    EXPECT_DOUBLE_EQ(input.vehicleSpeedTargetKmh, -1.0);
+}
+
+TEST_F(ReplayTelemetryProviderTest, ManualClutchPctPropagates) {
+    // autoGearbox=false: the CSV clutch_pct (0..100) normalises to 0..1 clutch
+    // pressure and propagates directly. 50% -> 0.5.
+    makeProvider("time_s,clutch_pct\n0.0,50.0\n", true, false);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(input.clutchPressure, 0.5);
+}
+
 TEST_F(ReplayTelemetryProviderTest, TimeSlicingStartFromSkipsEarlySamples) {
     // startFromS=0.5 => the clock starts at 0.5s, so the first sample shown is
     // the one at t=0.5 (the floor of 0.5 in [0.0, 0.5, 1.0]).

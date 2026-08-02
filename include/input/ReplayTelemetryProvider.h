@@ -80,26 +80,12 @@ public:
 private:
     using Sample = CsvSample;
 
-    struct CsvColumns {
-        int colTime = -1;
-        int colThrottle = -1;
-        int colRoad = -1;
-        int colGear = -1;
-        int colClutch = -1;
-        int colGearSelector = -1;
-        bool timeInMs = false;
-    };
-
     bool parseCsv();
+    void postProcessSamples();  // sort + even-spreading of identical timestamps
 
-    // parseCsv helpers
-    bool parseHeaderLine(const std::vector<std::string>& fields, CsvColumns& cols) const;
-    bool isRawCanFormat(const std::vector<std::string>& fields) const;
-    void parseDataLine(const std::vector<std::string>& fields, const CsvColumns& cols,
-                       double& firstTs, Sample& s) const;
-    void postProcessSamples();
-
-    // OnUpdateSimulation helpers
+    // OnUpdateSimulation helpers — each owns one responsibility so
+    // OnUpdateSimulation stays a flat orchestrator (cognitive-complexity +
+    // nesting under the sonar thresholds).
     bool applyTimeSlicing(EngineInput& input, double dt);
     void buildBaseEngineInput(EngineInput& input, const Sample& s) const;
     void handleAutoGearboxDrive(EngineInput& input, const Sample& s, double dt, double speedForBox) const;
