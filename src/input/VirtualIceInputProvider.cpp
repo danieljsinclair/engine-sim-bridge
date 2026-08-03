@@ -66,6 +66,15 @@ EngineInput VirtualIceInputProvider::OnUpdateSimulation(double dt) {
     input.gearSelector = static_cast<int>(output.gearSelector);
     input.gearAutoMode = true; // VirtualIceTwin uses automatic gearbox
 
+    // Surface the upstream (CSV/feedback) road speed so the presentation layer
+    // can display it (EngineInput.roadSpeedKmh -> EngineState.controls.
+    // commandedSpeedKmh). Without this the live path dropped the road speed, so
+    // the speed readout showed only the engine-sim vehicle physics — which
+    // creeps near standstill because the wheels are not driven here — instead of
+    // the commanded road speed. Mirrors ReplayTelemetryProvider, which sets
+    // input.roadSpeedKmh = s.roadSpeedKmh for every sample.
+    input.roadSpeedKmh = currentSignal_.speedKmh;
+
     return input;
 }
 
