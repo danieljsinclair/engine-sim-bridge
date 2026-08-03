@@ -85,6 +85,10 @@ public:
     void reconfigureProfile(const std::vector<double>& gearRatios,
                             double diffRatio, double tireRadiusM);
 
+    /// Attach a gearbox diagnostic logger. Mirrors DemoInputProvider so
+    /// --gearbox-log works identically for --live-telemetry and --connect-demo.
+    void setGearboxLogger(twin::IGearboxLogger* logger);
+
     /// Get the current upstream signal (for diagnostics/debugging).
     UpstreamSignal getCurrentSignal() const;
 

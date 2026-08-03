@@ -179,6 +179,11 @@ void LiveTelemetryProvider::reconfigureProfile(const std::vector<double>& gearRa
     }
 }
 
+void LiveTelemetryProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
+    if (twinProvider_) {
+        twinProvider_->setGearboxLogger(logger);
+    }
+}
 UpstreamSignal LiveTelemetryProvider::getCurrentSignal() const {
     return currentSignal_.load(std::memory_order_seq_cst);
 }
