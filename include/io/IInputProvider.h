@@ -42,7 +42,11 @@ struct EngineInput {
     int gearSelector = 0;           // GearSelector value for display
     bool gearAutoMode = false;      // true=auto(ZF), false=manual
 
-    // Simulator auto-disengages starter when RPM > threshold
+    // Sustained starter during cranking (vs momentary starterButton)
+    bool starterMotor = false;
+
+    // Loop control
+    bool shouldContinue = true;     // false = input provider requests loop exit
 };
 
 // ============================================================================

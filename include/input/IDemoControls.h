@@ -17,6 +17,7 @@ public:
     virtual void setIgnition(bool on) = 0;
     virtual void toggleIgnition() = 0;
     virtual bool isIgnitionOn() const = 0;
+    virtual void setBrake(double level) = 0;
     virtual void requestExit() = 0;
 };
 

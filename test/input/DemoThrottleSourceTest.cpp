@@ -28,33 +28,38 @@ TEST_F(DemoThrottleSourceTest, SetThrottleLevel1_0_ReturnsOnNextPoll) {
     EXPECT_DOUBLE_EQ(throttleSource_->pollThrottle(), 1.0);
 }
 
-TEST_F(DemoThrottleSourceTest, ThrottleLatches_UntilExplicitlyChanged) {
+TEST_F(DemoThrottleSourceTest, ThrottleHoldsForDefaultFramesThenDecays) {
     throttleSource_->setThrottleLevel(0.5);
 
-    // Throttle should hold indefinitely (no snap-to-zero)
-    for (int i = 0; i < 100; ++i) {
-        EXPECT_DOUBLE_EQ(throttleSource_->pollThrottle(), 0.5);
+    // Should hold for DEFAULT_HOLD_FRAMES (8) polls
+    for (int i = 0; i < DemoThrottleSource::DEFAULT_HOLD_FRAMES; ++i) {
+        EXPECT_DOUBLE_EQ(throttleSource_->pollThrottle(), 0.5) << "Frame " << i;
     }
+
+    // Should decay to 0 after hold frames expire
+    EXPECT_DOUBLE_EQ(throttleSource_->pollThrottle(), 0.0);
 }
 
-TEST_F(DemoThrottleSourceTest, ThrottleChangesOnlyWhenSet) {
+TEST_F(DemoThrottleSourceTest, ThrottleChangesOnlyWhenSet_ResetsHoldCounter) {
     throttleSource_->setThrottleLevel(0.5);
     EXPECT_DOUBLE_EQ(throttleSource_->pollThrottle(), 0.5);
 
-    // After many polls, still holds
-    for (int i = 0; i < 50; ++i) {
-        throttleSource_->pollThrottle();
+    // Poll a few times (but not enough to expire)
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_DOUBLE_EQ(throttleSource_->pollThrottle(), 0.5);
     }
-    EXPECT_DOUBLE_EQ(throttleSource_->pollThrottle(), 0.5);
 
-    // Explicit change to new level
+    // Explicit change to new level resets hold counter
     throttleSource_->setThrottleLevel(0.8);
     EXPECT_DOUBLE_EQ(throttleSource_->pollThrottle(), 0.8);
 
-    // Holds new level
-    for (int i = 0; i < 50; ++i) {
-        EXPECT_DOUBLE_EQ(throttleSource_->pollThrottle(), 0.8);
+    // Should hold for DEFAULT_HOLD_FRAMES again (7 more polls after the first)
+    for (int i = 0; i < DemoThrottleSource::DEFAULT_HOLD_FRAMES - 1; ++i) {
+        EXPECT_DOUBLE_EQ(throttleSource_->pollThrottle(), 0.8) << "Frame " << i;
     }
+
+    // Then decay to 0
+    EXPECT_DOUBLE_EQ(throttleSource_->pollThrottle(), 0.0);
 }
 
 TEST_F(DemoThrottleSourceTest, RequestExit_SetsShouldContinueFalse) {
@@ -69,4 +74,24 @@ TEST_F(DemoThrottleSourceTest, ShouldContinue_DefaultsToTrue) {
 
 TEST_F(DemoThrottleSourceTest, DefaultThrottleIsZero) {
     EXPECT_DOUBLE_EQ(throttleSource_->pollThrottle(), 0.0);
+}
+
+TEST_F(DemoThrottleSourceTest, CustomHoldFrames) {
+    auto custom = std::make_unique<DemoThrottleSource>(3);  // Hold for 3 frames
+    custom->setThrottleLevel(0.5);
+
+    EXPECT_DOUBLE_EQ(custom->pollThrottle(), 0.5);
+    EXPECT_DOUBLE_EQ(custom->pollThrottle(), 0.5);
+    EXPECT_DOUBLE_EQ(custom->pollThrottle(), 0.5);
+
+    // Decays on 4th poll
+    EXPECT_DOUBLE_EQ(custom->pollThrottle(), 0.0);
+}
+
+TEST_F(DemoThrottleSourceTest, ZeroLevelStaysZero) {
+    throttleSource_->setThrottleLevel(0.0);
+
+    for (int i = 0; i < 20; ++i) {
+        EXPECT_DOUBLE_EQ(throttleSource_->pollThrottle(), 0.0);
+    }
 }

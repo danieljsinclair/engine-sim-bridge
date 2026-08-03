@@ -9,6 +9,7 @@
 #include "input/IThrottleSource.h"
 #include "input/GearSelectorInput.h"
 #include "input/IgnitionInput.h"
+#include "input/BrakeInput.h"
 #include "input/DemoVehiclePhysics.h"
 #include "input/VirtualIceInputProvider.h"
 #include "twin/IceVehicleProfile.h"
@@ -52,6 +53,7 @@ public:
     void setIgnition(bool on) override;
     void toggleIgnition() override;
     bool isIgnitionOn() const override;
+    void setBrake(double level) override;
     void requestExit() override;
 
     // Gearbox diagnostic logging
@@ -64,6 +66,7 @@ private:
     std::unique_ptr<IgnitionInput> ignition_;
     VirtualIceInputProvider twinProvider_;
     DemoVehiclePhysics physics_;
+    BrakeInput brakeInput_;
     bool initialized_ = false;
     std::string lastError_;
     double roadSpeedKmh_ = 0.0;

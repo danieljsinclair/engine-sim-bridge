@@ -2,12 +2,13 @@
 
 namespace input {
 
-DemoThrottleSource::DemoThrottleSource()
-    : shouldContinue_(true) {
+DemoThrottleSource::DemoThrottleSource(int holdFrames)
+    : shouldContinue_(true), holdFrames_(holdFrames) {
 }
 
 void DemoThrottleSource::setThrottleLevel(double level) {
     lastThrottle_ = level;
+    framesSinceSet_ = 0;
 }
 
 void DemoThrottleSource::requestExit() {
@@ -15,7 +16,12 @@ void DemoThrottleSource::requestExit() {
 }
 
 double DemoThrottleSource::pollThrottle() {
-    return lastThrottle_;
+    if (framesSinceSet_ < holdFrames_) {
+        ++framesSinceSet_;
+        return lastThrottle_;
+    }
+    lastThrottle_ = 0.0;
+    return 0.0;
 }
 
 bool DemoThrottleSource::shouldContinue() const {

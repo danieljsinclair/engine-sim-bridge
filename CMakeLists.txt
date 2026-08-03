@@ -127,6 +127,7 @@ set(BRIDGE_SOURCES
     src/input/DemoInputProvider.cpp
     src/input/LiveTelemetryProvider.cpp
     src/input/CsvTelemetryParser.cpp
+    src/input/BrakeInput.cpp
 )
 
 # Platform-specific audio hardware and factory
@@ -553,6 +554,7 @@ if(BUILD_BRIDGE_TESTS)
         test/input/DemoInputProviderTest.cpp
         test/input/GearSelectorInputTest.cpp
         test/input/IgnitionInputTest.cpp
+        test/input/BrakeInputTest.cpp
     )
     target_include_directories(demo_input_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
