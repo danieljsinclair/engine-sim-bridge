@@ -372,4 +372,21 @@ TEST(LiveTelemetryStreamTest, ReconfigureProfileEmptyRatiosIsNoOp) {
     EXPECT_TRUE(h.provider->IsConnected());
 }
 
+// T10: the upstream (CSV) road speed is surfaced on EngineInput.roadSpeedKmh so
+// the presentation layer can show the commanded road speed (it flows to
+// EngineState.controls.commandedSpeedKmh). The live path previously dropped it,
+// so the speed readout reflected only the engine-sim vehicle physics — which
+// creeps near standstill because the wheels are not driven here — instead of the
+// CSV road speed. Mirrors ReplayTelemetryProvider (input.roadSpeedKmh = s.
+// roadSpeedKmh per sample). Uses the vehicle-sim schema column `speed_kmh`
+// (an alias the parser maps to the road-speed column).
+TEST(LiveTelemetryStreamTest, CsvRoadSpeedIsSurfacedOnEngineInput) {
+    StreamHarness h("timestamp_ms,speed_kmh,throttle_percent\n1000,100,50\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_DOUBLE_EQ(in.roadSpeedKmh, 100.0)
+        << "CSV speed_kmh=100 must surface on EngineInput.roadSpeedKmh (was dropped)";
+}
+
 }  // namespace
