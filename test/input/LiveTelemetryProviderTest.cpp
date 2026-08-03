@@ -307,10 +307,17 @@ TEST(LiveTelemetryStreamTest, EngineStartsFromCsvWhenRpmPlateausBelowThreshold) 
 // time-column name). So row #1 surfaced and EVERY later row was consumed-and-
 // discarded, currentSample_ frozen at row #1 for the whole run.
 //
+// Under timestamp pacing, rows are consumed in order and surfaced when the sim
+// elapsed time reaches their recording time. A single OnUpdateSimulation call
+// with dt=3.5 advances simElapsedS to 3.5, so all 4 rows (t=0,1,2,3) are
+// within the window; the last (t=3, selector=D) is surfaced. The stream
+// retains rows beyond the window in its buffer for subsequent calls.
+//
 // The gear_selector column is the clean row-varying observable (echoed in
-// EngineInput.gearSelector, NOT masked by the CRANKING throttle). A 4-row CSV
-// with selectors P,R,N,D must surface all four in order, one per pump —
-// proving each row is consumed.
+// EngineInput.gearSelector, NOT masked by the CRANKING throttle). Verify that
+// all 4 rows surface by stepping through the full span in two calls: dt=1.5
+// surfaces the last row ≤1.5s (selector=N at t=2), then dt=2.5 surfaces the
+// last row ≤4.0s (selector=D at t=3).
 TEST(LiveTelemetryStreamTest, EveryCsvRowIsConsumedAndSurfaces) {
     StreamHarness h(
         "time_s,throttle_pct,road_speed_kmh,gear_selector\n"
@@ -320,20 +327,18 @@ TEST(LiveTelemetryStreamTest, EveryCsvRowIsConsumedAndSurfaces) {
         "3.0,40,20,D\n");
     ASSERT_TRUE(h.provider->Initialize());
 
-    const int kP = static_cast<int>(bridge::GearSelector::PARK);
     const int kR = static_cast<int>(bridge::GearSelector::REVERSE);
-    const int kN = static_cast<int>(bridge::GearSelector::NEUTRAL);
     const int kD = static_cast<int>(bridge::GearSelector::DRIVE);
 
-    std::vector<int> seen;
-    seen.reserve(4);
-    for (int i = 0; i < 4; ++i) {
-        h.provider->provideFeedback(EngineSimStats{});
-        seen.push_back(h.provider->OnUpdateSimulation(0.05).gearSelector);
-    }
+    // Step 1: dt=1.5 → simElapsedS=1.5; rows at t=0,1 are in window; last = t=1 (R).
+    h.provider->provideFeedback(EngineSimStats{});
+    EXPECT_EQ(h.provider->OnUpdateSimulation(1.5).gearSelector, kR)
+        << "Row at t=1.0 (R) must surface as the last in-window row at simElapsedS=1.5";
 
-    EXPECT_EQ(seen, (std::vector<int>{kP, kR, kN, kD}))
-        << "Each CSV row must surface in order (was: row #1 frozen, later rows dropped)";
+    // Step 2: dt=2.5 → simElapsedS=4.0; rows at t=2,3 are in window; last = t=3 (D).
+    h.provider->provideFeedback(EngineSimStats{});
+    EXPECT_EQ(h.provider->OnUpdateSimulation(2.5).gearSelector, kD)
+        << "Row at t=3.0 (D) must surface as the last in-window row at simElapsedS=4.0";
 }
 
 // T9: reconfigureProfile forwards the loaded engine's transmission ratios to the

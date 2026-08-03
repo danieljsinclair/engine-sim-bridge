@@ -92,9 +92,15 @@ public:
     /// Get the current upstream signal (for diagnostics/debugging).
     UpstreamSignal getCurrentSignal() const;
 
+    /// Skip CSV rows before this time (seconds). Mirrors ReplayTelemetryProvider
+    /// so --start-from works for --live-telemetry as well as --replay-telemetry.
+    void setStartFromS(double s);
+
 private:
     // CSV stdin path helpers
-    bool tryReadNextRow();
+    // simElapsedS is the current simulation elapsed seconds; used to pace row
+    // consumption by recording timestamp so that 1s of sim time = 1s of recording.
+    bool tryReadNextRow(double simElapsedS);
 
     /// Create + initialise twinProvider_ (shared by the CSV and JSON paths).
     bool initTwinProvider();
@@ -125,6 +131,8 @@ private:
     double elapsedS_ = 0.0;
     bool eofSeen_ = false;
     bool headerParsed_ = false;  // header parsed once; later calls read data rows only
+    double startFromS_ = -1.0;   // skip CSV rows before this time (-1 = disabled)
+    double baselineTimeS_ = -1.0;  // recording-time of the first consumed row (set on first success)
 };
 
 } // namespace input
