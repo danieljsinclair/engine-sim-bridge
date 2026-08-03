@@ -102,6 +102,21 @@ private:
     // consumption by recording timestamp so that 1s of sim time = 1s of recording.
     bool tryReadNextRow(double simElapsedS);
 
+    /// Parse the CSV header (first non-blank line), once. False until a usable
+    /// header is found (or EOF).
+    bool ensureHeaderParsed();
+
+    /// Outcome of classifying one parsed row against the current sim window.
+    enum class RowDisposition { Skip, Surface, Future };
+
+    /// Classify a row vs the sim window: before --start-from (Skip), within the
+    /// window (Surface), or ahead of sim time (Future). Sets baselineTimeS_ on
+    /// the first surfaced row.
+    RowDisposition classifyRow(const CsvSample& sample, double simElapsedS);
+
+    /// True if a line is all whitespace.
+    static bool isBlankLine(std::string_view s);
+
     /// Create + initialise twinProvider_ (shared by the CSV and JSON paths).
     bool initTwinProvider();
 
