@@ -796,3 +796,72 @@ TEST_F(AutomaticGearboxTest, Kickdown_OverridesDwell) {
     EXPECT_TRUE(gearbox.requestsShift()) << "Kickdown must override the dwell";
     EXPECT_LT(gearbox.getCurrentGear(), 2) << "Kickdown must downshift despite sub-dwell timing";
 }
+
+// ============================================================
+// fix95: top-gear logShiftState must not throw when the shift table
+// has fewer columns than the profile's gear count (e.g. Subaru EJ25:
+// 6 gears, 5 upshift columns). Previously getShiftSpeed(top, top+1, ...)
+// computed tableIndex = top-1 which equaled shiftTable[0].size(), hitting
+// the ASSERT and throwing std::runtime_error. The clamp makes every table
+// access bounds-safe regardless of profile dimensions.
+// ============================================================
+TEST_F(AutomaticGearboxTest, TopGear_LogShiftState_DoesNotThrow) {
+    // Build a 6-speed profile with 5 shift-table columns (upshifts 1→2 .. 5→6),
+    // matching the Subaru EJ25 layout that triggered the crash.
+    IceVehicleProfile profile = IceVehicleProfile::zf8hp45();
+    profile.gearRatios = {4.714, 3.143, 2.106, 1.667, 1.285, 1.000};
+    profile.shiftTable = {
+        {11, 17, 26, 32, 42},
+        {15, 22, 33, 41, 54},
+        {19, 28, 42, 53, 69},
+        {23, 35, 52, 65, 85},
+        {29, 43, 64, 81, 105},
+        {35, 52, 77, 97, 126},
+        {40, 59, 88, 110, 143},
+        {44, 65, 97, 122, 159},
+        {46, 68, 102, 128, 167},
+        {48, 71, 106, 134, 174}
+    };
+    profile.separateDownshiftTableEnabled = true;
+    profile.downshiftTable = {
+        {9, 13, 20, 25, 33},
+        {11, 16, 24, 30, 39},
+        {14, 21, 31, 39, 51},
+        {18, 27, 40, 51, 66},
+        {22, 33, 49, 62, 81},
+        {26, 39, 58, 74, 95},
+        {29, 44, 66, 83, 107},
+        {33, 49, 73, 92, 119},
+        {34, 51, 76, 96, 125},
+        {34, 51, 76, 97, 125}
+    };
+
+    AutomaticGearbox gearbox(profile);
+
+    // Attach a logger so logShiftState exercises the upshift-speed lookup
+    // every frame. Without a logger the getShiftSpeed call is skipped.
+    struct MockLogger : public IGearboxLogger {
+        std::vector<GearboxLogEntry> entries;
+        void log(const GearboxLogEntry& entry) override { entries.push_back(entry); }
+    };
+    MockLogger logger;
+    gearbox.setLogger(&logger);
+
+    // Accelerate past the 5→6 threshold so the box climbs to top gear. The 5→6
+    // upshift is ~105 kph @ 40% throttle and the 2s shift-dwell needs ~20 updates
+    // per shift, so run long and fast enough (190 updates to 200 kph) to clear
+    // every threshold + dwell and reach gear 6.
+    for (double speed = 10.0; speed <= 200.0; speed += 1.0) {
+        gearbox.update(0.1, speed, 0.4);
+    }
+
+    // Reached top gear — the next logShiftState call would have asked for
+    // getShiftSpeed(6, 7, ...) which previously threw.
+    EXPECT_EQ(gearbox.getCurrentGear(), 6);
+    EXPECT_FALSE(logger.entries.empty());
+    if (!logger.entries.empty()) {
+        const auto& lastEntry = logger.entries.back();
+        EXPECT_GE(lastEntry.upshiftSpeed, 0.0)
+            << "upshiftSpeed at top gear must be non-negative (clamped to last column)";
+    }
+}
