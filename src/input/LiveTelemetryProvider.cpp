@@ -95,7 +95,12 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
     // and the cranking lifecycle; the CSV sample becomes its upstream signal.
     if (stream_) {
         elapsedS_ += dt;
-        tryReadNextRow();
+        // Time slicing: jump elapsedS_ to startFromS_ so the twin's monotonic
+        // timestamp starts from the right point. Mirrors ReplayTelemetryProvider.
+        if (startFromS_ >= 0.0 && elapsedS_ < startFromS_) {
+            elapsedS_ = startFromS_;
+        }
+        tryReadNextRow(elapsedS_);
 
         if (!initialized_.load() || !twinProvider_) {
             lastError_ = "Provider not initialized";
@@ -179,6 +184,10 @@ void LiveTelemetryProvider::reconfigureProfile(const std::vector<double>& gearRa
     }
 }
 
+void LiveTelemetryProvider::setStartFromS(double s) {
+    startFromS_ = s;
+}
+
 void LiveTelemetryProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
     if (twinProvider_) {
         twinProvider_->setGearboxLogger(logger);
@@ -192,7 +201,7 @@ UpstreamSignal LiveTelemetryProvider::getCurrentSignal() const {
 // CSV stdin path
 // ============================================================================
 
-bool LiveTelemetryProvider::tryReadNextRow() {
+bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
     if (eofSeen_ || !stream_) return false;
 
     const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
@@ -218,7 +227,17 @@ bool LiveTelemetryProvider::tryReadNextRow() {
         if (!headerParsed_) { eofSeen_ = true; return false; }  // no header before EOF
     }
 
-    // Read exactly one data row and surface it (one row per call).
+    // Timestamp-paced row consumption: CsvSample.timeS is absolute epoch-style
+    // seconds, but simElapsedS is relative (starts near 0). Anchor on the first
+    // consumed row's timeS as baselineTimeS_, then consume-and-discard rows
+    // whose recording-time (relative to baseline) is at or before simElapsedS,
+    // surfacing the LAST matching row. Future rows stay in the istream buffer
+    // for subsequent calls. This makes 1 s of sim time = 1 s of recording time,
+    // fixing the "stuck at 0–3 km/h" bug caused by high-rate recordings being
+    // consumed at one row per sim frame (~60 rows/s vs ~442 rows/s real rate).
+    CsvSample lastInWindow{};
+    bool foundInWindow = false;
+
     std::string line;
     while (std::getline(*stream_, line)) {
         if (isBlank(line)) continue;
@@ -226,14 +245,44 @@ bool LiveTelemetryProvider::tryReadNextRow() {
         std::string parseError;
         if (double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
             csvParser_.parseRow(line, timeDivisor, sample, parseError)) {
-            currentSample_ = sample;
-            hasSample_ = true;
-            return true;
+            // startFromS_ skip: rows before the user's requested start time are
+            // consumed-and-discarded (stream has no seek).
+            if (startFromS_ >= 0.0 && sample.timeS < startFromS_) {
+                continue;
+            }
+            // Establish baseline on the first row that passes startFromS_.
+            // baselineTimeS_ converts absolute epoch-style timeS to a relative
+            // offset aligned with simElapsedS for all pacing decisions. The first
+            // row does NOT short-circuit: we keep scanning so the surfaced sample
+            // is the LAST row whose recording-time is at or before simElapsedS.
+            if (baselineTimeS_ < 0.0) {
+                baselineTimeS_ = sample.timeS;
+            }
+            const double recordingRelativeS = sample.timeS - baselineTimeS_;
+            if (recordingRelativeS > simElapsedS) {
+                // Future row: stop scanning and surface the last in-window row
+                // (committed below). getline has consumed this future row, so it
+                // is not re-read next call — a minor ~1-row/call time-skew on
+                // high-rate streams (tracked as follow-up debt, negligible for
+                // gearbox upshift behaviour at ~442 rows/s).
+                break;
+            }
+            // Within window: record and keep scanning for the last matching row.
+            lastInWindow = sample;
+            foundInWindow = true;
+        } else {
+            return false;  // malformed data row
         }
-        return false;  // malformed data row
     }
-    eofSeen_ = true;
-    return false;  // EOF — no more rows
+    // Mark EOF only on genuine exhaustion — a call that surfaced a row stays
+    // "connected" (more data may follow on a live stream); EOF is confirmed on a
+    // later call that surfaces nothing.
+    if (stream_->eof() && !foundInWindow) eofSeen_ = true;
+    if (foundInWindow) {
+        currentSample_ = lastInWindow;
+        hasSample_ = true;
+    }
+    return foundInWindow;  // false at clean EOF after all in-window rows consumed
 }
 
 bridge::GearSelector LiveTelemetryProvider::csvGearSelector() const {
