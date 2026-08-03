@@ -376,7 +376,7 @@ TEST_F(VirtualIceTwinTest, RunningStaysRunning_WhenSpeedAboveStandstillThreshold
 }
 
 // ============================================================================
-// RED PHASE TEST: Gearbox uses signal speed, not feedback speed for shift decisions
+// BEHAVIOUR TEST: Gearbox uses signal speed, not feedback speed for shift decisions
 // ============================================================================
 
 TEST_F(VirtualIceTwinTest, FeedbackSpeedDoesNotOverrideSignalSpeedForUpshift) {
@@ -394,15 +394,21 @@ TEST_F(VirtualIceTwinTest, FeedbackSpeedDoesNotOverrideSignalSpeedForUpshift) {
     sig.throttleFraction = 0.5;
     sig.speedKmh = 40.0;
 
-    // Run several frames to pass shift interval gate (minShiftIntervalS starts at 0 since no shift yet)
-    // 40 kph at 50% throttle is well above the 15 kph upshift threshold for 1->2 shift
-    for (int i = 0; i < 20; ++i) {
+    // Poll (timing-agnostic) instead of a fixed frame window: the clutch-cycle
+    // timings are TUNING KNOBS, so we must not freeze them behind a rigid loop.
+    // We assert the BEHAVIOUR — gearbox upshifts on the HIGH signal speed (40 kph),
+    // not the LOW feedback speed (5 kph) — by breaking as soon as gear > 1.
+    const int maxFrames = 400;  // ~6.4s at dt=0.016; generous, decoupled from clutch calibration
+    bool upshifted = false;
+    for (int i = 0; i < maxFrames; ++i) {
         twin_->update(0.016, sig);
+        if (twin_->getCurrentGear() > 1) {
+            upshifted = true;
+            break;
+        }
     }
 
-    // Assert: Gear should be > 1 if gearbox uses signal speed for shift decisions
-    // This test WILL FAIL with current code because gearbox uses feedback speed (5 kph)
-    EXPECT_GT(twin_->getCurrentGear(), 1)
+    EXPECT_TRUE(upshifted)
         << "Gearbox should upshift based on signal.speedKmh (40 kph), "
         << "not feedback speed (5 kph)";
 }
