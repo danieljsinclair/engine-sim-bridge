@@ -20,8 +20,8 @@ struct IceVehicleProfile {
     double kickdownDelta = 0.4;
     double kickdownWindowMs = 100.0;
     double shiftDisengageMs = 50.0;
-    double shiftPauseMs = 200.0;
-    double shiftReengageMs = 100.0;
+    double shiftPauseMs = 60.0;
+    double shiftReengageMs = 60.0;
     double throttleSmoothingTauMs = 50.0;
     double minShiftIntervalS = 3.0;
     double upshiftMinIntervalS = 0.0;      // 0 = use minShiftIntervalS
@@ -130,8 +130,8 @@ struct IceVehicleProfile {
 
         // Shift timing
         p.shiftDisengageMs = 50.0;
-        p.shiftPauseMs = 200.0;
-        p.shiftReengageMs = 100.0;
+        p.shiftPauseMs = 60.0;
+        p.shiftReengageMs = 60.0;
         p.throttleSmoothingTauMs = 50.0;
         p.minShiftIntervalS = 3.0;
 
