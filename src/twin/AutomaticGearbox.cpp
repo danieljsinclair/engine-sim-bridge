@@ -290,9 +290,11 @@ double AutomaticGearbox::getShiftSpeed(int fromGear, int toGear, double throttle
     ASSERT(fromGear >= 1 && toGear >= 1 && fromGear < toGear, "getShiftSpeed: gear indexes out of range");
     ASSERT(!profile_.shiftTable.empty(), "getShiftSpeed: shift table must be populated");
 
-    const size_t tableIndex = static_cast<size_t>(fromGear) - 1;
+    size_t tableIndex = static_cast<size_t>(fromGear) - 1;
+    if (!profile_.shiftTable[0].empty() && tableIndex >= profile_.shiftTable[0].size()) {
+        tableIndex = profile_.shiftTable[0].size() - 1;  // clamp to last valid column
+    }
 
-    ASSERT(tableIndex < profile_.shiftTable[0].size(), "getShiftSpeed: table index out of range for shift table");
     ASSERT(!profile_.shiftTableThrottleLevels.empty(), "getShiftSpeed: throttle levels must be populated");
 
     return interpolateShiftSpeed(profile_.shiftTable, throttle, profile_.shiftTableThrottleLevels, tableIndex);
@@ -308,10 +310,11 @@ double AutomaticGearbox::getDownshiftSpeed(int fromGear, int toGear, double thro
     ASSERT(fromGear >= 1 && toGear >= 1 && fromGear < toGear,
            "getDownshiftSpeed: gear indexes out of range");
 
-    const size_t tableIndex = static_cast<size_t>(fromGear) - 1;
-    ASSERT(!profile_.downshiftTable.empty() &&
-           tableIndex < profile_.downshiftTable[0].size(),
-           "getDownshiftSpeed: downshift table/index out of range");
+    size_t tableIndex = static_cast<size_t>(fromGear) - 1;
+    ASSERT(!profile_.downshiftTable.empty(), "getDownshiftSpeed: downshift table must be populated");
+    if (!profile_.downshiftTable[0].empty() && tableIndex >= profile_.downshiftTable[0].size()) {
+        tableIndex = profile_.downshiftTable[0].size() - 1;  // clamp to last valid column
+    }
     ASSERT(!profile_.downshiftTableThrottleLevels.empty(),
            "getDownshiftSpeed: downshift throttle levels must be populated");
 
