@@ -17,6 +17,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Bridge always builds as static library
 set(LIB_TYPE STATIC)
 
+# Afterfire spike (exhaust pops on throttle-cut overrun). Propagated into the
+# engine-sim subdirectory below so both halves agree — the macro changes
+# sizeof(CombustionChamber), so a mismatch is an ODR/layout bug, not just a
+# missing feature.
+option(ATG_ENGINE_SIM_AFTERFIRE_SPIKE "Enable exhaust afterfire spike" OFF)
+
 # Find engine-sim (expected as a submodule at ./engine-sim)
 # Use ENGINE_SIM_PATH if set by parent project for override
 if(NOT DEFINED ENGINE_SIM_PATH)
@@ -45,6 +51,9 @@ set(ENV{GIT_TERMINAL_PROMPT} "0")
 set(BUILD_ENGINE_SIM_APP OFF CACHE BOOL "Build engine-sim GUI app" FORCE)
 set(BUILD_BRIDGE OFF CACHE BOOL "Build bridge from engine-sim (we are the bridge)" FORCE)
 set(DISCORD_ENABLED OFF CACHE BOOL "Enable Discord Rich Presence" FORCE)
+# Force the afterfire setting through to engine-sim so both halves of the build
+# see the same definition (engine-sim re-exports it PUBLIC to all consumers).
+set(ATG_ENGINE_SIM_AFTERFIRE_SPIKE "${ATG_ENGINE_SIM_AFTERFIRE_SPIKE}" CACHE BOOL "Enable exhaust afterfire spike" FORCE)
 # Disable engine-sim's internal testing
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(ENGINE_SIM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -255,6 +264,12 @@ target_link_libraries(engine-sim-bridge
 
 target_compile_options(engine-sim-bridge PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags -Wno-unused-private-field -g)
 
+# Belt-and-braces: engine-sim already exports this PUBLIC, but the bridge's own
+# #ifdefs must not depend on link-order or on engine-sim being an in-tree target.
+if(ATG_ENGINE_SIM_AFTERFIRE_SPIKE)
+    target_compile_definitions(engine-sim-bridge PUBLIC ATG_ENGINE_SIM_AFTERFIRE_SPIKE)
+endif()
+
 if(TARGET engine-sim-script-interpreter)
     target_link_libraries(engine-sim-bridge
         PRIVATE
@@ -422,6 +437,67 @@ if(BUILD_BRIDGE_TESTS)
 
     if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME bridge_unit_tests COMMAND bridge_unit_tests --gtest_color=yes)
+    endif()
+
+    # ------------------------------------------------------------------------
+    # Afterfire determinism test (RED-phase TDD).
+    #
+    # Built ONLY when ATG_ENGINE_SIM_AFTERFIRE_SPIKE is ON. It links
+    # engine-sim-bridge, which exports the macro PUBLIC (see the
+    # target_compile_definitions block above), so this TU sees the same
+    # definition the bridge and engine-sim were compiled with — no duplicate
+    # #ifdef / ODR risk. The test is silent (asserts only the afterfire event
+    # counter), so it needs no audio output path.
+    # ------------------------------------------------------------------------
+    if(ATG_ENGINE_SIM_AFTERFIRE_SPIKE)
+        # Resolve the test's data paths at CONFIGURE time and inject them as
+        # compile definitions (the TEST_ES_DIR / TEST_FIXTURE_DIR convention used
+        # elsewhere in this file). The test must NOT guess the layout at runtime:
+        # deriving paths from __FILE__ breaks whenever the compiler is handed a
+        # relative source path.
+        #
+        # The engine script lives in the CLI repo (es_new/), which is the bridge's
+        # parent in the normal submodule layout; the impulse-response WAVs live in
+        # the bridge's own es/. Both candidates are probed so a standalone bridge
+        # checkout is diagnosable rather than silently mis-wired.
+        set(_afterfire_script "")
+        foreach(_candidate
+                "${CMAKE_CURRENT_SOURCE_DIR}/../es_new/C63_M156_V3.mr"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../../engine-sim-cli/es_new/C63_M156_V3.mr")
+            if(_afterfire_script STREQUAL "" AND EXISTS "${_candidate}")
+                get_filename_component(_afterfire_script "${_candidate}" ABSOLUTE)
+            endif()
+        endforeach()
+        if(_afterfire_script STREQUAL "")
+            message(WARNING
+                "Afterfire test: C63_M156_V3.mr not found near ${CMAKE_CURRENT_SOURCE_DIR}. "
+                "The test will build but fail on a missing script unless "
+                "ATG_AFTERFIRE_SCRIPT is set at run time.")
+        endif()
+
+        add_executable(afterfire_determinism_tests
+            test/AfterfireDeterminismTest.cpp
+        )
+        target_include_directories(afterfire_determinism_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${ENGINE_SIM_PATH}/include
+            ${ENGINE_SIM_PATH}/scripting/include
+            ${ENGINE_SIM_PATH}/dependencies/submodules/simple-2d-constraint-solver/include
+        )
+        target_compile_definitions(afterfire_determinism_tests PRIVATE
+            AFTERFIRE_TEST_SCRIPT_PATH="${_afterfire_script}"
+            AFTERFIRE_TEST_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/es"
+        )
+        target_link_libraries(afterfire_determinism_tests
+            PRIVATE
+                engine-sim-bridge
+                GTest::gtest_main
+        )
+        target_compile_options(afterfire_determinism_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+        if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+            add_test(NAME afterfire_determinism_tests COMMAND afterfire_determinism_tests --gtest_color=yes)
+        endif()
     endif()
 
     # Preset engine tests - verifies C++ factory engines match Piranha scripts

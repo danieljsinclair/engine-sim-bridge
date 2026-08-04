@@ -118,6 +118,14 @@ public:
     // the constraint was enabled.
     bool setVehicleSpeedTarget(double speedKmh);
 
+    // Afterfire (exhaust pops on throttle-cut overrun).
+    // Applies the config to every combustion chamber. When
+    // ATG_ENGINE_SIM_AFTERFIRE_SPIKE is not compiled in these are safe no-ops:
+    // configureAfterfire warns, getAfterfireDiagnostics returns an empty vector.
+    void configureAfterfire(const AfterfireConfig& config);
+    std::vector<AfterfireDiagnostics> getAfterfireDiagnostics() const;
+    void resetAfterfireDiagnostics();
+
     // Set display name directly
     void setName(const std::string& name) { name_ = name; }
 

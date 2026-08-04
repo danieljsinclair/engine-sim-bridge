@@ -12,6 +12,9 @@
 #include <cassert>
 #include <common/Verification.h>
 #include "common/PresetExceptions.h"
+#include "engine.h"
+#include "throttle.h"
+#include "direct_throttle_linkage.h"
 #include "simulator/BridgeSimulator.h"
 
 BridgeSimulator::BridgeSimulator(std::unique_ptr<Simulator> simulator, const std::string& name)
@@ -183,9 +186,32 @@ EngineSimStats BridgeSimulator::getStats() const {
 void BridgeSimulator::setThrottle(double position) {
     if (position < 0.0) position = 0.0;
     if (position > 1.0) position = 1.0;
-    if (m_simulator->getEngine()) {
-        m_simulator->getEngine()->setSpeedControl(position);
-    }
+    Engine* engine = m_simulator->getEngine();
+    if (!engine) return;
+
+    // engine->setThrottle() sets the intake plates AND m_throttleValue (the value
+    // getThrottle()/afterfire-gating reads). But the engine's throttle COMPONENT
+    // (DirectThrottleLinkage or Governor) re-asserts engine->setThrottle() every tick
+    // from setSpeedControl() — and the two components use OPPOSITE setSpeedControl
+    // polarity. So we must drive setSpeedControl with the type-correct value, else the
+    // component overrides our plates:
+    //   DirectThrottleLinkage: throttle = 1 - pow(s, gamma)  -> 0 = full, 1 = cut,
+    //                          so to realise user-throttle `position`, set s = (1 - position)
+    //                          (exact for gamma=1; correct at the 0/1 endpoints for any gamma).
+    //   Governor: target speed = (1-s)*min + s*max           -> 0 = idle, 1 = redline,
+    //             so set s = position (naive: 1 = full).
+    //   plain Throttle: update() is a no-op, so engine->setThrottle() above already holds.
+    engine->setThrottle(position);
+    // The throttle COMPONENT re-asserts engine->setThrottle() every tick from
+    // setSpeedControl(), and DirectThrottleLinkage uses INVERTED polarity
+    // (throttle = 1 - pow(s, gamma): 0 = full, 1 = cut). Governor and plain throttles
+    // (including SineEngine) use naive polarity (1 = full). So always drive
+    // setSpeedControl, inverting only for DirectThrottleLinkage.
+    Throttle* throttle = engine->getThrottleObject();
+    const double s = dynamic_cast<DirectThrottleLinkage*>(throttle)
+        ? position            // FIXED: empirical test proved s=1=OPEN, s=0=CLOSED (no inversion needed)
+        : position;
+    engine->setSpeedControl(s);
 }
 
 void BridgeSimulator::setIgnition(bool on) {
@@ -329,6 +355,104 @@ bool BridgeSimulator::configureDynoLoad(double loadFraction) {
     m_simulator->m_dyno.m_rotationSpeed = EngineSimDefaults::DYNO_IDLE_RPM * radPerRpm;
     m_simulator->m_dyno.m_maxTorque = units::torque(EngineSimDefaults::DYNO_MAX_TORQUE_FT_LBS, units::ft_lb) * loadFraction;
     return true;
+}
+
+// ============================================================================
+// Afterfire
+//
+// The bridge owns only the TRANSLATION between the bridge-level AfterfireConfig/
+// AfterfireDiagnostics and engine-sim's per-chamber types. All gating and firing
+// logic lives in engine-sim (SRP). When the spike is not compiled in, these are
+// no-ops so callers need no #ifdef of their own.
+// ============================================================================
+
+void BridgeSimulator::configureAfterfire(const AfterfireConfig& config) {
+#ifdef ATG_ENGINE_SIM_AFTERFIRE_SPIKE
+    Engine* engine = m_simulator ? m_simulator->getEngine() : nullptr;
+    if (!engine) return;
+
+    const int cylinderCount = engine->getCylinderCount();
+    for (int i = 0; i < cylinderCount; ++i) {
+        CombustionChamber::AfterfireParameters parameters;
+        parameters.enabled = config.enabled;
+        parameters.intensity = config.intensity;
+        parameters.cooldownMs = config.cooldownMs;
+        parameters.throttleCutoff = config.throttleCutoff;
+        parameters.rpmMin = config.rpmMin;
+        parameters.fuelFraction = config.fuelFraction;
+        parameters.probability = config.probability;
+        parameters.decelWindowMs = config.decelWindowMs;
+        parameters.maxEventsPerDecel = config.maxEventsPerDecel;
+        parameters.rpmFallThreshold = config.rpmFallThreshold;
+        parameters.globalPopIntervalMs = config.globalPopIntervalMs;
+        parameters.diagnostics = config.diagnostics;
+
+        engine->getChamber(i)->setAfterfireParameters(parameters);
+        engine->getChamber(i)->resetAfterfireDiagnostics();
+    }
+
+    if (config.enabled && logger_) {
+        logger_->info(LogMask::BRIDGE, __ilog_format(
+            "Afterfire: enabled (%d chambers, intensity=%.2f, cooldown=%.0fms, throttle<=%.2f, rpm>=%.0f)",
+            cylinderCount,
+            config.intensity,
+            config.cooldownMs,
+            config.throttleCutoff,
+            config.rpmMin));
+    }
+#else
+    if (config.enabled && logger_) {
+        logger_->warning(LogMask::BRIDGE,
+            "Afterfire: request ignored (ATG_ENGINE_SIM_AFTERFIRE_SPIKE not compiled in)");
+    }
+#endif
+}
+
+std::vector<AfterfireDiagnostics> BridgeSimulator::getAfterfireDiagnostics() const {
+    std::vector<AfterfireDiagnostics> diagnostics;
+
+#ifdef ATG_ENGINE_SIM_AFTERFIRE_SPIKE
+    const Engine* engine = m_simulator ? m_simulator->getEngine() : nullptr;
+    if (engine) {
+        const int cylinderCount = engine->getCylinderCount();
+        diagnostics.reserve(static_cast<size_t>(cylinderCount));
+
+        for (int i = 0; i < cylinderCount; ++i) {
+            const auto chamberDiagnostics = engine->getChamber(i)->getAfterfireDiagnostics();
+
+            AfterfireDiagnostics entry;
+            entry.eventCount = chamberDiagnostics.eventCount;
+            entry.skippedCooldown = chamberDiagnostics.skippedCooldown;
+            entry.skippedLowRpm = chamberDiagnostics.skippedLowRpm;
+            entry.skippedThrottle = chamberDiagnostics.skippedThrottle;
+            entry.skippedProbability = chamberDiagnostics.skippedProbability;
+            entry.skippedMaxEvents = chamberDiagnostics.skippedMaxEvents;
+            entry.skippedCrankAngle = chamberDiagnostics.skippedCrankAngle;
+            entry.skippedNoOverrun = chamberDiagnostics.skippedNoOverrun;
+            entry.eventsInCurrentDecel = chamberDiagnostics.eventsInCurrentDecel;
+            entry.lastEventRpm = chamberDiagnostics.lastEventRpm;
+            entry.lastEventThrottle = chamberDiagnostics.lastEventThrottle;
+            entry.lastEventPeakPressure = chamberDiagnostics.lastEventPeakPressure;
+            entry.lastEventEnergyReleased = chamberDiagnostics.lastEventEnergyReleased;
+
+            diagnostics.push_back(entry);
+        }
+    }
+#endif
+
+    return diagnostics;
+}
+
+void BridgeSimulator::resetAfterfireDiagnostics() {
+#ifdef ATG_ENGINE_SIM_AFTERFIRE_SPIKE
+    Engine* engine = m_simulator ? m_simulator->getEngine() : nullptr;
+    if (!engine) return;
+
+    const int cylinderCount = engine->getCylinderCount();
+    for (int i = 0; i < cylinderCount; ++i) {
+        engine->getChamber(i)->resetAfterfireDiagnostics();
+    }
+#endif
 }
 
 void BridgeSimulator::applyTransition(const TransitionDecision& decision) {

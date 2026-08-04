@@ -105,6 +105,43 @@ struct ISimulatorConfig {
     float convolutionLevel = 0.5f; // Runtime-tunable default
 };
 
+// Afterfire ("pop on overrun") tuning, expressed in bridge-level terms so callers
+// never need to include engine-sim headers. Mapped onto
+// CombustionChamber::AfterfireParameters by BridgeSimulator::configureAfterfire.
+struct AfterfireConfig {
+    bool enabled = false;
+    double intensity = 0.35;
+    double cooldownMs = 150.0;
+    double throttleCutoff = 0.2;
+    double rpmMin = 1800.0;
+    double fuelFraction = 0.004;
+    double probability = 0.5;
+    double decelWindowMs = 5000.0;
+    int maxEventsPerDecel = 5;
+    double rpmFallThreshold = 10.0;
+    double globalPopIntervalMs = 600.0;  // min sim-time between pops (spread)
+    bool diagnostics = false;
+};
+
+// Per-chamber afterfire counters, mirrored out of engine-sim.
+// eventCount is the field the acceptance test asserts on; the skipped* counters
+// explain WHY a pop did not happen when it did not.
+struct AfterfireDiagnostics {
+    int eventCount = 0;
+    int skippedCooldown = 0;
+    int skippedLowRpm = 0;
+    int skippedThrottle = 0;
+    int skippedProbability = 0;
+    int skippedMaxEvents = 0;
+    int skippedCrankAngle = 0;
+    int skippedNoOverrun = 0;
+    int eventsInCurrentDecel = 0;
+    double lastEventRpm = 0.0;
+    double lastEventThrottle = 0.0;
+    double lastEventPeakPressure = 0.0;
+    double lastEventEnergyReleased = 0.0;
+};
+
 // Runtime statistics
 struct EngineSimStats {
     double currentRPM = 0.0;

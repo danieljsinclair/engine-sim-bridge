@@ -263,6 +263,23 @@ bool SimulatorFactory::configureLoadTorque(ISimulator* simulator, double loadFra
 }
 
 // ============================================================================
+// configureAfterfire - Apply afterfire tuning to all chambers.
+// Thin delegation: the factory resolves the concrete type, BridgeSimulator owns
+// the translation, engine-sim owns the behaviour.
+// ============================================================================
+
+void SimulatorFactory::configureAfterfire(ISimulator* simulator, const AfterfireConfig& config, ILogging* logger) {
+    auto* bridgeSim = dynamic_cast<BridgeSimulator*>(simulator);
+
+    if (bridgeSim) {
+        bridgeSim->configureAfterfire(config);
+    }
+    else if (logger) {
+        logger->warning(LogMask::BRIDGE, "Afterfire: not a BridgeSimulator, ignoring");
+    }
+}
+
+// ============================================================================
 // createAndConfigure - Create simulator and optionally configure load torque
 // ============================================================================
 

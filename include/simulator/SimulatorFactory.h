@@ -73,6 +73,13 @@ public:
     static bool configureLoadTorque(ISimulator* simulator, double loadFraction, ILogging* logger = nullptr);
 
     /**
+     * Configure afterfire (exhaust pops on throttle-cut overrun) on an existing
+     * simulator. Requires ATG_ENGINE_SIM_AFTERFIRE_SPIKE compiled in; otherwise the
+     * call is a logged no-op. Does nothing if simulator is not a BridgeSimulator.
+     */
+    static void configureAfterfire(ISimulator* simulator, const AfterfireConfig& config, ILogging* logger = nullptr);
+
+    /**
      * Create and configure simulator with optional dyno load torque.
      * Combines create() + configureLoadTorque() for factory convenience.
      */
