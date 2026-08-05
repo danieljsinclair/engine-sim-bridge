@@ -47,7 +47,15 @@ public:
     /// (e.g. stdin pipe from vehicle-sim --stdout-csv) and routes each sample
     /// through the VirtualIceTwin (gearbox/clutch/throttle + cranking). The
     /// autoStart flag is retained for callers; the twin owns the start lifecycle.
-    LiveTelemetryProvider(std::istream& stream, bool autoStart);
+    ///
+    /// liveStream=true (the engine-sim-cli --live-telemetry pipe) surfaces the
+    /// LATEST row available in the stream every frame — no consumption pacing by
+    /// recording timestamp. Pacing by recording time is correct for a seekable
+    /// replay file but adds up to ~0.5s+ latency on a live pipe (the sim clock
+    /// must "catch up" to each row's timestamp), so a live feed must echo the
+    /// freshest sample immediately. liveStream=false keeps the deterministic
+    /// timestamp-paced behaviour (used by unit tests).
+    LiveTelemetryProvider(std::istream& stream, bool autoStart, bool liveStream = false);
 
     ~LiveTelemetryProvider() override;
 
@@ -106,6 +114,14 @@ private:
     /// header is found (or EOF).
     bool ensureHeaderParsed();
 
+    /// LIVE stdin path: surface the LATEST row read this frame (no timestamp
+    /// pacing) — keeps a live feed responsive. Returns true if a sample was found.
+    bool tryReadNextRowLive();
+
+    /// Timestamp-paced path (replay file): surface the last row at/before the sim
+    /// window. Returns true if a sample was found.
+    bool tryReadNextRowPaced(double simElapsedS);
+
     /// Outcome of classifying one parsed row against the current sim window.
     enum class RowDisposition { Skip, Surface, Future };
 
@@ -138,8 +154,9 @@ private:
     /// Non-virtual cleanup. Called by destructor and Shutdown().
     void doShutdown();
 
-    // CSV stdin members (unused in JSON mode)
+    /// CSV stdin members (unused in JSON mode)
     std::istream* stream_ = nullptr;
+    bool liveStream_ = false;  // true => surface latest row every frame (no pacing)
     CsvTelemetryParser csvParser_;
     CsvSample currentSample_{};
     bool hasSample_ = false;

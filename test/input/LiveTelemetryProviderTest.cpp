@@ -394,4 +394,43 @@ TEST(LiveTelemetryStreamTest, CsvRoadSpeedIsSurfacedOnEngineInput) {
         << "CSV speed_kmh=100 must surface on EngineInput.roadSpeedKmh (was dropped)";
 }
 
+// T11: LIVE stream mode (engine-sim-cli --live-telemetry stdin pipe) surfaces the
+// LATEST row available in the stream on the FIRST frame — no consumption pacing
+// by recording timestamp. This is the latency fix: under timestamp pacing a
+// sparse recording (rows at t=2,3.5,4,...) holds an old row until the sim clock
+// "catches up" to each row's timestamp, adding ~0.5s+ of input-to-audio lag on a
+// live pipe. The live ctor (liveStream=true) must surface the freshest sample
+// immediately, so the engine response tracks the pipe like keyboard input does.
+//
+// Observable: a single OnUpdateSimulation with dt=0.05 (simElapsedS~0.05, far
+// below the first row at t=2.0) must surface the LAST row (t=8, throttle=100),
+// NOT be gated behind the clock. The gear_selector column is the clean row-varying
+// observable (echoed in EngineInput.gearSelector, not masked by CRANKING throttle).
+TEST(LiveTelemetryStreamTest, LiveStreamSurfacesLatestRowImmediately) {
+    // Mirrors the sparse-probe shape that exposed the latency (rows at 2,3.5,4,6,8s).
+    const std::string csv =
+        "time_s,throttle_pct,road_speed_kmh,gear_selector\n"
+        "2.0,0,0,P\n"
+        "3.5,0,0,R\n"
+        "4.0,50,10,N\n"
+        "6.0,50,40,D\n"
+        "8.0,100,65,D\n";
+    std::istringstream stream(csv);
+    auto live = std::make_unique<input::LiveTelemetryProvider>(stream, /*autoStart=*/true, /*liveStream=*/true);
+    ASSERT_TRUE(live->Initialize());
+
+    const int kD = static_cast<int>(bridge::GearSelector::DRIVE);
+
+    // First frame, dt=0.05 → simElapsedS=0.05, far below t=2.0. Live mode must
+    // still surface the latest (t=8, selector=D) — no wait. The twin is in
+    // CRANKING on frame 1 (so raw throttle is masked by the cranking floor), but
+    // the selector is forwarded from the CSV column and echoed in EngineInput,
+    // making it the clean observable of which row was selected.
+    live->provideFeedback(EngineSimStats{});
+    input::EngineInput in = live->OnUpdateSimulation(0.05);
+    EXPECT_EQ(in.gearSelector, kD)
+        << "Live mode must surface the LATEST row (t=8, D) on the first frame, "
+           "not gate behind the sim clock (which would surface t=2, P).";
+}
+
 }  // namespace

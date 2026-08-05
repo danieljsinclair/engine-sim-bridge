@@ -15,10 +15,11 @@ LiveTelemetryProvider::LiveTelemetryProvider(const twin::IceVehicleProfile& prof
     , initialized_(false) {
 }
 
-LiveTelemetryProvider::LiveTelemetryProvider(std::istream& stream, bool autoStart)
+LiveTelemetryProvider::LiveTelemetryProvider(std::istream& stream, bool autoStart, bool liveStream)
     : ownedProfile_(twin::IceVehicleProfile::zf8hp45())
     , profile_(ownedProfile_)
-    , stream_(&stream) {
+    , stream_(&stream)
+    , liveStream_(liveStream) {
     // autoStart is retained in the signature for callers; the twin owns the
     // engine cranking lifecycle (OFF->CRANKING) once valid telemetry arrives.
     (void)autoStart;
@@ -243,10 +244,52 @@ LiveTelemetryProvider::classifyRow(const CsvSample& sample, double simElapsedS) 
 bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
     if (eofSeen_ || !stream_ || !ensureHeaderParsed()) return false;
 
-    // Timestamp-paced consumption: surface the LAST row whose recording-time
-    // (relative to baselineTimeS_) is at or before simElapsedS, so 1 s of sim
-    // time == 1 s of recording time. Fixes the "stuck at 0–3 km/h" bug where a
-    // high-rate recording was consumed at one row per sim frame.
+    // LIVE mode (engine-sim-cli --live-telemetry stdin pipe): surface the LATEST
+    // row currently available in the stream every frame. A live pipe delivers
+    // rows in real time, so the freshest sample IS the current state — there is
+    // no reason to hold an old row until a sim clock "catches up" to its recorded
+    // timestamp. Timestamp pacing (tryReadNextRowPaced) is correct for a seekable
+    // replay file, but on a live feed it forces the sim clock (elapsedS_, advanced
+    // by dt per frame) to reach each row's time before it is shown — adding up to
+    // ~0.5s+ latency (worst between sparse rows, e.g. t=0,2,3.5,4,6,8s). Echoing
+    // the latest sample immediately makes the live response as instant as keyboard.
+    if (liveStream_) return tryReadNextRowLive();
+
+    return tryReadNextRowPaced(simElapsedS);
+}
+
+// LIVE stdin path: surface the LATEST row read from the stream this frame, with
+// no pacing by recording timestamp. Malformed rows are skipped; rows before
+// --start-from are skipped; everything else updates the current sample.
+bool LiveTelemetryProvider::tryReadNextRowLive() {
+    CsvSample latest{};
+    bool found = false;
+    const double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
+    std::string line;
+    while (std::getline(*stream_, line)) {
+        if (isBlankLine(line)) continue;
+        CsvSample sample;
+        if (std::string parseError; !csvParser_.parseRow(line, timeDivisor, sample, parseError)) {
+            continue;  // malformed data row: skip, keep the last good sample
+        }
+        // Skip leading rows before --start-from; surface everything else.
+        if (startFromS_ >= 0.0 && sample.timeS < startFromS_) continue;
+        latest = sample;
+        found = true;
+    }
+    if (stream_->eof()) eofSeen_ = true;
+    if (found) {
+        currentSample_ = latest;
+        hasSample_ = true;
+    }
+    return found;
+}
+
+// Timestamp-paced consumption (replay file path): surface the LAST row whose
+// recording-time (relative to baselineTimeS_) is at or before simElapsedS, so
+// 1 s of sim time == 1 s of recording time. Fixes the "stuck at 0–3 km/h" bug
+// where a high-rate recording was consumed at one row per sim frame.
+bool LiveTelemetryProvider::tryReadNextRowPaced(double simElapsedS) {
     CsvSample lastInWindow{};
     bool foundInWindow = false;
     std::string line;
