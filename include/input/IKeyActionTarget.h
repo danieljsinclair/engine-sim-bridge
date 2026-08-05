@@ -20,6 +20,9 @@ public:
     virtual void shiftDown() {}
     virtual void toggleIgnition() {}
     virtual void setStarter() {}
+    // --start: hold the starter depressed until the engine fires (phase-aware).
+    // Default no-op; EngineInputTarget implements the held-starter behaviour.
+    virtual void setAutoStart() {}
     virtual void cyclePreset() {}
     virtual void adjustDynoTorque(double) {}
     virtual void releaseDynoTorque() {}

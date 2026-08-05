@@ -4,6 +4,7 @@
 #define DR_WAV_IMPLEMENTATION
 #include "simulator/ScriptLoadHelpers.h"
 #include "common/wav_loader.h"
+#include "common/PresetExceptions.h"  // SimulatorException (fail-fast on missing asset)
 
 namespace ScriptLoadHelpers {
 
@@ -59,11 +60,33 @@ bool loadImpulseResponses(
         WavLoader::Result wavResult = WavLoader::load(fullPath);
 
         if (!wavResult.valid) {
+            // Fail-fast: a missing impulse response means the run would produce
+            // no exhaust audio at all, so we must NOT silently continue. Throw
+            // (not return false) so the top-level SimulatorException handler names
+            // the missing path + asset base and the process exits non-zero.
+            // Distinguish "the file is absent" from "the file is present but
+            // unreadable/corrupt": both are fatal, but they need different fixes
+            // (wrong asset base vs. a bad WAV), and saying which saves a guess.
+            std::error_code ec;
+            const bool present = std::filesystem::exists(fullPath, ec) && !ec;
             if (logger) {
-                logger->error(LogMask::ASSET, __ilog_format("Failed to load required audio file: %s", fullPath.c_str()));
-                logger->error(LogMask::ASSET, __ilog_format("(asset base: %s, from script: %s)", assetBasePath.c_str(), filename.c_str()));
+                logger->error(LogMask::ASSET, __ilog_format(
+                    present ? "Required audio file is present but could not be decoded: %s"
+                            : "Required audio file is MISSING: %s",
+                    fullPath.c_str()));
+                logger->error(LogMask::ASSET, __ilog_format(
+                    "(asset base: %s, from script: %s, exhaust system: %d)",
+                    assetBasePath.c_str(), filename.c_str(), i));
+                logger->error(LogMask::ASSET,
+                    "Asset base must be the directory that directly contains 'sound-library/'"
+                    " (e.g. <repo>/es). Run the engine from a tree with the WAVs present.");
             }
-            return false;
+            throw SimulatorException(
+                std::string(present ? "Required audio file present but unreadable: "
+                                    : "Required audio file MISSING: ")
+                + fullPath
+                + " (asset base: " + assetBasePath
+                + ", referenced from script as: " + filename + ")");
         }
 
         if (logger) {
