@@ -283,7 +283,7 @@ check: test
 # Compiles .mr scripts from es/ into JSON presets using the preset_compiler.
 # Wrapper scripts (e.g., es/v8_gm_ls.mr) import from engines/atg-video-2/ which
 # resolves via the engine-sim root — the preset_compiler handles this.
-# Standalone scripts (e.g., es/C63_M156_V2.mr) are self-contained.
+# Standalone scripts (e.g., es/C63_M156_V3.mr) are self-contained.
 #
 # Single source of truth: CANDIDATE_ENGINES lists which scripts to compile.
 # ============================================================================
@@ -345,7 +345,7 @@ summary:
 		--removed-facet $(SONAR_REMOVED_FACET)
 
 # Add/remove engines here — this is the ONLY list. Everything here is compiled, tested, and shipped.
-ENGINES := ferrari_f136 2jz C63_M156_V2 C63_M156_V2b subaru_ej25 lfa_v10 v8_gm_ls 11_merlin_v12 06_subaru_ej25
+ENGINES := ferrari_f136 2jz C63_M156_V3 subaru_ej25 lfa_v10 v8_gm_ls 11_merlin_v12 06_subaru_ej25
 
 # Auto-generate compilation rules: each preset/$(engine).json depends on es/$(engine).mr
 # The preset_compiler takes: <script_path> <output_json> <engine_sim_root>
