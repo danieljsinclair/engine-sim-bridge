@@ -133,6 +133,13 @@ private:
     /// True if a line is all whitespace.
     static bool isBlankLine(std::string_view s);
 
+    /// True if a parsed sample has no meaningful signals (both throttle=0 and
+    /// roadSpeedKmh at the dyno-off sentinel). Such rows arrive when the CAN bus
+    /// is still waking up (e.g. ~166 blank frames from a live USB pipe before
+    /// real telemetry populates). They must be skipped so hasSample_ stays false
+    /// and the twin waits in OFF for valid data.
+    static bool isSampleBlank(const CsvSample& s);
+
     /// Create + initialise twinProvider_ (shared by the CSV and JSON paths).
     bool initTwinProvider();
 

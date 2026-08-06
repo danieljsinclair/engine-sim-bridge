@@ -225,6 +225,14 @@ bool LiveTelemetryProvider::isBlankLine(std::string_view s) {
     return std::find_if(s.begin(), s.end(), notSpace) == s.end();
 }
 
+bool LiveTelemetryProvider::isSampleBlank(const CsvSample& s) {
+    // Both throttle=0 AND roadSpeedKmh at the dyno-off sentinel (-2) means no
+    // CAN signals were decoded for this row. This is the signature of the blank
+    // initial frames emitted while the bus wakes up. Such rows must be skipped
+    // so hasSample_ stays false and the twin remains in OFF waiting for real data.
+    return s.throttle == 0.0 && s.roadSpeedKmh == -2.0;
+}
+
 LiveTelemetryProvider::RowDisposition
 LiveTelemetryProvider::classifyRow(const CsvSample& sample, double simElapsedS) {
     // Rows before --start-from are consumed-and-discarded (the stream has no seek).
@@ -260,7 +268,8 @@ bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
 
 // LIVE stdin path: surface the LATEST row read from the stream this frame, with
 // no pacing by recording timestamp. Malformed rows are skipped; rows before
-// --start-from are skipped; everything else updates the current sample.
+// --start-from are skipped; blank rows (no signals — throttle=0 and road speed
+// at the dyno-off sentinel) are skipped; everything else updates the current sample.
 bool LiveTelemetryProvider::tryReadNextRowLive() {
     CsvSample latest{};
     bool found = false;
@@ -272,6 +281,10 @@ bool LiveTelemetryProvider::tryReadNextRowLive() {
         if (std::string parseError; !csvParser_.parseRow(line, timeDivisor, sample, parseError)) {
             continue;  // malformed data row: skip, keep the last good sample
         }
+        // Skip blank rows (no decoded CAN signals) — these arrive while the bus
+        // is still waking up and would otherwise overwrite a valid sample with
+        // empty data, keeping the twin stuck in OFF/IDLE waiting for real telemetry.
+        if (isSampleBlank(sample)) continue;
         // Skip leading rows before --start-from; surface everything else.
         if (startFromS_ >= 0.0 && sample.timeS < startFromS_) continue;
         latest = sample;
@@ -279,6 +292,9 @@ bool LiveTelemetryProvider::tryReadNextRowLive() {
     }
     if (stream_->eof()) eofSeen_ = true;
     if (found) {
+        // Only update currentSample_ with a non-blank row. This ensures blank
+        // rows interleaved with populated data never overwrite the last valid
+        // sample (the "latest valid row" semantics the live path needs).
         currentSample_ = latest;
         hasSample_ = true;
     }
@@ -288,7 +304,8 @@ bool LiveTelemetryProvider::tryReadNextRowLive() {
 // Timestamp-paced consumption (replay file path): surface the LAST row whose
 // recording-time (relative to baselineTimeS_) is at or before simElapsedS, so
 // 1 s of sim time == 1 s of recording time. Fixes the "stuck at 0–3 km/h" bug
-// where a high-rate recording was consumed at one row per sim frame.
+// where a high-rate recording was consumed at one row per sim frame. Blank rows
+// (no decoded signals) are skipped so they don't pollute the in-window sample.
 bool LiveTelemetryProvider::tryReadNextRowPaced(double simElapsedS) {
     CsvSample lastInWindow{};
     bool foundInWindow = false;
@@ -301,6 +318,9 @@ bool LiveTelemetryProvider::tryReadNextRowPaced(double simElapsedS) {
             !csvParser_.parseRow(line, timeDivisor, sample, parseError)) {
             return false;  // malformed data row
         }
+        // Skip blank rows (no decoded CAN signals) — they carry no telemetry
+        // and would otherwise overwrite a valid in-window sample.
+        if (isSampleBlank(sample)) continue;
 
         const RowDisposition disposition = classifyRow(sample, simElapsedS);
         if (disposition == RowDisposition::Skip) continue;

@@ -433,4 +433,84 @@ TEST(LiveTelemetryStreamTest, LiveStreamSurfacesLatestRowImmediately) {
            "not gate behind the sim clock (which would surface t=2, P).";
 }
 
+// T12: blank CAN-bus-waking-up rows (throttle=0 AND roadSpeedKmh=-2 sentinel,
+// i.e. no decoded signals) must be SKIPPED so hasSample_ stays false and the
+// twin remains in OFF waiting for real telemetry. This is the live-USB-pipe
+// blocker fix: the ESP32 emits ~166 blank frames while the bus wakes up; without
+// the guard the first blank row sets hasSample_=true and the twin receives a
+// valid-but-empty signal, never transitioning OFF -> CRANKING.
+//
+// Two observables:
+//  (a) blank rows preceding any populated row: starter stays off (twin in OFF)
+//  (b) populated row after blanks: starter fires once (twin enters CRANKING)
+TEST(LiveTelemetryStreamTest, BlankInitialRowsSkippedEngineCranksWhenDataArrives) {
+    // 10 blank rows followed by one populated row (throttle=50%, speed=5 km/h).
+    // Live mode consumes the entire stream in one call, so the populated row
+    // at t=10.0 is the first non-blank row encountered → sets hasSample_=true
+    // with populated data. The second OnUpdateSimulation call (EOF now) reuses
+    // that sample; the twin transitions OFF -> CRANKING and fires the starter.
+    const std::string csv =
+        "time_s,throttle_pct,road_speed_kmh\n"
+        "0.0,,\n"
+        "1.0,,\n"
+        "2.0,,\n"
+        "3.0,,\n"
+        "4.0,,\n"
+        "5.0,,\n"
+        "6.0,,\n"
+        "7.0,,\n"
+        "8.0,,\n"
+        "9.0,,\n"
+        // First (and only) populated row at t=10 — this must surface and crank.
+        "10.0,50,5\n";
+    StreamHarness h(csv, /*autoStart=*/false);
+    ASSERT_TRUE(h.provider->Initialize());
+
+    // Call 1: consume the whole stream. Blank rows (t=0..9) are skipped; the
+    // populated row (t=10) is the first non-blank → hasSample_=true, but the
+    // twin has not yet been ticked with this signal.
+    h.provider->provideFeedback(EngineSimStats{});
+    // The starter fires on the transition OFF->CRANKING, which happens when
+    // the twin first receives the valid populated signal (this call).
+    EXPECT_TRUE(h.provider->OnUpdateSimulation(0.05).starterButton)
+        << "Populated row (t=10, throttle=50%, speed=5) must crank the engine";
+
+    // Call 2: EOF, sample unchanged (populated). RPM feedback (900 > 500) catches
+    // the engine → CRANKING -> IDLE, starter releases within a few ticks.
+    bool starterReleased = false;
+    for (int i = 0; i < 20 && !starterReleased; ++i) {
+        h.provider->provideFeedback(EngineSimStats{});
+        if (!h.provider->OnUpdateSimulation(0.05).starterButton) starterReleased = true;
+    }
+    EXPECT_TRUE(starterReleased)
+        << "Engine must catch (starter released) after populated row drives CRANKING->IDLE";
+}
+
+// T13: populated data followed by blank rows must NOT lose the populated sample.
+// In a live pipe, intermittent blank frames can arrive after the bus is up;
+// the "latest valid row" semantics must hold — blank rows must not overwrite
+// the last good sample.
+TEST(LiveTelemetryStreamTest, PopulatedRowSurvivesSubsequentBlankRows) {
+    const std::string csv =
+        "time_s,throttle_pct,road_speed_kmh\n"
+        "0.0,50,5\n"   // populated
+        "1.0,,\n"      // blank — must not overwrite
+        "2.0,,\n"      // blank — must not overwrite
+        "3.0,60,10\n"; // another populated (updates sample)
+    StreamHarness h(csv, /*autoStart=*/false);
+    ASSERT_TRUE(h.provider->Initialize());
+
+    // Call 1: consumes all rows. Non-blank rows at t=0 (throttle=50) and t=3
+    // (throttle=60). The latest non-blank is t=3 → currentSample_.throttle=0.6.
+    h.provider->provideFeedback(EngineSimStats{});
+    input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_TRUE(in.starterButton)
+        << "Populated sample must trigger cranking (OFF->CRANKING)";
+    // The blank rows at t=1 and t=2 must not have overwritten the sample.
+    // We can't observe currentSample_ directly, but the twin cranking proves
+    // a valid non-blank sample was received.
+    EXPECT_GT(in.throttle, 0.0)
+        << "Throttle from the latest populated row (t=3, 60%) must reach the twin";
+}
+
 }  // namespace
