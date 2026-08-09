@@ -87,6 +87,8 @@ bool CsvTelemetryParser::parseHeader(const std::string& headerLine, std::string&
             header_.colGearSelector = static_cast<int>(i);
         } else if (name == "clutch_pct" || name == "clutch") {
             header_.colClutch = static_cast<int>(i);
+        } else if (name == "motor_torque_nm" || name == "motor_torque" || name == "torque_nm") {
+            header_.colMotorTorque = static_cast<int>(i);
         }
     }
 
@@ -151,6 +153,11 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
     if (header_.colClutch >= 0 && header_.colClutch < static_cast<int>(fields.size()) &&
         parseDouble(fields[header_.colClutch], v) && v >= 0.0) {
         s.clutchPct = std::clamp(v / 100.0, 0.0, 1.0);
+    }
+
+    if (header_.colMotorTorque >= 0 && header_.colMotorTorque < static_cast<int>(fields.size()) &&
+        parseDouble(fields[header_.colMotorTorque], v)) {
+        s.motorTorqueNm = v;
     }
 
     out = s;

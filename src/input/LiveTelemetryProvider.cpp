@@ -20,6 +20,11 @@ LiveTelemetryProvider::LiveTelemetryProvider(std::istream& stream, bool autoStar
     , profile_(ownedProfile_)
     , stream_(&stream)
     , liveStream_(liveStream) {
+    // NOTE: zf8hp45 is ONLY a construction-time default. The LIVE path must have
+    // its geometry supplied by the loaded .mr — CLIMain::reconfigureGearboxProviders
+    // FAILS FAST (throws CliException) if the script lacks a transmission/vehicle
+    // node, so this default never silently drives an engine for --live-telemetry.
+    // The non-live paths (replay/demo) may legitimately keep it.
     // autoStart is retained in the signature for callers; the twin owns the
     // engine cranking lifecycle (OFF->CRANKING) once valid telemetry arrives.
     (void)autoStart;
@@ -112,6 +117,7 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
         if (hasSample_) {
             signal.throttleFraction = currentSample_.throttle;
             signal.speedKmh = currentSample_.roadSpeedKmh;
+            signal.motorTorqueNm = currentSample_.motorTorqueNm;
             // The row is valid telemetry even when speed is blank (dyno off); a
             // non-zero timestamp keeps the twin's telemetry-timeout guard happy.
             signal.isValid = true;
@@ -169,6 +175,12 @@ void LiveTelemetryProvider::setGearSelector(int selector) {
 void LiveTelemetryProvider::setIgnition(bool on) {
     if (twinProvider_) {
         twinProvider_->setIgnition(on);
+    }
+}
+
+void LiveTelemetryProvider::setWheelCouplingMode(twin::WheelCouplingMode mode) {
+    if (twinProvider_) {
+        twinProvider_->setWheelCouplingMode(mode);
     }
 }
 
@@ -261,44 +273,65 @@ bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
     // by dt per frame) to reach each row's time before it is shown — adding up to
     // ~0.5s+ latency (worst between sparse rows, e.g. t=0,2,3.5,4,6,8s). Echoing
     // the latest sample immediately makes the live response as instant as keyboard.
-    if (liveStream_) return tryReadNextRowLive();
+    if (liveStream_) return tryReadNextRowLive(simElapsedS);
 
     return tryReadNextRowPaced(simElapsedS);
 }
 
-// LIVE stdin path: surface the LATEST row read from the stream this frame, with
-// no pacing by recording timestamp. Malformed rows are skipped; rows before
-// --start-from are skipped; blank rows (no signals — throttle=0 and road speed
-// at the dyno-off sentinel) are skipped; everything else updates the current sample.
-bool LiveTelemetryProvider::tryReadNextRowLive() {
-    CsvSample latest{};
-    bool found = false;
+// LIVE stdin path: surface the latest row available within a small time
+// lookahead of the sim clock, with no strict timestamp pacing. Malformed rows,
+// --start-from-prior rows, and blank rows (throttle=0 + road speed at the dyno-off
+// sentinel) are skipped; everything else updates the current sample.
+//
+// The lookahead window (kLiveLookaheadS) is the latency/responsiveness trade-off:
+//   - A live pipe delivers rows in real time, so the newest row is almost always
+//     within the window -> surfaced next frame. Latency stays sub-window (as
+//     instant as keyboard), which is what the a321e1f latency fix wanted.
+//   - A file-redirected capture is fully buffered, so rows advance through the
+//     window as the sim clock (simElapsedS) sweeps forward -> the twin walks the
+//     speed ramp and the gearbox shifts. This is what drain-to-EOF broke: that
+//     loop read the ENTIRE stream in one call and pinned currentSample_ to the
+//     capture's FINAL (often near-standstill) row, freezing the gearbox in 1st.
+// We stop reading at the first row beyond the window (or EOF) so the stream
+// position advances correctly for both feed types.
+bool LiveTelemetryProvider::tryReadNextRowLive(double simElapsedS) {
+    // Same in-window scan as the paced path, but with a small lookahead horizon
+    // (kLiveLookaheadS) instead of strict simElapsedS gating. This keeps a live
+    // feed responsive (rows arriving near real time fall inside the horizon and are
+    // surfaced next frame — latency stays sub-window, as instant as keyboard) while
+    // still WALKING a file-redirected capture row-by-row as the sim clock sweeps
+    // forward, so the twin sees the speed ramp and the gearbox shifts. The strict
+    // paced path is correct for seekable replay files but added ~0.5s+ latency on a
+    // live pipe (holding rows until the sim clock caught their timestamp); the
+    // lookahead removes that wait. The ~1-row/call skew from breaking on the first
+    // beyond-horizon row is the same minor effect the paced path already accepts.
+    constexpr double kLiveLookaheadS = 0.25;  // latency budget
     const double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
     std::string line;
+    CsvSample lastInWindow{};
+    bool foundInWindow = false;
     while (std::getline(*stream_, line)) {
         if (isBlankLine(line)) continue;
         CsvSample sample;
         if (std::string parseError; !csvParser_.parseRow(line, timeDivisor, sample, parseError)) {
-            continue;  // malformed data row: skip, keep the last good sample
+            continue;  // malformed data row: skip
         }
-        // Skip blank rows (no decoded CAN signals) — these arrive while the bus
-        // is still waking up and would otherwise overwrite a valid sample with
-        // empty data, keeping the twin stuck in OFF/IDLE waiting for real telemetry.
         if (isSampleBlank(sample)) continue;
-        // Skip leading rows before --start-from; surface everything else.
         if (startFromS_ >= 0.0 && sample.timeS < startFromS_) continue;
-        latest = sample;
-        found = true;
+        // Anchor absolute epoch-style timeS to a relative offset on the first row,
+        // then compare against the sim clock + lookahead horizon.
+        if (baselineTimeS_ < 0.0) baselineTimeS_ = sample.timeS;
+        if (const double recordingRelativeS = sample.timeS - baselineTimeS_;
+            recordingRelativeS > simElapsedS + kLiveLookaheadS) break;  // future row
+        lastInWindow = sample;
+        foundInWindow = true;
     }
-    if (stream_->eof()) eofSeen_ = true;
-    if (found) {
-        // Only update currentSample_ with a non-blank row. This ensures blank
-        // rows interleaved with populated data never overwrite the last valid
-        // sample (the "latest valid row" semantics the live path needs).
-        currentSample_ = latest;
+    if (stream_->eof() && !foundInWindow) eofSeen_ = true;
+    if (foundInWindow) {
+        currentSample_ = lastInWindow;
         hasSample_ = true;
     }
-    return found;
+    return foundInWindow;
 }
 
 // Timestamp-paced consumption (replay file path): surface the LAST row whose

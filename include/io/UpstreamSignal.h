@@ -10,6 +10,7 @@ struct UpstreamSignal {
     double speedKmh = 0.0;
     double accelerationG = 0.0;
     double brakeFraction = 0.0;
+    double motorTorqueNm = 0.0;       // Recorded motor/engine torque (Nm) for MATCH mode
     uint64_t timestampUtcMs = 0;
     bool isValid = false;
 };

@@ -88,6 +88,43 @@ TEST_F(VirtualIceInputProviderTest, ClutchPressureMapsFromTwin) {
     EXPECT_LE(input.clutchPressure, 1.0);
 }
 
+// When the twin is in PIN mode and RUNNING, its pinVehicleSpeedTargetKmh (the CSV
+// speed) must be surfaced through EngineInput.vehicleSpeedTargetKmh so the
+// SimulationLoop pins the sim wheels to the CSV speed. FREE (default) leaves it
+// at the -1 sentinel, which SimulationLoop treats as "don't change".
+TEST_F(VirtualIceInputProviderTest, PinModeSurfacesVehicleSpeedTarget) {
+    ASSERT_TRUE(provider_->Initialize());
+
+    // DRIVE selector + a real throttle so the twin reaches RUNNING.
+    const int drive = 99;  // bridge::GearSelector::DRIVE
+    provider_->setGearSelector(drive);
+
+    UpstreamSignal signal;
+    signal.throttleFraction = 0.8;
+    signal.speedKmh = 32.0;
+    signal.isValid = true;
+    signal.timestampUtcMs = 1000;  // non-zero -> twin treats as valid telemetry
+    provider_->setUpstreamSignal(signal);
+
+    // Advance through CRANKING (deterministic 3s fallback) into RUNNING.
+    for (int i = 0; i < 250; ++i) provider_->OnUpdateSimulation(0.016);
+    provider_->setWheelCouplingMode(WheelCouplingMode::Pin);
+
+    EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(input.vehicleSpeedTargetKmh, 32.0)
+        << "PIN must carry the CSV speed into EngineInput.vehicleSpeedTargetKmh";
+
+    // FREE (default) must NOT pin: leave the -1 sentinel.
+    auto freeProvider = std::make_unique<VirtualIceInputProvider>(profile_);
+    ASSERT_TRUE(freeProvider->Initialize());
+    freeProvider->setGearSelector(drive);
+    freeProvider->setUpstreamSignal(signal);
+    for (int i = 0; i < 250; ++i) freeProvider->OnUpdateSimulation(0.016);
+    EngineInput freeInput = freeProvider->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(freeInput.vehicleSpeedTargetKmh, -1.0)
+        << "FREE must leave vehicleSpeedTargetKmh at the -1 sentinel (no pin)";
+}
+
 TEST_F(VirtualIceInputProviderTest, CrankingStateActivatesStarterAndIgnition) {
     ASSERT_TRUE(provider_->Initialize());
 

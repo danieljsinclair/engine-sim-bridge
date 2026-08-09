@@ -68,6 +68,10 @@ public:
     int getGear() const override;
     void setClutchPressure(double pressure) override;
     void setBrakePressure(double pressure) override;
+
+    // MATCH mode: inject recorded drivetrain torque (Nm) at the transmission
+    // input / rotating-mass side. The torque flows clutch->gearbox->diff->wheels.
+    void setDrivetrainInputTorque(double nm);
     double getEngineRpm() const override;
     EnginePhase getEnginePhase() const override { return enginePhase_; }
     void applyTransition(const TransitionDecision& decision) override;

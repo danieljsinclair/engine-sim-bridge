@@ -83,6 +83,9 @@ public:
     /// Forward ignition state to the twin.
     void setIgnition(bool on);
 
+    /// Select the live clutch wheel-coupling strategy (FREE/PIN).
+    void setWheelCouplingMode(twin::WheelCouplingMode mode);
+
     /// Forward simulator RPM feedback to the twin for cranking transition.
     void provideFeedback(const EngineSimStats& stats) override;
 
@@ -114,9 +117,11 @@ private:
     /// header is found (or EOF).
     bool ensureHeaderParsed();
 
-    /// LIVE stdin path: surface the LATEST row read this frame (no timestamp
-    /// pacing) — keeps a live feed responsive. Returns true if a sample was found.
-    bool tryReadNextRowLive();
+    /// LIVE stdin path: surface the latest row available within a small time
+    /// lookahead of the sim clock (no strict timestamp pacing) — keeps a live feed
+    /// responsive while still walking a file-redirected capture row-by-row so the
+    /// gearbox sees the speed ramp. Returns true if a sample was found.
+    bool tryReadNextRowLive(double simElapsedS);
 
     /// Timestamp-paced path (replay file): surface the last row at/before the sim
     /// window. Returns true if a sample was found.

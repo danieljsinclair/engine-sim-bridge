@@ -6,6 +6,7 @@
 #include <twin/AutomaticGearbox.h>
 #include <twin/ThrottleSmoother.h>
 #include <twin/IGearboxLogger.h>
+#include <twin/WheelCoupling.h>
 #include <io/UpstreamSignal.h>
 #include <simulator/GearConventions.h>
 #include <memory>
@@ -44,6 +45,12 @@ public:
 
     double getSmoothedThrottle() const { return throttleSmoother_.getCurrentValue(); }
 
+    // Select the wheel-coupling strategy (FREE default, or PIN to mirror replay).
+    void setWheelCouplingMode(WheelCouplingMode mode) {
+        wheelCouplingMode_ = mode;
+        coupling_ = makeWheelCoupling(mode);
+    }
+
 private:
     IceVehicleProfile profile_;  // owned (was const ref — caused dangling + no reconfigure)
     std::unique_ptr<AutomaticGearbox> gearbox_;
@@ -59,6 +66,14 @@ private:
     double clutchPressure_ = 1.0;
     bridge::GearSelector selector_ = bridge::GearSelector::NEUTRAL;
     bool ignitionOn_ = true;
+
+    WheelCouplingMode wheelCouplingMode_ = WheelCouplingMode::Free;
+    std::unique_ptr<IWheelCoupling> coupling_ = makeWheelCoupling(WheelCouplingMode::Free);
+
+    // RPM the engine would be at if locked to the given wheel speed in the
+    // current gear (clones the replay formula). Fallback idleRpm when gear is
+    // out of range.
+    double roadSpeedImpliedRpmFor(double wheelSpeedKmh) const;
 
     void updateShiftExecution(double dt);
 };

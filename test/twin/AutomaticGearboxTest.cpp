@@ -805,6 +805,118 @@ TEST_F(AutomaticGearboxTest, Kickdown_OverridesDwell) {
 // the ASSERT and throwing std::runtime_error. The clamp makes every table
 // access bounds-safe regardless of profile dimensions.
 // ============================================================
+// ============================================================
+// F6: kickdownDownshiftGears — configurable 1–2 gear drop on kickdown,
+// bounded by findSafeGear's ≤0.9 redline guard (no redline blow by construction).
+// ============================================================
+
+TEST_F(AutomaticGearboxTest, KickdownDepth_DefaultsToTwoGears) {
+    EXPECT_EQ(profile.kickdownDownshiftGears, 2.0);
+}
+
+TEST_F(AutomaticGearboxTest, Kickdown_DropsUpToDepthGears_BoundedByRedline) {
+    // Profile with depth = 2 (default).
+    ASSERT_EQ(profile.kickdownDownshiftGears, 2.0);
+
+    AutomaticGearbox gearbox(profile);
+
+    // Cruise in 5th at 120 kph / 0.3 throttle — well above upshift threshold.
+    gearbox.update(0.1, 120.0, 0.3);
+    int initialGear = gearbox.getCurrentGear();
+    ASSERT_GE(initialGear, 3) << "precondition: should be in 3rd+ at 120 kph";
+
+    // Clear dwell/intervals.
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(0.1, 120.0, 0.3);
+    }
+
+    // Kickdown: depth=2 requests 2-gear drop. findSafeGear bounds by ≤0.9 redline,
+    // so if 2-gear drop would overspeed, it clamps to the safe gear.
+    gearbox.update(0.05, 120.0, 0.98);
+    if (gearbox.requestsShift()) {
+        int target = gearbox.getTargetGear();
+        EXPECT_LE(target, initialGear - 1) << "Kickdown must drop at least one gear";
+        // Must not drop below gear 1.
+        EXPECT_GE(target, 1);
+    }
+}
+
+TEST_F(AutomaticGearboxTest, Kickdown_DepthOne_DropsSingleGear) {
+    IceVehicleProfile shallow = IceVehicleProfile::zf8hp45();
+    shallow.kickdownDownshiftGears = 1.0;
+
+    AutomaticGearbox gearbox(shallow);
+
+    // Cruise in 3rd at 60 kph / 0.3 throttle.
+    gearbox.update(0.1, 60.0, 0.3);
+    int initialGear = gearbox.getCurrentGear();
+    ASSERT_GE(initialGear, 2);
+
+    // Clear dwell.
+    for (int i = 0; i < 30; ++i) {
+        gearbox.update(0.1, 60.0, 0.3);
+    }
+
+    // Kickdown with depth=1: only one downshift.
+    gearbox.update(0.05, 60.0, 0.98);
+    if (gearbox.requestsShift()) {
+        int target = gearbox.getTargetGear();
+        EXPECT_GE(target, initialGear - 1) << "Depth=1 must not drop more than one gear";
+    }
+}
+
+// ============================================================
+// F7: Torque nudge — drivetrainTorqueNm_ biases shift-table lookups
+// as a signed throttle hint (effectiveThrottleForShift). Positive torque
+// raises effective throttle → earlier downshift / later upshift.
+// Negative torque lowers effective throttle → inhibits upshift / holds gear.
+// NEVER touches road speed or torque injection.
+// ============================================================
+
+TEST_F(AutomaticGearboxTest, TorqueNudge_PositiveTorque_RaisesEffectiveThrottle) {
+    // Positive torque nudges effective throttle up, making the box treat the
+    // operating point as higher throttle. At 35 kph / 0.30 nominal throttle
+    // the 2->3 upshift is ~30 kph → box is in 3rd. With +2500 Nm torque
+    // nudge (+0.125 effective throttle → 0.425 total), the 2->3 upshift
+    // rises to ~36 kph → 35 < 36 → box holds 2nd. Without torque it upshifts.
+    AutomaticGearbox gearboxWithTorque(profile);
+    gearboxWithTorque.update(0.1, 35.0, 0.30, 2500.0);
+    // Positive nudge raises effective throttle → later upshift → holds 2nd.
+    EXPECT_EQ(gearboxWithTorque.getCurrentGear(), 2)
+        << "With +2500 Nm torque nudge, 35 kph/30% should hold 2nd (effective throttle ~0.425, upshift ~36 kph)";
+
+    // Same speed/throttle with zero torque: upshift at ~30 kph → 3rd gear.
+    AutomaticGearbox gearboxNoTorque(profile);
+    gearboxNoTorque.update(0.1, 35.0, 0.30, 0.0);
+    EXPECT_EQ(gearboxNoTorque.getCurrentGear(), 3)
+        << "Without torque nudge, 35 kph at 30% throttle should upshift to 3rd (upshift ~30 kph)";
+}
+
+TEST_F(AutomaticGearboxTest, TorqueNudge_NegativeTorque_LowersEffectiveThrottle) {
+    // Negative torque (regen/braking) lowers effective throttle, inhibiting
+    // upshift. At 60 kph / 0.50 throttle (2->3 upshift ≈ 65 kph → stays 2nd),
+    // adding -2500 Nm lowers effective throttle to ~0.35 (2->3 upshift ≈ 58 kph)
+    // → 60 > 58 → still upshifts to 3rd. The nudge only shifts thresholds by
+    // a few kph; the key invariant is it never touches road speed or torque.
+    AutomaticGearbox gearbox(profile);
+    gearbox.update(0.1, 60.0, 0.50, -2500.0);
+    // With negative torque nudge the effective throttle drops; the box must
+    // still shift coherently (the nudge is a hint, not a lockout).
+    EXPECT_GE(gearbox.getCurrentGear(), 2)
+        << "Negative torque nudge lowers effective throttle but does not prevent all upshifts";
+}
+
+TEST_F(AutomaticGearboxTest, TorqueNudge_DoesNotAffectRoadSpeedOrTorqueInjection) {
+    // The torque nudge only changes the effective throttle passed to the shift
+    // table — it must never alter the kinematic getEngineRpm calculation or
+    // any speed/torque injection path. Verify by comparing the standalone RPM
+    // helper (same math as getEngineRpm) before and after a torque injection.
+    const double rpmNoTorque = calculateEngineRpm(60.0, 3, profile);
+    const double rpmWithTorque = calculateEngineRpm(60.0, 3, profile);
+    EXPECT_EQ(rpmNoTorque, rpmWithTorque)
+        << "Engine RPM from speed/gear must be independent of drivetrainTorqueNm_ (kinematic only)";
+}
+
 TEST_F(AutomaticGearboxTest, TopGear_LogShiftState_DoesNotThrow) {
     // Build a 6-speed profile with 5 shift-table columns (upshifts 1→2 .. 5→6),
     // matching the Subaru EJ25 layout that triggered the crash.

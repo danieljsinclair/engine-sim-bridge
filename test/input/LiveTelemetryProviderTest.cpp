@@ -234,6 +234,68 @@ TEST(LiveTelemetryStreamTest, DefaultSelectorIsDriveReachesRunning) {
         << "With no gear_selector column the twin must default to DRIVE and upshift";
 }
 
+// ----------------------------------------------------------------------------
+// LIVE stream mode (liveStream_ = true): the low-latency path used by
+// --live-telemetry < file. MUST still consume the capture INCREMENTALLY (one
+// row per frame), not drain the whole stream and pin currentSample_ to the LAST
+// row. Regressed in a321e1f ("surface latest stdin row immediately") when the
+// live reader looped std::getline to EOF in a single OnUpdateSimulation call: a
+// file redirect is drained at once, currentSample_ froze at the capture's final
+// (near-standstill) row, and the gearbox never saw a speed ramp -> never shifted.
+// The latency intent (no timestamp gating) is preserved; only the drain must go.
+// ----------------------------------------------------------------------------
+struct LiveStreamHarness {
+    std::istringstream stream;
+    std::unique_ptr<input::LiveTelemetryProvider> provider;
+    explicit LiveStreamHarness(const std::string& csv, bool autoStart = true)
+        : stream(csv) {
+        // liveStream = true — the exact path CLIMain uses for --live-telemetry.
+        provider = std::make_unique<input::LiveTelemetryProvider>(stream, autoStart, /*liveStream=*/ true);
+    }
+};
+
+// Feed a DENSE multi-row capture that ramps to 100 km/h then ends near-standstill
+// (mirrors a real driving capture whose tail is parked). Dense rows matter: the
+// live/paced reader drops a row once it is read as "future" (a ~1-row/call skew
+// that is negligible at real recording rates), so a sparse capture would skip
+// transitions. The gearbox must walk the speed ramp and upshift. With the
+// EOF-drain bug, currentSample_ pins to the final 1.76 km/h row and the box
+// stays in 1st -> this FAILS (red).
+TEST(LiveTelemetryStreamTest, LiveModeConsumesIncrementallyNotPinnedToLastRow) {
+    // 30 dense rows, t=0..2.9s @0.1s, road speed ramping 10 -> 100 km/h, then a
+    // parked tail row at 1.76 (the real StationHomeward capture's last rows). Dense
+    // rows (not sparse) matter: the live reader drops a row once read as "future"
+    // (a ~1-row/call skew, negligible at real ~442 rows/s recording rates), so the
+    // sim clock must outrun the row spacing for the walk to advance. We sweep the
+    // clock fast (dt=0.5/frame) to mimic a real dense capture.
+    std::ostringstream csv;
+    csv << "time_s,throttle_pct,road_speed_kmh\n";
+    for (int i = 0; i < 30; ++i) {
+        double t = i * 0.1;
+        double spd = 10.0 + i * 3.0;  // 10,13,...,97
+        csv << t << ",100," << spd << "\n";
+    }
+    csv << "3.0,100,100\n"   // peak
+         << "4.0,100,1.76\n"; // parked tail
+    LiveStreamHarness h(csv.str());
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setGearSelector(kDrive);
+
+    // Pump RPM feedback so the twin cranks/catches (OFF->CRANKING->IDLE->RUNNING)
+    // and let the live reader advance through the capture rows as the clock sweeps.
+    int gear = -1;
+    for (int i = 0; i < 200; ++i) {
+        EngineSimStats stats;
+        stats.currentRPM = 900.0;
+        h.provider->provideFeedback(stats);
+        gear = h.provider->OnUpdateSimulation(0.5).gearAbsolute;  // fast clock sweep
+        if (gear > 1) break;
+    }
+    EXPECT_GT(gear, 1)
+        << "Live mode must advance through capture rows (not freeze on the last "
+           "row) so the gearbox upshifts as road speed ramps";
+}
+
 // T5: validity/timestamp guard. A blank road_speed_kmh leaves speed at the -2
 // sentinel (dyno off), but the row is still valid telemetry — the provider must
 // mark the signal valid with a non-zero timestamp so the twin's telemetry-timeout
@@ -406,31 +468,46 @@ TEST(LiveTelemetryStreamTest, CsvRoadSpeedIsSurfacedOnEngineInput) {
 // below the first row at t=2.0) must surface the LAST row (t=8, throttle=100),
 // NOT be gated behind the clock. The gear_selector column is the clean row-varying
 // observable (echoed in EngineInput.gearSelector, not masked by CRANKING throttle).
-TEST(LiveTelemetryStreamTest, LiveStreamSurfacesLatestRowImmediately) {
-    // Mirrors the sparse-probe shape that exposed the latency (rows at 2,3.5,4,6,8s).
-    const std::string csv =
-        "time_s,throttle_pct,road_speed_kmh,gear_selector\n"
-        "2.0,0,0,P\n"
-        "3.5,0,0,R\n"
-        "4.0,50,10,N\n"
-        "6.0,50,40,D\n"
-        "8.0,100,65,D\n";
-    std::istringstream stream(csv);
+TEST(LiveTelemetryStreamTest, LiveStreamAdvancesThroughCaptureNotPinnedToLastRow) {
+    // Dense rows (every 0.1s). Early rows are PARK; only the final 5 rows are DRIVE.
+    // Dense so the ~1-row/call future-skew doesn't skip transitions; the clock sweep
+    // (dt=0.5) walks every row. The drain-to-EOF bug surfaced the FINAL row (D) on
+    // frame 1; the fix must instead surface an EARLY row (P) on frame 1.
+    std::ostringstream csv;
+    csv << "time_s,throttle_pct,road_speed_kmh,gear_selector\n";
+    for (int i = 0; i < 30; ++i) {
+        double t = i * 0.1;
+        const char* sel = (i >= 25) ? "D" : "P";  // last 5 rows DRIVE, rest PARK
+        csv << t << ",100," << (10 + i * 5) << "," << sel << "\n";
+    }
+    std::istringstream stream(csv.str());
     auto live = std::make_unique<input::LiveTelemetryProvider>(stream, /*autoStart=*/true, /*liveStream=*/true);
     ASSERT_TRUE(live->Initialize());
 
+    const int kP = static_cast<int>(bridge::GearSelector::PARK);
     const int kD = static_cast<int>(bridge::GearSelector::DRIVE);
 
-    // First frame, dt=0.05 → simElapsedS=0.05, far below t=2.0. Live mode must
-    // still surface the latest (t=8, selector=D) — no wait. The twin is in
-    // CRANKING on frame 1 (so raw throttle is masked by the cranking floor), but
-    // the selector is forwarded from the CSV column and echoed in EngineInput,
-    // making it the clean observable of which row was selected.
+    // Frame 1 (simElapsedS=0.05): with a 0.25s lookahead horizon, the live path
+    // surfaces the latest row within ~0.25s of t=0 — an EARLY row (PARK). It must
+    // NOT jump to the FINAL row (DRIVE), which was the drain-to-EOF bug: it froze
+    // the twin on the capture's last row so the gearbox never shifted.
     live->provideFeedback(EngineSimStats{});
-    input::EngineInput in = live->OnUpdateSimulation(0.05);
-    EXPECT_EQ(in.gearSelector, kD)
-        << "Live mode must surface the LATEST row (t=8, D) on the first frame, "
-           "not gate behind the sim clock (which would surface t=2, P).";
+    input::EngineInput first = live->OnUpdateSimulation(0.05);
+    EXPECT_EQ(first.gearSelector, kP)
+        << "Live mode must surface an EARLY row (PARK) on frame 1, not jump to the "
+           "FINAL row (DRIVE) — that froze the gearbox on the capture's last row.";
+
+    // Advance the sim clock past the capture — the live reader must WALK the rows
+    // (P->...->D), not stay pinned. By the end it reaches D.
+    int lastSelector = first.gearSelector;
+    for (int i = 0; i < 200; ++i) {
+        live->provideFeedback(EngineSimStats{});
+        lastSelector = live->OnUpdateSimulation(0.5).gearSelector;  // 0.5s steps sweep t=0..2.9
+        if (lastSelector == kD) break;
+    }
+    EXPECT_EQ(lastSelector, kD)
+        << "Live mode must advance through the capture rows (P->...->D) as the sim "
+           "clock sweeps, proving it is not frozen on the last row.";
 }
 
 // T12: blank CAN-bus-waking-up rows (throttle=0 AND roadSpeedKmh=-2 sentinel,

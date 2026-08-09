@@ -49,6 +49,11 @@ struct EngineInput {
     // Passed through to EngineState.drivetrain.replayTimestampS for display.
     double replayTimestampS = -1.0;
 
+    // MATCH (Torque) mode: recorded drivetrain torque (Nm) injected at the
+    // transmission input each frame. 0.0 = no injection (FREE/PIN leave this at
+    // 0; applying 0.0 Nm is a true no-op on the rotating mass).
+    double drivetrainInputTorqueNm = 0.0;
+
     // Simulator auto-disengages starter when RPM > threshold
     // Preset cycling
     bool presetCycle = false;       // true = cycle to next preset engine configuration

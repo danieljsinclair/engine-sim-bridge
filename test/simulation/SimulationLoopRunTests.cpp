@@ -80,6 +80,25 @@ private:
     bool fired_ = false;
 };
 
+// Input provider that emulates a streaming source hitting EOF: stays connected
+// for the first poll, then reports IsConnected()==false (stdin/CSV exhausted).
+// Used to prove run() TERMINATES on source EOF instead of looping forever.
+class DisconnectingInputProvider : public IInputProvider {
+public:
+    EngineInput OnUpdateSimulation(double) override {
+        disconnected_ = true;  // EOF observed after the first row is delivered
+        return EngineInput{};
+    }
+    void provideFeedback(const EngineSimStats&) override {}
+    bool Initialize() override { return true; }
+    void Shutdown() override {}
+    bool IsConnected() const override { return !disconnected_; }
+    std::string GetProviderName() const override { return "DisconnectingInputProvider"; }
+    std::string GetLastError() const override { return ""; }
+private:
+    bool disconnected_ = false;
+};
+
 // ---- Fakes reused from the step-test scaffold (kept local & minimal) ----
 
 class FakeAudioBuffer : public IAudioBuffer {
@@ -277,6 +296,24 @@ TEST_F(SimulationLoopRunTest, RunWithStopRequestedReturnsStop) {
     SimulationLoop loop(*simulator_, cfg, buildDeps(inputProvider_.get()));
     int result = loop.run();
     EXPECT_EQ(result, 0);
+}
+
+// run() TERMINATES when a streaming input source reports EOF (IsConnected()
+// false) instead of spinning forever on the last buffered row. The duration is
+// set long so it cannot be the cause of the stop; the disconnecting provider
+// drops after the first poll, so the loop must exit after a handful of ticks.
+TEST_F(SimulationLoopRunTest, RunTerminatesWhenStreamingSourceHitsEof) {
+    auto eofProvider = std::make_unique<DisconnectingInputProvider>();
+
+    SimulationConfig cfg;
+    cfg.duration = 1000.0;  // long: only EOF may end the run this early
+    cfg.simulatorLabel = "Eof";
+
+    SimulationLoop loop(*simulator_, cfg, buildDeps(eofProvider.get()));
+    int result = loop.run();
+    EXPECT_EQ(result, 0);                              // Stop (clean EOF exit)
+    EXPECT_GT(audioCalls_->updateSimulationCount, 0);  // at least one tick ran
+    EXPECT_LT(audioCalls_->updateSimulationCount, 50); // ...but not 1000s worth
 }
 
 }  // namespace

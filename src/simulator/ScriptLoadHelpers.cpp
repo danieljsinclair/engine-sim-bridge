@@ -3,6 +3,7 @@
 
 #define DR_WAV_IMPLEMENTATION
 #include "simulator/ScriptLoadHelpers.h"
+#include "common/PathNormalizer.h"
 #include "common/wav_loader.h"
 
 namespace ScriptLoadHelpers {
@@ -45,15 +46,21 @@ bool loadImpulseResponses(
         const ImpulseResponse* impulse = exhaust->getImpulseResponse();
         if (!impulse) continue;
 
-        std::string filename = impulse->getFilename();
+        std::string rawFn = impulse->getFilename();
+        bool isAbsolute = (!rawFn.empty() && (rawFn[0] == '/' || (rawFn.length() > 1 && rawFn[1] == ':')));
+        std::string filename = isAbsolute ? PathNormalizer::normalizeImpulseResponsePath(rawFn) : rawFn;
         if (filename.empty()) {
             continue;
         }
 
         // Construct full path deterministically.
-        // The deserializer normalizes the filename to "sound-library/..." (no "es/" prefix).
-        // resolveAssetBasePath returns the directory containing "sound-library/" on both
-        // macOS (<root>/es/) and iOS (<bundle>/). No fallbacks needed.
+        // For ABSOLUTE baked temp paths (e.g. /var/folders/.../T/sound-library/...),
+        // normalizeImpulseResponsePath anchors on "sound-library/" and strips the temp
+        // prefix, yielding the portable "sound-library/..." form. RELATIVE paths
+        // (e.g. "../../es/sound-library/X.wav") are passed through raw — buildFullPath
+        // resolves them correctly against assetBase (engine-sim/assets/../../es/...).
+        // normalize is NOT applied unconditionally because it would collapse the leading
+        // "../.." and strip "es/", regressing legitimate relative IR paths.
         std::string fullPath = buildFullPath(assetBasePath, filename);
 
         WavLoader::Result wavResult = WavLoader::load(fullPath);

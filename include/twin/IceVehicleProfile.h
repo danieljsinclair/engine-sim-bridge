@@ -19,6 +19,7 @@ struct IceVehicleProfile {
     double kickdownThrottleThreshold = 0.95;
     double kickdownDelta = 0.4;
     double kickdownWindowMs = 100.0;
+    double kickdownDownshiftGears = 2.0;   // 1–2 gears on kickdown (findSafeGear bounds by redline)
     double shiftDisengageMs = 50.0;
     double shiftPauseMs = 60.0;
     double shiftReengageMs = 60.0;

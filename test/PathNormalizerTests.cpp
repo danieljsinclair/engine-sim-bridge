@@ -44,6 +44,18 @@ TEST(PathNormalizerTest, AbsolutePathKeepsSoundLibraryOnward) {
               "sound-library/ir.wav");
 }
 
+// (b-cont.) Regression for the temp-path anchoring bug: a .mr script copied to a
+//     temp dir bakes an absolute "/var/folders/.../T/sound-library/..." path into
+//     the impulse response. The normalizer must strip the temp prefix down to the
+//     portable anchor so loadImpulseResponses (the single chokepoint) resolves it
+//     against the asset base, not the non-existent temp dir.
+TEST(PathNormalizerTest, AbsoluteTempPathStripsToSoundLibraryAnchor) {
+    const std::string input =
+        "/var/folders/xx/T/esmr-abc123/sound-library/smooth/smooth_39.wav";
+    EXPECT_EQ(PathNormalizer::normalizeImpulseResponsePath(input),
+              "sound-library/smooth/smooth_39.wav");
+}
+
 // (c) Absolute path with NO "sound-library" anchor: input is returned unchanged
 //     so callers can detect that no portable form exists.
 TEST(PathNormalizerTest, AbsolutePathWithoutAnchorReturnedUnchanged) {

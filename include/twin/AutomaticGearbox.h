@@ -93,6 +93,12 @@ private:
     double getDownshiftSpeed(int fromGear, int toGear, double throttle) const;
     double getEngineRpm(double speedKmh, int gear) const;
 
+    // Torque nudge: signed shift-table hint derived from drivetrainTorqueNm_.
+    // Positive torque → higher effective throttle (earlier downshift / later upshift).
+    // Negative torque → lower effective throttle (inhibits upshift / holds gear).
+    // Bounded to ±15% throttle equivalent; never touches road speed or torque injection.
+    double effectiveThrottleForShift() const;
+
     // Declarative shift decision helpers.
     bool shouldKickdown(double throttleFraction) const;
     int findSafeGear(double speedKmh, int maxDownshifts) const;

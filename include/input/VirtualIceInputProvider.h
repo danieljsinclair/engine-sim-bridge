@@ -42,6 +42,9 @@ public:
     // Forward ignition state to the twin
     void setIgnition(bool on);
 
+    // Select the live clutch wheel-coupling strategy (FREE/PIN).
+    void setWheelCouplingMode(twin::WheelCouplingMode mode);
+
     // Forward simulator RPM feedback to the twin for cranking transition
     void provideFeedback(const EngineSimStats& stats) override;
 

@@ -28,6 +28,7 @@ struct CsvHeader {
     int colGear = -1;
     int colClutch = -1;
     int colGearSelector = -1;
+    int colMotorTorque = -1;
     bool timeInMs = false;
     bool rawCanFormat = false;  // true if can_id + data_hex columns detected
 };
@@ -35,11 +36,12 @@ struct CsvHeader {
 // One decoded telemetry sample.
 struct CsvSample {
     double timeS = 0.0;
-    double throttle = 0.0;       // 0..1
-    double roadSpeedKmh = -2.0;  // -2 sentinel = not commanded (dyno off)
-    int gear = -1;               // -1 = unchanged; 0 = neutral; 1..8 = forward
-    double clutchPct = -1.0;     // -1 = unchanged; 0..1
-    std::string gearSelector;    // PRNDL string from vehicle-sim captures
+    double throttle = 0.0;           // 0..1
+    double roadSpeedKmh = -2.0;      // -2 sentinel = not commanded (dyno off)
+    int gear = -1;                   // -1 = unchanged; 0 = neutral; 1..8 = forward
+    double clutchPct = -1.0;         // -1 = unchanged; 0..1
+    std::string gearSelector;        // PRNDL string from vehicle-sim captures
+    double motorTorqueNm = 0.0;      // Recorded motor/engine torque (Nm); -1 = missing
 };
 
 class CsvTelemetryParser {

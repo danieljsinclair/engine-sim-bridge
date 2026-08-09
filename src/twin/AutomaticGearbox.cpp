@@ -80,6 +80,19 @@ void AutomaticGearbox::update(double dt, double speedKmh, double throttleFractio
     runShiftLogic(dt, speedKmh, throttleFraction);
 }
 
+double AutomaticGearbox::effectiveThrottleForShift() const {
+    // Torque nudge: signed shift-table hint derived from drivetrainTorqueNm_.
+    // Positive torque → higher effective throttle (earlier downshift / later upshift).
+    // Negative torque → lower effective throttle (inhibits upshift / holds gear).
+    // Bounded to ±15% throttle equivalent; never touches road speed or torque injection.
+    constexpr double kMaxTorqueNm = 3000.0;
+    constexpr double kMaxThrottleNudge = 0.15;
+    const double normTorque = std::clamp(std::abs(drivetrainTorqueNm_) / kMaxTorqueNm, 0.0, 1.0);
+    const double sign = drivetrainTorqueNm_ >= 0.0 ? 1.0 : -1.0;
+    const double nudge = sign * normTorque * kMaxThrottleNudge;
+    return std::clamp(smoothedThrottle_ + nudge, 0.0, 1.0);
+}
+
 void AutomaticGearbox::runShiftLogic(double dt, double speedKmh, double throttleFraction) {
     // Zero-time calls (the SHIFTING placeholder update(0,0,0) from VirtualIceTwin)
     // must be a no-op: with dt == 0 they would corrupt throttle-tracking state
@@ -140,7 +153,8 @@ AutomaticGearbox::decideGear(double speedKmh) const {
     //    increase (or WOT) forces one RPM-safe downshift, even inside the dwell
     //    window: a legitimate power demand cannot wait.
     if (currentGear_ > 1 && kickdownActive_) {
-        const int safeGear = findSafeGear(speedKmh, currentGear_ - 1);
+        const int depth = static_cast<int>(profile_.kickdownDownshiftGears);
+        const int safeGear = findSafeGear(speedKmh, depth);
         if (safeGear < currentGear_) {
             return {safeGear, -1, true};
         }
@@ -181,7 +195,7 @@ bool AutomaticGearbox::speedExceedsUpshift(double speedKmh, int gear) const {
     if (gear >= static_cast<int>(profile_.gearRatios.size())) {
         return false;
     }
-    if (const double upshiftSpeed = getShiftSpeed(gear, gear + 1, smoothedThrottle_);
+    if (const double upshiftSpeed = getShiftSpeed(gear, gear + 1, effectiveThrottleForShift());
         upshiftSpeed > 0.0 && speedKmh > upshiftSpeed) {
         return true;
     }
@@ -194,7 +208,7 @@ bool AutomaticGearbox::speedBelowDownshift(double speedKmh, int gear) const {
     if (gear <= 1) {
         return false;
     }
-    const double downshiftSpeed = getDownshiftSpeed(gear - 1, gear, smoothedThrottle_);
+    const double downshiftSpeed = getDownshiftSpeed(gear - 1, gear, effectiveThrottleForShift());
     return downshiftSpeed > 0.0 && speedKmh < downshiftSpeed;
 }
 

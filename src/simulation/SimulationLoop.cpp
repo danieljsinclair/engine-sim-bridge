@@ -181,28 +181,38 @@ void SimulationLoop::applyVehicleControls(
         applyGearChange(simulator_, input.gearDelta, logger_);
     }
 
-    // Vehicle controls (gear, dyno) — dyno only when engine running
-    if (!crankingState.starterEngaged) {
-        // HACK: Should put the clutch in here really
-        applyDynoControl(simulator_, input.dynoTorqueScale, lastDynoTorqueScale);
-
-        // Speed tracking. Spike-A: prefer the vehicle-speed constraint (drives the
-        // wheels, clutch couples to engine, dyno OFF) when commanded — this is the
-        // --auto DRIVE path that fixes the dragged-engine sound. Fall back to the
-        // dyno path (setSpeedTrackingTarget) for the legacy road-speed input.
-        // Both are BridgeSimulator-specific APIs, so downcast the engine.
-        if (auto* bridgeSim = dynamic_cast<BridgeSimulator*>(combustionEngine)) {
-            if (input.vehicleSpeedTargetKmh >= 0.0) {
-                // Spike-A inverse path: drive wheels, clutch couples, dyno OFF.
-                bridgeSim->setVehicleSpeedTarget(input.vehicleSpeedTargetKmh);
-            } else if (!input.gearAutoMode && input.roadSpeedKmh >= 0.0) {
-                // Legacy dyno fallback — manual road-speed input only. In --auto
-                // mode the gearbox provider owns speed tracking via the constraint;
-                // PARK/NEUTRAL frames must NOT fall through to the dyno (free-rev).
-                bridgeSim->setSpeedTrackingTarget(input.roadSpeedKmh, input.engineRpmFloor);
-            }
+    // Vehicle controls (gear, dyno). The vehicle-speed constraint (PIN mode)
+    // takes precedence: it drives the wheels directly and the dyno stays off.
+    // FREE mode has no speed constraint; the twin signals dyno braking during
+    // cranking (dynoTorqueScale > 0) to give the starter a resistive load
+    // so the CrankingController can detect engine catch (RPM > 500). Without
+    // this load FREE mode's engine free-revs with no resistance and the RPM
+    // never climbs, leaving the twin stuck in CRANKING indefinitely.
+    if (auto* bridgeSim = dynamic_cast<BridgeSimulator*>(combustionEngine)) {
+        if (input.vehicleSpeedTargetKmh >= 0.0) {
+            // PIN mode: constraint solver drives the wheels directly.
+            bridgeSim->setVehicleSpeedTarget(input.vehicleSpeedTargetKmh);
+        } else if (!input.gearAutoMode && input.roadSpeedKmh >= 0.0) {
+            // Legacy dyno fallback — manual road-speed input only. In --auto
+            // mode the gearbox provider owns speed tracking via the constraint;
+            // PARK/NEUTRAL frames must NOT fall through to the dyno (free-rev).
+            bridgeSim->setSpeedTrackingTarget(input.roadSpeedKmh, input.engineRpmFloor);
+        } else if (input.dynoTorqueScale > 0.0) {
+            // FREE mode: twin-requested dyno braking (cranking load). Applied
+            // when no speed constraint is active so FREE mode can build RPM.
+            applyDynoControl(simulator_, input.dynoTorqueScale, lastDynoTorqueScale);
         }
-    } else {
+
+        // MATCH (Torque) mode: inject the recorded drivetrain torque at the
+        // transmission input so the constraint solver integrates road speed from
+        // it (engine RPM emerges via the clutch). 0.0 in FREE/PIN is a true
+        // no-op on the rotating mass, so this is unconditional — no mode gate.
+        bridgeSim->setDrivetrainInputTorque(input.drivetrainInputTorqueNm);
+    } else if (!crankingState.starterEngaged) {
+        // Non-bridge path: dyno only when starter not engaged (legacy).
+        applyDynoControl(simulator_, input.dynoTorqueScale, lastDynoTorqueScale);
+    }
+    if (crankingState.starterEngaged) {
         logger_->info(LogMask::BRIDGE, "Cranking: starter engaged, dyno disabled - consider using the clutch instead");
     }
 
@@ -504,6 +514,17 @@ int SimulationLoop::run() {
 
         // Check stop flag
         if (stopRequested_->load(std::memory_order_seq_cst)) {
+            return 0;
+        }
+
+        // Streaming-source EOF (live-telemetry stdin / piped CSV): when the
+        // provider reports it is no longer connected, the input is exhausted and
+        // every buffered row has been delivered — terminate cleanly instead of
+        // looping forever on stale telemetry. Only a streaming provider ever
+        // disconnects mid-run (keyboard/demo/replay/manual stay connected and
+        // stop via duration / the user); interactive mode has no provider (the
+        // guard skips it).
+        if (inputProvider_ && !inputProvider_->IsConnected()) {
             return 0;
         }
     }

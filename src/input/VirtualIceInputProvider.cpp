@@ -65,6 +65,7 @@ EngineInput VirtualIceInputProvider::OnUpdateSimulation(double dt) {
     input.starterButton = output.starterMotor;
     input.gearSelector = static_cast<int>(output.gearSelector);
     input.gearAutoMode = true; // VirtualIceTwin uses automatic gearbox
+    input.dynoTorqueScale = output.dynoTorqueScale;
 
     // Surface the upstream (CSV/feedback) road speed so the presentation layer
     // can display it (EngineInput.roadSpeedKmh -> EngineState.controls.
@@ -74,6 +75,17 @@ EngineInput VirtualIceInputProvider::OnUpdateSimulation(double dt) {
     // the commanded road speed. Mirrors ReplayTelemetryProvider, which sets
     // input.roadSpeedKmh = s.roadSpeedKmh for every sample.
     input.roadSpeedKmh = currentSignal_.speedKmh;
+
+    // Surface the twin's vehicle-speed pin (set in RUNNING by the wheel-coupling
+    // strategy). FREE leaves -1.0 (no pin); PIN copies the CSV speed. The
+    // downstream SimulationLoop gates -1 as "don't change", so this is an
+    // unconditional copy — no scattered conditional here.
+    input.vehicleSpeedTargetKmh = output.pinVehicleSpeedTargetKmh;
+
+    // Surface the twin's recorded-input-torque injection (MATCH/Torque mode).
+    // FREE/PIN leave 0.0 (no-op on the rotating mass); Torque copies the recorded
+    // motor_torque_nm so the solver integrates road speed from it.
+    input.drivetrainInputTorqueNm = output.drivetrainInputTorqueNm;
 
     return input;
 }
@@ -99,6 +111,12 @@ void VirtualIceInputProvider::setGearSelector(int selector) {
 void VirtualIceInputProvider::setIgnition(bool on) {
     if (twin_) {
         twin_->setIgnition(on);
+    }
+}
+
+void VirtualIceInputProvider::setWheelCouplingMode(twin::WheelCouplingMode mode) {
+    if (twin_) {
+        twin_->setWheelCouplingMode(mode);
     }
 }
 

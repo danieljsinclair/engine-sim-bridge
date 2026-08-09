@@ -1,6 +1,8 @@
 #include <algorithm>
 
 #include <twin/VirtualIceTwin.h>
+#include <twin/SlipLockController.h>
+#include <twin/TorqueConverterLaunch.h>
 #include <simulator/GearConventions.h>
 #include <simulator/EngineSimTypes.h>
 
@@ -60,8 +62,28 @@ void VirtualIceTwin::setGearboxLogger(IGearboxLogger* logger) {
     gearbox_->setLogger(logger);
 }
 
+double VirtualIceTwin::roadSpeedImpliedRpmFor(double wheelSpeedKmh) const {
+    // Clones ReplayTelemetryProvider::handleAutoGearboxDrive's implied-RPM math:
+    //   wheelRadS = (v/3.6) / tireRadius
+    //   roadSpeedImpliedRpm = wheelRadS * gearRatio * diffRatio * 30/π
+    // Fall back to idleRpm when the current gear is out of the ratio vector range.
+    // if-with-initializer keeps `gear` scoped to the range check (S6004).
+    if (const int gear = gearbox_->getCurrentGear();
+        gear >= 1 && gear <= static_cast<int>(profile_.gearRatios.size())) {
+        const double speedMs = wheelSpeedKmh / 3.6;
+        const double wheelRadS = speedMs / profile_.tireRadiusM;
+        return wheelRadS
+             * profile_.gearRatios[gear - 1]
+             * profile_.diffRatio
+             * 30.0 / 3.14159265358979;
+    }
+    return profile_.idleRpm;
+}
+
 TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal) {
     TwinOutput output;
+    // Dyno off by default; only CRANKING (FREE mode) re-enables it.
+    output.dynoTorqueScale = 0.0;
 
     if (!signal.isValid || signal.timestampUtcMs == 0) {
         timeWithoutValidTelemetryS_ += dt;
@@ -117,6 +139,16 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             // is redundant for engagement. See AC18.
             output.ignition = true;
 
+            // FREE mode: enable dyno braking during cranking to give the starter
+            // a resistive load. Without a vehicle-speed constraint (PIN mode's
+            // setVehicleSpeedTarget) the engine has no load path in FREE mode,
+            // the starter free-revs without building measurable RPM, and the
+            // CrankingController never sees a catch (stays at 0 RPM indefinitely).
+            // The dyno provides that load directly on the engine crankshaft.
+            if (coupling_->getMode() == WheelCouplingMode::Free) {
+                output.dynoTorqueScale = 0.15;
+            }
+
             // CRANKING -> IDLE: the engine catches via EITHER
             //   (a) the physics fast-path — fed-back RPM exceeds the catch
             //       threshold (the closed loop confirms combustion is sustained), OR
@@ -137,6 +169,7 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
                 rpmCaught || fallbackExpired) {
                 state_ = TwinState::IDLE;
                 output.starterMotor = false;
+                output.dynoTorqueScale = 0.0;  // dyno off once engine catches
             }
             output.gear = static_cast<int>(bridge::BridgeGear::NEUTRAL);
             clutchPressure_ = 0.0;
@@ -167,10 +200,28 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             break;
 
         case TwinState::RUNNING: {
-            double gearboxSpeedKmh = signal.speedKmh;
+            // The clutch slip-lock uses the wheel speed SELECTED BY THE COUPLING
+            // STRATEGY: PIN uses the CSV road speed (sim pinned to it); FREE/TORQUE
+            // use the ACTUAL simulated wheel speed (their speed is emergent — FREE
+            // for the mph-vs-target diagnostic, TORQUE from injected torque) so the
+            // slip-lock tracks real engine↔wheel slip.
+            const double wheelKmh = coupling_->slipLockWheelSpeedKmh(vehicleSpeedFeedbackKmh_, signal.speedKmh);
+
+            // The GEARBOX SHIFT DECISION uses the UPSTREAM COMMANDED road speed
+            // (signal.speedKmh), NOT the coupling/friction-clutch feedback speed.
+            // This matches the pre-wheel-coupling behaviour and the contract in
+            // VirtualIceTwinTest.FeedbackSpeedDoesNotOverrideSignalSpeedForUpshift:
+            // the gearbox governor is driven by the commanded road speed, so it
+            // shifts even when no engine-sim wheel feedback is being pumped (the
+            // scenario tests and the live-stream path feed speed via the signal
+            // only). Routing the gearbox through the feedback source is what stuck
+            // the box in 1st — in FREE mode the feedback was 0, so every frame
+            // looked like standstill and no shift ever fired. The slip-lock and
+            // the shift governor are genuinely two different quantities; they must
+            // not be conflated into one wheel-speed variable.
             gearbox_->setTwinContext(static_cast<int>(state_), clutchPressure_, vehicleSpeedFeedbackKmh_, engineRpmFeedback_);
             gearbox_->setGearSelector(selector_);
-            gearbox_->update(dt, gearboxSpeedKmh, signal.throttleFraction, drivetrainTorqueNm_);
+            gearbox_->update(dt, signal.speedKmh, signal.throttleFraction, drivetrainTorqueNm_);
             output.ignition = true;
 
             // RUNNING->IDLE: selector moved to NEUTRAL or PARK
@@ -186,7 +237,49 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             }
 
             output.gear = gearbox_->getCurrentGear();
-            clutchPressure_ = 1.0;
+
+            // Clutch slip-lock (replaces the old rigid `clutchPressure_ = 1.0;`).
+            // Uses the same emergent wheel speed as the gearbox (above).
+            const double roadSpeedImpliedRpm = roadSpeedImpliedRpmFor(wheelKmh);
+            const auto slip = computeSlipLockPressure(
+                twin::SlipLockInput{engineRpmFeedback_,
+                                    roadSpeedImpliedRpm,
+                                    signal.throttleFraction,
+                                    profile_.idleRpm,
+                                    profile_.redlineRpm},
+                /*maxCreepPressure=*/0.10);
+            const double lockOverride = coupling_->clutchLockOverride(roadSpeedImpliedRpm, profile_.idleRpm);
+            clutchPressure_ = (lockOverride >= 0.0) ? lockOverride : slip.clutchPressure;
+            // Launch (torque converter): the slip-lock is a velocity-match
+            // schedule that only behaves once the wheels are coupled to the
+            // engine (road-implied RPM >= idle). At standstill a fixed creep
+            // pressure yanks the engine down -> the launch bogs near-stall (the
+            // velocity-match catch-22). Instead, while the wheels are still free
+            // (road-implied < idle), override the creep with a stall-gated launch
+            // pressure that transmits torque at 0 wheel speed without stalling
+            // the engine (see TorqueConverterLaunch.h). Once the wheels couple
+            // the launch function defers (returns LAUNCH_PRESSURE_DEFER) and the
+            // slip-lock lock-up pressure above stands. This applies to every mode
+            // that leaves the sim speed INDEPENDENT (Free, Torque) — selected by
+            // the strategy so the twin carries no mode conditional. PIN never
+            // launches: its vehicle-speed constraint drives the wheels directly.
+            if (coupling_->launchAssistAtStandstill()) {
+                const double launchPressure = computeLaunchPressure(
+                    twin::LaunchPressureInput{engineRpmFeedback_,
+                                              roadSpeedImpliedRpm,
+                                              signal.throttleFraction,
+                                              profile_.idleRpm,
+                                              profile_.redlineRpm});
+                if (launchPressure != twin::LAUNCH_PRESSURE_DEFER) {
+                    clutchPressure_ = launchPressure;
+                }
+            }
+            output.pinVehicleSpeedTargetKmh = coupling_->vehicleSpeedTargetKmh(signal.speedKmh);
+            // MATCH (Torque) mode: surface the recorded input torque so the
+            // simulator injects it at the rotating mass each frame and the solver
+            // integrates road speed from it (engine RPM emerges via the clutch
+            // coupling, not by fiat). FREE/PIN surface 0.0 (no-op).
+            output.drivetrainInputTorqueNm = coupling_->injectedInputTorqueNm(signal.motorTorqueNm);
             break;
         }
 

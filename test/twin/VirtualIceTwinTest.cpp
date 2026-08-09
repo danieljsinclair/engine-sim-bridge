@@ -751,3 +751,215 @@ TEST_F(VirtualIceTwinTest, LoggerSurvivesReconfigureProfile_AC17) {
     EXPECT_GT(mockLogger.entries.size(), entriesBefore)
         << "Logger must survive reconfigureProfile — entries must continue after gearbox rebuild";
 }
+
+// ============================================================================
+// GOAL 1: live clutch slip-lock with BOTH wheel-coupling modes (FREE default,
+// PIN mirrors replay) behind the runtime --wheel-coupling CLI toggle.
+//
+// Behaviour under test: in RUNNING the twin no longer hard-pins clutchPressure_=1.
+// It feeds a slip-lock controller whose wheel-speed source is chosen by the
+// wheel-coupling strategy. FREE uses the ACTUAL simulated wheel speed (feedback);
+// PIN uses the upstream CSV road speed and pins the sim vehicle speed to it.
+// ============================================================================
+
+namespace {
+// Implied engine RPM at a given wheel speed in a given gear, cloning
+// ReplayTelemetryProvider's formula and the zf8hp45 profile geometry. Used by
+// the tests to pick a feedback speed that locks (slip ~ 0) at a target RPM.
+double impliedRpmFor(double wheelKmh, int gear, const IceVehicleProfile& p) {
+    if (gear < 1 || gear > static_cast<int>(p.gearRatios.size())) return p.idleRpm;
+    const double speedMs = wheelKmh / 3.6;
+    const double wheelRadS = speedMs / p.tireRadiusM;
+    return wheelRadS * p.gearRatios[gear - 1] * p.diffRatio * 30.0 / 3.14159265358979;
+}
+}  // namespace
+
+// FREE (default): in RUNNING with actual wheel speed ~0 the implied RPM is below
+// idle, so the torque-converter LAUNCH model drives the clutch (not the rigid old
+// lock of 1.0, and not a fixed creep). With the engine well above its stall speed
+// the launch pressure is the sustainable stall cap scaled by throttle.
+TEST_F(VirtualIceTwinTest, RunningUsesTorqueConverterLaunchAtStandstill_Free) {
+    advanceThroughCranking();
+    auto sig = makeValidSignal(0.5, 0.0);
+    twin_->update(0.016, sig);  // IDLE -> RUNNING
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+    ASSERT_GE(twin_->getCurrentGear(), 1) << "Should be in a driving gear in RUNNING";
+
+    // High engine RPM, actual wheel speed ~0 -> implied RPM below idle -> launch.
+    twin_->setEngineRpmFeedback(3000.0);
+    twin_->setVehicleSpeedFeedback(0.0);
+    sig = makeValidSignal(0.5, 0.0);
+    auto out = twin_->update(0.016, sig);
+
+    EXPECT_GT(out.clutchPressure, 0.0) << "Launch must transmit some clutch pressure at standstill";
+    EXPECT_LT(out.clutchPressure, 1.0) << "Must NOT be rigidly locked at standstill";
+    EXPECT_NE(out.clutchPressure, 1.0) << "Old rigid `clutchPressure_ = 1.0` must be gone";
+    EXPECT_NEAR(out.clutchPressure, 0.03, 1e-6)
+        << "TC launch at 50% throttle above stall = stallPressureMax(0.06)*0.5";
+}
+
+// FREE launch anti-bog: with the engine sitting just above idle at standstill (a
+// just-caught engine), the launch pressure must be ~0 so the velocity-match clutch
+// does NOT yank it down (the catch-22 that used to crash the RPM to ~100). The old
+// fixed-creep model would have applied 0.10*throttle regardless of engine RPM.
+TEST_F(VirtualIceTwinTest, FreeLaunchUnloadsEngineNearIdle_NoBog) {
+    advanceThroughCranking();
+    auto sig = makeValidSignal(0.5, 0.0);
+    twin_->update(0.016, sig);  // IDLE -> RUNNING
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    // Engine just above idle, wheels still at standstill, throttle applied.
+    twin_->setEngineRpmFeedback(profile_.idleRpm + 50.0);
+    twin_->setVehicleSpeedFeedback(0.0);
+    sig = makeValidSignal(0.5, 0.0);
+    auto out = twin_->update(0.016, sig);
+
+    EXPECT_LT(out.clutchPressure, 0.02)
+        << "Engine near idle at standstill must not be loaded (anti-bog)";
+    EXPECT_GE(out.clutchPressure, 0.0) << "Pressure is non-negative";
+}
+
+
+// FREE: when the actual wheel speed implies an RPM matching the engine RPM, the
+// clutch should lock (pressure near 1.0).
+TEST_F(VirtualIceTwinTest, RunningLocksWhenActualWheelSpeedMatchesEngine_Free) {
+    advanceThroughCranking();
+    auto sig = makeValidSignal(0.5, 0.0);
+    twin_->update(0.016, sig);  // IDLE -> RUNNING
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+    const int gear = twin_->getCurrentGear();
+    ASSERT_GE(gear, 1) << "Should be in a driving gear in RUNNING";
+
+    // Pick a feedback speed whose implied RPM == engine feedback (3000) at this gear.
+    const double targetRpm = 3000.0;
+    double feedbackKmh = 0.0;
+    {
+        // Solve impliedRpmFor(feedbackKmh) == targetRpm for feedbackKmh.
+        const double speedMs = targetRpm / (profile_.gearRatios[gear - 1] * profile_.diffRatio
+                                            * 30.0 / 3.14159265358979)
+                               * profile_.tireRadiusM;
+        feedbackKmh = speedMs * 3.6;
+    }
+
+    twin_->setEngineRpmFeedback(targetRpm);
+    twin_->setVehicleSpeedFeedback(feedbackKmh);
+    sig = makeValidSignal(0.5, 0.0);
+    auto out = twin_->update(0.016, sig);
+
+    EXPECT_GT(out.clutchPressure, 0.9) << "Clutch should lock when wheel speed implies engine RPM";
+    // Sanity: confirm the chosen feedback actually implies ~targetRpm.
+    EXPECT_NEAR(impliedRpmFor(feedbackKmh, gear, profile_), targetRpm, 1.0);
+}
+
+// FREE must NOT pin the sim vehicle speed (pinVehicleSpeedTargetKmh == -1).
+TEST_F(VirtualIceTwinTest, FreeModeDoesNotPinVehicleSpeed) {
+    advanceThroughCranking();
+    auto sig = makeValidSignal(0.5, 32.0);
+    twin_->update(0.016, sig);  // IDLE -> RUNNING
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    twin_->setEngineRpmFeedback(2500.0);
+    twin_->setVehicleSpeedFeedback(32.0);
+    sig = makeValidSignal(0.5, 32.0);
+    auto out = twin_->update(0.016, sig);
+
+    EXPECT_DOUBLE_EQ(out.pinVehicleSpeedTargetKmh, -1.0)
+        << "FREE must leave the sim speed independent (no pin)";
+}
+
+// PIN must pin the sim vehicle speed to the CSV speed.
+TEST_F(VirtualIceTwinTest, PinModePinsVehicleSpeedToCsv) {
+    twin_->setWheelCouplingMode(WheelCouplingMode::Pin);
+    advanceThroughCranking();
+    auto sig = makeValidSignal(0.5, 32.0);
+    twin_->update(0.016, sig);  // IDLE -> RUNNING
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    twin_->setEngineRpmFeedback(2500.0);
+    twin_->setVehicleSpeedFeedback(50.0);  // actual wheel differs from CSV
+    sig = makeValidSignal(0.5, 32.0);       // CSV speed = 32
+    auto out = twin_->update(0.016, sig);
+
+    EXPECT_DOUBLE_EQ(out.pinVehicleSpeedTargetKmh, 32.0)
+        << "PIN must pin sim vehicle speed to the CSV speed";
+}
+
+// The source switch is real: in FREE the slip-lock uses the ACTUAL wheel speed,
+// not the CSV speed. With actual=50 (near lock) and CSV=5 (would be creep), the
+// pressure must be HIGH. Contrast with PIN under the same values -> LOW.
+TEST_F(VirtualIceTwinTest, FreeModeSlipLockUsesActualWheelSpeedNotCsv) {
+    // --- FREE: uses actual 50, ignores csv 5 -> near lock.
+    advanceThroughCranking();
+    auto sig = makeValidSignal(0.5, 5.0);  // CSV speed = 5 (would imply creep)
+    twin_->update(0.016, sig);             // IDLE -> RUNNING
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    twin_->setEngineRpmFeedback(3000.0);
+    twin_->setVehicleSpeedFeedback(50.0);   // ACTUAL wheel speed = 50 (near lock)
+    sig = makeValidSignal(0.5, 5.0);
+    auto freeOut = twin_->update(0.016, sig);
+
+    EXPECT_GT(freeOut.clutchPressure, 0.9)
+        << "FREE must use ACTUAL wheel speed (50 -> near lock), not CSV (5 -> creep)";
+
+    // --- PIN under the SAME values: uses csv 5 -> low creep pressure.
+    twin_ = std::make_unique<VirtualIceTwin>(profile_);
+    twin_->setWheelCouplingMode(WheelCouplingMode::Pin);
+    advanceThroughCranking();
+    sig = makeValidSignal(0.5, 5.0);
+    twin_->update(0.016, sig);             // IDLE -> RUNNING
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    twin_->setEngineRpmFeedback(3000.0);
+    twin_->setVehicleSpeedFeedback(50.0);   // actual ignored in PIN
+    sig = makeValidSignal(0.5, 5.0);        // csv 5 -> implied RPM below idle -> creep
+    auto pinOut = twin_->update(0.016, sig);
+
+    EXPECT_LT(pinOut.clutchPressure, 0.2)
+        << "PIN must use CSV wheel speed (5 -> creep), proving the source switch";
+}
+
+// ---------------------------------------------------------------------------
+// MATCH (Torque) mode: the twin surfaces the recorded motor_torque_nm as a
+// drivetrain-input torque so the solver integrates road speed from it, while
+// FREE/PIN surface 0.0 (no injection). Drives the strategy through the twin so
+// the wiring (not just the strategy) is covered.
+// ---------------------------------------------------------------------------
+
+TEST_F(VirtualIceTwinTest, MatchMode_SurfacesRecordedTorqueWhileRunning) {
+    twin_->setWheelCouplingMode(WheelCouplingMode::Torque);
+    advanceThroughCranking();
+
+    auto sig = makeValidSignal(0.6, 30.0);
+    twin_->update(0.016, sig);  // IDLE -> RUNNING
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    twin_->setEngineRpmFeedback(3000.0);
+    twin_->setVehicleSpeedFeedback(30.0);
+    sig.motorTorqueNm = 1850.0;
+    auto out = twin_->update(0.016, sig);
+
+    EXPECT_EQ(twin_->getState(), TwinState::RUNNING);
+    EXPECT_DOUBLE_EQ(out.drivetrainInputTorqueNm, 1850.0)
+        << "MATCH mode must surface the recorded motor_torque_nm for injection";
+    EXPECT_LT(out.pinVehicleSpeedTargetKmh, 0.0)
+        << "MATCH mode must NOT pin the sim speed (it emerges from torque)";
+}
+
+TEST_F(VirtualIceTwinTest, FreeAndPinMode_InjectNoDrivetrainTorque) {
+    advanceThroughCranking();
+    auto sig = makeValidSignal(0.6, 30.0);
+    twin_->update(0.016, sig);  // IDLE -> RUNNING
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+    twin_->setEngineRpmFeedback(3000.0);
+    twin_->setVehicleSpeedFeedback(30.0);
+
+    for (WheelCouplingMode mode : {WheelCouplingMode::Free, WheelCouplingMode::Pin}) {
+        twin_->setWheelCouplingMode(mode);
+        sig.motorTorqueNm = 1850.0;
+        auto out = twin_->update(0.016, sig);
+        EXPECT_DOUBLE_EQ(out.drivetrainInputTorqueNm, 0.0)
+            << "FREE/PIN must not inject drivetrain torque (only MATCH does)";
+    }
+}
+

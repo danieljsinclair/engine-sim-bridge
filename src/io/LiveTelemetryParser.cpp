@@ -18,17 +18,20 @@ UpstreamSignal LiveTelemetryParser::parse(const std::string& json, uint64_t time
     double speedKmh = 0.0;
     double accelerationG = 0.0;
     double brakePercent = 0.0;
+    double motorTorqueNm = 0.0;
 
     extractDoubleRaw(json, "throttle", throttlePercent);
     extractDoubleRaw(json, "speed", speedKmh);
     extractDoubleRaw(json, "acceleration", accelerationG);
     extractDoubleRaw(json, "brake", brakePercent);
+    extractDoubleRaw(json, "motor_torque_nm", motorTorqueNm);
 
     // Convert vehicle-sim units to UpstreamSignal (fraction 0-1)
     signal.throttleFraction = throttlePercent / 100.0;
     signal.speedKmh = speedKmh;
     signal.accelerationG = accelerationG;
     signal.brakeFraction = brakePercent / 100.0;
+    signal.motorTorqueNm = motorTorqueNm;
 
     // Clamp to valid ranges
     signal.throttleFraction = std::max(0.0, std::min(1.0, signal.throttleFraction));
