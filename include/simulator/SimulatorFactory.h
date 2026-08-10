@@ -76,8 +76,12 @@ public:
      * Configure afterfire (exhaust pops on throttle-cut overrun) on an existing
      * simulator. Requires ATG_ENGINE_SIM_AFTERFIRE_SPIKE compiled in; otherwise the
      * call is a logged no-op. Does nothing if simulator is not a BridgeSimulator.
+     *
+     * @return false when a non-empty afterfireWavPath matched no files on disk,
+     *         so the caller can fail fast instead of silently running with the
+     *         engine's default exhaust impulse response. True otherwise.
      */
-    static void configureAfterfire(ISimulator* simulator, const AfterfireConfig& config, ILogging* logger = nullptr);
+    static bool configureAfterfire(ISimulator* simulator, const AfterfireConfig& config, ILogging* logger = nullptr);
 
     /**
      * Create and configure simulator with optional dyno load torque.

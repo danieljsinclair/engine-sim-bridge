@@ -31,7 +31,9 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <fstream>
 #include <string>
+#include <unistd.h>
 
 // --- loadFromJson: the delegation path (entire function was 0-hit) ------------
 
@@ -91,4 +93,94 @@ TEST(PresetEngineFactoryTest, LoadFromStringMalformedJsonReturnsStructuredError)
     EXPECT_FALSE(result.success());
     EXPECT_FALSE(result.error.empty());
     EXPECT_EQ(result.engine, nullptr);
+}
+
+// --- resolveAfterfireWavPaths: glob expansion + the empty-result contract -----
+//
+// This is the seam the CLI's --afterfire-wav depends on. An empty result is NOT
+// merely "fall back to the default": for a NON-EMPTY request it is the signal
+// BridgeSimulator::configureAfterfire turns into a hard failure, so the
+// distinction between "matched files" and "matched nothing" is load-bearing.
+// Tests build their own fixture tree in a temp dir rather than depending on the
+// shipped sound library, so they cannot break when assets are re-organised.
+
+namespace {
+
+// Temp directory containing a few named WAV-ish files, removed on destruction.
+class AfterfireWavFixture {
+public:
+    AfterfireWavFixture() {
+        dir_ = std::filesystem::temp_directory_path() /
+               ("es_afterfire_glob_" + std::to_string(::getpid()));
+        std::filesystem::create_directories(dir_);
+        for (const char* name : {"pop_01.wav", "pop_02.wav", "pop_03.wav", "other.wav"}) {
+            std::ofstream(dir_ / name) << "RIFF";
+        }
+    }
+    ~AfterfireWavFixture() {
+        std::error_code ec;
+        std::filesystem::remove_all(dir_, ec);
+    }
+    AfterfireWavFixture(const AfterfireWavFixture&) = delete;
+    AfterfireWavFixture& operator=(const AfterfireWavFixture&) = delete;
+
+    std::string pattern(const std::string& leaf) const {
+        return (dir_ / leaf).string();
+    }
+
+private:
+    std::filesystem::path dir_;
+};
+
+} // namespace
+
+// A glob against a real directory expands to every match — the behaviour the
+// CLI relies on to offer a randomised pool of pop samples.
+TEST(AfterfireWavPathTest, GlobExpandsToAllMatchingFiles) {
+    const AfterfireWavFixture fixture;
+
+    const auto paths = resolveAfterfireWavPaths(fixture.pattern("pop_*.wav"));
+
+    EXPECT_EQ(paths.size(), 3u) << "pop_01/02/03 should match, other.wav should not";
+}
+
+// A glob that matches nothing yields an empty list. This is what lets the
+// bridge fail fast instead of silently substituting the default IR.
+TEST(AfterfireWavPathTest, NonMatchingGlobYieldsEmptyResult) {
+    const AfterfireWavFixture fixture;
+
+    EXPECT_TRUE(resolveAfterfireWavPaths(fixture.pattern("nope_*.wav")).empty());
+}
+
+// A literal path that exists resolves to exactly itself.
+TEST(AfterfireWavPathTest, LiteralExistingPathResolvesToOneFile) {
+    const AfterfireWavFixture fixture;
+
+    const auto paths = resolveAfterfireWavPaths(fixture.pattern("pop_01.wav"));
+
+    ASSERT_EQ(paths.size(), 1u);
+    EXPECT_NE(paths.front().find("pop_01.wav"), std::string::npos);
+}
+
+// A literal path that does NOT exist is also an empty result, so a typo'd
+// filename fails fast on the same code path as a non-matching glob.
+TEST(AfterfireWavPathTest, LiteralMissingPathYieldsEmptyResult) {
+    const AfterfireWavFixture fixture;
+
+    EXPECT_TRUE(resolveAfterfireWavPaths(fixture.pattern("absent.wav")).empty());
+}
+
+// An empty request is the documented "use the engine default" sentinel and must
+// stay empty WITHOUT touching the filesystem.
+TEST(AfterfireWavPathTest, EmptyPathYieldsEmptyResult) {
+    EXPECT_TRUE(resolveAfterfireWavPaths("").empty());
+}
+
+// A glob whose DIRECTORY does not exist must not throw — it reports no matches.
+// This was the pre-fix production state (the CLI handed the bridge a path under
+// a nonexistent build/ directory), so it stays pinned as a boundary case.
+TEST(AfterfireWavPathTest, GlobInMissingDirectoryYieldsEmptyResultWithoutThrowing) {
+    EXPECT_NO_THROW({
+        EXPECT_TRUE(resolveAfterfireWavPaths("/no/such/dir/anywhere/pop_*.wav").empty());
+    });
 }

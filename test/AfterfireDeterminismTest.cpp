@@ -5,12 +5,12 @@
 // path the CLI uses — and proves that a throttle-cut overrun increases the
 // per-chamber afterfire event counters.
 //
-// TDD PHASE: RED. The engine-sim skeleton stubs the firing decision
-// (CombustionChamber::shouldTriggerAfterfire always declines, and
-// PistonEngineSimulator::tickAfterfire never asks a chamber to fire), so the
-// summed eventCount stays 0 and the final assertion MUST fail. The test compiles
-// and links cleanly against the skeleton API, so the RED is a BEHAVIOUR failure,
-// not a missing symbol.
+// The afterfire model is physical: unburnt fuel in a runner that is above the
+// auto-ignition temperature lights off once its Arrhenius induction period
+// completes, and exhaust flow scavenging the pipe is what resets that clock.
+// This test asserts the two halves of that contract that a user would notice —
+// pops DO happen on a throttle-cut overrun, and pops do NOT happen while the
+// engine is held at steady throttle (where scavenging always wins the race).
 //
 // NO AUDIO: the event counter is the non-audio proof that pops occurred. Nothing
 // here renders, reads or asserts on audio, so the result never depends on a
@@ -84,6 +84,7 @@ constexpr int    kCrankTicks         = 120;         // ~2.0 s on the starter
 constexpr int    kIdleSettleTicks    = 90;          // ~1.5 s settling at idle
 constexpr int    kRevTicks           = 180;         // ~3.0 s at full pedal
 constexpr int    kCoastTicks         = 240;         // ~4.0 s of overrun coast
+constexpr int    kSteadyThrottleTicks = 240;        // ~4.0 s held at constant pedal
 
 // Measured on this scenario: idle ~1020 RPM, revved ~7290 RPM, coast bottoms out
 // near idle. These bounds are deliberately loose — they prove "it really revved"
@@ -129,19 +130,19 @@ void driveFor(ISimulator& simulator, double pedal, int ticks) {
     }
 }
 
-// Afterfire tuning for the acceptance run: permissive on purpose. The subject is
-// "does a pop ever happen on overrun", not how a tuned engine sounds, so every
-// gate that could mask a working implementation is opened.
+// Afterfire tuning for the acceptance run: the PHYSICAL DEFAULTS, unmodified.
+//
+// There is deliberately nothing to open up here any more. The old config had to
+// disable a probability roll, a cooldown, a pop-spacing timer and an event cap
+// so that none of them could mask a working implementation; none of those exist
+// now, because a pop is decided by the runner's own temperature, mixture and
+// residence time. Asserting against the shipped defaults is therefore strictly
+// stronger: it proves the effect works as delivered rather than only under
+// test-only settings.
 AfterfireConfig acceptanceAfterfireConfig() {
     AfterfireConfig config;
     config.enabled = true;
     config.diagnostics = true;
-    config.probability = 1.0;         // no stochastic gate — keeps the run deterministic
-    config.cooldownMs = 0.0;          // no per-chamber rate limit
-    config.globalPopIntervalMs = 0.0; // no cross-chamber spacing
-    config.rpmMin = 1500.0;           // comfortably under the measured coast range
-    config.throttleCutoff = 0.5;      // permissive gate
-    config.maxEventsPerDecel = 1000;  // effectively uncapped
     return config;
 }
 
@@ -225,10 +226,92 @@ TEST(AfterfireDeterminismTest, OverrunAfterThrottleCutProducesAfterfireEvents) {
     // --- The actual subject of this test ------------------------------------
     const int eventsAfterOverrun = sumAfterfireEvents(*bridge);
     std::cout << "eventsAfterOverrun=" << eventsAfterOverrun << " (before=" << eventsBeforeOverrun << ")" << std::endl;
+
+    // Report the physical state on failure: these say whether the runner ever
+    // became reactive at all, and how close the induction integral came to
+    // completing — the difference between "never hot enough" and "always
+    // scavenged first". Without them a zero-event failure is unactionable.
+    // By value, not by reference: getAfterfireDiagnostics() returns a fresh
+    // vector, so a reference to .front() would dangle immediately.
+    const AfterfireDiagnostics chamber0 = bridge->getAfterfireDiagnostics().front();
     EXPECT_GT(eventsAfterOverrun, eventsBeforeOverrun)
         << "No afterfire events were produced by a throttle-cut overrun (before="
-        << eventsBeforeOverrun << " after=" << eventsAfterOverrun << "). "
-           "RED-phase expectation: the engine-sim firing decision is still a stub.";
+        << eventsBeforeOverrun << " after=" << eventsAfterOverrun << ").\n"
+        << "  chamber0 runner peaks: T=" << chamber0.maxRunnerTempK << "K"
+        << " rawFuelFraction=" << chamber0.maxRawFuelFraction
+        << " ignitionProgress=" << chamber0.maxIgnitionProgress << "\n"
+        << "  not ignited: tooCold=" << chamber0.skippedTooCold
+        << " noFuel=" << chamber0.skippedNoFuel
+        << " noOxygen=" << chamber0.skippedNoOxygen
+        << " inductionIncomplete=" << chamber0.skippedNotReady;
+
+    simulator->destroy();
+}
+
+// ---------------------------------------------------------------------------
+// The other half of the contract: a STEADY throttle must stay quiet.
+//
+// This is the regression that matters most in practice. The previous
+// timer-driven implementation fired on an interval whenever its gates happened
+// to agree, which produced a metronomic "knock" under cruise — an engine that
+// pops while holding constant throttle sounds broken. Physically it must not
+// happen: under power every exhaust stroke scavenges the runner, so the charge
+// is swept out long before its induction period can complete.
+//
+// Held at a HIGH steady throttle deliberately, because that is the hostile case
+// — it is where the runner is hottest (measured ~2400 K at WOT), so any model
+// that keys off temperature alone rather than residence time fails here.
+// ---------------------------------------------------------------------------
+TEST(AfterfireDeterminismTest, SteadyThrottleProducesNoAfterfireEvents) {
+    const std::filesystem::path scriptPath = resolveScriptPath();
+    ASSERT_TRUE(std::filesystem::exists(scriptPath)) << "Engine script not found: " << scriptPath.string();
+    const std::filesystem::path assetBasePath = resolveAssetBasePath();
+    ASSERT_TRUE(std::filesystem::exists(assetBasePath / "sound-library"))
+        << "Impulse-response assets not found under: " << assetBasePath.string();
+
+    ISimulatorConfig config;
+    config.simulationFrequency = 0;
+
+    std::unique_ptr<ISimulator> simulator = SimulatorFactory::create(
+        SimulatorType::PistonEngine, scriptPath.string(), assetBasePath.string(), config, nullptr, nullptr);
+    ASSERT_NE(simulator, nullptr);
+    ASSERT_TRUE(simulator->create(config, nullptr, nullptr)) << simulator->getLastError();
+
+    auto* bridge = dynamic_cast<BridgeSimulator*>(simulator.get());
+    ASSERT_NE(bridge, nullptr);
+
+    SimulatorFactory::configureAfterfire(simulator.get(), acceptanceAfterfireConfig(), nullptr);
+    ASSERT_FALSE(bridge->getAfterfireDiagnostics().empty())
+        << "getAfterfireDiagnostics() returned no chambers — afterfire is not wired through";
+
+    bridge->setIgnition(true);
+    bridge->setStarterMotor(true);
+    driveFor(*simulator, 0.0, kCrankTicks);
+    bridge->setStarterMotor(false);
+    driveFor(*simulator, 0.0, kIdleSettleTicks);
+
+    // Spin up, then hold a constant pedal and count only what happens while it
+    // is held — the ramp itself is excluded so this measures steady state.
+    driveFor(*simulator, 1.0, kRevTicks);
+    bridge->resetAfterfireDiagnostics();
+
+    driveFor(*simulator, 1.0, kSteadyThrottleTicks);
+    const double steadyRpm = simulator->getStats().currentRPM;
+    EXPECT_GT(steadyRpm, kMinRevRpm)
+        << "Scenario guard: the engine was not actually held under power, so this "
+           "says nothing about steady-throttle behaviour. rpm=" << steadyRpm;
+
+    const int steadyEvents = sumAfterfireEvents(*bridge);
+    // By value, not by reference: getAfterfireDiagnostics() returns a fresh
+    // vector, so a reference to .front() would dangle immediately.
+    const AfterfireDiagnostics chamber0 = bridge->getAfterfireDiagnostics().front();
+    EXPECT_EQ(steadyEvents, 0)
+        << "Afterfire fired " << steadyEvents << " times at steady throttle. Under power the "
+           "exhaust runner is scavenged every cycle, so the induction period cannot complete; "
+           "firing here is the metronomic-knock regression.\n"
+        << "  chamber0 runner peaks: T=" << chamber0.maxRunnerTempK << "K"
+        << " rawFuelFraction=" << chamber0.maxRawFuelFraction
+        << " ignitionProgress=" << chamber0.maxIgnitionProgress;
 
     simulator->destroy();
 }

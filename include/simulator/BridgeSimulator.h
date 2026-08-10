@@ -122,7 +122,13 @@ public:
     // Applies the config to every combustion chamber. When
     // ATG_ENGINE_SIM_AFTERFIRE_SPIKE is not compiled in these are safe no-ops:
     // configureAfterfire warns, getAfterfireDiagnostics returns an empty vector.
-    void configureAfterfire(const AfterfireConfig& config);
+    //
+    // Returns false when a NON-EMPTY afterfireWavPath (literal path or glob)
+    // matches no files on disk — an explicit request that cannot be honoured,
+    // which callers must surface rather than silently fall back to the engine's
+    // default exhaust impulse response. An EMPTY path means "use the default"
+    // and returns true. No chambers are modified on failure.
+    bool configureAfterfire(const AfterfireConfig& config);
     std::vector<AfterfireDiagnostics> getAfterfireDiagnostics() const;
     void resetAfterfireDiagnostics();
 

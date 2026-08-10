@@ -411,6 +411,7 @@ if(BUILD_BRIDGE_TESTS)
         test/InMemoryTelemetryResetTests.cpp
         test/SimulatorFactoryBoundaryTests.cpp
         test/ScriptLoadHelpersResolveAssetBasePathTests.cpp
+        test/WavLoaderSingleDefinitionTests.cpp
         test/simulation/SimulationLoopStepTests.cpp
         test/simulation/SimulationLoopRunTests.cpp
         test/simulation/SimulationLoopVehicleControlsTests.cpp
@@ -426,6 +427,9 @@ if(BUILD_BRIDGE_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${ENGINE_SIM_PATH}/include
+        # engine-sim/include/wav_loader.h includes "dr_libs/dr_wav.h", so the
+        # dependencies root must be on the path for any test TU that includes it.
+        ${ENGINE_SIM_PATH}/dependencies
         ${ENGINE_SIM_PATH}/dependencies/submodules/simple-2d-constraint-solver/include
     )
     target_link_libraries(bridge_unit_tests
@@ -497,6 +501,39 @@ if(BUILD_BRIDGE_TESTS)
         target_compile_options(afterfire_determinism_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
         if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
             add_test(NAME afterfire_determinism_tests COMMAND afterfire_determinism_tests --gtest_color=yes)
+        endif()
+
+        # --------------------------------------------------------------------
+        # Afterfire bridge integration test (ported from backfires-wip
+        # AfterfireBridgeTest). Drives the REAL CLI path
+        # (SimulatorFactory -> BridgeSimulator::setThrottle) to prove the
+        # throttle-polarity fix and the afterfire wiring produce pops on a
+        # throttle-cut decel. Needs preset + asset paths as compile defs.
+        # --------------------------------------------------------------------
+        add_executable(afterfire_bridge_tests
+            test/AfterfireBridgeTest.cpp
+        )
+        target_include_directories(afterfire_bridge_tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${ENGINE_SIM_PATH}/include
+            ${ENGINE_SIM_PATH}/scripting/include
+            ${ENGINE_SIM_PATH}/dependencies/submodules/simple-2d-constraint-solver/include
+        )
+        target_compile_definitions(afterfire_bridge_tests PRIVATE
+            TEST_PRESET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/preset"
+            TEST_ENGINE_SIM_ASSETS="${ENGINE_SIM_PATH}/assets"
+            TEST_ENGINE_SIM_ROOT="${ENGINE_SIM_PATH}"
+            TEST_ES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/es"
+        )
+        target_link_libraries(afterfire_bridge_tests
+            PRIVATE
+                engine-sim-bridge
+                GTest::gtest_main
+        )
+        target_compile_options(afterfire_bridge_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+        if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+            add_test(NAME afterfire_bridge_tests COMMAND afterfire_bridge_tests --gtest_color=yes)
         endif()
     endif()
 

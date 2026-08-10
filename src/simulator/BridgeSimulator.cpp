@@ -5,11 +5,14 @@
 
 #include "simulator/BridgeSimulator.h"
 #include "simulator/GearConventions.h"
+#include "simulator/PresetEngineFactory.h"
 #include "twin/SpeedRpmConversion.h"
 
 #include <vector>
 #include <cstring>
 #include <cassert>
+#include <algorithm>
+#include <filesystem>
 #include <common/Verification.h>
 #include "common/PresetExceptions.h"
 #include "engine.h"
@@ -366,45 +369,84 @@ bool BridgeSimulator::configureDynoLoad(double loadFraction) {
 // no-ops so callers need no #ifdef of their own.
 // ============================================================================
 
-void BridgeSimulator::configureAfterfire(const AfterfireConfig& config) {
+bool BridgeSimulator::configureAfterfire(const AfterfireConfig& config) {
 #ifdef ATG_ENGINE_SIM_AFTERFIRE_SPIKE
+    // No engine (e.g. the sine-wave simulator): there are no chambers to tune.
+    // This is NOT a WAV-resolution failure, and the bool contract is specifically
+    // "the requested WAV matched nothing" — returning false here would make the
+    // CLI report a misleading "matched no files" for a simulator that never had
+    // chambers. Preserves the original no-op behaviour.
     Engine* engine = m_simulator ? m_simulator->getEngine() : nullptr;
-    if (!engine) return;
+    if (!engine) return true;
+
+    // Expand the configured afterfire WAV path (single file or glob) into the
+    // list of candidate files the chamber will load and pick from per pop.
+    const std::vector<std::string> wavPaths = resolveAfterfireWavPaths(config.afterfireWavPath);
+
+    // Fail fast: an explicitly requested WAV that matches nothing is a user
+    // error, not a reason to silently substitute the engine's default exhaust
+    // impulse response. An EMPTY path is the documented "use the default" case
+    // and is left alone. Reported before any chamber is touched so a bad
+    // argument cannot half-apply.
+    if (!config.afterfireWavPath.empty() && wavPaths.empty()) {
+        if (logger_) {
+            logger_->error(LogMask::BRIDGE, __ilog_format(
+                "Afterfire: --afterfire-wav '%s' matched no files",
+                config.afterfireWavPath.c_str()));
+        }
+        return false;
+    }
 
     const int cylinderCount = engine->getCylinderCount();
     for (int i = 0; i < cylinderCount; ++i) {
         CombustionChamber::AfterfireParameters parameters;
         parameters.enabled = config.enabled;
-        parameters.intensity = config.intensity;
-        parameters.cooldownMs = config.cooldownMs;
+        parameters.misfireManifoldPressure = config.misfireManifoldPressurePa;
+        parameters.ignitionDelayRefS = config.ignitionDelayRefS;
+        parameters.activationTempK = config.activationTempK;
+        parameters.refTempK = config.refTempK;
+        parameters.autoIgnitionTempK = config.autoIgnitionTempK;
+        parameters.minRawFuelFraction = config.minRawFuelFraction;
+        parameters.minOxygenMoleFraction = config.minOxygenMoleFraction;
+        parameters.energyScale = config.energyScale;
         parameters.throttleCutoff = config.throttleCutoff;
-        parameters.rpmMin = config.rpmMin;
-        parameters.fuelFraction = config.fuelFraction;
-        parameters.probability = config.probability;
-        parameters.decelWindowMs = config.decelWindowMs;
-        parameters.maxEventsPerDecel = config.maxEventsPerDecel;
-        parameters.rpmFallThreshold = config.rpmFallThreshold;
-        parameters.globalPopIntervalMs = config.globalPopIntervalMs;
+        parameters.afterfireWavPath = config.afterfireWavPath;
+        parameters.afterfireWavPaths = wavPaths;
         parameters.diagnostics = config.diagnostics;
 
         engine->getChamber(i)->setAfterfireParameters(parameters);
         engine->getChamber(i)->resetAfterfireDiagnostics();
     }
 
+    // Custom pop WAV resolution is owned by the bridge (resolveAfterfireWavPaths
+    // in PresetEngineFactory); the chamber loads the samples from afterfireWavPaths
+    // at setAfterfireParameters time and picks one per pop. Nothing to install here.
+    // Reuses the expansion computed above rather than repeating the filesystem walk.
+    if (config.enabled && logger_ && !config.afterfireWavPath.empty()) {
+        logger_->info(LogMask::BRIDGE, __ilog_format(
+            "Afterfire: custom pop WAV '%s' -> %zu candidate(s)",
+            config.afterfireWavPath.c_str(), wavPaths.size()));
+    }
+
     if (config.enabled && logger_) {
         logger_->info(LogMask::BRIDGE, __ilog_format(
-            "Afterfire: enabled (%d chambers, intensity=%.2f, cooldown=%.0fms, throttle<=%.2f, rpm>=%.0f)",
+            "Afterfire: enabled (%d chambers, misfire MAP<%.0fkPa, autoIgnition>=%.0fK, tau(%.0fK)=%.0fms)",
             cylinderCount,
-            config.intensity,
-            config.cooldownMs,
-            config.throttleCutoff,
-            config.rpmMin));
+            config.misfireManifoldPressurePa / 1000.0,
+            config.autoIgnitionTempK,
+            config.refTempK,
+            config.ignitionDelayRefS * 1000.0));
     }
+
+    return true;
 #else
     if (config.enabled && logger_) {
         logger_->warning(LogMask::BRIDGE,
             "Afterfire: request ignored (ATG_ENGINE_SIM_AFTERFIRE_SPIKE not compiled in)");
     }
+    // Not compiled in: the request could not be honoured, but this is a build
+    // configuration state rather than a bad argument, so it is not a failure.
+    return true;
 #endif
 }
 
@@ -422,18 +464,21 @@ std::vector<AfterfireDiagnostics> BridgeSimulator::getAfterfireDiagnostics() con
 
             AfterfireDiagnostics entry;
             entry.eventCount = chamberDiagnostics.eventCount;
-            entry.skippedCooldown = chamberDiagnostics.skippedCooldown;
-            entry.skippedLowRpm = chamberDiagnostics.skippedLowRpm;
+            entry.skippedTooCold = chamberDiagnostics.skippedTooCold;
+            entry.skippedNoFuel = chamberDiagnostics.skippedNoFuel;
+            entry.skippedNoOxygen = chamberDiagnostics.skippedNoOxygen;
+            entry.skippedNotReady = chamberDiagnostics.skippedNotReady;
             entry.skippedThrottle = chamberDiagnostics.skippedThrottle;
-            entry.skippedProbability = chamberDiagnostics.skippedProbability;
-            entry.skippedMaxEvents = chamberDiagnostics.skippedMaxEvents;
-            entry.skippedCrankAngle = chamberDiagnostics.skippedCrankAngle;
-            entry.skippedNoOverrun = chamberDiagnostics.skippedNoOverrun;
-            entry.eventsInCurrentDecel = chamberDiagnostics.eventsInCurrentDecel;
+            entry.misfireCycles = chamberDiagnostics.misfireCycles;
+            entry.maxIgnitionProgress = chamberDiagnostics.maxIgnitionProgress;
+            entry.maxRunnerTempK = chamberDiagnostics.maxRunnerTempK;
+            entry.maxRawFuelFraction = chamberDiagnostics.maxRawFuelFraction;
+            entry.minManifoldPressurePa = chamberDiagnostics.minManifoldPressure;
             entry.lastEventRpm = chamberDiagnostics.lastEventRpm;
             entry.lastEventThrottle = chamberDiagnostics.lastEventThrottle;
             entry.lastEventPeakPressure = chamberDiagnostics.lastEventPeakPressure;
             entry.lastEventEnergyReleased = chamberDiagnostics.lastEventEnergyReleased;
+            entry.lastEventRunnerTempK = chamberDiagnostics.lastEventRunnerTempK;
 
             diagnostics.push_back(entry);
         }

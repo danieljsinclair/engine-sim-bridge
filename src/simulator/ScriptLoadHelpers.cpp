@@ -1,9 +1,21 @@
 // ScriptLoadHelpers.cpp - Implementation of shared script loading helpers
 // DRY: Shared helpers for engine simulation setup
 
-#define DR_WAV_IMPLEMENTATION
+// NOTE: DR_WAV_IMPLEMENTATION is intentionally NOT defined here. The single
+// definition of WavLoader and the dr_wav C functions lives in
+// engine-sim/src/wav_loader.cpp. The bridge links engine-sim, so WavLoader::load
+// in this file resolves to that definition at link time. Defining
+// DR_WAV_IMPLEMENTATION here too would duplicate the dr_wav symbols.
+//
+// This includes engine-sim's wav_loader.h DIRECTLY (it is on the bridge target's
+// PUBLIC include path). A bridge-local "declaration-only mirror" of the same
+// class used to live at common/wav_loader.h; it was deleted because it declared
+// WavLoader::Result WITHOUT the `channels` field while the linked definition had
+// it. Two layouts (32 vs 40 bytes) for one class is an ODR violation: this TU
+// read `valid` at the wrong offset and destroyed the returned std::string
+// through a shifted `this`, corrupting the heap. One header = one layout.
 #include "simulator/ScriptLoadHelpers.h"
-#include "common/wav_loader.h"
+#include "wav_loader.h"
 #include "common/PresetExceptions.h"  // SimulatorException (fail-fast on missing asset)
 
 namespace ScriptLoadHelpers {
