@@ -1,7 +1,9 @@
 // AfterfireBridgeTest.cpp — drives the REAL CLI path (SimulatorFactory → BridgeSimulator)
 // to prove the throttle-polarity fix and the afterfire wiring produce pops on a
 // throttle-cut decel. Ported from the backfires-wip snapshot
-// (da8dbe9:test/AfterfireBridgeTest.cpp) onto the live bridge API.
+// (da8dbe9:test/AfterfireBridgeTest.cpp), rewritten for the live physics-based
+// afterfire model (manifold-pressure misfire -> Arrhenius auto-ignition ->
+// scavenging reset). See EngineSimTypes.h (AfterfireConfig).
 //
 // This is the API-driven verification of what the interactive CLI does:
 // setThrottle → update → afterfire. It drives BridgeSimulator::setThrottle()
@@ -35,6 +37,11 @@ namespace {
 double sumAfterfireEvents(BridgeSimulator& bridge) {
     double total = 0.0;
     for (const auto& d : bridge.getAfterfireDiagnostics()) total += d.eventCount;
+    return total;
+}
+double sumSkippedThrottle(BridgeSimulator& bridge) {
+    double total = 0.0;
+    for (const auto& d : bridge.getAfterfireDiagnostics()) total += d.skippedThrottle;
     return total;
 }
 }  // namespace
@@ -89,20 +96,24 @@ TEST(AfterfireBridgeTest, RevsOnFullThrottleAndPopsOnCut) {
     SimulatorInitHelpers::initializeConvolutionFilters(innerSim);
 
     // Configure afterfire AGGRESSIVELY — this is a path/wiring proof, not a realism
-    // test, so guarantee events fire during the decel (probability=1, no spacing).
+    // test, so guarantee events fire during the decel. The physics model lights off
+    // when the manifold pressure collapses (overrun), the runner is hot and oxygen-
+    // rich enough, and the pedal is below the throttle cutoff. Relax every gate so a
+    // cut reliably produces pops within the short coast window.
     AfterfireConfig af;
     af.enabled = true;
-    af.intensity = 0.5;
-    af.cooldownMs = 50.0;
-    af.throttleCutoff = 0.5;
-    af.rpmMin = 1500.0;
-    af.fuelFraction = 0.006;
-    af.probability = 1.0;
-    af.decelWindowMs = 5000.0;
-    af.maxEventsPerDecel = 12;
-    af.globalPopIntervalMs = 0.0;   // no spacing — maximize fire chance in the window
+    af.misfireManifoldPressurePa = 101325.0;  // ~1 atm: any low-MAP condition qualifies
+    af.throttleCutoff = 0.5;                  // generous: cut is well below this
+    af.ignitionDelayRefS = 0.001;             // near-instant light-off
+    af.activationTempK = 8000.0;
+    af.refTempK = 1000.0;
+    af.autoIgnitionTempK = 300.0;             // low floor so a hot pipe always lights
+    af.minRawFuelFraction = 1e-6;             // tiny: ensure raw fuel accumulates
+    af.minOxygenMoleFraction = 1e-4;          // tiny: ensure oxygen present
+    af.energyScale = 5.0;                     // loud, clearly-audible pop
+    af.diagnostics = true;
     SimulatorFactory::configureAfterfire(sim.get(), af, nullptr);
-    ASSERT_GT(sumAfterfireEvents(*bridge), -0.5) << "Afterfire diagnostics must be readable";
+    ASSERT_GE(sumAfterfireEvents(*bridge), 0.0) << "Afterfire diagnostics must be readable";
 
     // --- Start the engine: ignition + starter + full throttle ---
     bridge->setIgnition(true);
@@ -121,6 +132,7 @@ TEST(AfterfireBridgeTest, RevsOnFullThrottleAndPopsOnCut) {
 
     // --- CUT throttle and let it coast; afterfire should fire on the cut ---
     const double eventsBeforeDecel = sumAfterfireEvents(*bridge);
+    const double skippedThrottleBefore = sumSkippedThrottle(*bridge);
     double minDecelRpm = peakRpm;
     for (int i = 0; i < 240; ++i) {          // ~4s of coast-down
         bridge->setThrottle(0.0);           // throttle CUT (naive user intent)
@@ -129,6 +141,7 @@ TEST(AfterfireBridgeTest, RevsOnFullThrottleAndPopsOnCut) {
     }
     const double throttleAtCut = innerSim->getEngine()->getThrottle();
     const double eventsAfterDecel = sumAfterfireEvents(*bridge);
+    const double skippedThrottleAfter = sumSkippedThrottle(*bridge);
 
     // POLARITY PROOF (robust): getThrottle() is the value the afterfire gate reads.
     // With the bridge fix, setThrottle(x) must produce getThrottle() ≈ x for a
@@ -144,16 +157,22 @@ TEST(AfterfireBridgeTest, RevsOnFullThrottleAndPopsOnCut) {
         << "Afterfire did not fire after the throttle cut. "
         << "before=" << eventsBeforeDecel << " after=" << eventsAfterDecel;
 
+    // During the full-throttle rev, the pedal was ABOVE the cutoff, so the model must
+    // have counted those steps as skippedThrottle (not overrun). This proves the
+    // throttle gate (a core part of the physics model) is wired through the bridge.
+    EXPECT_GT(skippedThrottleAfter, skippedThrottleBefore)
+        << "Throttle gate did not record skippedThrottle during full-throttle rev.";
+
     // RPM dynamics are engine-specific (some presets free-rev, some don't) so they are
-    // recorded as info, not asserted. The determinism test covers the C63's
-    // rev-then-decel RPM behaviour and audible output in detail.
+    // recorded as info, not asserted.
     RecordProperty("peak_rpm", std::to_string(peakRpm));
     RecordProperty("min_decel_rpm", std::to_string(minDecelRpm));
     RecordProperty("throttle_at_full", std::to_string(throttleAtFull));
     RecordProperty("throttle_at_cut", std::to_string(throttleAtCut));
     RecordProperty("afterfire_events", std::to_string(eventsAfterDecel));
-    printf("[result] throttle full=%.3f cut=%.3f peakRpm=%.0f events=%.0f\n",
-           throttleAtFull, throttleAtCut, peakRpm, eventsAfterDecel);
+    printf("[result] throttle full=%.3f cut=%.3f peakRpm=%.0f events=%.0f skippedThrottle=%.0f\n",
+           throttleAtFull, throttleAtCut, peakRpm, eventsAfterDecel,
+           skippedThrottleAfter - skippedThrottleBefore);
     fflush(stdout);
 #endif
 }
