@@ -131,13 +131,34 @@ struct AfterfireConfig {
 
     // Stage 2 — auto-ignition.
     // tau(T) = ignitionDelayRefS * exp(activationTempK * (1/T - 1/refTempK)).
-    // Tuned toward "cold": 0.02 -> 0.3 lengthens the induction period so the
-    // crackle sequence spreads into the coast-down (pops keep firing as the runner
-    // cools through 1000-800K) instead of one near-instant burst on the hottest
-    // runner. Note tau is ~50x more sensitive to runner temp than to this knob, so
-    // the very first pop on a ~1700K runner is still quick; dial this up/down, or
-    // adjust activationTempK, to taste. Tests override this default.
-    double ignitionDelayRefS = 0.3;
+    //
+    // This is the induction time at refTempK (1000 K), NOT the delay you hear.
+    // The runner on a real overrun sits far hotter than the reference — measured
+    // ~1880-1910 K on the C63_M156_V3 rev-and-cut — and at 1900 K the Arrhenius
+    // factor is exp(8000*(1/1900 - 1/1000)) ~= 0.023, so the effective tau in the
+    // pipe is ~44x SHORTER than the number written here. That compression is why
+    // a physical-looking 0.02 fired the first pop on the very tick of the cut.
+    //
+    // Measured on that scenario, one value per process (first pop after the cut /
+    // pop count / spread between first and last pop):
+    //     0.02 -> 0.000 s, 30 pops, 1.000 s   (instant, machine-gun)
+    //     0.3  -> 0.050 s, 20 pops, 0.317 s
+    //     1.0  -> 0.067 s, 13 pops, 0.517 s
+    //     3.0  -> 0.100 s,  7 pops, 0.333 s   (current)
+    //     6.0  -> 0.167 s,  4 pops, 0.083 s
+    //     8.0  -> 0.250 s,  2 pops, 0.083 s
+    //    10.0  -> no pops at all              (scavenging always wins)
+    //
+    // 3.0 puts the first pop ~100 ms behind the cut — a beat, not a coincidence —
+    // and thins 30 pops to 7 that still spread over a third of a second, so the
+    // crackle reads as a sequence rather than one burst. Beyond ~6 the sequence
+    // collapses to a couple of isolated cracks and 10 kills the effect outright,
+    // so this keeps real margin to that cliff.
+    //
+    // Measure isolated: several values swept inside ONE process interfere (a
+    // later value read 0 pops in-process but 4 on its own), so re-tune with one
+    // value per run. Repeatability at 3.0: three runs, identical timings.
+    double ignitionDelayRefS = 3.0;
     double activationTempK   = 8000.0;
     double refTempK          = 1000.0;
 
