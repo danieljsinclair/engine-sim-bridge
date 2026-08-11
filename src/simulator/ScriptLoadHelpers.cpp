@@ -41,6 +41,51 @@ static std::string buildFullPath(const std::string& assetBasePath, const std::st
     return assetBasePath + "/" + filename;
 }
 
+/**
+ * Report an unusable impulse response and abort the load.
+ *
+ * Fail-fast: a missing impulse response means the run would produce no exhaust
+ * audio at all, so we must NOT silently continue. Throwing (rather than
+ * returning false) lets the top-level SimulatorException handler name the
+ * missing path + asset base and exit non-zero.
+ *
+ * Distinguishes "the file is absent" from "the file is present but
+ * unreadable/corrupt": both are fatal, but they need different fixes (wrong
+ * asset base vs. a bad WAV), and saying which saves a guess.
+ *
+ * Extracted from loadImpulseResponses purely to carry the diagnostics away from
+ * the load loop — the two nested reporting ternaries sat three levels deep and
+ * pushed that function's cognitive complexity to 28. Behaviour is unchanged.
+ */
+[[noreturn]] static void failUnusableImpulseResponse(const std::string& fullPath,
+                                                     const std::string& assetBasePath,
+                                                     const std::string& filename,
+                                                     int exhaustSystemIndex,
+                                                     ILogging* logger) {
+    std::error_code ec;
+    const bool present = std::filesystem::exists(fullPath, ec) && !ec;
+
+    if (logger) {
+        logger->error(LogMask::ASSET, __ilog_format(
+            present ? "Required audio file is present but could not be decoded: %s"
+                    : "Required audio file is MISSING: %s",
+            fullPath.c_str()));
+        logger->error(LogMask::ASSET, __ilog_format(
+            "(asset base: %s, from script: %s, exhaust system: %d)",
+            assetBasePath.c_str(), filename.c_str(), exhaustSystemIndex));
+        logger->error(LogMask::ASSET,
+            "Asset base must be the directory that directly contains 'sound-library/'"
+            " (e.g. <repo>/es). Run the engine from a tree with the WAVs present.");
+    }
+
+    throw SimulatorException(
+        std::string(present ? "Required audio file present but unreadable: "
+                            : "Required audio file MISSING: ")
+        + fullPath
+        + " (asset base: " + assetBasePath
+        + ", referenced from script as: " + filename + ")");
+}
+
 bool loadImpulseResponses(
     Simulator* simulator,
     const Engine* engine,
@@ -79,33 +124,7 @@ bool loadImpulseResponses(
         WavLoader::Result wavResult = WavLoader::load(fullPath);
 
         if (!wavResult.valid) {
-            // Fail-fast: a missing impulse response means the run would produce
-            // no exhaust audio at all, so we must NOT silently continue. Throw
-            // (not return false) so the top-level SimulatorException handler names
-            // the missing path + asset base and the process exits non-zero.
-            // Distinguish "the file is absent" from "the file is present but
-            // unreadable/corrupt": both are fatal, but they need different fixes
-            // (wrong asset base vs. a bad WAV), and saying which saves a guess.
-            std::error_code ec;
-            const bool present = std::filesystem::exists(fullPath, ec) && !ec;
-            if (logger) {
-                logger->error(LogMask::ASSET, __ilog_format(
-                    present ? "Required audio file is present but could not be decoded: %s"
-                            : "Required audio file is MISSING: %s",
-                    fullPath.c_str()));
-                logger->error(LogMask::ASSET, __ilog_format(
-                    "(asset base: %s, from script: %s, exhaust system: %d)",
-                    assetBasePath.c_str(), filename.c_str(), i));
-                logger->error(LogMask::ASSET,
-                    "Asset base must be the directory that directly contains 'sound-library/'"
-                    " (e.g. <repo>/es). Run the engine from a tree with the WAVs present.");
-            }
-            throw SimulatorException(
-                std::string(present ? "Required audio file present but unreadable: "
-                                    : "Required audio file MISSING: ")
-                + fullPath
-                + " (asset base: " + assetBasePath
-                + ", referenced from script as: " + filename + ")");
+            failUnusableImpulseResponse(fullPath, assetBasePath, filename, i, logger);
         }
 
         if (logger) {
