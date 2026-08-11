@@ -121,6 +121,7 @@ TEST(AfterfireBridgeTest, RevsOnFullThrottleAndPopsOnCut) {
 
     const double dt = 1.0 / 60.0;
     double peakRpm = 0.0;
+    const double skippedThrottleAtStart = sumSkippedThrottle(*bridge);  // baseline before the rev
     // REV for ~3s at full throttle. Disable the starter once it should be running.
     for (int i = 0; i < 180; ++i) {
         bridge->setThrottle(1.0);           // full throttle (naive user intent)
@@ -128,7 +129,7 @@ TEST(AfterfireBridgeTest, RevsOnFullThrottleAndPopsOnCut) {
         bridge->update(dt);
         peakRpm = std::max(peakRpm, bridge->getEngineRpm());
     }
-    const double throttleAtFull = innerSim->getEngine()->getThrottle();
+    const double throttleAtFull = innerSim->getEngine()->getSpeedControl();
 
     // --- CUT throttle and let it coast; afterfire should fire on the cut ---
     const double eventsBeforeDecel = sumAfterfireEvents(*bridge);
@@ -139,17 +140,18 @@ TEST(AfterfireBridgeTest, RevsOnFullThrottleAndPopsOnCut) {
         bridge->update(dt);
         minDecelRpm = std::min(minDecelRpm, bridge->getEngineRpm());
     }
-    const double throttleAtCut = innerSim->getEngine()->getThrottle();
+    const double throttleAtCut = innerSim->getEngine()->getSpeedControl();
     const double eventsAfterDecel = sumAfterfireEvents(*bridge);
     const double skippedThrottleAfter = sumSkippedThrottle(*bridge);
 
-    // POLARITY PROOF (robust): getThrottle() is the value the afterfire gate reads.
-    // With the bridge fix, setThrottle(x) must produce getThrottle() ≈ x for a
-    // DirectThrottleLinkage engine. If polarity were inverted, full would read ~0.
+    // POLARITY PROOF: the afterfire gate reads getSpeedControl() (the pedal), NOT
+    // getThrottle() — getThrottle() is the plate restriction (0=open/full, 1=closed)
+    // because DirectThrottleLinkage::update() overwrites it each tick. So setThrottle(x)
+    // must produce getSpeedControl() ≈ x. (Asserting getThrottle here would be wrong.)
     EXPECT_NEAR(throttleAtFull, 1.0, 0.02)
-        << "setThrottle(1.0) did not yield full throttle (getThrottle=" << throttleAtFull;
+        << "setThrottle(1.0) did not yield full pedal (getSpeedControl=" << throttleAtFull;
     EXPECT_NEAR(throttleAtCut, 0.0, 0.02)
-        << "setThrottle(0.0) did not yield closed throttle (getThrottle=" << throttleAtCut;
+        << "setThrottle(0.0) did not yield closed pedal (getSpeedControl=" << throttleAtCut;
 
     // Afterfire fired once the throttle was cut and RPM was in range — the core proof
     // that the full bridge path (setThrottle → engine → afterfire) works.
@@ -157,10 +159,11 @@ TEST(AfterfireBridgeTest, RevsOnFullThrottleAndPopsOnCut) {
         << "Afterfire did not fire after the throttle cut. "
         << "before=" << eventsBeforeDecel << " after=" << eventsAfterDecel;
 
-    // During the full-throttle rev, the pedal was ABOVE the cutoff, so the model must
-    // have counted those steps as skippedThrottle (not overrun). This proves the
-    // throttle gate (a core part of the physics model) is wired through the bridge.
-    EXPECT_GT(skippedThrottleAfter, skippedThrottleBefore)
+    // During the full-throttle rev, the pedal was ABOVE the cutoff, so the gate must
+    // have counted those steps as skippedThrottle. skippedThrottleBefore is snapshotted
+    // AFTER the rev, so it must exceed the pre-rev baseline (skippedThrottleAtStart) —
+    // NOT the post-decel value (a decel is a throttle cut, so it adds zero skips).
+    EXPECT_GT(skippedThrottleBefore, skippedThrottleAtStart)
         << "Throttle gate did not record skippedThrottle during full-throttle rev.";
 
     // RPM dynamics are engine-specific (some presets free-rev, some don't) so they are
