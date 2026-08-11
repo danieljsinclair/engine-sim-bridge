@@ -977,3 +977,117 @@ TEST_F(AutomaticGearboxTest, TopGear_LogShiftState_DoesNotThrow) {
             << "upshiftSpeed at top gear must be non-negative (clamped to last column)";
     }
 }
+
+// ============================================================
+// Empty / ragged shift-table rows must not be indexed.
+//
+// The b80fa5b top-gear clamp is written as
+//     if (!shiftTable[0].empty() && tableIndex >= shiftTable[0].size())
+// so when row 0 IS empty the clamp is SKIPPED and control falls through to
+// interpolateShiftSpeed, which does an unchecked shiftTable[row][tableIndex].
+// operator[] past the end of an empty vector is undefined behaviour — the old
+// pre-b80fa5b ASSERT was what used to catch exactly this shape. The same hole
+// exists for a RAGGED table: the clamp is computed from row 0's width only, so
+// a short row further down is still indexed out of range.
+//
+// These tests pin the contract: a malformed table yields a safe sentinel
+// (0.0 — the "no threshold" value speedExceedsUpshift/speedBelowDownshift
+// already test for with `> 0.0`) and never reads out of bounds.
+// ============================================================
+
+TEST_F(AutomaticGearboxTest, EmptyShiftTableRow_DoesNotIndexOutOfRange) {
+    IceVehicleProfile p = IceVehicleProfile::zf8hp45();
+    p.gearRatios = {4.714, 3.143, 2.106};
+    p.shiftTableThrottleLevels = {0.1, 0.5, 1.0};
+    p.shiftTable = {{}, {}, {}};            // populated table, but every row empty
+    p.separateDownshiftTableEnabled = false;
+
+    AutomaticGearbox gearbox(p);
+
+    struct MockLogger : public IGearboxLogger {
+        std::vector<GearboxLogEntry> entries;
+        void log(const GearboxLogEntry& entry) override { entries.push_back(entry); }
+    };
+    MockLogger logger;
+    gearbox.setLogger(&logger);
+
+    // Drive through the full speed range with a logger attached so both the
+    // shift-decision lookups and logShiftState exercise the table every frame.
+    EXPECT_NO_THROW({
+        for (double speed = 5.0; speed <= 150.0; speed += 5.0) {
+            gearbox.update(0.1, speed, 0.5);
+        }
+    }) << "an empty shift-table row must be treated as 'no threshold', not indexed";
+
+    // The redline safety net may still upshift (it is deliberately independent
+    // of the tables), but it can never exceed the gears the profile declares,
+    // and no table-derived threshold may be fabricated from an unusable row.
+    EXPECT_LE(gearbox.getCurrentGear(), static_cast<int>(p.gearRatios.size()))
+        << "must never shift past the last declared gear";
+    ASSERT_FALSE(logger.entries.empty());
+    EXPECT_DOUBLE_EQ(logger.entries.back().upshiftSpeed, 0.0)
+        << "unusable table must log the 0.0 no-threshold sentinel";
+}
+
+TEST_F(AutomaticGearboxTest, RaggedShiftTable_ShortRowNotIndexedOutOfRange) {
+    // Row 0 is wide enough that the top-gear clamp passes, but the rows the
+    // interpolation actually brackets are SHORT.
+    IceVehicleProfile p = IceVehicleProfile::zf8hp45();
+    p.gearRatios = {4.714, 3.143, 2.106, 1.667};
+    p.shiftTableThrottleLevels = {0.1, 0.5, 1.0};
+    p.shiftTable = {
+        {20.0, 35.0, 50.0},   // 10% — full width
+        {30.0},               // 50% — ragged short row
+        {40.0}                // 100% — ragged short row
+    };
+    p.separateDownshiftTableEnabled = false;
+
+    AutomaticGearbox gearbox(p);
+
+    EXPECT_NO_THROW({
+        for (double speed = 5.0; speed <= 150.0; speed += 5.0) {
+            gearbox.update(0.1, speed, 0.9);   // brackets the two short rows
+        }
+    }) << "a ragged shift table must not index a short row past its end";
+}
+
+TEST_F(AutomaticGearboxTest, MoreGearsThanTableColumns_TopGearQueryIsSafe) {
+    // 4 gears but only 2 upshift columns: at gear 3 and 4 the caller
+    // (logShiftState) asks for getShiftSpeed(gear, gear+1, ...) beyond the
+    // table. Neither the caller nor the lookup may go out of range.
+    IceVehicleProfile p = IceVehicleProfile::zf8hp45();
+    p.gearRatios = {4.714, 3.143, 2.106, 1.667};
+    p.shiftTableThrottleLevels = {0.1, 0.5, 1.0};
+    p.shiftTable = {
+        {20.0, 35.0},
+        {30.0, 50.0},
+        {40.0, 65.0}
+    };
+    p.separateDownshiftTableEnabled = false;
+
+    AutomaticGearbox gearbox(p);
+
+    struct MockLogger : public IGearboxLogger {
+        std::vector<GearboxLogEntry> entries;
+        void log(const GearboxLogEntry& entry) override { entries.push_back(entry); }
+    };
+    MockLogger logger;
+    gearbox.setLogger(&logger);
+
+    EXPECT_NO_THROW({
+        for (double speed = 5.0; speed <= 250.0; speed += 2.0) {
+            gearbox.update(0.1, speed, 0.9);
+        }
+    }) << "querying beyond the last shift-table column must be safe";
+
+    // The gearbox may not upshift past the gears it actually has.
+    EXPECT_LE(gearbox.getCurrentGear(), static_cast<int>(p.gearRatios.size()));
+    ASSERT_FALSE(logger.entries.empty());
+
+    // At top gear there is no next gear to shift into, so the caller must not
+    // report a fabricated upshift threshold.
+    if (gearbox.getCurrentGear() == static_cast<int>(p.gearRatios.size())) {
+        EXPECT_DOUBLE_EQ(logger.entries.back().upshiftSpeed, 0.0)
+            << "top gear has no upshift target — no threshold may be logged";
+    }
+}

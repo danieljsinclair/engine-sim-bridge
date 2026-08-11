@@ -5,13 +5,20 @@
 #include <common/Verification.h>
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace twin {
 
+// The "no usable threshold" sentinel returned by the shift-speed lookups.
+// Both call sites (speedExceedsUpshift / speedBelowDownshift) already gate on
+// `> 0.0`, so a non-positive result is by construction read as "this table
+// cannot answer" and no shift is derived from it.
+static constexpr double kNoShiftSpeed = 0.0;
+
 // Shared interpolation core for the upshift and downshift speed lookups.
 // Selects the bracketing throttle-level rows around `throttle` and linearly
-// interpolates between the corresponding table speeds. Pure computation: no
-// validation — callers guarantee a populated table/levels and a valid index.
+// interpolates between the corresponding table speeds. Pure computation on a
+// table whose rows the caller has already verified can address `tableIndex`.
 template <typename LevelContainer>
 static double interpolateShiftSpeed(const std::vector<std::vector<double>>& table,
                                     double throttle,
@@ -276,7 +283,16 @@ void AutomaticGearbox::logShiftState(double throttleFraction, double dt, double 
     e.twinState = twinState_;
     e.clutchPressure = clutchPressureFeedback_;
     if (currentGear_ >= 1 && speedKmh >= 0.1) {
-        e.upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle_);
+        // Top-gear guard, matching speedExceedsUpshift: in the highest gear
+        // there is no gear to shift UP into, so the upshift threshold is not a
+        // meaningful quantity and must not be queried. Without this the logger
+        // asked for getShiftSpeed(top, top+1, ...) — a column past the end of
+        // the table — on every frame at top gear.
+        if (const bool hasHigherGear =
+                currentGear_ < static_cast<int>(profile_.gearRatios.size());
+            hasHigherGear) {
+            e.upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle_);
+        }
         if (currentGear_ > 1) {
             e.downshiftSpeed = getDownshiftSpeed(currentGear_ - 1, currentGear_, smoothedThrottle_);
         }
@@ -300,18 +316,51 @@ bool AutomaticGearbox::isInKickdown() const {
     return kickdownActive_;
 }
 
-double AutomaticGearbox::getShiftSpeed(int fromGear, int toGear, double throttle) const {
-    ASSERT(fromGear >= 1 && toGear >= 1 && fromGear < toGear, "getShiftSpeed: gear indexes out of range");
-    ASSERT(!profile_.shiftTable.empty(), "getShiftSpeed: shift table must be populated");
+// Resolve the shift-table column for `fromGear`, clamped to the widest column
+// index that is addressable in EVERY row. Returns nullopt when the table cannot
+// answer at all (no rows, an empty row, or fewer rows than throttle levels) —
+// the caller then yields kNoShiftSpeed instead of indexing out of range.
+//
+// b80fa5b clamped against shiftTable[0].size() only and guarded that clamp with
+// `!shiftTable[0].empty()`, so an EMPTY row 0 skipped the clamp entirely and a
+// RAGGED table clamped against the wrong row. Both fell through to an unchecked
+// operator[] on a short/empty row — undefined behaviour, and in practice a
+// garbage threshold that silently drove real shift decisions.
+static std::optional<size_t> resolveShiftTableIndex(
+        const std::vector<std::vector<double>>& table,
+        const std::vector<double>& levels,
+        int fromGear) {
+    std::optional<size_t> tableIndex;
 
-    size_t tableIndex = static_cast<size_t>(fromGear) - 1;
-    if (!profile_.shiftTable[0].empty() && tableIndex >= profile_.shiftTable[0].size()) {
-        tableIndex = profile_.shiftTable[0].size() - 1;  // clamp to last valid column
+    // Interpolation brackets rows by throttle level, so there must be at least
+    // one row per level before any row is indexed.
+    if (!table.empty() && !levels.empty() && table.size() >= levels.size()) {
+        const size_t narrowestRow =
+            std::min_element(table.begin(), table.end(),
+                             [](const std::vector<double>& a, const std::vector<double>& b) {
+                                 return a.size() < b.size();
+                             })->size();
+        if (narrowestRow > 0) {
+            // Clamp to the last column addressable in every row.
+            tableIndex = std::min(static_cast<size_t>(fromGear) - 1, narrowestRow - 1);
+        }
     }
 
-    ASSERT(!profile_.shiftTableThrottleLevels.empty(), "getShiftSpeed: throttle levels must be populated");
+    return tableIndex;
+}
 
-    return interpolateShiftSpeed(profile_.shiftTable, throttle, profile_.shiftTableThrottleLevels, tableIndex);
+double AutomaticGearbox::getShiftSpeed(int fromGear, int toGear, double throttle) const {
+    ASSERT(fromGear >= 1 && toGear >= 1 && fromGear < toGear, "getShiftSpeed: gear indexes out of range");
+
+    double shiftSpeed = kNoShiftSpeed;
+    if (const std::optional<size_t> tableIndex =
+            resolveShiftTableIndex(profile_.shiftTable, profile_.shiftTableThrottleLevels, fromGear);
+        tableIndex.has_value()) {
+        shiftSpeed = interpolateShiftSpeed(profile_.shiftTable, throttle,
+                                           profile_.shiftTableThrottleLevels, *tableIndex);
+    }
+
+    return shiftSpeed;
 }
 
 double AutomaticGearbox::getDownshiftSpeed(int fromGear, int toGear, double throttle) const {
@@ -324,16 +373,16 @@ double AutomaticGearbox::getDownshiftSpeed(int fromGear, int toGear, double thro
     ASSERT(fromGear >= 1 && toGear >= 1 && fromGear < toGear,
            "getDownshiftSpeed: gear indexes out of range");
 
-    size_t tableIndex = static_cast<size_t>(fromGear) - 1;
-    ASSERT(!profile_.downshiftTable.empty(), "getDownshiftSpeed: downshift table must be populated");
-    if (!profile_.downshiftTable[0].empty() && tableIndex >= profile_.downshiftTable[0].size()) {
-        tableIndex = profile_.downshiftTable[0].size() - 1;  // clamp to last valid column
+    double downshiftSpeed = kNoShiftSpeed;
+    if (const std::optional<size_t> tableIndex =
+            resolveShiftTableIndex(profile_.downshiftTable,
+                                   profile_.downshiftTableThrottleLevels, fromGear);
+        tableIndex.has_value()) {
+        downshiftSpeed = interpolateShiftSpeed(profile_.downshiftTable, throttle,
+                                               profile_.downshiftTableThrottleLevels, *tableIndex);
     }
-    ASSERT(!profile_.downshiftTableThrottleLevels.empty(),
-           "getDownshiftSpeed: downshift throttle levels must be populated");
 
-    return interpolateShiftSpeed(profile_.downshiftTable, throttle,
-                                 profile_.downshiftTableThrottleLevels, tableIndex);
+    return downshiftSpeed;
 }
 
 double AutomaticGearbox::getEngineRpm(double speedKmh, int gear) const {
