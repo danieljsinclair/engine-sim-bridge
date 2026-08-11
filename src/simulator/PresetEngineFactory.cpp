@@ -20,7 +20,7 @@ using json::JsonValue;
 
 // Minimal fnmatch: '*' matches any run of characters, '?' matches exactly one,
 // all other characters match literally. Used to select afterfire pop WAVs from a
-// glob such as "es/sound-library/new/*.wav".
+// glob whose leaf is a pattern such as "pop_*.wav".
 static bool matchGlob(const std::string& pattern, const std::string& name) {
     const size_t p = pattern.size();
     const size_t n = name.size();
@@ -54,17 +54,18 @@ static bool matchGlob(const std::string& pattern, const std::string& name) {
 // engine's default exhaust impulse response.
 // Static helper owned by PresetEngineFactory (it already centralises the
 // filesystem + WAV-loading concerns for the bridge).
-std::vector<std::string> resolveAfterfireWavPaths(const std::string& rawPath) {
+std::vector<std::string> resolveAfterfireWavPaths(const std::filesystem::path& rawPath) {
     std::vector<std::string> result;
     if (rawPath.empty()) return result;
 
-    const bool isGlob = rawPath.find('*') != std::string::npos
-                     || rawPath.find('?') != std::string::npos
-                     || rawPath.find('[') != std::string::npos;
+    const std::string rawText = rawPath.string();
+    const bool isGlob = rawText.find('*') != std::string::npos
+                     || rawText.find('?') != std::string::npos
+                     || rawText.find('[') != std::string::npos;
 
-    const std::filesystem::path raw(rawPath);
-    const std::filesystem::path dir = raw.has_parent_path() ? raw.parent_path() : std::filesystem::path(".");
-    const std::string leaf = raw.filename().string();
+    const std::filesystem::path dir =
+        rawPath.has_parent_path() ? rawPath.parent_path() : std::filesystem::path(".");
+    const std::string leaf = rawPath.filename().string();
 
     if (!isGlob) {
         if (std::filesystem::exists(rawPath)) {

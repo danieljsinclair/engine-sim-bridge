@@ -193,27 +193,12 @@ void BridgeSimulator::setThrottle(double position) {
     if (!engine) return;
 
     // engine->setThrottle() sets the intake plates AND m_throttleValue (the value
-    // getThrottle()/afterfire-gating reads). But the engine's throttle COMPONENT
-    // (DirectThrottleLinkage or Governor) re-asserts engine->setThrottle() every tick
-    // from setSpeedControl() — and the two components use OPPOSITE setSpeedControl
-    // polarity. So we must drive setSpeedControl with the type-correct value, else the
-    // component overrides our plates:
-    //   DirectThrottleLinkage: throttle = 1 - pow(s, gamma)  -> 0 = full, 1 = cut,
-    //                          so to realise user-throttle `position`, set s = (1 - position)
-    //                          (exact for gamma=1; correct at the 0/1 endpoints for any gamma).
-    //   Governor: target speed = (1-s)*min + s*max           -> 0 = idle, 1 = redline,
-    //             so set s = position (naive: 1 = full).
-    //   plain Throttle: update() is a no-op, so engine->setThrottle() above already holds.
+    // getThrottle()/afterfire-gating reads). The engine's throttle COMPONENT then
+    // re-asserts engine->setThrottle() every tick from setSpeedControl(), so we must
+    // drive setSpeedControl too or the component overrides our plates.
     engine->setThrottle(position);
-    // The throttle COMPONENT re-asserts engine->setThrottle() every tick from
-    // setSpeedControl(), and DirectThrottleLinkage uses INVERTED polarity
-    // (throttle = 1 - pow(s, gamma): 0 = full, 1 = cut). Governor and plain throttles
-    // (including SineEngine) use naive polarity (1 = full). So always drive
-    // setSpeedControl, inverting only for DirectThrottleLinkage.
-    Throttle* throttle = engine->getThrottleObject();
-    const double s = dynamic_cast<DirectThrottleLinkage*>(throttle)
-        ? position            // FIXED: empirical test proved s=1=OPEN, s=0=CLOSED (no inversion needed)
-        : position;
+    // setSpeedControl(position) is correct for all throttle types; no inversion.
+    const double s = position;
     engine->setSpeedControl(s);
 }
 
@@ -488,7 +473,7 @@ std::vector<AfterfireDiagnostics> BridgeSimulator::getAfterfireDiagnostics() con
     return diagnostics;
 }
 
-void BridgeSimulator::resetAfterfireDiagnostics() {
+void BridgeSimulator::resetAfterfireDiagnostics() const {
 #ifdef ATG_ENGINE_SIM_AFTERFIRE_SPIKE
     Engine* engine = m_simulator ? m_simulator->getEngine() : nullptr;
     if (!engine) return;

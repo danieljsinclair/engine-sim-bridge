@@ -130,7 +130,7 @@ public:
     // and returns true. No chambers are modified on failure.
     bool configureAfterfire(const AfterfireConfig& config);
     std::vector<AfterfireDiagnostics> getAfterfireDiagnostics() const;
-    void resetAfterfireDiagnostics();
+    void resetAfterfireDiagnostics() const;
 
     // Set display name directly
     void setName(const std::string& name) { name_ = name; }
