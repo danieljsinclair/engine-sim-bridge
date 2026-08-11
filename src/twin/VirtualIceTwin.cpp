@@ -20,12 +20,24 @@ void VirtualIceTwin::reconfigureProfile(const std::vector<double>& gearRatios,
     profile_.gearRatios = gearRatios;
     profile_.diffRatio = diffRatio;
     profile_.tireRadiusM = tireRadiusM;
-    // Auto-generate shift table (same logic as ReplayTelemetryProvider)
+    // Auto-generate shift table (same logic as ReplayTelemetryProvider).
+    // Recalibrated for the ICE twin's geometry: the ZF8-style box rides on top of
+    // a 9.0:1 diff (tesla_y_vehicle), which multiplies every gear ratio. With the
+    // old `redline*(0.40+0.45*thr)` band the implied upshift road speeds were too
+    // LOW for such a tall final drive and the box climbed to high gears at very
+    // low road speed (e.g. gear 7 near 12 mph), dragging engine RPM into the lug
+    // zone. The band below targets a higher upshift-RPM envelope so LOW gears are
+    // HELD at LOW speed (gear 1-2 around 11 mph) and the engine revs in those
+    // gears (high revs in a low gear at low speed is correct — that is the engine
+    // revving, not lugging). It still scales with throttle: light throttle shifts
+    // earlier (lower RPM/speed), WOT holds the gear to higher RPM/speed.
     profile_.shiftTableThrottleLevels = {0.05,0.15,0.25,0.40,0.55,0.70,0.80,0.90,0.95,1.00};
     profile_.shiftTable.clear();
     for (double thr : profile_.shiftTableThrottleLevels) {
         std::vector<double> row;
-        double shiftRpm = profile_.redlineRpm * (0.40 + 0.45 * thr);
+        // Upshift RPM envelope: 0.62..0.92 of redline across the throttle sweep
+        // (was 0.40..0.85). Higher floor keeps gear 1 engaged to ~11 mph.
+        double shiftRpm = profile_.redlineRpm * (0.62 + 0.30 * thr);
         for (size_t i = 0; i + 1 < gearRatios.size(); ++i) {
             double speedMs = shiftRpm / 60.0 * 2.0 * 3.14159265358979 * tireRadiusM
                            / (gearRatios[i] * diffRatio);
@@ -248,7 +260,13 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
                                     profile_.idleRpm,
                                     profile_.redlineRpm},
                 /*maxCreepPressure=*/0.10);
-            const double lockOverride = coupling_->clutchLockOverride(roadSpeedImpliedRpm, profile_.idleRpm);
+            // PIN uses the BOUNDED clutch pressure from its coupling strategy
+            // (engine revs on launch via partial pressure, locks at cruise, never
+            // fully open). FREE/TORQUE return -1.0 and defer to the emergent
+            // slip-lock computed above.
+            const double lockOverride = coupling_->clutchLockOverride(
+                engineRpmFeedback_, roadSpeedImpliedRpm, signal.throttleFraction,
+                profile_.idleRpm, profile_.redlineRpm);
             clutchPressure_ = (lockOverride >= 0.0) ? lockOverride : slip.clutchPressure;
             // Launch (torque converter): the slip-lock is a velocity-match
             // schedule that only behaves once the wheels are coupled to the

@@ -6,14 +6,19 @@
 // redline at any throttle. This function computes a clutch pressure that
 // resolves that circle:
 //
-//   - At standstill (road-implied < idle):    pressure == 0   (engine free to idle)
-//   - At launch under throttle (high slip):   partial pressure (TC slip in power band)
+//   - At standstill (road-implied < idle):    floor pressure (engine loaded, no stall)
+//   - At launch under throttle (high slip):   partial pressure (slip, engine can rev)
 //   - As road catches up (slip -> 0):         pressure -> 1.0 (locked, direct coupling)
 //   - On decel (engine slower than road):     pressure == 1.0 (locked, engine braking)
 //
-// Hard rule from the stall circle: the clutch MUST be open whenever
-// roadSpeedImpliedRpm < idleRpm. Coupling below that floor drags the engine
-// under idle and stalls it. The TC characteristic only applies above the floor.
+// HARD RULE: the clutch pressure is NEVER fully open (0). A pressure floor
+// (kSlipLockPressureFloor, ~0.05-0.15) is applied in every branch because a
+// fully-open clutch decouples the engine from the road and lets it free-rev to
+// the redline. The floor keeps the clutch transmitting torque at all times while
+// still allowing slip (the engine revs on launch via partial pressure instead of
+// being rigidly locked, and never fully opens). Below idle the clutch is kept at
+// the floor (or creep pressure, itself floored) so the engine is loaded, not
+// free. The TC characteristic only applies above the idle floor.
 //
 // This is a pure function with no dependency on engine-sim physics.
 
@@ -37,15 +42,21 @@ struct SlipLockOutput {
     bool locked;            // true when effectively locked (for display / state).
 };
 
+// Minimum clutch pressure floor (see kSlipLockPressureFloor in the .cpp). The
+// clutch MUST NEVER be fully open (0): a zero pressure decouples the engine from
+// the road and lets it free-rev to redline. Exposed so callers/tests can assert
+// the floor without re-deriving the magic constant.
+constexpr double kSlipLockPressureFloor = 0.10;
+
 // Compute clutch pressure from slip. Algorithm:
 //   1. If roadSpeedImpliedRpm < idleRpm:
 //        - creepPressure = throttleFraction * maxCreepPressure  (TC fluid coupling at stall)
-//        - If creepPressure > 0: return {creepPressure, false}  (partial coupling, engine loaded)
-//        - Otherwise:            return {0.0, false}            (true neutral, no creep)
+//        - If creepPressure > 0: return {max(creepPressure, floor), false}  (floored creep)
+//        - Otherwise:            return {floor, false}            (floored, engine loaded)
 //   2. slip      = max(0, engineRpm - roadSpeedImpliedRpm)
 //      stallBand = redlineRpm * (0.10 + 0.40 * throttleFraction)  (wider at WOT)
 //      slipRatio = clamp(slip / stallBand, 0, 1)
-//      pressure  = 1 - sqrt(slipRatio)                            (non-linear K-factor)
+//      pressure  = floor + (1 - floor) * (1 - sqrt(slipRatio))     (floored K-factor)
 //      locked    = (slipRatio < 0.1)
 //
 // The creep mode (step 1) mimics a real torque converter's fluid coupling:

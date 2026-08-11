@@ -58,30 +58,39 @@ TEST(WheelCouplingTest, Factory_MapsEachModeToItsStrategy) {
 }
 
 // ============================================================
-// clutchLockOverride — PIN locks clutch when road-implied RPM >= idle;
-// FREE/TORQUE always defer to slip-lock (-1.0).
+// clutchLockOverride — PIN returns the BOUNDED slip-lock clutch pressure
+// (engine revs on launch via partial pressure, locks at cruise, never fully
+// open). FREE/TORQUE always defer to slip-lock (-1.0).
 // ============================================================
 
-TEST(WheelCouplingTest, Pin_LocksWhenRoadRpmAboveIdle) {
+TEST(WheelCouplingTest, Pin_ReturnsBoundedSlipLock_NotRigidLock) {
     PinWheelCoupling coupling;
-    EXPECT_EQ(coupling.clutchLockOverride(2000.0, 750.0), 1.0);
-    EXPECT_EQ(coupling.clutchLockOverride(750.0, 750.0), 1.0);   // boundary: equal
+    // At cruise (engine ~ road, slip ~ 0) the bounded slip-lock LOCKS (== 1.0).
+    EXPECT_DOUBLE_EQ(coupling.clutchLockOverride(2500.0, 2500.0, 0.4, 750.0, 6500.0), 1.0);
+    // At a boundary where road == idle (just crossed idle) the slip-lock still
+    // produces a valid, non-open clutch pressure (> floor).
+    const double boundary = coupling.clutchLockOverride(750.0, 750.0, 0.4, 750.0, 6500.0);
+    EXPECT_GE(boundary, 0.1) << "PIN clutch pressure must never be fully open (floor)";
+    EXPECT_LE(boundary, 1.0);
 }
 
-TEST(WheelCouplingTest, Pin_DefersBelowIdle) {
+TEST(WheelCouplingTest, Pin_SlipOnLaunch_NotRigidlyLocked) {
     PinWheelCoupling coupling;
-    EXPECT_EQ(coupling.clutchLockOverride(700.0, 750.0), -1.0);
-    EXPECT_EQ(coupling.clutchLockOverride(0.0, 750.0), -1.0);
+    // Launch: engine revs (3500) well above road-implied (1000) under WOT -> the
+    // bounded slip-lock slips with PARTIAL pressure (engine revs, not locked).
+    const double launch = coupling.clutchLockOverride(3500.0, 1000.0, 1.0, 750.0, 6500.0);
+    EXPECT_GT(launch, 0.1) << "Launch must apply some clutch pressure (floor)";
+    EXPECT_LT(launch, 1.0) << "Launch must NOT be rigidly locked (engine must rev)";
 }
 
 TEST(WheelCouplingTest, Free_AlwaysDefersToSlipLock) {
     FreeWheelCoupling coupling;
-    EXPECT_EQ(coupling.clutchLockOverride(5000.0, 750.0), -1.0);
-    EXPECT_EQ(coupling.clutchLockOverride(0.0, 750.0), -1.0);
+    EXPECT_EQ(coupling.clutchLockOverride(5000.0, 2500.0, 0.4, 750.0, 6500.0), -1.0);
+    EXPECT_EQ(coupling.clutchLockOverride(0.0, 0.0, 0.0, 750.0, 6500.0), -1.0);
 }
 
 TEST(WheelCouplingTest, Torque_AlwaysDefersToSlipLock) {
     TorqueWheelCoupling coupling;
-    EXPECT_EQ(coupling.clutchLockOverride(5000.0, 750.0), -1.0);
-    EXPECT_EQ(coupling.clutchLockOverride(0.0, 750.0), -1.0);
+    EXPECT_EQ(coupling.clutchLockOverride(5000.0, 2500.0, 0.4, 750.0, 6500.0), -1.0);
+    EXPECT_EQ(coupling.clutchLockOverride(0.0, 0.0, 0.0, 750.0, 6500.0), -1.0);
 }

@@ -42,11 +42,18 @@ SlipLockOutput compute(double engineRpm, double roadImplied, double throttle) {
 // Stall prevention: the floor from the circle.
 // ---------------------------------------------------------------------------
 
-TEST(SlipLockControllerTest, StandstillZeroThrottle_OpenClutch_NoStall) {
-    // Idle: engine 800, road-implied 0, throttle 0.
+TEST(SlipLockControllerTest, StandstillZeroThrottle_FlooredClutch_NoFreeRev) {
+    // Idle: engine 800, road-implied 0, throttle 0. The clutch MUST NOT be fully
+    // open (pressure 0): a fully-open clutch decouples the engine from the road
+    // and lets it free-rev to the redline. The pressure floor keeps enough clamp
+    // to transmit torque and load the engine. The "fully open at standstill"
+    // behaviour was the original redline bug and is intentionally removed.
     const auto out = compute(800.0, 0.0, 0.0);
-    EXPECT_DOUBLE_EQ(out.clutchPressure, 0.0)
-        << "At standstill the clutch must be fully open so the engine can idle";
+    EXPECT_DOUBLE_EQ(out.clutchPressure, twin::kSlipLockPressureFloor)
+        << "At standstill the clutch must sit on the floor (never fully open), "
+           "so the engine is loaded and cannot free-rev";
+    EXPECT_GE(out.clutchPressure, 0.05)
+        << "Floor must be a meaningful minimum clutch pressure";
     EXPECT_FALSE(out.locked);
 }
 
@@ -63,23 +70,28 @@ TEST(SlipLockControllerTest, RoadImpliedBelowIdle_CreepProportionalToThrottle) {
     EXPECT_FALSE(out.locked);
 }
 
-TEST(SlipLockControllerTest, RoadImpliedBelowIdle_ZeroThrottle_StillOpen) {
-    // At zero throttle, creep pressure is 0 regardless of road speed.
+TEST(SlipLockControllerTest, RoadImpliedBelowIdle_ZeroThrottle_FlooredNotOpen) {
+    // At zero throttle the creep pressure is 0, but the clutch is still held on
+    // the floor (never fully open) so the engine is loaded and cannot free-rev.
     const auto out = compute(800.0, 300.0, 0.0);
-    EXPECT_DOUBLE_EQ(out.clutchPressure, 0.0)
-        << "At zero throttle the clutch must be fully open (no creep)";
+    EXPECT_DOUBLE_EQ(out.clutchPressure, twin::kSlipLockPressureFloor)
+        << "At zero throttle the clutch must sit on the floor (no creep pressure, "
+           "but never fully open)";
+    EXPECT_GE(out.clutchPressure, 0.05);
     EXPECT_FALSE(out.locked);
 }
 
 TEST(SlipLockControllerTest, RoadImpliedExactlyAtIdle_FloorDoesNotForceZero) {
     // Boundary: at exactly idle the floor no longer applies, so the TC
     // characteristic takes over. With throttle 0 the band is narrow and slip
-    // is large -> pressure should be partial but strictly > 0 and below 1.
+    // is large -> pressure should be partial but strictly > floor and below 1.
     const auto out = compute(800.0, kIdleRpm, 0.0);
     EXPECT_GT(out.clutchPressure, 0.0)
         << "Once road-implied >= idle the TC slip path must produce non-zero pressure";
     EXPECT_LT(out.clutchPressure, 1.0)
         << "With substantial slip the clutch must not be fully locked";
+    EXPECT_GE(out.clutchPressure, 0.10)
+        << "Pressure is bounded by the floor (never fully open)";
     EXPECT_FALSE(out.locked);
 }
 

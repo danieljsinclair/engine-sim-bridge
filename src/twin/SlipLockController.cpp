@@ -22,6 +22,13 @@ inline double clampThrottle(double throttle) {
 
 }  // namespace
 
+// The clutch MUST NEVER be fully open (pressure 0): at zero pressure the engine
+// decouples from the road and free-revs to the redline. The floor
+// (kSlipLockPressureFloor, ~0.05-0.15) keeps enough clutch clamp engaged at all
+// times to transmit torque while still allowing slip (the engine can rev on
+// launch/transients via partial pressure rather than being rigidly locked to the
+// wheels). 0.10 chosen so the clutch always carries meaningful torque.
+
 SlipLockOutput computeSlipLockPressure(const SlipLockInput& input, double maxCreepPressure) {
     // Creep mode: when road speed would imply below-idle RPM (standstill or
     // very low speed), apply a small clutch pressure proportional to throttle.
@@ -32,9 +39,11 @@ SlipLockOutput computeSlipLockPressure(const SlipLockInput& input, double maxCre
         const double throttle = clampThrottle(input.throttleFraction);
         if (const double creep = throttle * clampDouble(maxCreepPressure, 0.0, 1.0);
             creep > 0.0) {
-            return SlipLockOutput{creep, false};
+            // Floor the creep too: even stalled creep must keep the clutch
+            // engaged enough to load the engine and never fully open.
+            return SlipLockOutput{std::max(creep, kSlipLockPressureFloor), false};
         }
-        return SlipLockOutput{0.0, false};
+        return SlipLockOutput{kSlipLockPressureFloor, false};
     }
 
     // Slip is non-negative: if the engine is slower than the road (decel /
@@ -54,7 +63,10 @@ SlipLockOutput computeSlipLockPressure(const SlipLockInput& input, double maxCre
     const double slipRatio = clampDouble(slip / stallBand, 0.0, 1.0);
 
     // Non-linear K-factor: pressure rises steeply as slip approaches 0.
-    const double pressure = 1.0 - std::sqrt(slipRatio);
+    // Bounded by a hard floor so the clutch is NEVER fully open (that floor is
+    // what prevents the engine from decoupling and free-revving to redline).
+    const double pressure = kSlipLockPressureFloor +
+                            (1.0 - kSlipLockPressureFloor) * (1.0 - std::sqrt(slipRatio));
     const bool locked = slipRatio < 0.1;
 
     return SlipLockOutput{pressure, locked};
