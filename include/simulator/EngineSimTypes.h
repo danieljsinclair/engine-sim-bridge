@@ -131,7 +131,13 @@ struct AfterfireConfig {
 
     // Stage 2 — auto-ignition.
     // tau(T) = ignitionDelayRefS * exp(activationTempK * (1/T - 1/refTempK)).
-    double ignitionDelayRefS = 0.02;
+    // Tuned toward "cold": 0.02 -> 0.3 lengthens the induction period so the
+    // crackle sequence spreads into the coast-down (pops keep firing as the runner
+    // cools through 1000-800K) instead of one near-instant burst on the hottest
+    // runner. Note tau is ~50x more sensitive to runner temp than to this knob, so
+    // the very first pop on a ~1700K runner is still quick; dial this up/down, or
+    // adjust activationTempK, to taste. Tests override this default.
+    double ignitionDelayRefS = 0.3;
     double activationTempK   = 8000.0;
     double refTempK          = 1000.0;
 
