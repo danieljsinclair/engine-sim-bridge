@@ -100,13 +100,22 @@ TEST_F(CsvTelemetryParserTest, ParseRow_ThrottlesOutsideRange_AreClamped) {
     EXPECT_DOUBLE_EQ(s2.throttle, 0.0);
 }
 
-TEST_F(CsvTelemetryParserTest, ParseRow_NegativeRoadSpeed_KeepsSentinel) {
+TEST_F(CsvTelemetryParserTest, ParseRow_NegativeRoadSpeedIsPreserved) {
     std::string error;
     ASSERT_TRUE(parser.parseHeader("time_s,road_speed_kmh", error));
 
     CsvSample sample;
+    // Reverse driving is a real CSV state (em-dinner.csv 'R' rows at -3.2 km/h).
+    // The parser must preserve the negative speed rather than collapsing it to
+    // the -2.0 sentinel, so downstream reverse coercion can tell genuine reverse
+    // (speed < 0, honoured) from a standstill/forward 'R' (coerced to P/N).
     EXPECT_TRUE(parser.parseRow("0.0,-1.0", 1.0, sample, error));
-    EXPECT_DOUBLE_EQ(sample.roadSpeedKmh, -2.0);  // sentinel unchanged
+    EXPECT_DOUBLE_EQ(sample.roadSpeedKmh, -1.0);
+    EXPECT_TRUE(parser.parseRow("1.0,-3.2", 1.0, sample, error));
+    EXPECT_DOUBLE_EQ(sample.roadSpeedKmh, -3.2);
+    // A blank/unparseable road column still leaves the -2.0 sentinel intact.
+    EXPECT_TRUE(parser.parseRow("2.0,", 1.0, sample, error));
+    EXPECT_DOUBLE_EQ(sample.roadSpeedKmh, -2.0);
 }
 
 TEST_F(CsvTelemetryParserTest, ParseRow_EmptyFields_KeepDefaults) {

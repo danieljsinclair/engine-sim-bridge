@@ -9,10 +9,13 @@
 
 namespace input {
 
-// Below this road speed a 'R' stalk command is treated as a standstill request
-// and coerced to NEUTRAL (no reverse gear at a standstill). Mirrors the twin's
-// own standstill threshold (IceVehicleProfile::standstillThresholdKmh).
-constexpr double kStandstillSpeedKmh = 1.0;
+// A reverse gear is only honoured when the vehicle is genuinely reversing —
+// i.e. road speed is clearly negative (below this threshold). em-dinner.csv
+// carries 'R' rows at near-standstill negative speeds (down to ~-2 km/h) that
+// are NOT real reversing; only speeds below this threshold keep REVERSE.
+// Everything at or above it (standstill, forward creep, contradictory forward
+// 'R') is coerced to PARK/NEUTRAL.
+constexpr double kReverseActiveSpeedKmh = -2.0;
 
 
 LiveTelemetryProvider::LiveTelemetryProvider(const twin::IceVehicleProfile& profile)
@@ -132,17 +135,27 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
         }
 
         twinProvider_->setUpstreamSignal(signal);
-        // Standstill reverse coercion: a 'R' stalk command at ~zero road speed
-        // must NOT select REVERSE gear — at a standstill there is nothing to
-        // reverse into, and creeping in reverse at a standstill is wrong (the
-        // box must report PARK/NEUTRAL). Reverse is only honoured while actually
-        // backing up at meaningful speed, so forward 'R' rows (genuine
-        // reversing) are preserved. This is the iter2 fix for the RAR-at-Tgt=0
-        // behaviour seen in the PIN replay.
+        // Reverse coercion: an 'R' stalk command is only honoured while the
+        // vehicle is GENUINELY reversing (road speed clearly negative, below the
+        // reverse-active threshold). A standstill 'R' (or a contradictory forward
+        // 'R' — the car actually moving forward) must NOT select REVERSE gear:
+        // at a standstill there is nothing to reverse into, and a forward 'R'
+        // row is a corrupted/contradictory signal. Such rows map to PARK (true
+        // standstill) or NEUTRAL (creeping forward), never REVERSE.
+        //
+        // This replaces the iter2 standstill-only coercion (|speed| < 1 km/h),
+        // which leaked RAR frames: em-dinner.csv carries ~5k 'R' rows at
+        // near-standstill negative speeds (-2..-1 km/h) that the 1 km/h window
+        // failed to catch. Only a clearly-reversing speed (< kReverseActiveSpeedKmh)
+        // keeps REVERSE.
         bridge::GearSelector sel = csvGearSelector();
         if (sel == bridge::GearSelector::REVERSE &&
-            std::fabs(currentSample_.roadSpeedKmh) < kStandstillSpeedKmh) {
-            sel = bridge::GearSelector::NEUTRAL;
+            currentSample_.roadSpeedKmh >= kReverseActiveSpeedKmh) {
+            // Not genuinely reversing: a forward 'R' (speed > 0) is a contradictory
+            // signal -> NEUTRAL; standstill / sentinel 'R' -> PARK. Never REVERSE.
+            sel = (currentSample_.roadSpeedKmh > 0.0)
+                      ? bridge::GearSelector::NEUTRAL
+                      : bridge::GearSelector::PARK;
         }
         twinProvider_->setGearSelector(static_cast<int>(sel));
         return twinProvider_->OnUpdateSimulation(dt);

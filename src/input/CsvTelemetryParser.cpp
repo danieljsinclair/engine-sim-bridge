@@ -137,7 +137,13 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
     }
 
     if (header_.colRoad >= 0 && header_.colRoad < static_cast<int>(fields.size()) &&
-        parseDouble(fields[header_.colRoad], v) && v >= 0.0) {
+        parseDouble(fields[header_.colRoad], v)) {
+        // Accept negative road speeds: reverse driving is a real state in the CSV
+        // schema (em-dinner.csv carries 'R' rows at -3.2 km/h). The old guard
+        // `v >= 0.0` silently dropped negatives to the -2.0 sentinel, which hid
+        // genuine reverse from downstream coercion and let standstill 'R' rows
+        // leak through as REVERSE (RAR). A blank/unparseable road column still
+        // leaves the -2.0 "not commanded" sentinel intact.
         s.roadSpeedKmh = v;
     }
 

@@ -157,7 +157,6 @@ struct StreamHarness {
 };
 
 constexpr int kDrive = static_cast<int>(bridge::GearSelector::DRIVE);
-constexpr int kReverse = static_cast<int>(bridge::GearSelector::REVERSE);
 
 // Pump RPM feedback so the twin's engine catches quickly (CRANKING->IDLE), then
 // run until gear advances past `target` or the budget is exhausted.
@@ -316,12 +315,15 @@ TEST(LiveTelemetryStreamTest, ValidityTimestampGuardKeepsTwinAlive) {
 // T6: the gear_selector column is parsed and forwarded to the twin (observable
 // as the selector echoed in EngineInput), and the delegation seams are safe.
 TEST(LiveTelemetryStreamTest, GearSelectorColumnForwardedAndDelegatesSafe) {
+    // A forward-moving 'R' (speed 20 km/h) is a contradictory signal and must be
+    // coerced to NEUTRAL (never REVERSE) — see the RAR fix. A genuine reversing
+    // 'R' (clearly negative speed) would be honoured as REVERSE.
     StreamHarness h("time_s,throttle_pct,road_speed_kmh,gear_selector\n0.0,40,20,R\n");
     ASSERT_TRUE(h.provider->Initialize());
 
     input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
-    EXPECT_EQ(in.gearSelector, kReverse)
-        << "gear_selector=R must be parsed and forwarded to the twin";
+    EXPECT_EQ(in.gearSelector, static_cast<int>(bridge::GearSelector::NEUTRAL))
+        << "A forward 'R' must be coerced to NEUTRAL, never REVERSE (RAR fix)";
 
     EXPECT_NO_THROW({
         h.provider->setGearSelector(static_cast<int>(bridge::GearSelector::PARK));
@@ -378,13 +380,13 @@ TEST(LiveTelemetryStreamTest, EngineStartsFromCsvWhenRpmPlateausBelowThreshold) 
 // The gear_selector column is the clean row-varying observable (echoed in
 // EngineInput.gearSelector, NOT masked by the CRANKING throttle). Verify that
 // all 4 rows surface by stepping through the full span in two calls: dt=1.5
-// surfaces the last row ≤1.5s (selector=N at t=2), then dt=2.5 surfaces the
-// last row ≤4.0s (selector=D at t=3).
+// surfaces the last row ≤1.5s (selector=R at t=1 — a genuine reversing R is
+// honoured), then dt=2.5 surfaces the last row ≤4.0s (selector=D at t=3).
 TEST(LiveTelemetryStreamTest, EveryCsvRowIsConsumedAndSurfaces) {
     StreamHarness h(
         "time_s,throttle_pct,road_speed_kmh,gear_selector\n"
         "0.0,10,5,P\n"
-        "1.0,20,10,R\n"
+        "1.0,20,-10,R\n"   // genuine reverse (negative speed) -> REVERSE honoured
         "2.0,30,15,N\n"
         "3.0,40,20,D\n");
     ASSERT_TRUE(h.provider->Initialize());

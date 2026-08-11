@@ -152,8 +152,9 @@ TEST(C63TeslaYTuneTest, StandstillReverseMapsToParkOrNeutral) {
            "in reverse at a standstill / Tgt=0)";
 }
 
-// Forward-moving 'R' (genuine reverse) is preserved — the coercion only applies
-// at standstill, so a backing-up R is still reported as REVERSE to the engine.
+// Forward-moving 'R' (genuine reverse) is preserved — REVERSE is only coerced
+// when the car is NOT genuinely reversing. A backing-up 'R' (clearly negative
+// road speed, below kReverseActiveSpeedKmh = -2 km/h) is still REVERSE.
 TEST(C63TeslaYTuneTest, ReversingAtSpeedKeepsReverse) {
     StreamHarness h("time_s,throttle_pct,road_speed_kmh,gear_selector\n"
                     "0.0,20,-8,R\n");
@@ -161,7 +162,40 @@ TEST(C63TeslaYTuneTest, ReversingAtSpeedKeepsReverse) {
 
     input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
     EXPECT_EQ(in.gearSelector, kReverse)
-        << "A genuine reversing 'R' (speed != 0) must remain REVERSE";
+        << "A genuine reversing 'R' (speed clearly negative) must remain REVERSE";
+}
+
+// A near-standstill 'R' (road speed inside -2..0 km/h — the em-dinner.csv RAR
+// band) must NOT select REVERSE. The old standstill-only coercion (|speed|<1)
+// leaked these; the new coercion keys off kReverseActiveSpeedKmh = -2 km/h.
+TEST(C63TeslaYTuneTest, NearStandstillReverseMapsToParkOrNeutral) {
+    // Rows at -1.5 and -0.5 km/h are near-standstill 'R' (no real reversing).
+    StreamHarness h("time_s,throttle_pct,road_speed_kmh,gear_selector\n"
+                    "0.0,0,-1.5,R\n"
+                    "0.1,0,-0.5,R\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    input::EngineInput a = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_NE(a.gearSelector, kReverse)
+        << "Near-standstill 'R' (-1.5 km/h) must map to PARK/NEUTRAL, never REVERSE";
+    input::EngineInput b = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_NE(b.gearSelector, kReverse)
+        << "Near-standstill 'R' (-0.5 km/h) must map to PARK/NEUTRAL, never REVERSE";
+}
+
+// A contradictory forward 'R' (car creeping forward, speed > 0) must map to
+// NEUTRAL, never REVERSE — forward motion and reverse gear are mutually
+// exclusive.
+TEST(C63TeslaYTuneTest, ForwardCreepReverseMapsToNeutral) {
+    StreamHarness h("time_s,throttle_pct,road_speed_kmh,gear_selector\n"
+                    "0.0,5,0.64,R\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_NE(in.gearSelector, kReverse)
+        << "A forward-creep 'R' (speed > 0) must map to NEUTRAL, never REVERSE";
+    EXPECT_EQ(in.gearSelector, static_cast<int>(bridge::GearSelector::NEUTRAL))
+        << "A forward-creep 'R' must map to NEUTRAL (forward, not standstill)";
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +274,59 @@ TEST(C63TeslaYTuneTest, GearAt15MphIsFirstOrSecond) {
         << "At ~15 mph the box must be in 1st or 2nd, never 3rd+ (eager-gear bug)";
     EXPECT_GE(gearbox.getCurrentGear(), 1)
         << "The box must be in a forward gear at 15 mph";
+}
+
+// ---------------------------------------------------------------------------
+// 6. Shift progression: at ~40 mph the box must be in gear 4-5 (NOT gear 2).
+// ---------------------------------------------------------------------------
+
+// Drive the twin (configured with the C63_TeslaY ZF8 geometry) to RUNNING, then
+// hold ~40 mph (64 km/h) with moderate throttle. The recalibrated upshift-RPM
+// envelope must have climbed the box to gear 4-5 so the engine RPM sits near
+// the cruise band (~1350-1500 RPM), never stuck in gear 2 (~3650 RPM). This is
+// the regression test for the "gear 2 at 40 mph" over-correction.
+TEST(C63TeslaYTuneTest, GearAt40MphIsFourthOrFifth) {
+    twin::IceVehicleProfile profile = twin::IceVehicleProfile::zf8hp45();
+    profile.redlineRpm = kC63Redline;
+    profile.idleRpm = kC63Idle;
+    auto twin = std::make_unique<twin::VirtualIceTwin>(profile);
+
+    // Apply the C63_TeslaY geometry exactly as the CLI does (--script C63_TeslaY.mr).
+    twin->reconfigureProfile(
+        /*gearRatios=*/{4.38, 2.86, 1.92, 1.37, 1.00, 0.82, 0.73},
+        /*diffRatio=*/kC63DiffRatio,
+        /*tireRadiusM=*/kC63TireRadius);
+    twin->setGearSelector(bridge::GearSelector::DRIVE);
+
+    // OFF -> CRANKING -> IDLE -> RUNNING with RPM feedback above the catch threshold.
+    twin->update(0.016, input::UpstreamSignal{});          // OFF -> CRANKING
+    twin->setEngineRpmFeedback(800.0);
+    twin->update(0.016, input::UpstreamSignal{});          // CRANKING -> IDLE
+    twin->update(0.016, input::UpstreamSignal{});          // IDLE (throttle 0) stays IDLE
+
+    // Throttle to enter RUNNING, then hold 40 mph.
+    input::UpstreamSignal drive;
+    drive.throttleFraction = 0.4;
+    drive.speedKmh = 64.0;          // ~40 mph
+    drive.isValid = true;
+    drive.timestampUtcMs = 1000;
+
+    // Run enough frames for the box to cascade up through the gears.
+    int gear = 0;
+    for (int i = 0; i < 400; ++i) {
+        twin->setEngineRpmFeedback(
+            twin::computeTargetRpm(drive.speedKmh,
+                                   profile.gearRatios[gear - 1 < 0 ? 0 : gear - 1],
+                                   kC63TireRadius, kC63DiffRatio, 0.0));
+        twin->update(0.05, drive);
+        gear = twin->getCurrentGear();
+        if (gear >= 4) break;       // stop once it has reached the expected band
+    }
+
+    EXPECT_GE(gear, 4)
+        << "At ~40 mph the box must have upshifted to at least gear 4 (not stuck in gear 2)";
+    EXPECT_LE(gear, 5)
+        << "At ~40 mph the box must rest in gear 4-5 (cruise band ~1350-1500 RPM), not lug in 3 or over-shift to 6";
 }
 
 }  // namespace

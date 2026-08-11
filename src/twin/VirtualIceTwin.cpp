@@ -35,9 +35,18 @@ void VirtualIceTwin::reconfigureProfile(const std::vector<double>& gearRatios,
     profile_.shiftTable.clear();
     for (double thr : profile_.shiftTableThrottleLevels) {
         std::vector<double> row;
-        // Upshift RPM envelope: 0.62..0.92 of redline across the throttle sweep
-        // (was 0.40..0.85). Higher floor keeps gear 1 engaged to ~11 mph.
-        double shiftRpm = profile_.redlineRpm * (0.62 + 0.30 * thr);
+        // Upshift RPM envelope: 0.14..0.26 of redline across the throttle sweep.
+        // Calibrated for the ZF8 box (1st=4.38) on the C63 final drive (2.82),
+        // tire 0.356 m, redline 7250. The previous 0.62..0.92 band pushed every
+        // upshift road speed too high, so the box stalled in low gears (gear 2 at
+        // ~40 mph / 3650 RPM instead of gear 4-5 at ~1350 RPM). This lower band
+        // lands the upshift points at realistic road speeds:
+        //   gear 1->2 ~11 mph, 2->3 ~17 mph, 3->4 ~25 mph, 4->5 ~35 mph,
+        //   5->6 ~46 mph, 6->7 ~57 mph. At 40 mph the box rests in gear 5
+        //   (~1350 RPM); at highway speed it reaches gear 7. It still scales with
+        //   throttle: light throttle shifts earlier, WOT holds the gear a touch
+        //   longer — but never so long that it lugs (RPM stays well under redline).
+        double shiftRpm = profile_.redlineRpm * (0.14 + 0.12 * thr);
         for (size_t i = 0; i + 1 < gearRatios.size(); ++i) {
             double speedMs = shiftRpm / 60.0 * 2.0 * 3.14159265358979 * tireRadiusM
                            / (gearRatios[i] * diffRatio);
