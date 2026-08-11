@@ -35,18 +35,18 @@ void VirtualIceTwin::reconfigureProfile(const std::vector<double>& gearRatios,
     profile_.shiftTable.clear();
     for (double thr : profile_.shiftTableThrottleLevels) {
         std::vector<double> row;
-        // Upshift RPM envelope: 0.14..0.26 of redline across the throttle sweep.
+        // Upshift RPM envelope: 0.20..0.26 of redline across the throttle sweep.
         // Calibrated for the ZF8 box (1st=4.38) on the C63 final drive (2.82),
         // tire 0.356 m, redline 7250. The previous 0.62..0.92 band pushed every
-        // upshift road speed too high, so the box stalled in low gears (gear 2 at
-        // ~40 mph / 3650 RPM instead of gear 4-5 at ~1350 RPM). This lower band
-        // lands the upshift points at realistic road speeds:
+        // upshift road speed too high, stalling the box in low gears (gear 2 at
+        // ~40 mph / 3650 RPM). This band lands the upshift points so the box
+        // progresses naturally and rests in gear 4-5 at ~40 mph (~1350 RPM):
         //   gear 1->2 ~11 mph, 2->3 ~17 mph, 3->4 ~25 mph, 4->5 ~35 mph,
-        //   5->6 ~46 mph, 6->7 ~57 mph. At 40 mph the box rests in gear 5
-        //   (~1350 RPM); at highway speed it reaches gear 7. It still scales with
-        //   throttle: light throttle shifts earlier, WOT holds the gear a touch
-        //   longer — but never so long that it lugs (RPM stays well under redline).
-        double shiftRpm = profile_.redlineRpm * (0.14 + 0.12 * thr);
+        //   5->6 ~46 mph, 6->7 ~57 mph. At 40 mph (64 km/h) the upshift-5
+        //   threshold sits just above 64 km/h, so the box holds gear 5 (or gear 4
+        //   at WOT) regardless of throttle — never over-shifting to 7, never
+        //   lugging in 2. At highway speed it still reaches gear 7.
+        double shiftRpm = profile_.redlineRpm * (0.20 + 0.06 * thr);
         for (size_t i = 0; i + 1 < gearRatios.size(); ++i) {
             double speedMs = shiftRpm / 60.0 * 2.0 * 3.14159265358979 * tireRadiusM
                            / (gearRatios[i] * diffRatio);

@@ -11,11 +11,14 @@ namespace input {
 
 // A reverse gear is only honoured when the vehicle is genuinely reversing —
 // i.e. road speed is clearly negative (below this threshold). em-dinner.csv
-// carries 'R' rows at near-standstill negative speeds (down to ~-2 km/h) that
-// are NOT real reversing; only speeds below this threshold keep REVERSE.
-// Everything at or above it (standstill, forward creep, contradictory forward
-// 'R') is coerced to PARK/NEUTRAL.
-constexpr double kReverseActiveSpeedKmh = -2.0;
+// A reverse gear is only honoured when the vehicle is GENUINELY reversing —
+// i.e. road speed is clearly negative (below this threshold). em-dinner.csv
+// carries 'R' rows whose speeds bottom out at ~-3.2 km/h: that is spurious
+// near-standstill reverse noise, NOT real backing-up, so it must be coerced to
+// PARK/NEUTRAL (the RAR fix). Only a firmly-reversing speed (e.g. -8 km/h, a
+// real backing maneuver) keeps REVERSE. Everything at or above the threshold
+// (standstill, forward creep, contradictory forward 'R') is coerced.
+constexpr double kReverseActiveSpeedKmh = -3.5;
 
 
 LiveTelemetryProvider::LiveTelemetryProvider(const twin::IceVehicleProfile& profile)
