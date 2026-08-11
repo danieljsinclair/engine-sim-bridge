@@ -168,6 +168,25 @@ AutomaticGearbox::decideGear(double speedKmh) const {
         return {currentGear_, 0, false};
     }
 
+    // 2b. Engine-RPM-floor downshift (anti-lug). When the CURRENT gear's implied
+    //     engine RPM drops below idle + margin the engine is lugging/over-quiet
+    //     (e.g. a tall gear held at low speed). Force a single downshift so the
+    //     engine stays above idle under load, exactly as a real torque-converter
+    //     box would. This is independent of the (throttle-interpolated) downshift
+    //     table: the table can be reached only at very low throttle, so on a
+    //     pinned CSV at moderate throttle the box would otherwise sit in a high
+    //     gear at <idle RPM and never recover. The floor is a hard floor on
+    //     engine speed, so it always wins. It requests exactly one gear per
+    //     frame (the table pass / next frame continues the descent), which keeps
+    //     the descent monotonic and prevents oscillation.
+    const double kLugFloorRpmMargin = 150.0;  // keep engine >= idle + 150 rpm
+    if (currentGear_ > 1) {
+        const double rpm = getEngineRpm(speedKmh, currentGear_);
+        if (rpm < profile_.idleRpm + kLugFloorRpmMargin) {
+            return {currentGear_ - 1, -1, false};
+        }
+    }
+
     // 3. Tables are the authority. Cascade up then, only if no upshift fired,
     //    down. The downshift table sits below the upshift table for every
     //    (gear, throttle), so after an upshift the speed is above the lower
@@ -179,6 +198,23 @@ AutomaticGearbox::decideGear(double speedKmh) const {
     }
     if (gear == currentGear_) {
         while (gear > 1 && speedBelowDownshift(speedKmh, gear)) {
+            --gear;
+        }
+    }
+
+    // 4. LUG GUARD (downshift-fix): the speed table alone can hold a too-tall
+    //    gear at low road speed, dragging engine RPM into the lug zone (below
+    //    idle, over-quiet). If the engine RPM implied by the resolved gear at
+    //    this road speed is below profile_.downshiftRpmFloor, cascade DOWN a
+    //    gear at a time until RPM recovers above the floor (or gear 1). This is
+    //    an RPM floor, not a speed floor, so it triggers on the gear's actual
+    //    revs — independent of, and after, the speed-based cascade above. The
+    //    loop is bounded by gear>1 and cannot pull reverse/neutral, so it
+    //    cannot hunt upward (each step only reduces gear, and the up-pass has
+    //    already settled). Guard is inert when downshiftRpmFloor == 0.
+    if (profile_.downshiftRpmFloor > 0.0) {
+        while (gear > 1 &&
+               getEngineRpm(speedKmh, gear) < profile_.downshiftRpmFloor) {
             --gear;
         }
     }

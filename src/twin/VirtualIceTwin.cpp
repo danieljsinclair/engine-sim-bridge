@@ -35,18 +35,18 @@ void VirtualIceTwin::reconfigureProfile(const std::vector<double>& gearRatios,
     profile_.shiftTable.clear();
     for (double thr : profile_.shiftTableThrottleLevels) {
         std::vector<double> row;
-        // Upshift RPM envelope: 0.20..0.26 of redline across the throttle sweep.
-        // Calibrated for the ZF8 box (1st=4.38) on the C63 final drive (2.82),
-        // tire 0.356 m, redline 7250. The previous 0.62..0.92 band pushed every
-        // upshift road speed too high, stalling the box in low gears (gear 2 at
-        // ~40 mph / 3650 RPM). This band lands the upshift points so the box
-        // progresses naturally and rests in gear 4-5 at ~40 mph (~1350 RPM):
-        //   gear 1->2 ~11 mph, 2->3 ~17 mph, 3->4 ~25 mph, 4->5 ~35 mph,
-        //   5->6 ~46 mph, 6->7 ~57 mph. At 40 mph (64 km/h) the upshift-5
-        //   threshold sits just above 64 km/h, so the box holds gear 5 (or gear 4
-        //   at WOT) regardless of throttle — never over-shifting to 7, never
-        //   lugging in 2. At highway speed it still reaches gear 7.
-        double shiftRpm = profile_.redlineRpm * (0.20 + 0.06 * thr);
+        // Upshift RPM envelope: ~41..49% of redline across the throttle sweep,
+        // i.e. a ~3000-3500 RPM upshift point on the C63 (redline 7250). The
+        // previous 0.20..0.26 band (~1450-1900 RPM) made the box upshift far too
+        // eagerly: it climbed to DA5 by ~9 mph and the engine never revved past
+        // ~2000 RPM (max RPM 2039), lugging in high gears at low speed. Raising
+        // the band lets the engine actually REV in each gear before the next
+        // upshift (like a real car), and keeps the box in lower gears at low
+        // speed so the engine stays well above idle. Light throttle still shifts a
+        // touch earlier (lower RPM/speed); WOT holds each gear to the top of the
+        // band. Calibrated for the C63 M156 (1st=4.38) on the AMG final drive
+        // (2.82), tire 12.7" (0.3226 m), redline 7250.
+        double shiftRpm = profile_.redlineRpm * (0.41 + 0.08 * thr);
         for (size_t i = 0; i + 1 < gearRatios.size(); ++i) {
             double speedMs = shiftRpm / 60.0 * 2.0 * 3.14159265358979 * tireRadiusM
                            / (gearRatios[i] * diffRatio);
@@ -70,6 +70,14 @@ void VirtualIceTwin::reconfigureProfile(const std::vector<double>& gearRatios,
         for (double upSpeed : srcRow) row.push_back(upSpeed * 0.70);
         profile_.downshiftTable.push_back(row);
     }
+    // LUG GUARD (downshift-fix): keep the engine above idle at low road speed.
+    // The speed-table downshift alone would hold a too-tall gear at 9-11 mph
+    // (e.g. gear 5 at ~288 RPM — lugging/over-quiet). With a ~1500 RPM floor
+    // the gearbox cascades down at low speed so it sits in gears 1-2
+    // (~2000-3000 RPM) where the engine revs properly. Set well above idle
+    // (750) and below the upshift band so it neither fights cruise nor masks
+    // genuine lugging. Inert (0) in legacy profiles that never set it.
+    profile_.downshiftRpmFloor = 1500.0;
     // Preserve logger across gearbox reconstruction (bug: prior code called
     // setLogger(nullptr) here, which dropped the logger attached at startup
     // and produced empty --gearbox-log CSVs even though the gearbox shifted).
