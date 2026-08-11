@@ -46,30 +46,47 @@ SlipLockOutput computeSlipLockPressure(const SlipLockInput& input, double maxCre
         return SlipLockOutput{kSlipLockPressureFloor, false};
     }
 
-    // Slip is non-negative: if the engine is slower than the road (decel /
-    // engine braking), slip is treated as 0 -> the clutch locks.
-    const double slip = std::max(0.0, input.engineRpm - input.roadSpeedImpliedRpm);
+    // Rolling band: the wheels are turning (road-implied >= idle). Drive the
+    // clutch LOCK off ROAD SPEED, not slip — this is the fix for the cruise
+    // free-rev bug. The old model set pressure from (engine - road) slip, which
+    // deadlocks: a high engine RPM -> large slip -> low pressure -> engine revs
+    // higher -> larger slip, so at cruise the engine free-revved uncoupled with
+    // no engine braking. Keying the lock off road-implied RPM breaks the circle:
+    // once the wheels are rolling at cruise the clutch locks regardless of how
+    // far the engine has over-revved, and the lock drags engine RPM back down to
+    // road×gear×diff (loaded, with engine braking restored).
+    const double cruiseRpm = input.redlineRpm * kCruiseLockRpmFraction;
+    const double band = cruiseRpm - input.idleRpm;
 
-    // Stall band widens with throttle (10% of redline closed, 50% at WOT).
-    const double throttle = clampThrottle(input.throttleFraction);
-    const double stallBand = input.redlineRpm * (0.10 + 0.40 * throttle);
-
-    // Guard against a degenerate zero band (e.g. redlineRpm == 0): treat as
-    // fully locked rather than divide by zero.
-    if (stallBand <= 0.0) {
+    // Guard against a degenerate band (e.g. redlineRpm <= idle): treat as fully
+    // locked rather than divide by zero.
+    if (band <= 0.0) {
         return SlipLockOutput{1.0, true};
     }
 
-    const double slipRatio = clampDouble(slip / stallBand, 0.0, 1.0);
-
-    // Non-linear K-factor: pressure rises steeply as slip approaches 0.
-    // Bounded by a hard floor so the clutch is NEVER fully open (that floor is
-    // what prevents the engine from decoupling and free-revving to redline).
+    // Pressure ramps from the floor (at idle) up to 1.0 (at the cruise
+    // threshold) as the wheels roll faster. Independent of engine RPM, so a
+    // spinning-up / over-revving engine cannot deadlock the pressure to the
+    // floor (the old bug). The floor keeps the clutch NEVER fully open.
+    const double t = clampDouble(
+        (input.roadSpeedImpliedRpm - input.idleRpm) / band, 0.0, 1.0);
     const double pressure = kSlipLockPressureFloor +
-                            (1.0 - kSlipLockPressureFloor) * (1.0 - std::sqrt(slipRatio));
-    const bool locked = slipRatio < 0.1;
+                            (1.0 - kSlipLockPressureFloor) * t;
 
-    return SlipLockOutput{pressure, locked};
+    // Over-redline bound (iter2): the clutch must NEVER lock while the engine is
+    // at or above the redline. If the engine has been driven to the redline (the
+    // slip-lock alone must not be the thing that pins it there), force the
+    // clutch to slip (pressure capped at the floor, never locked) so the engine
+    // can shed speed under the rev limiter instead of being rigidly held at
+    // redline. This is the hard ceiling that complements the floor. Cruise lock
+    // still applies below the redline: below redline the lock is driven purely
+    // by road speed (the line above), which is what drags a free-revving cruise
+    // engine back down to the road.
+    const bool overRedline = (input.redlineRpm > 0.0) &&
+                             (input.engineRpm >= input.redlineRpm);
+    const bool locked = overRedline ? false : (input.roadSpeedImpliedRpm >= cruiseRpm);
+
+    return SlipLockOutput{overRedline ? kSlipLockPressureFloor : pressure, locked};
 }
 
 }  // namespace twin

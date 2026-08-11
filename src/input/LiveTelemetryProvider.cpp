@@ -4,9 +4,16 @@
 #include "common/PresetExceptions.h"
 
 #include <cctype>
+#include <cmath>
 #include <string_view>
 
 namespace input {
+
+// Below this road speed a 'R' stalk command is treated as a standstill request
+// and coerced to NEUTRAL (no reverse gear at a standstill). Mirrors the twin's
+// own standstill threshold (IceVehicleProfile::standstillThresholdKmh).
+constexpr double kStandstillSpeedKmh = 1.0;
+
 
 LiveTelemetryProvider::LiveTelemetryProvider(const twin::IceVehicleProfile& profile)
     : ownedProfile_(profile)
@@ -125,7 +132,19 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
         }
 
         twinProvider_->setUpstreamSignal(signal);
-        twinProvider_->setGearSelector(static_cast<int>(csvGearSelector()));
+        // Standstill reverse coercion: a 'R' stalk command at ~zero road speed
+        // must NOT select REVERSE gear — at a standstill there is nothing to
+        // reverse into, and creeping in reverse at a standstill is wrong (the
+        // box must report PARK/NEUTRAL). Reverse is only honoured while actually
+        // backing up at meaningful speed, so forward 'R' rows (genuine
+        // reversing) are preserved. This is the iter2 fix for the RAR-at-Tgt=0
+        // behaviour seen in the PIN replay.
+        bridge::GearSelector sel = csvGearSelector();
+        if (sel == bridge::GearSelector::REVERSE &&
+            std::fabs(currentSample_.roadSpeedKmh) < kStandstillSpeedKmh) {
+            sel = bridge::GearSelector::NEUTRAL;
+        }
+        twinProvider_->setGearSelector(static_cast<int>(sel));
         return twinProvider_->OnUpdateSimulation(dt);
     }
 

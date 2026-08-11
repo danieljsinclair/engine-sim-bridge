@@ -385,6 +385,7 @@ if(BUILD_BRIDGE_TESTS)
         test/SineWaveRegressionTests.cpp
         test/twin/SpeedRpmConversionTest.cpp
         test/twin/RedlineClampAndUpshiftTest.cpp
+        test/twin/C63TeslaYTuneTest.cpp
         test/simulation/CommandedSpeedDisplayTest.cpp
         test/PathNormalizerTests.cpp
         test/JsonParserTests.cpp
