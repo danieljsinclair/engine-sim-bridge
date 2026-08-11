@@ -263,6 +263,36 @@ bool SimulatorFactory::configureLoadTorque(ISimulator* simulator, double loadFra
 }
 
 // ============================================================================
+// configureAfterfire - Apply afterfire tuning to all chambers.
+// Thin delegation: the factory resolves the concrete type, BridgeSimulator owns
+// the translation, engine-sim owns the behaviour.
+// ============================================================================
+
+bool SimulatorFactory::configureAfterfire(ISimulator* simulator, const AfterfireConfig& config, ILogging* logger) {
+    auto* bridgeSim = dynamic_cast<BridgeSimulator*>(simulator);
+    bool configured = true;
+
+    if (bridgeSim) {
+        // configureAfterfire is a post-creation step that runs BEFORE
+        // ISimulator::create(), and create() is where logger_ is installed.
+        // Without seeding it here every log statement inside
+        // BridgeSimulator::configureAfterfire is unreachable (logger_ == nullptr),
+        // which is why the WAV-candidate line never appeared. The factory is a
+        // friend precisely so it can wire dependencies at this stage; create()
+        // re-installs the same logger later, so this is not a lasting override.
+        if (logger && !bridgeSim->logger_) {
+            bridgeSim->logger_ = logger;
+        }
+        configured = bridgeSim->configureAfterfire(config);
+    }
+    else if (logger) {
+        logger->warning(LogMask::BRIDGE, "Afterfire: not a BridgeSimulator, ignoring");
+    }
+
+    return configured;
+}
+
+// ============================================================================
 // createAndConfigure - Create simulator and optionally configure load torque
 // ============================================================================
 

@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <cstring>
+#include <string>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -103,6 +104,79 @@ struct ISimulatorConfig {
     double targetSynthesizerLatency = EngineSimDefaults::TARGET_SYNTH_LATENCY;
     float volume = 0.5f;           // Runtime-tunable default
     float convolutionLevel = 0.5f; // Runtime-tunable default
+};
+
+// Afterfire ("pop on overrun") tuning, expressed in bridge-level terms so callers
+// never need to include engine-sim headers. Mapped onto
+// CombustionChamber::AfterfireParameters by BridgeSimulator::configureAfterfire.
+//
+// These are PHYSICAL properties of exhaust-gas auto-ignition, not a firing
+// schedule. There is no throttle cutoff, RPM floor, probability, cooldown or
+// per-decel event cap here any more: a pop happens when unburnt fuel in a hot
+// runner completes its Arrhenius induction period before being scavenged out.
+// Overrun produces that condition by itself, so it needs no explicit gate.
+struct AfterfireConfig {
+    bool enabled = false;
+
+    // Stage 1 — misfire. Manifold pressure (Pa) below which the charge is so
+    // diluted that combustion breaks down and raw fuel is pumped into the
+    // exhaust. This is what selects overrun: measured MAP is 98 kPa at WOT,
+    // 52 kPa at part throttle and idle, but 25-29 kPa on a coast.
+    double misfireManifoldPressurePa = 40530.0;   // ~0.4 atm
+
+    // Throttle position below which afterfire is allowed.
+    // Speed control s where s=1 = wide open, s=0 = shut.
+    // This prevents firing at steady part-throttle where MAP may also be low.
+    double throttleCutoff = 0.1;
+
+    // Stage 2 — auto-ignition.
+    // tau(T) = ignitionDelayRefS * exp(activationTempK * (1/T - 1/refTempK)).
+    double ignitionDelayRefS = 0.02;
+    double activationTempK   = 8000.0;
+    double refTempK          = 1000.0;
+
+    // Auto-ignition temperature of gasoline vapour (K). Below this, no light-off.
+    double autoIgnitionTempK = 750.0;
+
+    // Reactants must be present for a reaction to occur.
+    double minRawFuelFraction    = 0.0005;
+    double minOxygenMoleFraction = 0.01;
+
+    // Trim on released energy; 1.0 = the fuel's real energy density.
+    double energyScale = 1.0;
+
+    // Custom impulse response for afterfire pops.
+    // Can be a single file path or a glob pattern (e.g., "es/sound-library/new/*.wav").
+    // Resolved relative to the executable directory. If a glob, one matching file
+    // is chosen randomly for each pop.
+    std::string afterfireWavPath;
+
+    bool diagnostics = false;
+};
+
+// Per-chamber afterfire counters, mirrored out of engine-sim. eventCount is the
+// field the acceptance test asserts on; the rest explain WHY a pop did not
+// happen — each names the missing PHYSICAL precondition. maxIgnitionProgress is
+// the most informative: it reports how close the induction integral ever came
+// to completing, which separates "never hot enough" from "always scavenged
+// first" without guesswork.
+struct AfterfireDiagnostics {
+    int eventCount = 0;
+    int skippedTooCold = 0;
+    int skippedNoFuel = 0;
+    int skippedNoOxygen = 0;
+    int skippedNotReady = 0;
+    int skippedThrottle = 0;
+    int misfireCycles = 0;
+    double maxIgnitionProgress = 0.0;
+    double maxRunnerTempK = 0.0;
+    double maxRawFuelFraction = 0.0;
+    double minManifoldPressurePa = 0.0;
+    double lastEventRpm = 0.0;
+    double lastEventThrottle = 0.0;
+    double lastEventPeakPressure = 0.0;
+    double lastEventEnergyReleased = 0.0;
+    double lastEventRunnerTempK = 0.0;
 };
 
 // Runtime statistics

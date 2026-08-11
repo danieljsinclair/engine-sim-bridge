@@ -47,24 +47,36 @@ inline std::string normalizeScriptPath(const std::string& scriptPath) {
  * derives the path from the script path.
  */
 inline std::string resolveAssetBasePath(const std::string& scriptPath, const std::string& assetBasePath) {
+    // Probe: non-throwing existence test. The throwing std::filesystem::exists
+    // overload raises filesystem_error on ANY stat failure, not just "absent" —
+    // notably ELOOP. A stray self-referencing symlink (es/es -> es) inside a
+    // probed directory therefore aborted the process with an uncaught
+    // filesystem_error (SIGABRT) before the loader could report anything.
+    // Path resolution is a search over candidates: an unstattable candidate is
+    // simply "not a match", so the error_code overload is the correct contract.
+    auto pathExists = [](const std::filesystem::path& p) noexcept -> bool {
+        std::error_code ec;
+        return std::filesystem::exists(p, ec) && !ec;
+    };
+
     // Helper: check if a path directly contains sound-library/
-    auto hasSoundLibrary = [](const std::filesystem::path& p) -> bool {
-        return std::filesystem::exists(p / "sound-library");
+    auto hasSoundLibrary = [&pathExists](const std::filesystem::path& p) -> bool {
+        return pathExists(p / "sound-library");
     };
 
     // Helper: check if a path is a valid engine-sim root (has es/ and assets/).
-    auto isValidEngineSimRoot = [](const std::filesystem::path& p) -> bool {
-        return std::filesystem::exists(p / "es") &&
-               std::filesystem::exists(p / "assets");
+    auto isValidEngineSimRoot = [&pathExists](const std::filesystem::path& p) -> bool {
+        return pathExists(p / "es") &&
+               pathExists(p / "assets");
     };
 
     // Helper: check if a path has es/ locally and assets/ in a child engine-sim/ directory.
-    auto isValidSplitRoot = [](const std::filesystem::path& p) -> bool {
-        if (!std::filesystem::exists(p / "es")) return false;
+    auto isValidSplitRoot = [&pathExists](const std::filesystem::path& p) -> bool {
+        if (!pathExists(p / "es")) return false;
         std::filesystem::path subModule = p / "engine-sim";
-        return std::filesystem::exists(subModule) &&
-               std::filesystem::exists(subModule / "es") &&
-               std::filesystem::exists(subModule / "assets");
+        return pathExists(subModule) &&
+               pathExists(subModule / "es") &&
+               pathExists(subModule / "assets");
     };
 
     // If an explicit assetBasePath is provided, validate it before accepting.

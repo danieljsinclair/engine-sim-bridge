@@ -5,12 +5,21 @@
 #define PRESET_ENGINE_FACTORY_H
 
 #include <string>
+#include <vector>
 #include <cstdint>
+#include <filesystem>
 
 // Forward declarations
 class Engine;
 class Vehicle;
 class Transmission;
+
+// Expand an afterfire WAV path (single file or glob) into the list of candidate
+// files the chamber loads and picks from per pop. Declared here so callers
+// (BridgeSimulator) can reach the definition in PresetEngineFactory.cpp without
+// pulling WAV/glob internals into their own TU. An empty result means "use the
+// engine's default exhaust impulse response".
+std::vector<std::string> resolveAfterfireWavPaths(const std::filesystem::path& rawPath);
 
 // Result of preset loading
 struct PresetLoadResult {

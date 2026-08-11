@@ -32,6 +32,11 @@ public:
     void shiftDown() override;
     void toggleIgnition() override;
     void setStarter() override;
+    // --start: hold the starter switch depressed for a phase-aware window so the
+    // CrankingController cranks the engine and it fires, then the engine/simulator
+    // auto-disengages the starter when RPM is sufficient. Unlike setStarter() (a
+    // momentary one-frame pulse), this keeps S:1 until the engine reaches Running.
+    void setAutoStart() override;
     void cyclePreset() override;
     void adjustDynoTorque(double delta) override;
     void releaseDynoTorque() override;
@@ -63,6 +68,9 @@ private:
     double throttle_;
     bool ignition_;
     bool starterButton_;
+    bool autoStartHeld_ = false;  // true while --start is holding the starter on
+    bool engineRunning_ = false;  // latched once RPM catches, releases the hold
+    int autoStartFrames_ = 0;    // frames held so far (fail-safe cap)
     int gearDelta_;
     int gearSelector_;
     double dynoTorqueScale_;
