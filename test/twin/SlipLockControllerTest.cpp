@@ -123,11 +123,11 @@ TEST(SlipLockControllerTest, Decel_EngineSlowerThanRoad_LockedForEngineBraking) 
 
 TEST(SlipLockControllerTest, LaunchWOT_HighSlip_PartialPressureInSlipBand) {
     // Launch: engine revs to 3500 (power band), road still slow but above idle
-    // (road-implied 850) — the low-speed launch band, well below the cruise lock
-    // threshold (0.18 * redline = 1170 at idle 700 / red 6500). The clutch must
-    // slip with PARTIAL pressure (engine revs, not rigidly locked), but the
-    // pressure is driven by ROAD SPEED so it stays partial only at low road speed.
-    // At this low launch road speed pressure is ~0.35, comfortably below the lock.
+    // (road-implied 850) — inside the narrow launch slip band [idle..engage],
+    // where engage = kLockEngageIdleFactor * idle = 1.5 * 700 = 1050. The clutch
+    // must slip with PARTIAL pressure (engine revs, not rigidly locked), driven
+    // by ROAD SPEED so it stays partial only at low road speed. At road-implied
+    // 850 (below the 1050 engage point) pressure is ~0.46, below the lock.
     const auto out = compute(3500.0, 850.0, 1.0);
     EXPECT_GT(out.clutchPressure, 0.0)
         << "Under throttle at launch the clutch must apply some pressure";
@@ -230,8 +230,8 @@ TEST(SlipLockControllerTest, Cruise_LocksAtRoadSpeed_EngineNotFreeRevving) {
     // tire ~0.356) the road-implied RPM is ~1350, but the engine was sitting at
     // 4250 with the clutch effectively open. The clutch must LOCK at cruise so
     // the engine is loaded and dragged down to the road (≈1350), not left to
-    // free-rev. Road-implied 1350 is well above the cruise threshold
-    // (0.18 * 6500 = 1170), so pressure must be ~1.0 and the clutch locked.
+    // free-rev. Road-implied 1350 is well above the idle-relative engage point
+    // (1.5 * 700 = 1050), so pressure must be ~1.0 and the clutch locked.
     const double roadImpliedCruise = 1350.0;
     const auto out = compute(4250.0, roadImpliedCruise, 0.3);
     EXPECT_NEAR(out.clutchPressure, 1.0, 1e-6)
@@ -263,27 +263,28 @@ TEST(SlipLockControllerTest, Cruise_PressureDrivenByRoadSpeed_NoDeadlock) {
     EXPECT_TRUE(cruise.locked);
 }
 
-TEST(SlipLockControllerTest, CruiseThreshold_JustAboveIdle_SlipBelowLaunch) {
-    // The lock threshold is a fraction of redline (0.18) — comfortably above
-    // idle so standstill/low-speed launch still slips, but at a real cruise road
-    // speed it locks. Below the threshold the clutch must NOT be fully locked
-    // (launch slip is allowed); at/above it the clutch locks.
-    const double cruiseRpm = kRedlineRpm * twin::kCruiseLockRpmFraction;  // 1170
-    ASSERT_GT(cruiseRpm, kIdleRpm)
-        << "Cruise threshold must be above idle so launch still slips";
+TEST(SlipLockControllerTest, EngagePoint_JustAboveIdle_SlipBelowLock) {
+    // The lock-engage point is idle-relative (kLockEngageIdleFactor × idle) — a
+    // narrow band above idle so the engine couples firmly once the wheels can
+    // sustain idle (~3 mph in 1st), ending the low-speed droop, while a sliver
+    // of launch slip remains below it. Below the engage point the clutch must
+    // NOT be fully locked (launch slip allowed); at/above it the clutch locks.
+    const double lockRpm = kIdleRpm * twin::kLockEngageIdleFactor;  // 1.5 * 700 = 1050
+    ASSERT_GT(lockRpm, kIdleRpm)
+        << "Engage point must be above idle so a sliver of launch slip remains";
 
-    // Just below threshold: partial pressure, not locked (launch slip allowed).
-    const double below = cruiseRpm - 50.0;
+    // Just below engage point: partial pressure, not locked (launch slip allowed).
+    const double below = lockRpm - 50.0;
     const auto lowSpeed = compute(3000.0, below, 1.0);
     EXPECT_LT(lowSpeed.clutchPressure, 1.0)
-        << "Below the cruise threshold the clutch may still slip (launch)";
+        << "Below the engage point the clutch may still slip (launch)";
     EXPECT_FALSE(lowSpeed.locked);
 
-    // At/above threshold: locked.
-    const auto cruise = compute(3000.0, cruiseRpm + 50.0, 1.0);
-    EXPECT_NEAR(cruise.clutchPressure, 1.0, 1e-6)
-        << "At/above the cruise threshold the clutch must lock";
-    EXPECT_TRUE(cruise.locked);
+    // At/above engage point: locked.
+    const auto locked = compute(3000.0, lockRpm + 50.0, 1.0);
+    EXPECT_NEAR(locked.clutchPressure, 1.0, 1e-6)
+        << "At/above the engage point the clutch must lock";
+    EXPECT_TRUE(locked.locked);
 }
 
 TEST(SlipLockControllerTest, CruiseLock_EngineBrakingRestoredOnDecel) {

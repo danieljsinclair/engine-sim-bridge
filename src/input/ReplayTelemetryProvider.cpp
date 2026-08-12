@@ -67,39 +67,80 @@ double ReplayTelemetryProvider::durationS() const {
     return samples_.empty() ? 0.0 : samples_.back().timeS;
 }
 
+void ReplayTelemetryProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
+    // Forwards to the owned AutomaticGearbox so the oracle (section D) can parse
+    // per-frame gear/rpm/mph from the gearbox log during replay. No-op when the
+    // auto-gearbox is disabled (gearbox_ null).
+    if (gearbox_) gearbox_->setLogger(logger);
+}
+
 void ReplayTelemetryProvider::reconfigureProfile(const std::vector<double>& gearRatios,
                                                   double diffRatio, double tireRadiusM) {
     if (gearRatios.empty() || !autoGearbox_) return;
     gearboxProfile_.gearRatios = gearRatios;
     gearboxProfile_.diffRatio = diffRatio;
     gearboxProfile_.tireRadiusM = tireRadiusM;
-    // Auto-generate shift table from the ratios + redline. Shift speed for each
-    // gear = the road speed at which the engine RPM reaches the shift-RPM band
-    // (~40% redline at light throttle, ~85% at WOT).
+    // BAND-TOP SHIFT MAP — identical to VirtualIceTwin::reconfigureProfile so the
+    // replay path and the live (twin) path select the same gear at the same road
+    // speed. The OLD map derived each upshift from `redline*(0.40+0.45*thr)`,
+    // which at WOT pushed DA1->DA2 to ~33.8 mph (85% redline = 5525 rpm in DA1)
+    // and left the box a gear or two LOW at every cruise speed vs the oracle
+    // (the "DA1 at 25 mph" / over-rev symptom). The band-top map instead pins
+    // each upshift to a ROAD SPEED (the top of the originating gear's band),
+    // with only a ±5% throttle nudge, so the gear follows the oracle
+    // (DA1->DA2 at ~15 mph ... DA6->DA7 at ~65 mph) independent of throttle.
+    //   band tops (mph->km/h): 15,25,35,45,55,65 mph.
+    static const std::vector<double> kUpshiftBandTopKmh = {24.14, 40.23, 56.33, 72.42, 88.51, 104.61};
+    static constexpr double kDownshiftHysteresisKmh = 5.0;  // held band below each top
+    // Narrow throttle sensitivity: light throttle upshifts a touch earlier, WOT
+    // holds each gear a touch longer — but always centered on the band top so the
+    // map owns steady-state (throttle never breaks convergence).
+    auto bandScale = [](double thr) {
+        const double t = std::clamp((thr - 0.05) / 0.95, 0.0, 1.0);
+        return 0.95 + 0.10 * t;  // 0.95 (light) .. 1.05 (WOT)
+    };
+
+    const int numCols = static_cast<int>(gearRatios.size()) - 1;
+    std::vector<double> upTops;
+    upTops.reserve(numCols);
+    for (int i = 0; i < numCols; ++i) {
+        if (i < static_cast<int>(kUpshiftBandTopKmh.size())) {
+            upTops.push_back(kUpshiftBandTopKmh[i]);
+        } else {
+            upTops.push_back(kUpshiftBandTopKmh.back() + 10.0 * (i - static_cast<int>(kUpshiftBandTopKmh.size()) + 1));
+        }
+    }
+
     gearboxProfile_.shiftTableThrottleLevels = {0.05,0.15,0.25,0.40,0.55,0.70,0.80,0.90,0.95,1.00};
     gearboxProfile_.shiftTable.clear();
     for (double thr : gearboxProfile_.shiftTableThrottleLevels) {
+        const double s = bandScale(thr);
         std::vector<double> row;
-        double shiftRpm = gearboxProfile_.redlineRpm * (0.40 + 0.45 * thr);
-        for (size_t i = 0; i + 1 < gearRatios.size(); ++i) {
-            double speedMs = shiftRpm / 60.0 * 2.0 * 3.14159265358979 * tireRadiusM
-                           / (gearRatios[i] * diffRatio);
-            row.push_back(speedMs * 3.6);  // km/h
+        for (double top : upTops) {
+            row.push_back(top * s);  // upshift N->N+1 at the top of N's band
         }
         gearboxProfile_.shiftTable.push_back(row);
     }
-    // Downshift table: ~70% of the upshift speed (hysteresis)
     gearboxProfile_.separateDownshiftTableEnabled = true;
     gearboxProfile_.downshiftTableThrottleLevels = gearboxProfile_.shiftTableThrottleLevels;
     gearboxProfile_.downshiftTable.clear();
-    for (const auto& ups : gearboxProfile_.shiftTable) {
+    // Downshift G->G-1 fires at the BOTTOM of G's band (the top that entered G)
+    // minus hysteresis: a symmetric dead band below the upshift, so a single
+    // speed can never satisfy both an up- and a down-shift (no hunting).
+    for (double thr : gearboxProfile_.downshiftTableThrottleLevels) {
+        const double s = bandScale(thr);
         std::vector<double> row;
-        for (double upSpeed : ups) {
-            row.push_back(upSpeed * 0.70);
+        for (double top : upTops) {
+            row.push_back(std::max(0.0, top - kDownshiftHysteresisKmh) * s);
         }
         gearboxProfile_.downshiftTable.push_back(row);
     }
     gearboxProfile_.hysteresisFactor = 0.85;
+    // Ground the idle floor in the V3's EMERGENT idle (~500 rpm, per the .mr —
+    // the M156 has no idle scalar). The old hardcoded 750 was wrong for this
+    // engine. Consumed declaratively by the anti-lug guard (idle + margin) and
+    // by the SlipLock stall floor (clutch decouples below idle).
+    gearboxProfile_.idleRpm = 500.0;
     // Reconstruct the gearbox with the matched profile
     gearbox_ = std::make_unique<twin::AutomaticGearbox>(gearboxProfile_);
     gearbox_->setGearSelector(bridge::GearSelector::DRIVE);

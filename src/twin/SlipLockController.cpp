@@ -52,11 +52,19 @@ SlipLockOutput computeSlipLockPressure(const SlipLockInput& input, double maxCre
     // deadlocks: a high engine RPM -> large slip -> low pressure -> engine revs
     // higher -> larger slip, so at cruise the engine free-revved uncoupled with
     // no engine braking. Keying the lock off road-implied RPM breaks the circle:
-    // once the wheels are rolling at cruise the clutch locks regardless of how
-    // far the engine has over-revved, and the lock drags engine RPM back down to
+    // once the wheels are rolling the clutch locks regardless of how far the
+    // engine has over-revved, and the lock drags engine RPM back down to
     // road×gear×diff (loaded, with engine braking restored).
-    const double cruiseRpm = input.redlineRpm * kCruiseLockRpmFraction;
-    const double band = cruiseRpm - input.idleRpm;
+    //
+    // The lock-engage point is IDLE-RELATIVE (kLockEngageIdleFactor × idle), not
+    // redline-relative: the engine must couple as soon as the wheels can sustain
+    // idle (road-implied > idle), so it tracks the road instead of drooping back
+    // to idle (the low-speed silence/droop bug). The prior redline-fraction
+    // threshold left a wide low-pressure slip band [idle..1170] in which the
+    // engine idled decoupled at 4-5 mph; idle-relative engagement couples it
+    // firmly by ~5 mph while preserving a narrow launch slip band.
+    const double lockRpm = input.idleRpm * kLockEngageIdleFactor;
+    const double band = lockRpm - input.idleRpm;
 
     // Guard against a degenerate band (e.g. redlineRpm <= idle): treat as fully
     // locked rather than divide by zero.
@@ -64,8 +72,8 @@ SlipLockOutput computeSlipLockPressure(const SlipLockInput& input, double maxCre
         return SlipLockOutput{1.0, true};
     }
 
-    // Pressure ramps from the floor (at idle) up to 1.0 (at the cruise
-    // threshold) as the wheels roll faster. Independent of engine RPM, so a
+    // Pressure ramps from the floor (at idle) up to 1.0 (at the lock-engage
+    // point) as the wheels roll faster. Independent of engine RPM, so a
     // spinning-up / over-revving engine cannot deadlock the pressure to the
     // floor (the old bug). The floor keeps the clutch NEVER fully open.
     const double t = clampDouble(
@@ -78,13 +86,13 @@ SlipLockOutput computeSlipLockPressure(const SlipLockInput& input, double maxCre
     // slip-lock alone must not be the thing that pins it there), force the
     // clutch to slip (pressure capped at the floor, never locked) so the engine
     // can shed speed under the rev limiter instead of being rigidly held at
-    // redline. This is the hard ceiling that complements the floor. Cruise lock
-    // still applies below the redline: below redline the lock is driven purely
-    // by road speed (the line above), which is what drags a free-revving cruise
-    // engine back down to the road.
+    // redline. This is the hard ceiling that complements the floor. The road-
+    // speed lock still applies below the redline: below redline the lock is
+    // driven purely by road speed (the line above), which is what drags a
+    // free-revving engine back down to the road.
     const bool overRedline = (input.redlineRpm > 0.0) &&
                              (input.engineRpm >= input.redlineRpm);
-    const bool locked = overRedline ? false : (input.roadSpeedImpliedRpm >= cruiseRpm);
+    const bool locked = overRedline ? false : (input.roadSpeedImpliedRpm >= lockRpm);
 
     return SlipLockOutput{overRedline ? kSlipLockPressureFloor : pressure, locked};
 }

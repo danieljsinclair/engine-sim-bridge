@@ -41,6 +41,19 @@ public:
     // the strategy keeps the twin free of mode-specific conditionals (OCP).
     virtual bool launchAssistAtStandstill() const = 0;
 
+    // Does this mode open the clutch to relieve creep-drag at standstill? PIN
+    // pins the sim wheels to the upstream road speed, so at standstill an engaged
+    // clutch (even at the slip-lock floor) couples the engine to a wheel that
+    // cannot turn and drags it down through idle to stall (the creep clutch-drag
+    // bug). PIN relieves by opening the clutch so the engine idles decoupled
+    // (the pinned wheel follows the CSV regardless). FREE/TORQUE do NOT relieve:
+    // their vehicle speed is independent/emergent, so at standstill their
+    // launch-assist path owns the clutch and an open clutch would free-rev them.
+    // The twin applies the relief uniformly below the profile's standstill
+    // threshold (no mode conditional in the twin) — this method only declares
+    // the strategy's behaviour, mirroring launchAssistAtStandstill above.
+    virtual bool relievesCreepDragAtStandstill() const = 0;
+
     // Recorded drivetrain torque (Nm) to inject at the transmission input this
     // frame (MATCH mode). Torque returns the recorded value verbatim so the
     // solver integrates road speed from it; Free/Pin return 0 (no injection — a
@@ -75,6 +88,7 @@ public:
         return -1.0;
     }
     bool launchAssistAtStandstill() const override { return true; }
+    bool relievesCreepDragAtStandstill() const override { return false; }
     double injectedInputTorqueNm(double /*recordedTorqueNm*/) const override { return 0.0; }
     WheelCouplingMode getMode() const override { return WheelCouplingMode::Free; }
     double clutchLockOverride(double /*engineRpm*/, double /*roadSpeedImpliedRpm*/,
@@ -95,6 +109,7 @@ public:
         return csvKmh;
     }
     bool launchAssistAtStandstill() const override { return false; }
+    bool relievesCreepDragAtStandstill() const override { return true; }
     double injectedInputTorqueNm(double /*recordedTorqueNm*/) const override { return 0.0; }
     WheelCouplingMode getMode() const override { return WheelCouplingMode::Pin; }
     double clutchLockOverride(double engineRpm, double roadSpeedImpliedRpm,
@@ -109,6 +124,10 @@ public:
         // wheel×gear×diff. The re-tuned controller's pressure floor guarantees
         // the clutch is NEVER fully open, so the engine can never free-rev to the
         // redline (the old bug). This is the "bounded slip-lock" for PIN.
+        //
+        // Standstill creep-drag relief is NOT applied here (this function lacks
+        // the vehicle speed) — the twin opens the clutch below the profile's
+        // standstill threshold via relievesCreepDragAtStandstill() above.
         return computeSlipLockPressure(
                    SlipLockInput{engineRpm, roadSpeedImpliedRpm,
                                  throttleFraction, idleRpm, redlineRpm},
@@ -136,6 +155,7 @@ public:
         return -1.0;  // no pin - speed emerges from torque
     }
     bool launchAssistAtStandstill() const override { return true; }
+    bool relievesCreepDragAtStandstill() const override { return false; }
     double injectedInputTorqueNm(double recordedTorqueNm) const override {
         return recordedTorqueNm;  // inject recorded torque -> solver integrates speed
     }

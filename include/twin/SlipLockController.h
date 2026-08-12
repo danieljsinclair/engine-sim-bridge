@@ -55,25 +55,33 @@ struct SlipLockOutput {
 // wheel load, so 0.05 is ample to prevent free-rev.
 constexpr double kSlipLockPressureFloor = 0.05;
 
-// Cruise-lock threshold, as a fraction of redline. Once the road-implied RPM
-// (the RPM the engine WOULD be at if locked to the wheels in the current gear)
-// exceeds this, the wheels are genuinely rolling at cruise speed and the clutch
-// LOCKS (pressure -> 1.0): the engine is loaded and forced to track
-// road×gear×diff. Below it (standstill + low-speed launch) the clutch slips with
-// partial pressure so the engine can rev.
+// Lock-engage point, as a MULTIPLE OF IDLE. Once the road-implied RPM (the RPM
+// the engine WOULD be at if locked to the wheels in the current gear) reaches
+// idle × kLockEngageIdleFactor the clutch LOCKS (pressure -> 1.0): the engine is
+// coupled to and forced to track road×gear×diff. Below it (standstill + the
+// narrow launch slip band just above idle) the clutch ramps from the floor so
+// the engine can still rev into its power band on launch.
 //
 // DRIVING THE LOCK OFF ROAD SPEED (not slip) IS THE FIX for the free-rev bug:
 // the old model set pressure from (engine - road) slip, which deadlocks — a
 // high engine RPM produces a large slip, which produces a LOW pressure, which
 // lets the engine rev HIGHER, producing even more slip. At cruise the engine
 // therefore free-revved uncoupled (the redline/free-rev symptom) with no engine
-// braking. Keying the lock off road-implied RPM breaks the circle: once the
-// wheels are turning at cruise, the clutch locks regardless of how far the
-// engine has over-revved, and the lock drags the engine RPM back down to the
-// road. ~0.18 of a 7250 redline ≈ 1305 RPM, comfortably above idle (750) so
-// standstill/launch still slips, and at/above a 40 mph cruise (implied ≈ 1350)
-// so the engine is locked, not free-revving.
-constexpr double kCruiseLockRpmFraction = 0.18;
+// braking. Keying the lock off road-implied RPM breaks the circle.
+//
+// IDLE-RELATIVE (not redline-relative) IS THE FIX for the droop/silence bug:
+// the prior redline-fraction threshold (0.18 × redline ≈ 1170-1305 rpm) left a
+// wide low-speed slip band [idle..1170] in which the clutch sat at low pressure
+// (~0.25 at 4 mph / road-implied ~657) so the engine idled/drooped decoupled
+// instead of tracking the road (the "silent at 4-5 mph" symptom). Coupling
+// depends on IDLE, not redline — the engine must be locked to the wheels as
+// soon as the wheels can sustain idle (road-implied > idle), which the
+// acceptance spec (A0.1) marks at ~3 mph in 1st. 1.5× a ~500 rpm idle = 750 rpm
+// ≈ 4.6 mph in DA1, so the engine is firmly coupled by ~5 mph and fully locked
+// above it, while a narrow [idle..1.5×idle] ramp preserves launch slip. Two
+// engines with the same idle but different redlines now lock at the same road
+// speed, which is correct.
+constexpr double kLockEngageIdleFactor = 1.5;
 
 // Compute clutch pressure from slip. Algorithm:
 //   1. If roadSpeedImpliedRpm < idleRpm:
@@ -83,14 +91,15 @@ constexpr double kCruiseLockRpmFraction = 0.18;
 //   2. Rolling band (roadSpeedImpliedRpm >= idleRpm): the wheels are turning.
 //      Drive the lock off ROAD SPEED, not slip, so a high engine RPM cannot
 //      deadlock the pressure to the floor (the old free-rev bug). Pressure ramps
-//      from the floor (at idle) up to 1.0 as road-implied rises to the cruise
-//      threshold (kCruiseLockRpmFraction * redline), then locks hard:
-//        cruiseRpm = redlineRpm * kCruiseLockRpmFraction
-//        t         = clamp((roadSpeedImpliedRpm - idleRpm) / (cruiseRpm - idleRpm), 0, 1)
+//      from the floor (at idle) up to 1.0 as road-implied rises to the lock-engage
+//      point (kLockEngageIdleFactor * idle), then locks hard:
+//        lockRpm   = idleRpm * kLockEngageIdleFactor
+//        t         = clamp((roadSpeedImpliedRpm - idleRpm) / (lockRpm - idleRpm), 0, 1)
 //        pressure  = floor + (1 - floor) * t
-//        locked    = (roadSpeedImpliedRpm >= cruiseRpm)
-//      Once locked, the engine is loaded and tracks road×gear×diff (no free-rev,
-//      engine braking restored).
+//        locked    = (roadSpeedImpliedRpm >= lockRpm)
+//      Once locked, the engine is coupled and tracks road×gear×diff (no free-rev,
+//      no droop, engine braking restored). The engage point is idle-relative so
+//      the engine couples as soon as the wheels can sustain idle (~3 mph in 1st).
 //
 // The creep mode (step 1) mimics a real torque converter's fluid coupling:
 // even at zero road speed, some torque is transmitted proportional to throttle.

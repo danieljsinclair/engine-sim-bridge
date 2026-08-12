@@ -46,6 +46,27 @@ struct IceVehicleProfile {
     double idleThrottle = 0.0;               // No throttle injection — engine idles on physics alone
     double standstillThresholdKmh = 1.0;     // Below this speed = standstill
 
+    // ---- Declarative shift-decision thresholds (no magic constants in logic) ----
+    // Lug guard: the box downshifts whenever the ACTUAL engine RPM in the current
+    // gear drops below max(idleRpm + lugFloorMarginRpm, downshiftRpmFloor). The
+    // idle+margin term is the always-on hard floor (keeps the engine above idle
+    // under load); downshiftRpmFloor is an optional higher override (tests/profiling).
+    // 0 = no override → floor is just idle + margin.
+    double downshiftRpmFloor = 0.0;          // optional override floor (0 = idle+margin only)
+    double lugFloorMarginRpm = 150.0;        // keep engine >= idle + this margin
+    // RPM at/below which the engine is considered STOPPED (or feedback unwired).
+    // A stopped engine (0 rpm) must NOT be treated as lugging — that pinned the
+    // box in 1st every frame. The stall/restart path owns the stopped case.
+    double engineStoppedRpm = 30.0;
+    // Redline safety nets (fractions of redlineRpm) — declarative, not hardcoded.
+    double redlineUpshiftFraction = 0.95;    // upshift when speed-implied RPM > 0.95×redline
+    double redlineKickdownFraction = 0.90;   // kickdown never drops into a gear > 0.90×redline
+    // Torque-hint bounds (consumed by SimTorqueHint). The bias is a signed
+    // throttle-equivalent nudge capped to ±torqueHintMaxBias, saturated at
+    // torqueHintMaxNm. Zero torque → zero bias (NullTorqueHint).
+    double torqueHintMaxNm = 3000.0;
+    double torqueHintMaxBias = 0.15;
+
     IceVehicleProfile() = default;
 
     IceVehicleProfile(

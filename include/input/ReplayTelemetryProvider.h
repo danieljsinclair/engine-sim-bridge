@@ -23,6 +23,7 @@
 #include "io/IInputProvider.h"
 #include "simulator/EngineSimTypes.h"
 #include "twin/IceVehicleProfile.h"
+#include "twin/IGearboxLogger.h"
 #include "input/IKeyboardInput.h"
 #include "input/CsvTelemetryParser.h"
 #include "session/ISimulatorSession.h"
@@ -76,6 +77,11 @@ public:
     // correct regardless of the transmission (7-speed AMG, 8-speed ZF, etc.).
     void reconfigureProfile(const std::vector<double>& gearRatios,
                              double diffRatio, double tireRadiusM);
+
+    // Attach a gearbox-decision logger so the oracle (section D: parse per-frame
+    // gear/rpm/mph) can validate the automatic box during replay. Forwards to the
+    // owned AutomaticGearbox (no-op when auto-gearbox is disabled / gearbox null).
+    void setGearboxLogger(twin::IGearboxLogger* logger);
 
 private:
     using Sample = CsvSample;

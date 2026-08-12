@@ -31,53 +31,87 @@ void VirtualIceTwin::reconfigureProfile(const std::vector<double>& gearRatios,
     // gears (high revs in a low gear at low speed is correct — that is the engine
     // revving, not lugging). It still scales with throttle: light throttle shifts
     // earlier (lower RPM/speed), WOT holds the gear to higher RPM/speed.
+    // PER-GEAR TARGET SHIFT MAP (ZF8-style, diff 2.82). The single `shiftRpm`
+    // knob it replaced OSCILLATED: because each gear ratio differs, one RPM
+    // band maps to wildly different road speeds per gear, so at a fixed road
+    // speed the implied RPM swung across gears and the box could never settle
+    // (DA5-at-40 <-> DA3-at-40). Instead the band CHECK is on ROAD SPEED, and
+    // the gear-ratio-implied RPM is only a sanity bound. Upshift gear N->N+1
+    // fires at the TOP of N's band; downshift N->N-1 fires below the BOTTOM of
+    // N's band minus a small hysteresis, so a gear is HELD across its dead band
+    // (no hunting). Bands are in km/h; the upstream signal carries road speed in
+    // km/h, so the task's "mph" map is applied 1:1 on signal.speedKmh.
+    //   DA1 0-15 | DA2 15-25 | DA3 25-35 | DA4 35-45 | DA5 45-55 | DA6 55-65 | DA7 65+
+    // CO-FIX (band units): the band tops were specified in MPH but consumed as
+    // KMH (the upstream signal carries road speed in km/h, applied 1:1). At the
+    // old 15/25/35/45/55/65 "km/h" the box climbed to DA5 at ~29 mph target while
+    // the real engine lugged to ~310 rpm — the death spiral. The tops are now
+    // converted to true km/h (mph * 1.60934): 15,25,35,45,55,65 mph ->
+    // 24.14, 40.23, 56.33, 72.42, 88.51, 104.61 km/h, so DA5 unlocks only above
+    // ~45 mph, not ~18 mph.
+    static const std::vector<double> kUpshiftBandTopKmh = {24.14, 40.23, 56.33, 72.42, 88.51, 104.61};
+    static constexpr double kDownshiftHysteresisKmh = 5.0;  // held band below each top
+    // Mild throttle sensitivity: light throttle upshifts a touch earlier, WOT
+    // holds each gear a touch longer — but always centered on the band top so
+    // the map still owns steady-state (throttle never breaks convergence).
+    auto bandScale = [](double thr) {
+        const double t = std::clamp((thr - 0.05) / 0.95, 0.0, 1.0);
+        return 0.95 + 0.10 * t;  // 0.95 (light) .. 1.05 (WOT)
+    };
+
+    const int numCols = static_cast<int>(gearRatios.size()) - 1;
+    std::vector<double> upTops;
+    upTops.reserve(numCols);
+    for (int i = 0; i < numCols; ++i) {
+        if (i < static_cast<int>(kUpshiftBandTopKmh.size())) {
+            upTops.push_back(kUpshiftBandTopKmh[i]);
+        } else {
+            // Engines with more than 6 upshifts: extend the 10 km/h ladder.
+            upTops.push_back(kUpshiftBandTopKmh.back() + 10.0 * (i - static_cast<int>(kUpshiftBandTopKmh.size()) + 1));
+        }
+    }
+
     profile_.shiftTableThrottleLevels = {0.05,0.15,0.25,0.40,0.55,0.70,0.80,0.90,0.95,1.00};
     profile_.shiftTable.clear();
     for (double thr : profile_.shiftTableThrottleLevels) {
+        const double s = bandScale(thr);
         std::vector<double> row;
-        // Upshift RPM envelope: ~41..49% of redline across the throttle sweep,
-        // i.e. a ~3000-3500 RPM upshift point on the C63 (redline 7250). The
-        // previous 0.20..0.26 band (~1450-1900 RPM) made the box upshift far too
-        // eagerly: it climbed to DA5 by ~9 mph and the engine never revved past
-        // ~2000 RPM (max RPM 2039), lugging in high gears at low speed. Raising
-        // the band lets the engine actually REV in each gear before the next
-        // upshift (like a real car), and keeps the box in lower gears at low
-        // speed so the engine stays well above idle. Light throttle still shifts a
-        // touch earlier (lower RPM/speed); WOT holds each gear to the top of the
-        // band. Calibrated for the C63 M156 (1st=4.38) on the AMG final drive
-        // (2.82), tire 12.7" (0.3226 m), redline 7250.
-        double shiftRpm = profile_.redlineRpm * (0.41 + 0.08 * thr);
-        for (size_t i = 0; i + 1 < gearRatios.size(); ++i) {
-            double speedMs = shiftRpm / 60.0 * 2.0 * 3.14159265358979 * tireRadiusM
-                           / (gearRatios[i] * diffRatio);
-            row.push_back(speedMs * 3.6);
+        for (double top : upTops) {
+            row.push_back(top * s);  // upshift N->N+1 at the top of N's band
         }
         profile_.shiftTable.push_back(row);
     }
     profile_.separateDownshiftTableEnabled = true;
     profile_.downshiftTableThrottleLevels = profile_.shiftTableThrottleLevels;
     profile_.downshiftTable.clear();
-    for (const auto& srcRow : profile_.shiftTable) {
+    // Downshift gear G->G-1 (column == gear G-2) fires at the BOTTOM of G's band
+    // (== the top that entered G) minus hysteresis: a symmetric dead band of
+    // `hyst` below the upshift that produced G. Hysteresis by construction, so a
+    // single speed can never satisfy both an up- and down-shift (no oscillation).
+    for (double thr : profile_.downshiftTableThrottleLevels) {
+        const double s = bandScale(thr);
         std::vector<double> row;
-        for (double upSpeed : srcRow) row.push_back(upSpeed * 0.70);
+        for (double top : upTops) {
+            row.push_back(std::max(0.0, top - kDownshiftHysteresisKmh) * s);
+        }
         profile_.downshiftTable.push_back(row);
     }
     profile_.hysteresisFactor = 0.85;
-    // Reconstruct gearbox with matched profile
-    profile_.downshiftTable.clear();
-    for (const auto& srcRow : profile_.shiftTable) {
-        std::vector<double> row;
-        for (double upSpeed : srcRow) row.push_back(upSpeed * 0.70);
-        profile_.downshiftTable.push_back(row);
-    }
-    // LUG GUARD (downshift-fix): keep the engine above idle at low road speed.
-    // The speed-table downshift alone would hold a too-tall gear at 9-11 mph
-    // (e.g. gear 5 at ~288 RPM — lugging/over-quiet). With a ~1500 RPM floor
-    // the gearbox cascades down at low speed so it sits in gears 1-2
-    // (~2000-3000 RPM) where the engine revs properly. Set well above idle
-    // (750) and below the upshift band so it neither fights cruise nor masks
-    // genuine lugging. Inert (0) in legacy profiles that never set it.
-    profile_.downshiftRpmFloor = 1500.0;
+    // Ground the idle floor in the V3's EMERGENT idle (~500 rpm, per the .mr —
+    // the M156 has no idle scalar; it settles ~400–600 on physics). The old
+    // hardcoded 750 (IceVehicleProfile default / zf8hp45) was wrong for this
+    // engine. The anti-lug guard floor is now declaratively idle + lugFloorMargin
+    // (AutomaticGearbox::decide), so this single grounding flows everywhere.
+    profile_.idleRpm = 500.0;
+    // MIN-RPM FLOOR: the engine must stay above idle under load. The speed map
+    // owns steady-state gear selection; an anti-lug guard in AutomaticGearbox
+    // (decideGear, idle + margin) forces a single downshift whenever the CURRENT
+    // gear's ratio-implied RPM drops below idle+margin, so the engine never lugs
+    // (was ~92 rpm at low speed). Keeping downshiftRpmFloor at 0 here is
+    // deliberate: the OLD 1500 rpm floor fought the upshift table at cruise
+    // (forced DA4 at 40 km/h, then the table re-climbed to DA5 — the very
+    // oscillation this map removes). The separate guard is inert for the twin.
+    profile_.downshiftRpmFloor = 0.0;
     // Preserve logger across gearbox reconstruction (bug: prior code called
     // setLogger(nullptr) here, which dropped the logger attached at startup
     // and produced empty --gearbox-log CSVs even though the gearbox shifted).
@@ -253,6 +287,41 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             gearbox_->update(dt, signal.speedKmh, signal.throttleFraction, drivetrainTorqueNm_);
             output.ignition = true;
 
+            // FIX #3 (idle/stall): the engine must NEVER coast through the
+            // engine-sim Stopped latch while ignition is ON. The idle-sustain
+            // floor previously existed ONLY in IDLE; at RUNNING/DAN the twin
+            // sent ~0 throttle and a falling feedback RPM let the engine decay
+            // to 0 and latch Stopped (the mid-drive stall bug). Two guards:
+            //
+            //  (a) Idle-sustain floor: when the ACTUAL engine RPM feedback is
+            //      below idle, floor the throttle at IDLE_SUSTAIN_THROTTLE so
+            //      the engine holds ~idle instead of coasting to 0. This keeps
+            //      a running engine alive under no-driver-throttle load (e.g.
+            //      standstill in DRIVE), exactly mirroring the IDLE-state floor.
+            //
+            //  (b) Restart-on-stall: if the engine has already stalled
+            //      (feedback RPM ~ 0) with ignition ON, re-crank it by emitting
+            //      the starter edge + a cranking throttle floor until the engine
+            //      catches (RPM recovers). This is the same cranking throttle the
+            //      OFF->CRANKING path uses, applied locally so a mid-drive stall
+            //      self-heals instead of latching Stopped forever.
+            const double kStallRpm = 30.0;  // below this = engine has stopped
+            const bool engineStalled = engineRpmFeedback_ <= kStallRpm;
+            if (engineStalled) {
+                // Re-crank: spin the starter + feed cranking throttle until the
+                // engine catches on the next feedback sample.
+                output.starterMotor = true;
+                output.throttle = std::max(
+                    std::max(throttleSmoother_.getCurrentValue(),
+                             EngineSimDefaults::CRANKING_THROTTLE),
+                    EngineSimDefaults::IDLE_SUSTAIN_THROTTLE);
+            } else if (engineRpmFeedback_ < profile_.idleRpm) {
+                // Engine alive but dipping below idle: hold the sustain floor so
+                // it cannot coast through the Stopped latch.
+                output.throttle = std::max(throttleSmoother_.getCurrentValue(),
+                                           EngineSimDefaults::IDLE_SUSTAIN_THROTTLE);
+            }
+
             // RUNNING->IDLE: selector moved to NEUTRAL or PARK
             if (selector_ == bridge::GearSelector::NEUTRAL ||
                 selector_ == bridge::GearSelector::PARK) {
@@ -309,6 +378,25 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
                     clutchPressure_ = launchPressure;
                 }
             }
+
+            // Creep-drag relief at standstill: a strategy whose wheels are pinned
+            // to the road speed (PIN) couples the engine to a wheel that cannot
+            // turn at standstill, and even the slip-lock floor drags the engine
+            // down through idle to stall (the creep clutch-drag bug) — and once it
+            // stalls the re-crank can't catch because the engaged clutch sends the
+            // starter torque to the stationary wheel (the 0<->170 limp). Opening
+            // the clutch below the profile's standstill threshold lets the engine
+            // idle decoupled (the pinned wheel follows the CSV regardless) and
+            // lets a re-crank spin the engine freely. The strategy declares
+            // whether it relieves (relievesCreepDragAtStandstill, like
+            // launchAssistAtStandstill) so the twin carries no mode conditional;
+            // the threshold is the profile's standstillThresholdKmh, so no magic
+            // constant. Above the threshold the slip-lock/launch pressure stands,
+            // so a moving vehicle still bump-starts and the cruise lock is intact.
+            if (signal.speedKmh < profile_.standstillThresholdKmh &&
+                coupling_->relievesCreepDragAtStandstill()) {
+                clutchPressure_ = 0.0;
+            }
             output.pinVehicleSpeedTargetKmh = coupling_->vehicleSpeedTargetKmh(signal.speedKmh);
             // MATCH (Torque) mode: surface the recorded input torque so the
             // simulator injects it at the rotating mass each frame and the solver
@@ -349,16 +437,30 @@ void VirtualIceTwin::updateShiftExecution(double dt) {
     pauseDuration = profile_.shiftPauseMs * EngineSimDefaults::MS_TO_SECONDS;
     reengageDuration = profile_.shiftReengageMs * EngineSimDefaults::MS_TO_SECONDS;
 
+    // The clutch is NEVER fully open — the slip-lock floor rule
+    // (kSlipLockPressureFloor). During a shift the clutch unloads so the gear
+    // can change, but it bottoms out at the floor (not 0): a fully-open clutch
+    // through the shift lets the engine free-rev under throttle, and the
+    // re-engage then transmits that over-rev torque as a spike the vehicle-speed
+    // constraint cannot absorb fast enough (the mph-overshoot transient on every
+    // 1->2 / 2->3 shift). Holding the floor keeps the engine loaded through the
+    // shift so it cannot run away, and the re-engage ramps floor -> 1.0.
+    const double floor = twin::kSlipLockPressureFloor;
     if (shiftTimerS_ <= disengageDuration) {
-        clutchPressure_ = 1.0 - (shiftTimerS_ / disengageDuration);
+        // Unload: ramp 1.0 -> floor (keep the engine loaded, never fully open).
+        // std::max on the factor guards a discrete timestep that overshoots
+        // disengageDuration so the ramp cannot dip below the floor.
+        clutchPressure_ = floor + (1.0 - floor) *
+                         std::max(0.0, 1.0 - shiftTimerS_ / disengageDuration);
     } else if (shiftTimerS_ <= disengageDuration + pauseDuration) {
-        clutchPressure_ = 0.0;
+        clutchPressure_ = floor;
         if (shiftTimerS_ > disengageDuration + pauseDuration / 2.0) {
             gearbox_->update(0, 0, 0);
         }
     } else if (shiftTimerS_ <= disengageDuration + pauseDuration + reengageDuration) {
-        double reengageProgress = (shiftTimerS_ - disengageDuration - pauseDuration) / reengageDuration;
-        clutchPressure_ = reengageProgress;
+        const double reengageProgress =
+            (shiftTimerS_ - disengageDuration - pauseDuration) / reengageDuration;
+        clutchPressure_ = floor + (1.0 - floor) * reengageProgress;
     } else {
         clutchPressure_ = 1.0;
         state_ = TwinState::RUNNING;

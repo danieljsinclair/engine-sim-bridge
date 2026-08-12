@@ -43,7 +43,29 @@ static double interpolateShiftSpeed(const std::vector<std::vector<double>>& tabl
 }
 
 AutomaticGearbox::AutomaticGearbox(const IceVehicleProfile& profile)
-    : profile_(profile) {
+    : profile_(profile),
+      torqueHint_(std::make_unique<NullTorqueHint>()) {
+    // Init-time invariant (the no-hunting proof): every downshift cell must sit
+    // below its upshift cell for every (gear, throttle), so a single speed can
+    // never satisfy both an up- and a down-shift at once. Enforced declaratively
+    // at construction — fail-fast if a profile violates it.
+    validateShiftTables(profile_);
+}
+
+void AutomaticGearbox::validateShiftTables(const IceVehicleProfile& profile) {
+    if (!profile.separateDownshiftTableEnabled) return;
+    if (profile.shiftTable.empty() || profile.downshiftTable.empty()) return;
+    const size_t numLevels = std::min(profile.shiftTable.size(),
+                                      profile.downshiftTable.size());
+    for (size_t lvl = 0; lvl < numLevels; ++lvl) {
+        const size_t numCols = std::min(profile.shiftTable[lvl].size(),
+                                        profile.downshiftTable[lvl].size());
+        for (size_t col = 0; col < numCols; ++col) {
+            ASSERT(profile.downshiftTable[lvl][col] <= profile.shiftTable[lvl][col],
+                   "validateShiftTables: downshift cell must be <= upshift cell "
+                   "(no-hunting invariant violated)");
+        }
+    }
 }
 
 bool AutomaticGearbox::isShifterInDrive() const {
@@ -51,14 +73,19 @@ bool AutomaticGearbox::isShifterInDrive() const {
 }
 
 void AutomaticGearbox::update(double dt, double speedKmh, double throttleFraction) {
-    // Legacy entry point: no torque signal, default selector already set.
-    drivetrainTorqueNm_ = 0.0;
+    // Legacy entry point: no torque signal → NullTorqueHint (zero bias).
+    torqueHint_ = std::make_unique<NullTorqueHint>();
     runShiftLogic(dt, speedKmh, throttleFraction);
 }
 
 void AutomaticGearbox::update(double dt, double speedKmh, double throttleFraction,
                               double drivetrainTorqueNm) {
-    drivetrainTorqueNm_ = drivetrainTorqueNm;
+    // Wrap the torque sample in the SimTorqueHint strategy (bounded bias). The
+    // decision consumes only ITorqueHint::shiftBias() — availability is
+    // encapsulated here, never an `if (hasTorque)` in the decision.
+    torqueHint_ = std::make_unique<SimTorqueHint>(drivetrainTorqueNm,
+                                                  profile_.torqueHintMaxNm,
+                                                  profile_.torqueHintMaxBias);
 
     // AC6: clutch-out positions hold the gear and never request a shift.
     if (!isShifterInDrive()) {
@@ -78,19 +105,6 @@ void AutomaticGearbox::update(double dt, double speedKmh, double throttleFractio
     }
 
     runShiftLogic(dt, speedKmh, throttleFraction);
-}
-
-double AutomaticGearbox::effectiveThrottleForShift() const {
-    // Torque nudge: signed shift-table hint derived from drivetrainTorqueNm_.
-    // Positive torque → higher effective throttle (earlier downshift / later upshift).
-    // Negative torque → lower effective throttle (inhibits upshift / holds gear).
-    // Bounded to ±15% throttle equivalent; never touches road speed or torque injection.
-    constexpr double kMaxTorqueNm = 3000.0;
-    constexpr double kMaxThrottleNudge = 0.15;
-    const double normTorque = std::clamp(std::abs(drivetrainTorqueNm_) / kMaxTorqueNm, 0.0, 1.0);
-    const double sign = drivetrainTorqueNm_ >= 0.0 ? 1.0 : -1.0;
-    const double nudge = sign * normTorque * kMaxThrottleNudge;
-    return std::clamp(smoothedThrottle_ + nudge, 0.0, 1.0);
 }
 
 void AutomaticGearbox::runShiftLogic(double dt, double speedKmh, double throttleFraction) {
@@ -120,7 +134,7 @@ void AutomaticGearbox::runShiftLogic(double dt, double speedKmh, double throttle
         return;
     }
 
-    applyShift(decideGear(speedKmh));
+    applyShift(decideGear(CommandedRoadSpeed{speedKmh}));
     logShiftState(throttleFraction, dt, speedKmh);
 }
 
@@ -147,104 +161,117 @@ void AutomaticGearbox::trackThrottleDelta(double throttleFraction, double dt) {
     previousThrottle_ = throttleFraction;
 }
 
+// Thin wrapper: gather member state into a ShiftFrame and delegate to the pure
+// decide(). The decision reads NO mutable member state — only the frame, the
+// torque-hint strategy and the (const) profile.
 AutomaticGearbox::ShiftDecision
-AutomaticGearbox::decideGear(double speedKmh) const {
+AutomaticGearbox::decideGear(CommandedRoadSpeed speed) const {
+    const ShiftFrame frame{
+        currentGear_,
+        speed,
+        actualEngineRpm_,
+        ThrottleState{smoothedThrottle_},
+        kickdownActive_,
+        rpmFeedbackValid_,
+        timeSinceLastShiftS_,
+        hasShiftedBefore_,
+    };
+    return decide(frame, *torqueHint_, profile_);
+}
+
+AutomaticGearbox::ShiftDecision
+AutomaticGearbox::decide(const ShiftFrame& frame,
+                         const ITorqueHint& torqueHint,
+                         const IceVehicleProfile& profile) {
+    // The TABLE authority is the COMMANDED road speed (frame.speed). The guard
+    // authority is the ACTUAL engine feedback rpm (frame.actualRpm). These are
+    // distinct strong types (CommandedRoadSpeed vs ActualEngineRpm) — they do
+    // not convert, so a commanded-speed value can never silently reach the guard.
+    const double speedKmh = frame.speed.kmh;
+    const double effThrottle = effectiveThrottle(frame.throttle, torqueHint);
+
     // 1. Kickdown — the sole override of the tables. A sudden large throttle
     //    increase (or WOT) forces one RPM-safe downshift, even inside the dwell
     //    window: a legitimate power demand cannot wait.
-    if (currentGear_ > 1 && kickdownActive_) {
-        const int depth = static_cast<int>(profile_.kickdownDownshiftGears);
-        const int safeGear = findSafeGear(speedKmh, depth);
-        if (safeGear < currentGear_) {
+    if (frame.currentGear > 1 && frame.kickdownActive) {
+        const int depth = static_cast<int>(profile.kickdownDownshiftGears);
+        const int safeGear = findSafeGear(frame.currentGear, speedKmh, depth, profile);
+        if (safeGear < frame.currentGear) {
             return {safeGear, -1, true};
         }
     }
 
     // 2. Minimal dwell blocks table-driven shifts right after any shift, so a
     //    single speed sample cannot thrash the shift valve sub-frame.
-    if (const bool withinDwell = hasShiftedBefore_ &&
-                                 timeSinceLastShiftS_ < profile_.shiftDwellS;
-        withinDwell) {
-        return {currentGear_, 0, false};
+    if (frame.hasShiftedBefore &&
+        frame.timeSinceLastShiftS < profile.shiftDwellS) {
+        return {frame.currentGear, 0, false};
     }
 
-    // 2b. Engine-RPM-floor downshift (anti-lug). When the CURRENT gear's implied
-    //     engine RPM drops below idle + margin the engine is lugging/over-quiet
-    //     (e.g. a tall gear held at low speed). Force a single downshift so the
-    //     engine stays above idle under load, exactly as a real torque-converter
-    //     box would. This is independent of the (throttle-interpolated) downshift
-    //     table: the table can be reached only at very low throttle, so on a
-    //     pinned CSV at moderate throttle the box would otherwise sit in a high
-    //     gear at <idle RPM and never recover. The floor is a hard floor on
-    //     engine speed, so it always wins. It requests exactly one gear per
-    //     frame (the table pass / next frame continues the descent), which keeps
-    //     the descent monotonic and prevents oscillation.
-    const double kLugFloorRpmMargin = 150.0;  // keep engine >= idle + 150 rpm
-    if (currentGear_ > 1) {
-        const double rpm = getEngineRpm(speedKmh, currentGear_);
-        if (rpm < profile_.idleRpm + kLugFloorRpmMargin) {
-            return {currentGear_ - 1, -1, false};
-        }
+    // 3. Merged anti-lug guard (the death-spiral fix). One declarative floor:
+    //    max(idle + margin, downshiftRpmFloor). When the ACTUAL engine RPM
+    //    (engine-sim feedback, typed ActualEngineRpm — never a road-speed-derived
+    //    value) drops below the floor the engine is lugging (a tall gear held at
+    //    low speed). Force ONE downshift so the engine stays above idle under
+    //    load, exactly as a real torque-converter box would. One gear per frame
+    //    keeps the descent monotonic and prevents oscillation. A STOPPED engine
+    //    (actualRpm <= engineStoppedRpm) is not lugging — the stall/restart path
+    //    (VirtualIceTwin::kStallRpm) owns that. Guard is inert until engine
+    //    feedback is wired (rpmFeedbackValid). Replaces the former two-guard
+    //    cascade (idle+margin pre-table, downshiftRpmFloor post-table) with a
+    //    single declarative floor.
+    const double lugFloor = std::max(profile.idleRpm + profile.lugFloorMarginRpm,
+                                     profile.downshiftRpmFloor);
+    if (frame.rpmFeedbackValid && frame.currentGear > 1 &&
+        isEngineLugging(frame.actualRpm, lugFloor, profile.engineStoppedRpm)) {
+        return {frame.currentGear - 1, -1, false};
     }
 
-    // 3. Tables are the authority. Cascade up then, only if no upshift fired,
-    //    down. The downshift table sits below the upshift table for every
-    //    (gear, throttle), so after an upshift the speed is above the lower
-    //    gear's downshift threshold and the down-pass cannot also fire — the
-    //    two are mutually exclusive and no oscillation is possible.
-    int gear = currentGear_;
-    while (speedExceedsUpshift(speedKmh, gear)) {
+    // 4. Tables are the authority. Resolve up, then — only if no upshift fired —
+    //    down. The downshift table sits at/below the upshift table for every
+    //    (gear, throttle) by the init-time invariant, so after an upshift the
+    //    speed is above the lower gear's downshift threshold and the down-pass
+    //    cannot also fire: the two are mutually exclusive and hunting is
+    //    impossible by construction.
+    int gear = frame.currentGear;
+    while (speedExceedsUpshift(speedKmh, gear, effThrottle, profile)) {
         ++gear;
     }
-    if (gear == currentGear_) {
-        while (gear > 1 && speedBelowDownshift(speedKmh, gear)) {
+    if (gear == frame.currentGear) {
+        while (gear > 1 && speedBelowDownshift(speedKmh, gear, effThrottle, profile)) {
             --gear;
         }
     }
 
-    // 4. LUG GUARD (downshift-fix): the speed table alone can hold a too-tall
-    //    gear at low road speed, dragging engine RPM into the lug zone (below
-    //    idle, over-quiet). If the engine RPM implied by the resolved gear at
-    //    this road speed is below profile_.downshiftRpmFloor, cascade DOWN a
-    //    gear at a time until RPM recovers above the floor (or gear 1). This is
-    //    an RPM floor, not a speed floor, so it triggers on the gear's actual
-    //    revs — independent of, and after, the speed-based cascade above. The
-    //    loop is bounded by gear>1 and cannot pull reverse/neutral, so it
-    //    cannot hunt upward (each step only reduces gear, and the up-pass has
-    //    already settled). Guard is inert when downshiftRpmFloor == 0.
-    if (profile_.downshiftRpmFloor > 0.0) {
-        while (gear > 1 &&
-               getEngineRpm(speedKmh, gear) < profile_.downshiftRpmFloor) {
-            --gear;
-        }
-    }
     int direction = 0;
-    if (gear > currentGear_) {
+    if (gear > frame.currentGear) {
         direction = +1;
-    } else if (gear < currentGear_) {
+    } else if (gear < frame.currentGear) {
         direction = -1;
     }
     return {gear, direction, false};
 }
 
-bool AutomaticGearbox::speedExceedsUpshift(double speedKmh, int gear) const {
-    if (gear >= static_cast<int>(profile_.gearRatios.size())) {
+bool AutomaticGearbox::speedExceedsUpshift(double speedKmh, int gear, double effThrottle,
+                                           const IceVehicleProfile& profile) {
+    if (gear >= static_cast<int>(profile.gearRatios.size())) {
         return false;
     }
-    if (const double upshiftSpeed = getShiftSpeed(gear, gear + 1, effectiveThrottleForShift());
+    if (const double upshiftSpeed = getShiftSpeed(gear, gear + 1, effThrottle, profile);
         upshiftSpeed > 0.0 && speedKmh > upshiftSpeed) {
         return true;
     }
     // Redline safety net, coherent with the speed model: a hard ceiling that
     // only ever upshifts, so it cannot cause hunting.
-    return getEngineRpm(speedKmh, gear) > profile_.redlineRpm * 0.95;
+    return getEngineRpm(speedKmh, gear, profile) > profile.redlineRpm * profile.redlineUpshiftFraction;
 }
 
-bool AutomaticGearbox::speedBelowDownshift(double speedKmh, int gear) const {
+bool AutomaticGearbox::speedBelowDownshift(double speedKmh, int gear, double effThrottle,
+                                           const IceVehicleProfile& profile) {
     if (gear <= 1) {
         return false;
     }
-    const double downshiftSpeed = getDownshiftSpeed(gear - 1, gear, effectiveThrottleForShift());
+    const double downshiftSpeed = getDownshiftSpeed(gear - 1, gear, effThrottle, profile);
     return downshiftSpeed > 0.0 && speedKmh < downshiftSpeed;
 }
 
@@ -277,16 +304,33 @@ bool AutomaticGearbox::shouldKickdown(double throttleFraction) const {
     return false;
 }
 
-int AutomaticGearbox::findSafeGear(double speedKmh, int maxDownshifts) const {
+int AutomaticGearbox::findSafeGear(int currentGear, double speedKmh, int maxDownshifts,
+                                   const IceVehicleProfile& profile) {
     // Walk down from the current gear, returning the highest gear whose engine
-    // speed stays under 90% redline. Bounded by maxDownshifts.
-    for (int gear = currentGear_ - 1; gear >= std::max(1, currentGear_ - maxDownshifts); --gear) {
-        const double rpm = getEngineRpm(speedKmh, gear);
-        if (rpm <= profile_.redlineRpm * 0.9) {
+    // speed stays under the kickdown redline fraction. Bounded by maxDownshifts.
+    const int floor = std::max(1, currentGear - maxDownshifts);
+    for (int gear = currentGear - 1; gear >= floor; --gear) {
+        const double rpm = getEngineRpm(speedKmh, gear, profile);
+        if (rpm <= profile.redlineRpm * profile.redlineKickdownFraction) {
             return gear;
         }
     }
-    return currentGear_;
+    return currentGear;
+}
+
+bool AutomaticGearbox::isEngineLugging(ActualEngineRpm actualRpm, double floorRpm,
+                                       double engineStoppedRpm) {
+    // The anti-lug guard. `actualRpm` is the ACTUAL engine-sim feedback rpm
+    // (typed ActualEngineRpm, never a road-speed-derived value — passing a
+    // `double` such as getEngineRpm(commanded, gear) here is a compile error
+    // because ActualEngineRpm has no converting constructor). When the live
+    // engine is below the floor it is lugging and a downshift is required.
+    // A reading at/below engineStoppedRpm is a STOPPED engine (or feedback not
+    // wired — e.g. paths that never call setTwinContext leave it at 0.0).
+    // Treating 0 rpm as lugging made the guard fire every frame and pin the box
+    // in 1st, preempting the upshift tables. The stopped case is owned by the
+    // stall/restart path (VirtualIceTwin::kStallRpm), not this guard.
+    return actualRpm.rpm > engineStoppedRpm && actualRpm.rpm < floorRpm;
 }
 
 void AutomaticGearbox::logShiftState(double throttleFraction, double dt, double speedKmh) {
@@ -308,13 +352,13 @@ void AutomaticGearbox::logShiftState(double throttleFraction, double dt, double 
     e.timeSinceLastShiftS = timeSinceLastShiftS_;
     e.kickdownActive = kickdownActive_;
     e.throttleDeltaHistory = throttleDeltaHistory_;
-    e.engineRpm = getEngineRpm(speedKmh, currentGear_);
+    e.engineRpm = getEngineRpm(speedKmh, currentGear_, profile_);
     e.twinState = twinState_;
     e.clutchPressure = clutchPressureFeedback_;
     if (currentGear_ >= 1 && speedKmh >= 0.1) {
-        e.upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle_);
+        e.upshiftSpeed = getShiftSpeed(currentGear_, currentGear_ + 1, smoothedThrottle_, profile_);
         if (currentGear_ > 1) {
-            e.downshiftSpeed = getDownshiftSpeed(currentGear_ - 1, currentGear_, smoothedThrottle_);
+            e.downshiftSpeed = getDownshiftSpeed(currentGear_ - 1, currentGear_, smoothedThrottle_, profile_);
         }
     }
     logger_->log(e);
@@ -336,49 +380,52 @@ bool AutomaticGearbox::isInKickdown() const {
     return kickdownActive_;
 }
 
-double AutomaticGearbox::getShiftSpeed(int fromGear, int toGear, double throttle) const {
+double AutomaticGearbox::getShiftSpeed(int fromGear, int toGear, double throttle,
+                                       const IceVehicleProfile& profile) {
     ASSERT(fromGear >= 1 && toGear >= 1 && fromGear < toGear, "getShiftSpeed: gear indexes out of range");
-    ASSERT(!profile_.shiftTable.empty(), "getShiftSpeed: shift table must be populated");
+    ASSERT(!profile.shiftTable.empty(), "getShiftSpeed: shift table must be populated");
 
     size_t tableIndex = static_cast<size_t>(fromGear) - 1;
-    if (!profile_.shiftTable[0].empty() && tableIndex >= profile_.shiftTable[0].size()) {
-        tableIndex = profile_.shiftTable[0].size() - 1;  // clamp to last valid column
+    if (!profile.shiftTable[0].empty() && tableIndex >= profile.shiftTable[0].size()) {
+        tableIndex = profile.shiftTable[0].size() - 1;  // clamp to last valid column
     }
 
-    ASSERT(!profile_.shiftTableThrottleLevels.empty(), "getShiftSpeed: throttle levels must be populated");
+    ASSERT(!profile.shiftTableThrottleLevels.empty(), "getShiftSpeed: throttle levels must be populated");
 
-    return interpolateShiftSpeed(profile_.shiftTable, throttle, profile_.shiftTableThrottleLevels, tableIndex);
+    return interpolateShiftSpeed(profile.shiftTable, throttle, profile.shiftTableThrottleLevels, tableIndex);
 }
 
-double AutomaticGearbox::getDownshiftSpeed(int fromGear, int toGear, double throttle) const {
+double AutomaticGearbox::getDownshiftSpeed(int fromGear, int toGear, double throttle,
+                                           const IceVehicleProfile& profile) {
     // Hysteresis fallback: without a separate downshift table, downshift at a
-    // fixed fraction of the upshift speed (profile_.hysteresisFactor).
-    if (!profile_.separateDownshiftTableEnabled) {
-        return getShiftSpeed(fromGear, toGear, throttle) * profile_.hysteresisFactor;
+    // fixed fraction of the upshift speed (profile.hysteresisFactor).
+    if (!profile.separateDownshiftTableEnabled) {
+        return getShiftSpeed(fromGear, toGear, throttle, profile) * profile.hysteresisFactor;
     }
 
     ASSERT(fromGear >= 1 && toGear >= 1 && fromGear < toGear,
            "getDownshiftSpeed: gear indexes out of range");
 
     size_t tableIndex = static_cast<size_t>(fromGear) - 1;
-    ASSERT(!profile_.downshiftTable.empty(), "getDownshiftSpeed: downshift table must be populated");
-    if (!profile_.downshiftTable[0].empty() && tableIndex >= profile_.downshiftTable[0].size()) {
-        tableIndex = profile_.downshiftTable[0].size() - 1;  // clamp to last valid column
+    ASSERT(!profile.downshiftTable.empty(), "getDownshiftSpeed: downshift table must be populated");
+    if (!profile.downshiftTable[0].empty() && tableIndex >= profile.downshiftTable[0].size()) {
+        tableIndex = profile.downshiftTable[0].size() - 1;  // clamp to last valid column
     }
-    ASSERT(!profile_.downshiftTableThrottleLevels.empty(),
+    ASSERT(!profile.downshiftTableThrottleLevels.empty(),
            "getDownshiftSpeed: downshift throttle levels must be populated");
 
-    return interpolateShiftSpeed(profile_.downshiftTable, throttle,
-                                 profile_.downshiftTableThrottleLevels, tableIndex);
+    return interpolateShiftSpeed(profile.downshiftTable, throttle,
+                                 profile.downshiftTableThrottleLevels, tableIndex);
 }
 
-double AutomaticGearbox::getEngineRpm(double speedKmh, int gear) const {
-    ASSERT(gear >= 1 && gear <= static_cast<int>(profile_.gearRatios.size()),
+double AutomaticGearbox::getEngineRpm(double speedKmh, int gear,
+                                      const IceVehicleProfile& profile) {
+    ASSERT(gear >= 1 && gear <= static_cast<int>(profile.gearRatios.size()),
            "getEngineRpm: gear index out of range");
 
     const double speedMs = speedKmh / EngineSimDefaults::MS_TO_KMH;
-    const double wheelRpm = speedMs / (2.0 * M_PI * profile_.tireRadiusM) * 60.0;
-    const double engineRpm = wheelRpm * profile_.gearRatios[gear - 1] * profile_.diffRatio;
+    const double wheelRpm = speedMs / (2.0 * M_PI * profile.tireRadiusM) * 60.0;
+    const double engineRpm = wheelRpm * profile.gearRatios[gear - 1] * profile.diffRatio;
 
     return engineRpm;
 }

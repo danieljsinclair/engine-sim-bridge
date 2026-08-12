@@ -43,6 +43,9 @@ public:
 
     int getCurrentGear() const { return gearbox_->getCurrentGear(); }
 
+    // Test/diagnostic accessor: the live (reconfigured) profile the twin uses.
+    const IceVehicleProfile& getProfile() const { return profile_; }
+
     double getSmoothedThrottle() const { return throttleSmoother_.getCurrentValue(); }
 
     // Select the wheel-coupling strategy (FREE default, or PIN to mirror replay).
