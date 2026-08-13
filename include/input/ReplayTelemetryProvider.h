@@ -119,6 +119,12 @@ private:
     // clutchPressure, ignition, starter, selector, auto-mode, road-speed pin,
     // injected torque and diagnostics.
     EngineInput driveThroughTwin(const Sample& s, double dt, double roadSpeedKmh);
+    // Feed the twin through its OFF->CRANKING->IDLE->RUNNING lifecycle once, so
+    // the first replayed frame is already RUNNING with a forward gear available
+    // (replay reproduces a running engine, not the cranking transient). The
+    // selector comes from the first sample (default DRIVE) so a PARK/NEUTRAL
+    // trace never reaches RUNNING. No-op when the twin is absent / no samples.
+    void primeTwinToRunning();
     void handleNonAutoGearbox(EngineInput& input, const Sample& s) const;
 
     const Sample& sampleAt(double t) const;

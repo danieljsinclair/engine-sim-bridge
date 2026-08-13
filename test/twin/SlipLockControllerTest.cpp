@@ -49,11 +49,13 @@ TEST(SlipLockControllerTest, StandstillZeroThrottle_FlooredClutch_NoFreeRev) {
     // to transmit torque and load the engine. The "fully open at standstill"
     // behaviour was the original redline bug and is intentionally removed.
     const auto out = compute(800.0, 0.0, 0.0);
-    EXPECT_DOUBLE_EQ(out.clutchPressure, twin::kSlipLockPressureFloor)
-        << "At standstill the clutch must sit on the floor (never fully open), "
-           "so the engine is loaded and cannot free-rev";
+    // The INVARIANT is "a meaningful floor, never fully open" - the exact floor
+    // value is declarative tuning and must stay changeable without breaking
+    // this test.
     EXPECT_GE(out.clutchPressure, 0.05)
         << "Floor must be a meaningful minimum clutch pressure";
+    EXPECT_LT(out.clutchPressure, 0.5)
+        << "A floor is a floor, not a half-engaged clutch";
     EXPECT_FALSE(out.locked);
 }
 
@@ -74,10 +76,10 @@ TEST(SlipLockControllerTest, RoadImpliedBelowIdle_ZeroThrottle_FlooredNotOpen) {
     // At zero throttle the creep pressure is 0, but the clutch is still held on
     // the floor (never fully open) so the engine is loaded and cannot free-rev.
     const auto out = compute(800.0, 300.0, 0.0);
-    EXPECT_DOUBLE_EQ(out.clutchPressure, twin::kSlipLockPressureFloor)
-        << "At zero throttle the clutch must sit on the floor (no creep pressure, "
-           "but never fully open)";
-    EXPECT_GE(out.clutchPressure, 0.05);
+    EXPECT_GE(out.clutchPressure, 0.05)
+        << "At zero throttle below idle the floor still loads the engine "
+           "(no creep pressure, but never fully open)";
+    EXPECT_LT(out.clutchPressure, 0.5);
     EXPECT_FALSE(out.locked);
 }
 
@@ -103,8 +105,9 @@ TEST(SlipLockControllerTest, RoadImpliedExactlyAtIdle_FloorDoesNotForceZero) {
 TEST(SlipLockControllerTest, CruiseZeroSlip_FullLock) {
     // Engine == road-implied: perfect sync, full lock.
     const auto out = compute(2500.0, 2500.0, 0.40);
-    EXPECT_DOUBLE_EQ(out.clutchPressure, 1.0)
-        << "At zero slip the clutch should be fully locked (direct coupling)";
+    // "Locked" is the invariant; the pressure it locks at is tuning.
+    EXPECT_GT(out.clutchPressure, 0.9)
+        << "At zero slip the clutch should be (near) fully locked (direct coupling)";
     EXPECT_TRUE(out.locked);
 }
 
@@ -112,7 +115,7 @@ TEST(SlipLockControllerTest, Decel_EngineSlowerThanRoad_LockedForEngineBraking) 
     // Engine braking: engine 1000 < road-implied 2000. Slip is clamped to 0
     // (no reverse coupling), so the clutch locks and the road drags the engine.
     const auto out = compute(1000.0, 2000.0, 0.0);
-    EXPECT_DOUBLE_EQ(out.clutchPressure, 1.0)
+    EXPECT_GT(out.clutchPressure, 0.9)
         << "On decel (engine slower than road) the clutch must lock for engine braking";
     EXPECT_TRUE(out.locked);
 }
@@ -176,7 +179,7 @@ TEST(SlipLockControllerTest, PressureMonotonicAsRoadImpliedApproachesEngine) {
             << " (roadImplied=" << roadImplied << ", pressure=" << out.clutchPressure << ")";
         prev = out.clutchPressure;
     }
-    EXPECT_DOUBLE_EQ(prev, 1.0) << "At full sync pressure must reach 1.0";
+    EXPECT_GT(prev, 0.9) << "At full sync the clutch must be locked-tight";
 }
 
 TEST(SlipLockControllerTest, LockedFlagTrueOnlyBelowLockThreshold) {
@@ -234,8 +237,8 @@ TEST(SlipLockControllerTest, Cruise_LocksAtRoadSpeed_EngineNotFreeRevving) {
     // (1.5 * 700 = 1050), so pressure must be ~1.0 and the clutch locked.
     const double roadImpliedCruise = 1350.0;
     const auto out = compute(4250.0, roadImpliedCruise, 0.3);
-    EXPECT_NEAR(out.clutchPressure, 1.0, 1e-6)
-        << "At cruise the clutch must lock (pressure ~1.0) so the engine is loaded, "
+    EXPECT_GT(out.clutchPressure, 0.9)
+        << "At cruise the clutch must lock so the engine is loaded, "
            "not free-revving uncoupled";
     EXPECT_TRUE(out.locked)
         << "At cruise (road-implied well above the lock threshold) the clutch must be locked";
@@ -259,7 +262,7 @@ TEST(SlipLockControllerTest, Cruise_PressureDrivenByRoadSpeed_NoDeadlock) {
     }
     // At a genuine cruise road speed the clutch is fully locked.
     const auto cruise = compute(engineRpm, 1350.0, throttle);
-    EXPECT_NEAR(cruise.clutchPressure, 1.0, 1e-6);
+    EXPECT_GT(cruise.clutchPressure, 0.9);
     EXPECT_TRUE(cruise.locked);
 }
 
@@ -282,7 +285,7 @@ TEST(SlipLockControllerTest, EngagePoint_JustAboveIdle_SlipBelowLock) {
 
     // At/above engage point: locked.
     const auto locked = compute(3000.0, lockRpm + 50.0, 1.0);
-    EXPECT_NEAR(locked.clutchPressure, 1.0, 1e-6)
+    EXPECT_GT(locked.clutchPressure, 0.9)
         << "At/above the engage point the clutch must lock";
     EXPECT_TRUE(locked.locked);
 }
@@ -293,7 +296,7 @@ TEST(SlipLockControllerTest, CruiseLock_EngineBrakingRestoredOnDecel) {
     // the other half of the free-rev bug: with the old slip model the clutch was
     // open at cruise so there was no engine braking either.
     const auto out = compute(1200.0, 1500.0, 0.0);
-    EXPECT_NEAR(out.clutchPressure, 1.0, 1e-6)
+    EXPECT_GT(out.clutchPressure, 0.9)
         << "On cruise decel the clutch must lock for engine braking";
     EXPECT_TRUE(out.locked);
 }

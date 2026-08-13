@@ -123,7 +123,19 @@ void AutomaticGearbox::runShiftLogic(double dt, double speedKmh, double throttle
     // window detects kickdown stabs. Neither is a shift gate.
     smoothThrottleInput(throttleFraction, dt);
     trackThrottleDelta(throttleFraction, dt);
-    kickdownActive_ = shouldKickdown(throttleFraction);
+    // Kickdown is a DEMAND EVENT, one per pedal movement: a sustained WOT
+    // level fires ONE kickdown (consumed when the shift executes, re-armed
+    // when the demand drops back below the threshold). A level-held kickdown
+    // re-firing every dwell expiry fights the upshift tables at sustained
+    // WOT — the box downshifts to the redline-safe gear, the speed tables
+    // upshift as speed climbs, the kickdown downshifts again: gear churn.
+    // The stab-delta branch keeps its own one-shot (throttleDeltaHistory_
+    // cleared on execution in applyShift).
+    if (throttleFraction < profile_.kickdownThrottleThreshold) {
+        wotKickdownConsumed_ = false;
+    }
+    kickdownActive_ =
+        shouldKickdown(throttleFraction) && !wotKickdownConsumed_;
 
     requestsShift_ = false;
     targetGear_ = currentGear_;
@@ -289,6 +301,7 @@ void AutomaticGearbox::applyShift(const ShiftDecision& decision) {
         // Consume the kickdown stab so a single pedal movement fires once.
         throttleDeltaHistory_ = 0.0;
         throttleDeltaTimeS_ = 0.0;
+        wotKickdownConsumed_ = true;
     }
 }
 

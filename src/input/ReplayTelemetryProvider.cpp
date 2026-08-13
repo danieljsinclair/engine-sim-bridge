@@ -130,6 +130,10 @@ bool ReplayTelemetryProvider::Initialize() {
         }
         twinProvider_->setWheelCouplingMode(wheelCouplingMode_);
         twinProvider_->setCouplingModel(couplingModelKind_);
+        // Bring the twin to RUNNING before the first replayed frame so DRIVE
+        // traces expose a forward gear immediately (replay is a running engine,
+        // not a cranking capture). PARK/NEUTRAL traces stay out of RUNNING.
+        primeTwinToRunning();
     }
     return true;
 }
@@ -284,7 +288,51 @@ EngineInput ReplayTelemetryProvider::driveThroughTwin(const Sample& s, double dt
     // VirtualIceInputProvider maps TwinOutput -> EngineInput (throttle, gear,
     // clutchPressure, ignition, starter, gearSelector, gearAutoMode, road speed
     // pin, injected torque, diagnostics) — identical to the live path.
-    return twinProvider_->OnUpdateSimulation(dt);
+    EngineInput input = twinProvider_->OnUpdateSimulation(dt);
+
+    // Selector-gate overlay. The twin owns an automatic gearbox and therefore
+    // ALWAYS reports gearAutoMode=true + a gear, even for a PARK/NEUTRAL stalk.
+    // But a replayed P/N stalk means the vehicle is NOT in an auto drive state,
+    // so the presentation layer must see neutral + manual-style auto-mode off.
+    // The replay provider is the authority on the PRNDL gate it replays, so it
+    // overrides the twin here (DRIVE/REVERSE pass through unchanged).
+    if (sel == bridge::GearSelector::PARK || sel == bridge::GearSelector::NEUTRAL) {
+        input.gearAutoMode = false;
+        input.gearAbsolute = 0;
+        input.vehicleSpeedTargetKmh = -1.0;
+    }
+    return input;
+}
+
+void ReplayTelemetryProvider::primeTwinToRunning() {
+    if (!twinProvider_ || samples_.empty()) return;
+    // Replay reproduces a running engine, not the cranking transient: feed the
+    // twin through OFF->CRANKING->IDLE->RUNNING once at Initialize() so the first
+    // replayed frame already exposes a forward gear for DRIVE traces. The selector
+    // is taken from the first sample (default DRIVE), so a PARK/NEUTRAL trace
+    // never leaves IDLE — it is not "running". The prime result is discarded; only
+    // the resulting RUNNING state matters.
+    const Sample& first = samples_.front();
+    const bridge::GearSelector sel = first.gearSelector.empty()
+        ? bridge::GearSelector::DRIVE : parseGearSelector(first.gearSelector);
+    twinProvider_->setGearSelector(static_cast<int>(sel));
+
+    input::UpstreamSignal signal;
+    signal.throttleFraction = first.throttle;
+    signal.speedKmh = first.roadSpeedKmh;
+    signal.motorTorqueNm = first.motorTorqueNm;
+    signal.isValid = true;
+    signal.timestampUtcMs = 1;  // non-zero -> twin treats as valid telemetry
+    twinProvider_->setUpstreamSignal(signal);
+
+    // Past the 3s CRANK_FALLBACK_DURATION_S crank budget (CRANKING -> IDLE), then
+    // a DRIVE selector promotes IDLE -> RUNNING. 100 frames @ 0.05s = 5s sim, with
+    // margin over the 3s fallback so RUNNING is guaranteed before frame 1.
+    constexpr double kPrimeDt = 0.05;
+    constexpr int kPrimeFrames = 100;
+    for (int i = 0; i < kPrimeFrames; ++i) {
+        twinProvider_->OnUpdateSimulation(kPrimeDt);
+    }
 }
 
 bool ReplayTelemetryProvider::applyTimeSlicing(EngineInput& input, double dt) {

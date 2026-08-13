@@ -2,12 +2,11 @@
 //
 // See TorqueConverter.h for the full physics. This implementation ports the
 // rescue-branch torque_converter (origin/torque-converter-rescue, 7fd5abb)
-// TR curve + pump law + hysteretic lockup onto the bridge's clutch-pressure
-// coupling axis. The bridge runs a velocity-match friction clutch (pressure
-// 0..1), not the rescue's SCS torque constraint (lambda in Nm), so the K*N^2
-// pump torque is expressed as a NORMALIZED pressure that preserves the
-// quadratic-in-engine-speed shape and the TR-modulated multiplication; the
-// absolute capacity is the declarative `capacityPressure` knob.
+// TR curve + pump law onto the bridge's clutch-pressure coupling axis. The
+// bridge runs a velocity-match friction clutch (pressure 0..1), not the
+// rescue's SCS torque constraint (lambda in Nm), so the coupling strength is
+// expressed as a NORMALIZED capacity scale driven by a smooth, monotonic,
+// ROAD-DRIVEN governor ramp (see compute()).
 
 #include <twin/TorqueConverter.h>
 
@@ -41,8 +40,6 @@ inline double smoothstep(double edge0, double edge1, double x) {
     const double t = std::clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
     return t * t * (3.0 - 2.0 * t);
 }
-
-inline double lerp(double a, double b, double t) { return a + (b - a) * t; }
 
 }  // namespace
 
@@ -104,96 +101,60 @@ CouplingOutput TorqueConverter::compute(const CouplingInput& input) {
     const double turbineRpm = std::max(input.roadSpeedImpliedRpm, 0.0);
 
     // Speed ratio (turbine / impeller). At stall SR=0, at lock SR=1.
+    // TELEMETRY ONLY — SR is a function of ENGINE rpm, so nothing downstream
+    // may key the pressure on it (see the governor below).
     speedRatio_ = (engineRpm > 0.0)
         ? std::clamp(turbineRpm / engineRpm, 0.0, 1.0)
         : 0.0;
 
     torqueRatio_ = lookupTorqueRatio(speedRatio_);
 
-    // --- Fluid coupling pressure (slip regime: launch + coupling) -------------
-    // The fluid pressure is a SMOOTH, ROAD-DRIVEN ramp - a single smoothstep of
-    // the road-implied (turbine) rpm, scaled by the capacity. It is deliberately
-    // a function of ROAD-IMPLIED rpm ONLY (not engine rpm, not the speed ratio):
+    // --- Governor: a smooth monotonic ramp of the ROAD-IMPLIED (turbine) rpm --
+    // The pressure (the converter's capacity scale) is a function of road-
+    // implied rpm ONLY — never engine rpm, never the speed ratio:
     //
-    //   * STANDSTILL / CREEP: road-implied < idle => roadGate 0 => pressure at the
-    //     floor. The fluid coupling has no capacity at zero turbine speed, so the
-    //     engine idles DECOUPLED - a post-crank flare cannot drag it to stall (the
-    //     standstill-stall fix), and a creeping engine is not lugged below idle
-    //     (the creep-lug fix).
-    //   * STABILITY: road-implied is EXOGENOUS (CSV-pinned wheels), so the pressure
-    //     CANNOT feed back into engine rpm - it cannot form a limit cycle. Any
-    //     engine-rpm term (a pump law, or the speed-ratio-based torque-ratio
-    //     factor) closes a feedback loop: the engine lugs -> the pressure shifts ->
-    //     the lug shifts -> a cycle. The 1442->70 yank measured on the prior
-    //     attempt came from exactly such an engine-rpm term (a "pump gate" that
-    //     collapsed pressure on lug, then re-engaged on recovery - bang-bang).
-    //     Dropping every engine-rpm term makes the schedule open-loop stable; the
-    //     friction clutch then converges by pulling the engine TOWARD road speed
-    //     (it cannot drag it below road), instead of cycling.
+    //   * STANDSTILL / CREEP (road < idle*0.9): flat at the MODERATE creep
+    //     capacity. The fluid LOADS a flaring engine (the engine-side K*N^2
+    //     pump law gives quadratic resistance, so a flaring engine settles at
+    //     its stall speed instead of free-revving unloaded) while slipping
+    //     against the pinned stationary wheel (no rigid couple, no stall).
+    //   * SLIP BAND (idle*0.9 .. idle*1.6): progressive — the converter pulls
+    //     the engine toward road speed, transmitting torque at part throttle.
+    //   * CRUISE (road >= idle*1.6): flat at 1.0 — locked, stable, no chatter.
     //
-    // The TC's torque-ratio (stall multiplication) curve is kept as a TELEMETRY
-    // quantity (getTorqueRatio / the TR-curve unit test) but is NOT folded into
-    // the pressure: TR is a function of the speed ratio (turbine/impeller), so
-    // multiplying by it would reintroduce engine-rpm feedback and the oscillation
-    // above. On the friction-clutch axis the stable mapping is the road-driven
-    // ramp here; the lockup clutch (below) supplies the cruise lock.
-    //
-    // The capacity is SMALL: the bridge's friction clutch transmits ~= pressure *
-    // maxClutchTorque (12000 Nm here), so 0.025 pressure ~= 300 Nm - enough to
-    // pull the engine to road speed through the coupling band, without the violent
-    // overshoot a larger capacity produced (0.12 -> 1440 Nm -> the 1442->70 yank).
+    //   * STABILITY: road-implied is EXOGENOUS (CSV-pinned wheels), so the
+    //     pressure CANNOT feed back into engine rpm — it cannot form a limit
+    //     cycle. The measured bench chatter (Cl 63->100->17->83->92->3->66%
+    //     frame-to-frame at 16 mph) came from the previous lockup blend keyed
+    //     on the speed ratio (turbine/ENGINE): the engine wandered through the
+    //     narrow SR band [0.85, 0.97], the blend swung the pressure 0.03<->1.0,
+    //     the capacity step yanked the engine back out of the band, and the
+    //     cycle repeated. The same feedback blocked engagement from ever
+    //     completing on the way UP: lockup required SR >= 0.85, but SR was low
+    //     precisely BECAUSE the unloaded engine was flaring — a self-blocking
+    //     deadlock that left the engine at redline at 16 mph (the free-rev
+    //     bench failure). A pure road ramp has neither failure mode.
     const double idle = std::max(input.idleRpm, 1.0);
-    const double roadGate = smoothstep(idle, idle * 1.6, turbineRpm);
+    const double engageStart = idle * params_.engageStartIdleFactor;
+    const double lockRpm = idle * params_.lockIdleFactor;
 
-    const double capacityPressure = std::clamp(params_.capacityPressure,
-                                               params_.pressureFloor, 1.0);
-    fluidPressure_ = std::clamp(
-        params_.pressureFloor
-            + (capacityPressure - params_.pressureFloor) * roadGate,
-        params_.pressureFloor, capacityPressure);
+    const double creep = std::clamp(params_.creepPressure, 0.0, 1.0);
+    const double roadGate = smoothstep(engageStart, lockRpm, turbineRpm);
+    fluidPressure_ = std::clamp(creep + (1.0 - creep) * roadGate, 0.0, 1.0);
 
-    // --- Lockup clutch (cruise) ----------------------------------------------
-    // Above a speed ratio and an impeller RPM the converter locks the pump to the
-    // turbine directly (1:1, no slip). Two SEPARATE concerns:
-    //   (1) the lockup STATE (binary, hysteretic) - drives the `locked` flag and
-    //       prevents the clutch plate's engaged indicator from chattering;
-    //   (2) the lockup PRESSURE BLEND (continuous, fixed smoothstep edges) -
-    //       ramps the clutch pressure from the fluid value up to full lock.
-    // Decoupling them is what keeps the pressure smooth: the hysteresis lives in
-    // the state machine only and NEVER shifts a blend edge (shifting an edge
-    // would re-introduce a discontinuity, the very bang-bang we are avoiding).
+    // --- Lockup STATE (telemetry / display) ----------------------------------
+    // Hysteretic on the SAME exogenous road-implied rpm, so the engaged flag
+    // cannot chatter with engine feedback either. The pressure itself is the
+    // continuous ramp above — the hysteresis never shifts a blend edge.
     if (!params_.lockupEnabled) {
         lockupEngaged_ = false;
     } else if (lockupEngaged_) {
-        // Release when EITHER RPM or SR falls below its (lowered) release floor.
-        const bool rpmReleased =
-            engineRpm < (params_.lockupRpm - params_.lockupHysteresisRpm);
-        const bool slipReleased =
-            speedRatio_ < (params_.lockupSpeedRatio - params_.lockupHysteresisSpeedRatio);
-        lockupEngaged_ = !(rpmReleased || slipReleased);
+        lockupEngaged_ = turbineRpm >= (lockRpm - params_.lockupHysteresisRpm);
     } else {
-        lockupEngaged_ = engineRpm >= params_.lockupRpm
-                         && speedRatio_ >= params_.lockupSpeedRatio;
+        lockupEngaged_ = turbineRpm >= lockRpm;
     }
 
-    // Continuous blend over FIXED edges (no hysteresis shift). Rises through the
-    // SR band just above the lock point, gated by impeller speed. A real lockup
-    // clutch applies its plate pressure over ~100 ms; this smooth band models
-    // that, so the engine never sees a step.
-    // Blend over the SR band [lockupSR, lockupSR + 0.12] so lockup is essentially
-    // complete by SR ~ 0.95 (a real TC is locked by then). Width 0.12 keeps the
-    // per-frame pressure delta well under a bang-bang step (the no-oscillation
-    // bar). Gated by impeller speed via a smooth RPM factor.
-    const double lockupSrHigh = std::min(params_.lockupSpeedRatio + 0.12, 1.0);
-    const double lockupBlend = params_.lockupEnabled
-        ? smoothstep(params_.lockupSpeedRatio, lockupSrHigh, speedRatio_)
-          * smoothstep(params_.lockupRpm * 0.9, params_.lockupRpm, engineRpm)
-        : 0.0;
-
-    const double pressure = std::clamp(
-        lerp(fluidPressure_, 1.0, lockupBlend), 0.0, 1.0);
-
-    return CouplingOutput{pressure, lockupEngaged_};
+    return CouplingOutput{fluidPressure_, lockupEngaged_};
 }
 
 }  // namespace twin

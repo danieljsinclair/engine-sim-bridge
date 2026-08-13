@@ -107,6 +107,10 @@ private:
     double throttleDeltaHistory_ = 0.0;
     double throttleDeltaTimeS_ = 0.0;
     bool kickdownActive_ = false;
+    // One kickdown per sustained-WOT episode: set when a kickdown shift
+    // executes, cleared when the throttle demand falls back below the
+    // kickdown threshold (re-arming for the next stab).
+    bool wotKickdownConsumed_ = false;
 
     // OCP torque-hint strategy. Defaults to NullTorqueHint (correct with no
     // torque data); the torque-aware update() swaps in a SimTorqueHint. The

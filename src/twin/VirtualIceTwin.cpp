@@ -446,12 +446,6 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             double desiredPressure;
             const bool tcMode = (couplingModelKind_ == twin::CouplingModelKind::TorqueConverter);
             if (tcMode) {
-                static int twinDbg = 0;
-                if (twinDbg < 30) {
-                    std::fprintf(stderr, "[TWIN-DBG] tcMode=1 gear=%d desiredPressure=%.3f clutchP_=%.3f\n",
-                                 gearbox_->getCurrentGear(), (gearbox_->getCurrentGear() >= 1) ? couplingOut.clutchPressure : 0.0, clutchPressure_);
-                    ++twinDbg;
-                }
                 // PROPER torque converter (SCS direct-torque fluid coupling). The
                 // fluid IS the load path: the engine is ALWAYS loaded by the
                 // converter's K*N^2 pump law (stall multiplication at low speed,
@@ -463,11 +457,14 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
                 // transmission.cpp: the TC mode sets capacityScale = clutchPressure
                 // and zeroes the friction clutch). The converter's OWN model
                 // (TorqueConverter::compute) already returns the correct smooth,
-                // ROAD-DRIVEN pressure: a small CREEP floor at standstill (the
-                // engine idles DECOUPLED — the pinned wheel cannot be yanked, so
-                // no standstill oscillation), ramping through the slip band to a
-                // full 1.0 LOCKUP at cruise (road-implied > idle*1.6, high speed
-                // ratio). We MUST use that smooth ramp here — forcing 1.0 at
+                // ROAD-DRIVEN pressure: a MODERATE creep capacity at standstill
+                // (the fluid loads a flaring engine to its stall speed while
+                // slipping against the pinned wheel — no free-rev, no rigid
+                // couple), ramping monotonically through the slip band to a full
+                // 1.0 LOCKUP at cruise (road-implied > idle*1.6). The ramp is a
+                // function of road-implied rpm ONLY (never engine rpm / the speed
+                // ratio), so it cannot feed back into engine rpm and cannot
+                // chatter. We MUST use that smooth ramp here — forcing 1.0 at
                 // standstill (the old code) set capacityScale=1.0, which rigidly
                 // coupled the engine to the CSV-pinned stationary wheel and drove
                 // the ±345 rpm limit cycle the driveability gate flags
@@ -508,16 +505,16 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
                 // Launch (torque converter): stall-gated launch pressure for the
                 // modes whose sim speed is independent (Free/Torque). PIN never
                 // launches — its vehicle-speed constraint drives the wheels.
-                if (coupling_->launchAssistAtStandstill()) {
-                    const double launchPressure = computeLaunchPressure(
+                const double launchPressure = coupling_->launchAssistAtStandstill()
+                    ? computeLaunchPressure(
                         twin::LaunchPressureInput{engineRpmFeedback_,
                                                   roadSpeedImpliedRpm,
                                                   signal.throttleFraction,
                                                   profile_.idleRpm,
-                                                  profile_.redlineRpm});
-                    if (launchPressure != twin::LAUNCH_PRESSURE_DEFER) {
-                        desiredPressure = launchPressure;
-                    }
+                                                  profile_.redlineRpm})
+                    : twin::LAUNCH_PRESSURE_DEFER;
+                if (launchPressure != twin::LAUNCH_PRESSURE_DEFER) {
+                    desiredPressure = launchPressure;
                 }
             }
 
@@ -618,8 +615,9 @@ void VirtualIceTwin::updateShiftExecution(double dt) {
     pauseDuration = profile_.shiftPauseMs * EngineSimDefaults::MS_TO_SECONDS;
     reengageDuration = profile_.shiftReengageMs * EngineSimDefaults::MS_TO_SECONDS;
 
-    const bool tcMode = (couplingModelKind_ == twin::CouplingModelKind::TorqueConverter);
-    if (tcMode) {
+    if (const bool tcMode =
+            (couplingModelKind_ == twin::CouplingModelKind::TorqueConverter);
+        tcMode) {
         // Torque-converter mode: the converter (not the friction clutch) is the
         // coupling path, and the Transmission holds the friction clutch OPEN
         // through the whole shift (transmission.cpp::update zeroes the clutch

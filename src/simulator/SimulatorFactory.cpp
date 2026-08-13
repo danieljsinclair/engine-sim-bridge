@@ -75,8 +75,6 @@ std::unique_ptr<Simulator> buildPistonEngineSimulator(
     const ISimulatorConfig& config,
     ILogging* logger)
 {
-    std::fprintf(stderr, "[FAC-DBG] createPiston called scriptPath-seen\n");
-    std::fprintf(stderr, "[FAC-DBG] createPiston called\n");
     auto pistonSim = std::make_unique<PistonEngineSimulator>();
     initSimulator(pistonSim.get(), config);
     pistonSim->loadSimulation(loaded.engine, loaded.vehicle, loaded.transmission);
@@ -95,8 +93,6 @@ std::unique_ptr<Simulator> buildPistonEngineSimulator(
 }
 
 LoadedSimulation loadPresetSimulation(const std::string& scriptPath, const std::string& assetBasePath, bool useTorqueConverter) {
-    std::fprintf(stderr, "[FAC-DBG] loadPreset ENTRY path=%s useTC=%d\n", scriptPath.c_str(), (int)useTorqueConverter);
-    std::fflush(stderr);
     PresetLoadResult result = PresetEngineFactory::loadFromFile(scriptPath);
     if (!result.success()) {
         throw SimulatorException("Failed to load preset: " + scriptPath + " — " + result.error);
@@ -109,8 +105,6 @@ LoadedSimulation loadPresetSimulation(const std::string& scriptPath, const std::
     loaded.initialGear = result.initialGear;
     loaded.resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(
         ScriptLoadHelpers::normalizeScriptPath(scriptPath), assetBasePath);
-    std::fprintf(stderr, "[FAC-DBG] loadPreset useTC=%d transNull=%d\n",
-                 (int)useTorqueConverter, (loaded.transmission == nullptr ? 1 : 0));
     // Install the fluid-coupling torque converter on the (preset-built)
     // transmission BEFORE the simulator wires it into the system, so addToSystem
     // adds the constraint at the safe wiring time (never to a live system).
@@ -229,8 +223,6 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
     telemetry::ITelemetryWriter* /*telemetryWriter*/,
     bool useTorqueConverter)
 {
-    std::fprintf(stderr, "[FAC-DBG] create ENTRY type=%d useTC=%d path=[%s]\n", (int)type, (int)useTorqueConverter, scriptPath.c_str());
-    std::fflush(stderr);
     SimulatorInit simInit;
     switch (type) {
         case SimulatorType::SineWave:

@@ -29,22 +29,24 @@
 //
 // WHY IT CANNOT OSCILLATE / STALL
 // --------------------------------
-// The slip-phase pressure is a SINGLE smoothstep of the road-implied (turbine)
-// rpm, scaled by the capacity. It is a function of ROAD-IMPLIED rpm ONLY - never
-// of engine rpm or the speed ratio. Two consequences:
-//   * STANDSTILL/CREASE: road-implied < idle => pressure at the floor (0) => the
-//     engine idles DECOUPLED. A post-crank flare cannot drag it to stall (the
-//     standstill-stall fix), and a creeping engine is not lugged below idle (the
-//     creep-lug fix).
+// The pressure is a SINGLE smooth monotonic ramp of the road-implied (turbine)
+// rpm. It is a function of ROAD-IMPLIED rpm ONLY - never of engine rpm and never
+// of the speed ratio. Two consequences:
+//   * STANDSTILL/CREASE: road-implied < idle*0.9 => pressure flat at the
+//     MODERATE creep capacity (creepPressure). The fluid LOADS a flaring engine
+//     (quadratic pump resistance -> the engine settles at its stall speed, it
+//     cannot free-rev unloaded) while still slipping against the pinned
+//     stationary wheel (no rigid couple, no standstill oscillation).
 //   * STABILITY: road-implied is EXOGENOUS (CSV-pinned wheels), so the pressure
 //     cannot feed back into engine rpm and cannot form a limit cycle. Any engine-
-//     rpm term (a pump law K*N^2, or the speed-ratio-based torque-ratio factor)
-//     closes a feedback loop - the engine lugs, the pressure shifts, the lug
-//     shifts, -> a cycle. The legacy binary relief cycled 0<->1149 rpm because it
-//     was bang-bang; an engine-rpm "pump gate" cycled 1442<->70 the same way. The
-//     friction clutch converges on its own by pulling the engine TOWARD road
-//     speed (it cannot drag it below road), so an open-loop, road-driven schedule
-//     settles instead of cycling.
+//     rpm term (a pump gate, a speed-ratio lockup blend, the TR factor) closes a
+//     feedback loop - the engine lugs, the pressure shifts, the lug shifts, -> a
+//     cycle. The measured bench chatter (Cl 63%->100%->17%->83%->92%->3%->66%
+//     frame-to-frame at 16 mph) came from exactly such a term: a lockup blend
+//     keyed on the speed ratio (turbine/ENGINE), which cycled the pressure
+//     0.03<->1.0 as the engine wandered through the narrow SR band. Dropping
+//     EVERY engine-rpm term makes the schedule open-loop stable; the converter
+//     then converges by pulling the engine TOWARD road speed instead of cycling.
 // The TC's torque-ratio curve (stall multiplication) is kept as TELEMETRY only -
 // TR is a function of the speed ratio, so folding it into the pressure would
 // reintroduce the engine-rpm feedback above.
@@ -52,13 +54,18 @@
 // MAPPING TO CLUTCH PRESSURE (the bridge runs a friction clutch, not an SCS
 // constraint)
 // ---------------------------------------------------------------------------
-// The bridge's engine-sim clutch transmits torque ~= pressure * maxClutchTorque.
-// The converter's fluid coupling is therefore expressed as a NORMALIZED pressure
+// In TC mode the pressure drives the converter's CAPACITY SCALE (transmission.cpp
+// sets capacityScale = clutchPressure and holds the friction clutch open), so the
+// normalized pressure IS the coupling strength. The governor is a mechanical-
+// schedule ramp of the road-implied rpm:
 //
-//     p_fluid = floor + (capacity - floor) * roadGate(road-implied)
+//     p = creepPressure + (1 - creepPressure)
+//         * smoothstep(idle*engageStartIdleFactor, idle*lockIdleFactor, road)
 //
-// (clamped to [floor, capacity]); the lockup clutch blends p up to 1.0 at cruise.
-// All declarative, all smooth.
+// Flat at creepPressure through the creep band, progressive through the slip
+// band (the engine tracks road-implied x ~1.0-1.3), flat at 1.0 (locked) at and
+// above the cruise lock point. Monotonic, C1-continuous, and engine-independent
+// by construction. All declarative, all smooth.
 
 #ifndef TWIN_TORQUE_CONVERTER_H
 #define TWIN_TORQUE_CONVERTER_H
@@ -68,41 +75,36 @@
 namespace twin {
 
 // Tunable converter characteristic. All declarative data (no thresholds baked
-// into logic); defaults follow the rescue branch + the bridge's clutch torque.
+// into logic); the governor anchors are expressed as multiples of the engine's
+// idle RPM so the curve scales with the profile.
 struct TorqueConverterParameters {
     // Stall torque ratio TR(0) (T_turbine/T_impeller at stall). Scales the
-    // reference curve's multiplication band. Rescue default 2.0.
+    // reference curve's multiplication band. Rescue default 2.0. TELEMETRY
+    // ONLY — never folded into the pressure (TR is a function of the speed
+    // ratio, i.e. of engine rpm, i.e. feedback).
     double stallTorqueRatio = 2.0;
 
-    // Fluid pressure ceiling for the slip phase (launch + coupling). SMALL: the
-    // bridge's friction clutch transmits ~= pressure * maxClutchTorque (12000 Nm
-    // here), so the capacity sets the max drag the fluid coupling can apply. Too
-    // large and the clutch yanks the engine through road speed (overshoot -> the
-    // 1442->70 yank at 0.12); too small and the engine free-revs instead of
-    // tracking road. 0.025 ~= 300 Nm - enough to pull the engine to road speed
-    // through the coupling band. The road gate isolates the standstill/creep band
-    // (pressure at the floor there), and the lockup clutch blends p up to 1.0 at
-    // cruise, so the capacity only governs the slip/coupling band.
-    double capacityPressure = 0.025;
+    // Standstill/creep capacity scale. The fluid's creep capacity at zero
+    // turbine speed: enough to LOAD the engine (a flaring engine meets
+    // quadratic pump resistance and settles at its stall speed, it cannot
+    // free-rev unloaded), small enough to slip against the pinned stationary
+    // wheel (no rigid couple, no standstill oscillation). The engine-side
+    // K*N^2 pump law shapes the load; this only scales it. 0.6 holds a ~25%
+    // throttle launch flare under the 3000 rpm free-rev bar (equilibrium
+    // N = sqrt(T_engine / (0.6 * K * TR)) ~ 2500 for ~180 Nm).
+    double creepPressure = 0.6;
 
-    // Pressure floor. Default 0: a real TC transmits a gentle creep at idle (the
-    // pump law supplies it — the smoothstep low edge sits below idle so idle sees
-    // a small positive pressure), and ~zero drag when the engine lugs BELOW idle
-    // (so a lugging engine recovers instead of being dragged to stall). A hard
-    // non-zero floor here would be a constant clutch drag that lugs the engine to
-    // stall at low speed — the very creep-drag bug the model must avoid.
-    double pressureFloor = 0.0;
+    // Road-implied rpm (as a fraction of idle) where the progressive band
+    // STARTS. Below this the pressure sits flat at creepPressure.
+    double engageStartIdleFactor = 0.9;
 
-    // Impeller speed at/above which lockup may engage, RPM. Rescue default 1500.
-    double lockupRpm = 1500.0;
+    // Road-implied rpm (as a fraction of idle) where the converter is fully
+    // LOCKED (pressure 1.0). Above this the pressure sits flat at 1.0.
+    double lockIdleFactor = 1.6;
 
-    // Speed ratio at/above which lockup may engage (near the coupling point).
-    double lockupSpeedRatio = 0.85;
-
-    // Release band below lockupRpm (RPM) and below lockupSpeedRatio (absolute),
-    // preventing lockup chatter around the engagement boundary.
+    // Release band below the lock point (RPM), preventing lock-state chatter
+    // around the engagement boundary.
     double lockupHysteresisRpm = 150.0;
-    double lockupHysteresisSpeedRatio = 0.05;
 
     // Master enable for the lockup clutch. With it off the converter stays in
     // the fluid (slip) regime at all speeds - useful for A/B tuning.

@@ -149,13 +149,17 @@ inline Vehicle* createDefaultVehicle() {
 // lockup. Tuned for the M156 / C63 clutch envelope.
 //
 // CapacityFactor is chosen so the engine settles at its STALL SPEED (turbine
-// pinned, TR ~ 2.0) a few hundred rpm BELOW the 3000 rpm free-rev bar even at
-// WOT: equilibrium is combustionTorque = CapacityFactor * N^2 * TR, so for
-// ~450 Nm at N = 2800 rpm, CapacityFactor ~ 2.9e-5. This keeps a standstill
-// WOT launch loaded (no free-rev) while the fluid still slips (no stall).
+// pinned, TR ~ 2.0) a few hundred rpm BELOW the 3000 rpm free-rev bar: the
+// standstill/creep launch equilibrium is combustionTorque =
+// creepPressure * CapacityFactor * N^2, so for a ~200 Nm part-throttle flare
+// to settle at ~2600 rpm with creepPressure = 0.6, CapacityFactor ~ 4.8e-5
+// (equivalently the old 2.9e-5 design point rescaled by 1/0.6, because the
+// twin's governor now applies the 0.6 creep capacity scale at standstill
+// instead of 1.0). This keeps a standstill launch loaded (no free-rev past
+// the 3000 bar at part throttle) while the fluid still slips (no stall).
 inline const TorqueConverter::Parameters kDefaultTorqueConverterParams = {
     /* StallTorqueRatio */ 2.0,
-    /* CapacityFactor   */ 2.9e-5,
+    /* CapacityFactor   */ 4.8e-5,
     /* LockupRpm        */ 1500.0,
     /* MaxInputTorque   */ 1250.0,
     /* LockupSpeedRatio */ 0.85,
