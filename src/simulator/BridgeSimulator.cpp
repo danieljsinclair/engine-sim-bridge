@@ -401,7 +401,6 @@ bool BridgeSimulator::configureAfterfire(const AfterfireConfig& config) {
         parameters.minOxygenMoleFraction = config.minOxygenMoleFraction;
         parameters.energyScale = config.energyScale;
         parameters.throttleCutoff = config.throttleCutoff;
-        parameters.afterfireRevDropFraction = config.afterfireRevDropFraction;
         parameters.afterfireWavPath = config.afterfireWavPath;
         parameters.afterfireWavPaths = wavPaths;
         parameters.diagnostics = config.diagnostics;
@@ -461,7 +460,6 @@ std::vector<AfterfireDiagnostics> BridgeSimulator::getAfterfireDiagnostics() con
             entry.skippedNoOxygen = chamberDiagnostics.skippedNoOxygen;
             entry.skippedNotReady = chamberDiagnostics.skippedNotReady;
             entry.skippedThrottle = chamberDiagnostics.skippedThrottle;
-            entry.skippedTooFast = chamberDiagnostics.skippedTooFast;
             entry.misfireCycles = chamberDiagnostics.misfireCycles;
             entry.maxIgnitionProgress = chamberDiagnostics.maxIgnitionProgress;
             entry.maxRunnerTempK = chamberDiagnostics.maxRunnerTempK;

@@ -129,18 +129,6 @@ struct AfterfireConfig {
     // This prevents firing at steady part-throttle where MAP may also be low.
     double throttleCutoff = 0.1;
 
-    // Rev-drop fraction that must be LEFT BEHIND before a completed pop is
-    // released. The raw charge auto-ignites when its Arrhenius induction period
-    // completes (as it always did), but that only happens while the runner is
-    // still hot — within the first part of the coast, while revs are already
-    // partway down. We hold the RELEASE of the pop until revs fall below this
-    // fraction of the current overrun reference, and after each pop re-anchor that
-    // reference at the revs it fired at, so the next pop must wait for a further
-    // drop. That marches the crackle DOWN the decel instead of dumping on the
-    // first eligible tick. Tied to live engine state, never a wall clock. 0.9 =>
-    // revs must drop >=10% past the anchor before each pop releases.
-    double afterfireRevDropFraction = 0.75;
-
     // Stage 2 — auto-ignition.
     // tau(T) = ignitionDelayRefS * exp(activationTempK * (1/T - 1/refTempK)).
     //
@@ -206,7 +194,6 @@ struct AfterfireDiagnostics {
     int skippedNoOxygen = 0;
     int skippedNotReady = 0;
     int skippedThrottle = 0;
-    int skippedTooFast = 0;
     int misfireCycles = 0;
     double maxIgnitionProgress = 0.0;
     double maxRunnerTempK = 0.0;
