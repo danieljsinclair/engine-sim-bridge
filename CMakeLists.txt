@@ -513,6 +513,7 @@ if(BUILD_BRIDGE_TESTS)
         # --------------------------------------------------------------------
         add_executable(afterfire_bridge_tests
             test/AfterfireBridgeTest.cpp
+            test/AfterfireCrackleTimingTest.cpp
         )
         target_include_directories(afterfire_bridge_tests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
