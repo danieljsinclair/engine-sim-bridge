@@ -92,6 +92,14 @@ struct TorqueConverterParameters {
     // K*N^2 pump law shapes the load; this only scales it. 0.6 holds a ~25%
     // throttle launch flare under the 3000 rpm free-rev bar (equilibrium
     // N = sqrt(T_engine / (0.6 * K * TR)) ~ 2500 for ~180 Nm).
+    //
+    // NOTE (2026-08 sweep evidence, single-number trap): this ONE flat scale
+    // serves three regimes at once — standstill idle-hold support, crawl-band
+    // coupling (1-3 km/h), and WOT launch flare loading. Lowering it to ~0.3
+    // to relieve a floored converter's standstill drag fixed standstill but
+    // multiplied crawl-band latch dips and let a WOT launch flare past the
+    // free-rev bar. Any recalibration must split the regimes (e.g. a crawl
+    // ramp below engageStart), not move this number.
     double creepPressure = 0.6;
 
     // Road-implied rpm (as a fraction of idle) where the progressive band
