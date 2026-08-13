@@ -118,11 +118,24 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
             signal.throttleFraction = currentSample_.throttle;
             signal.speedKmh = currentSample_.roadSpeedKmh;
             signal.motorTorqueNm = currentSample_.motorTorqueNm;
+            // The start/stop decision layer (VehicleStartController, read by
+            // StartStopInputAdapter via getCurrentSignal()) needs the raw brake
+            // enum and the resolved gear. The CSV path is the documented
+            // vehicle-sim --stdout-csv pipe, so it must populate these here —
+            // the JSON network path does the equivalent via submitSignal().
+            signal.brakePedalState = currentSample_.brakePedalState;
+            signal.gearSelector = csvGearSelector();
             // The row is valid telemetry even when speed is blank (dyno off); a
             // non-zero timestamp keeps the twin's telemetry-timeout guard happy.
             signal.isValid = true;
             signal.timestampUtcMs = streamTimestampUtcMs();
         }
+
+        // Mirror the JSON network path: publish the assembled signal so the
+        // decision layer (which polls getCurrentSignal()) observes the same
+        // brake/gear the twin processes. submitSignal() is the single seam for
+        // feeding currentSignal_ on every input path.
+        submitSignal(signal);
 
         twinProvider_->setUpstreamSignal(signal);
         twinProvider_->setGearSelector(static_cast<int>(csvGearSelector()));
@@ -326,7 +339,10 @@ bool LiveTelemetryProvider::tryReadNextRowLive(double simElapsedS) {
         lastInWindow = sample;
         foundInWindow = true;
     }
-    if (stream_->eof() && !foundInWindow) eofSeen_ = true;
+    // The LIVE path must NOT disconnect at EOF (see tryReadNextRowPaced note):
+    // keep the last sample "connected" until --duration bounds the run so the
+    // start/stop decision layer can complete its 0.5s crank delay.
+    if (!liveStream_ && stream_->eof() && !foundInWindow) eofSeen_ = true;
     if (foundInWindow) {
         currentSample_ = lastInWindow;
         hasSample_ = true;
@@ -363,7 +379,14 @@ bool LiveTelemetryProvider::tryReadNextRowPaced(double simElapsedS) {
     }
     // Mark EOF only on genuine exhaustion — a call that surfaced a row stays
     // "connected"; EOF is confirmed on a later call that surfaces nothing.
-    if (stream_->eof() && !foundInWindow) eofSeen_ = true;
+    // The LIVE path (engine-sim-cli --live-telemetry, a finite/buffered pipe such
+    // as `vehicle-sim --stdout-csv | cli`) must NOT disconnect at EOF: the
+    // start/stop decision layer needs wall-clock time AFTER the last row to
+    // complete the 0.5s crank delay and pending transitions. Disconnecting here
+    // would halt SimulationLoop (run() returns on !IsConnected) before ignition
+    // ever fires. The --duration guard bounds the run instead, so we keep the
+    // live feed "connected" past EOF and let the last sample ride until duration.
+    if (!liveStream_ && stream_->eof() && !foundInWindow) eofSeen_ = true;
     if (foundInWindow) {
         currentSample_ = lastInWindow;
         hasSample_ = true;

@@ -15,12 +15,13 @@
 #include "telemetry/NullTelemetryWriter.h"
 #include "engine-sim/include/simulator.h"
 #include "simulator/BrakeConstraint.h"
+#include "input/IEngineActuator.h"
 
 #include <memory>
 #include <string>
 #include <vector>
 
-class BridgeSimulator : public ICombustionEngine {
+class BridgeSimulator : public ICombustionEngine, public input::IEngineActuator {
     // SimulatorFactory completes audio-config initialization at construction
     // (initAudioConfig populates engineConfig_ + sizes the audio buffer) so a
     // freshly-factory-built simulator reports a correct simulationFrequency and

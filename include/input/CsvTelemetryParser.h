@@ -29,6 +29,7 @@ struct CsvHeader {
     int colClutch = -1;
     int colGearSelector = -1;
     int colMotorTorque = -1;
+    int colBrakePedalState = -1;  // DI_brakePedalState enum: 0=OFF,1=ON,2=INVALID
     bool timeInMs = false;
     bool rawCanFormat = false;  // true if can_id + data_hex columns detected
 };
@@ -42,6 +43,7 @@ struct CsvSample {
     double clutchPct = -1.0;         // -1 = unchanged; 0..1
     std::string gearSelector;        // PRNDL string from vehicle-sim captures
     double motorTorqueNm = 0.0;      // Recorded motor/engine torque (Nm); -1 = missing
+    int brakePedalState = 0;         // DI_brakePedalState enum: 0=OFF,1=ON,2=INVALID
 };
 
 class CsvTelemetryParser {
