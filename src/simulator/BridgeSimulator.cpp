@@ -121,11 +121,13 @@ void BridgeSimulator::getEngineStats(EngineSimStats& stats) const {
         // read THIS value, exactly like a driver's tachometer; currentRPM
         // above stays raw for rpm_raw.
         stats.filteredRPM = m_simulator->filteredEngineSpeed();
-        // getTotalExhaustFlow() returns the dt-integrated VOLUME per frame
-        // (m^3); divide by the frame timestep for a true rate (m^3/s), the
-        // same normalization the oscilloscope path applies. Previously the
-        // raw per-frame volume was displayed as cm3/s — 60x understated.
-        stats.exhaustFlow = m_simulator->getTotalExhaustFlow() / m_simulator->getTimestep();
+        // True volumetric exhaust rate (m^3/s): the FRAME-MEAN volume flow,
+        // integrated across every 10 kHz substep of the frame (see
+        // Simulator::getFrameExhaustFlowRate). The previous readout sampled
+        // the last substep's accumulator once per frame and divided by the
+        // SUBSTEP timestep — a 60x-overstated, firing-ripple-aliased value
+        // that flickered through +/-millions of cm3/s.
+        stats.exhaustFlow = m_simulator->getFrameExhaustFlowRate();
         stats.processingTimeMs = m_simulator->getAverageProcessingTime() * 1000.0;
     }
 }
@@ -154,40 +156,31 @@ void BridgeSimulator::getTransmissionStats(EngineSimStats& stats) const {
         int rawGear = m_simulator->getTransmission()->getGear();
         stats.gear = static_cast<int>(bridge::toBridge(rawGear));
 
-        // Real torque from the ACTIVE coupling constraint (populated by the
-        // solver after each step). In torque-converter mode the friction
-        // clutch is held open (its limits are zeroed), so its reaction reads
-        // ~0 — the transmitted torque lives in the converter constraint.
+        // Real torque from the ACTIVE coupling constraint, FRAME-INTEGRATED:
+        // the mean of the solved constraint reactions across every substep of
+        // the frame (Simulator::getFrameCouplingTorque/TurbineTorque). The
+        // previous readout sampled F_t of the LAST 10 kHz substep once per
+        // frame, aliasing the firing ripple into a ~30 Hz torque flicker with
+        // spurious sign flips at steady state. In torque-converter mode the
+        // friction clutch is held open (its limits are zeroed), so its
+        // reaction reads ~0 — the transmitted torque lives in the converter
+        // constraint. TorqueConverter row 0 mirrors ClutchConstraint's
+        // [-1, +1] pairing with the torque ratio folded into the turbine
+        // column: J = [0 0 -1 | 0 0 TR], so the engine side is the impeller
+        // torque and the turbine side is TR x impeller — at stall slip this
+        // shows multiplication, at lockup the plain engine torque. Sign
+        // convention: engine producing power = positive, engine braking =
+        // negative.
         if (!m_simulator->m_dyno.m_enabled) {
-            const auto* trans = m_simulator->getTransmission();
-            // TorqueConverter row 0 mirrors ClutchConstraint's [-1, +1] pairing
-            // with the torque ratio folded into the turbine column: J = [0 0 -1 |
-            // 0 0 TR], so F_t[0][0] is the impeller-side (engine) torque and
-            // F_t[0][1] = TR * F_t[0][0]-shaped turbine torque — at stall slip
-            // this shows multiplication, at lockup the plain engine torque.
-            // Sign convention matches the clutch branch below: engine producing
-            // power = positive, engine braking = negative.
-            if (trans->hasTorqueConverter()) {
-                const auto& converter = *trans->getTorqueConverter();
-                stats.engineTorqueNm = converter.F_t[0][0];
-                stats.drivetrainTorqueNm = -converter.F_t[0][1];
-            } else {
-                const auto& clutch = trans->getClutchConstraint();
-                // ClutchConstraint J = [-1, +1] on angular velocity of body 0 (crankshaft),
-                // body 1 (drivetrain virtual mass). The solver stores F_t[i][k] = J * lambda/dt.
-                // Engine crankshaft spins CW (v_theta < 0). During acceleration, lambda < 0
-                // so F_t[0][0] > 0 (clutch reaction opposing engine) and F_t[0][1] < 0
-                // (clutch driving the drivetrain in its negative/CW direction).
-                stats.engineTorqueNm = clutch.F_t[0][0];
-                stats.drivetrainTorqueNm = -clutch.F_t[0][1];
-            }
+            stats.engineTorqueNm = m_simulator->getFrameCouplingTorque();
+            stats.drivetrainTorqueNm = m_simulator->getFrameTurbineTorque();
 
             // Wheel-side torque: coupling torque * gear_ratio * diff_ratio.
             // Both coupling types transmit equal-and-opposite torque (Newton's 3rd
             // law), so the coupling-side value is the same magnitude on both
             // ends; gear multiplication makes the wheel side differ from the
             // engine side.
-            const double gearRatio = trans->getGearRatio();
+            const double gearRatio = m_simulator->getTransmission()->getGearRatio();
             if (m_simulator->getVehicle() && gearRatio > 0.0) {
                 const double diffRatio = m_simulator->getVehicle()->getDiffRatio();
                 stats.drivetrainTorqueNm *= gearRatio * diffRatio;
