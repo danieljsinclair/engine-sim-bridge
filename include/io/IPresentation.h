@@ -38,6 +38,11 @@ struct EngineState {
         double dynoTorque = 0.0;
         double dynoTargetRPM = 0.0;
         double replayTimestampS = -1.0;  // absolute CSV timestamp (-1 = not replaying)
+        // Live clutch diagnostics (surfaced from the twin for the inline
+        // [Gear:DAx Cl NN%] readout and the CSV-out spelunking path).
+        double clutchPressure = -1.0;    // 0=open/relieved .. 1=locked (-1=unknown)
+        double roadImpliedRpm = 0.0;     // RPM if engine locked to wheels in current gear
+        bool creepReliefFired = false;   // creep-drag relief opened the clutch this frame
     } drivetrain;
 
     // User control inputs (what the driver is commanding)

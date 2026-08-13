@@ -45,6 +45,9 @@ public:
     // Select the live clutch wheel-coupling strategy (FREE/PIN).
     void setWheelCouplingMode(twin::WheelCouplingMode mode);
 
+    // Select the coupling MODEL (clutch-map default, torque-converter, legacy).
+    void setCouplingModel(twin::CouplingModelKind kind);
+
     // Forward simulator RPM feedback to the twin for cranking transition
     void provideFeedback(const EngineSimStats& stats) override;
 

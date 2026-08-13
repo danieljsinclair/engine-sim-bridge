@@ -105,6 +105,10 @@ struct SimulationConfig {
     // Selective debug categories, forwarded to PresentationConfig.
     presentation::DiagnosticOutputFilter diagnostics;
 
+    // Machine-parseable CSV output path (--csv-out). Empty = no CSV. Forwarded
+    // to createPresentation which composes a CsvPresentation alongside console.
+    std::string csvOutPath;
+
     // Computed helpers
     double updateInterval() const { return 1.0 / 60.0; }
     int framesPerUpdate() const { return engineConfig.sampleRate / 60; }

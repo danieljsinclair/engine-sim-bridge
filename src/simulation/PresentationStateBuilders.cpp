@@ -29,6 +29,9 @@ namespace presentation::builders {
             drivetrain.dynoTorque = stats.dynoTorque;
             drivetrain.dynoTargetRPM = stats.dynoTargetRPM;
             drivetrain.replayTimestampS = input.replayTimestampS;
+            drivetrain.clutchPressure = input.clutchPressure;
+            drivetrain.roadImpliedRpm = input.roadImpliedRpm;
+            drivetrain.creepReliefFired = input.creepReliefFired;
             return drivetrain;
         }
 

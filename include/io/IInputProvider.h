@@ -54,6 +54,13 @@ struct EngineInput {
     // 0; applying 0.0 Nm is a true no-op on the rotating mass).
     double drivetrainInputTorqueNm = 0.0;
 
+    // Live twin diagnostics threaded through to presentation (inline clutch
+    // readout + CSV-out). roadImpliedRpm = RPM if locked to wheels in current
+    // gear; creepReliefFired = the creep-drag relief opened the clutch (the
+    // #24 slow-speed stall protection) this frame.
+    double roadImpliedRpm = 0.0;
+    bool creepReliefFired = false;
+
     // Simulator auto-disengages starter when RPM > threshold
     // Preset cycling
     bool presetCycle = false;       // true = cycle to next preset engine configuration

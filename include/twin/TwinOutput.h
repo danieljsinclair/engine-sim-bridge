@@ -24,6 +24,12 @@ struct TwinOutput {
     // transmission input so the solver integrates road speed from it. 0.0 in
     // FREE/PIN (no injection — a true no-op on the rotating mass).
     double drivetrainInputTorqueNm = 0.0;
+    // Diagnostics (surfaced to presentation for the inline clutch readout and
+    // the CSV-out spelunking path). roadImpliedRpm is the RPM the engine would
+    // be at if locked to the wheels in the current gear; creepReliefFired is
+    // true on the frame the creep-drag relief opened the clutch (pressure 0).
+    double roadImpliedRpm = 0.0;
+    bool creepReliefFired = false;
 };
 
 }

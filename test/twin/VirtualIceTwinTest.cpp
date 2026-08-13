@@ -73,24 +73,34 @@ TEST_F(VirtualIceTwinTest, CrankingToIdleWhenRpmExceedsThreshold_AC11_2) {
     EXPECT_FALSE(output.starterMotor);
 }
 
-TEST_F(VirtualIceTwinTest, IdleToRunningWhenThrottleAbove5Percent_AC11_3) {
+// IDLE->RUNNING now fires on a DRIVE selector (the box engages 1st ready to
+// creep), NOT on a throttle threshold. Even zero throttle in DRIVE -> RUNNING.
+TEST_F(VirtualIceTwinTest, IdleToRunningOnDriveSelector_EvenAtZeroThrottle_AC11_3) {
     advanceThroughCranking();
+    twin_->setGearSelector(bridge::GearSelector::DRIVE);
 
     EXPECT_EQ(twin_->getState(), TwinState::IDLE);
 
-    auto sig = makeValidSignal(0.06, 0.0);
+    auto sig = makeValidSignal(0.0, 0.0);  // no throttle, standstill — still engages
     twin_->update(0.016, sig);
 
-    EXPECT_EQ(twin_->getState(), TwinState::RUNNING);
+    EXPECT_EQ(twin_->getState(), TwinState::RUNNING)
+        << "DRIVE must engage (RUNNING/1st) even with no throttle, ready to creep";
 }
 
-TEST_F(VirtualIceTwinTest, IdleStaysIdleBelow5PercentThrottle) {
+// New spec: a drive position (D/R) engages immediately — the box sits in 1st
+// ready to creep, it does NOT wait for throttle. Only P/N keeps the twin in
+// IDLE (true neutral). (Was IdleStaysIdleBelow5PercentThrottle, which asserted
+// the old throttle-gated IDLE->RUNNING.)
+TEST_F(VirtualIceTwinTest, IdleStaysIdle_OnlyInParkOrNeutral) {
     advanceThroughCranking();
 
-    auto sig = makeValidSignal(0.04, 0.0);
+    // Selector NEUTRAL: stays IDLE regardless of throttle (true neutral).
+    twin_->setGearSelector(bridge::GearSelector::NEUTRAL);
+    auto sig = makeValidSignal(0.5, 0.0);  // plenty of throttle, but N = neutral
     twin_->update(0.016, sig);
-
-    EXPECT_EQ(twin_->getState(), TwinState::IDLE);
+    EXPECT_EQ(twin_->getState(), TwinState::IDLE)
+        << "NEUTRAL must stay IDLE (no drive engagement without a drive selector)";
 }
 
 TEST_F(VirtualIceTwinTest, RunningToShiftingWhenGearboxRequestsShift_AC11_4) {
@@ -146,11 +156,16 @@ TEST_F(VirtualIceTwinTest, RunningToIdleWhenSpeedAndThrottleZero_AC11_6) {
 
     ASSERT_EQ(twin_->getState(), TwinState::RUNNING) << "Should be in RUNNING with low speed/throttle";
 
+    // New spec: a SINGLE standstill frame (speed 0, throttle 0) in DRIVE must
+    // NOT drop RUNNING->IDLE->DAN. A real auto holds 1st against the brake; the
+    // box leaves gear only on a selector move or a SUSTAINED true stop (covered
+    // by RunningToIdle_AfterSustainedTrueStopInDrive_AC11_6 below).
     sig.throttleFraction = 0.0;
     sig.speedKmh = 0.0;
     twin_->update(0.016, sig);
 
-    EXPECT_EQ(twin_->getState(), TwinState::IDLE);
+    EXPECT_EQ(twin_->getState(), TwinState::RUNNING)
+        << "A single standstill frame must stay RUNNING in DRIVE (no eager DAN)";
 }
 
 TEST_F(VirtualIceTwinTest, AnyStateToOffAfter5SecondsNoValidTelemetry_AC11_7) {
@@ -289,6 +304,9 @@ TEST_F(VirtualIceTwinTest, IdleThrottle_PassesThroughUserInput_AC11) {
 
 TEST_F(VirtualIceTwinTest, IdleThrottle_HoldsSustainFloorWhenNoInput_AC12) {
     advanceThroughCranking();
+    // IDLE (true neutral) is the P/N state; the sustain floor holds here. (A
+    // drive selector now leaves IDLE for RUNNING immediately.)
+    twin_->setGearSelector(bridge::GearSelector::NEUTRAL);
     ASSERT_EQ(twin_->getState(), TwinState::IDLE);
 
     // No driver throttle — the twin must still hold the idle-sustain floor so the
@@ -345,10 +363,15 @@ TEST_F(VirtualIceTwinTest, RunningToIdle_WhenSelectorNeutral_AC14) {
 }
 
 // ============================================================================
-// New: RUNNING→IDLE uses threshold, not exact equality
+// RUNNING→IDLE: a real auto STAYS in 1st at creep and at a standstill in DRIVE
+// (clutch relieved, engine idling). It leaves gear ONLY on a selector move to
+// P/N — never on speed/throttle. The prior eager transition (speed<threshold
+// AND throttle<idle on a SINGLE frame) flipped RUNNING→IDLE→DAN the instant the
+// driver lifted at low speed, then coasted to a stall — the DAN-at-slow-speed /
+// stall bug. (Replaces the old AC11_6 test, which asserted that eager drop.)
 // ============================================================================
 
-TEST_F(VirtualIceTwinTest, RunningToIdle_UsesThresholdNotExactZero_AC11_6) {
+TEST_F(VirtualIceTwinTest, RunningStaysRunning_AtCreepSpeedInDrive_NoEagerIdle) {
     auto sig = makeValidSignal(0.1, 5.0);
     advanceThroughCranking();
 
@@ -358,14 +381,41 @@ TEST_F(VirtualIceTwinTest, RunningToIdle_UsesThresholdNotExactZero_AC11_6) {
 
     ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
 
-    // Transition should happen with small non-zero values below thresholds
-    // speed < standstillThresholdKmh (1.0) AND throttle < throttleRunningToIdleThreshold (0.02)
-    sig.throttleFraction = 0.01;  // Below threshold but not zero
-    sig.speedKmh = 0.5;           // Below threshold but not zero
+    // Low-speed creep in DRIVE, foot off the gas: a real box holds 1st (clutch
+    // relieved), it does NOT drop to neutral on a single frame at low speed.
+    sig.throttleFraction = 0.01;  // below idle threshold, not zero
+    sig.speedKmh = 0.5;           // below standstill threshold but CREEPING
     twin_->update(0.016, sig);
 
+    EXPECT_EQ(twin_->getState(), TwinState::RUNNING)
+        << "RUNNING must hold at creep speed in DRIVE (no eager RUNNING->IDLE->DAN)";
+}
+
+TEST_F(VirtualIceTwinTest, RunningToIdle_OnlyOnSelectorParkOrNeutral_AC11_6) {
+    auto sig = makeValidSignal(0.1, 5.0);
+    advanceThroughCranking();
+    twin_->setGearSelector(bridge::GearSelector::DRIVE);
+
+    for (int i = 0; i < 10; ++i) {
+        twin_->update(0.016, sig);
+    }
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    // A true stop in DRIVE (speed 0, no throttle) must NOT drop RUNNING->IDLE —
+    // the box stays in 1st (clutch relieved, engine idling) at a stoplight.
+    sig.throttleFraction = 0.0;
+    sig.speedKmh = 0.0;
+    for (int i = 0; i < 250; ++i) {  // ~4 seconds at a standstill in DRIVE
+        twin_->update(0.016, sig);
+    }
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING)
+        << "A standstill in DRIVE stays RUNNING (DA1, clutch relieved)";
+
+    // Selector -> NEUTRAL is the ONLY way out of RUNNING (besides a shift).
+    twin_->setGearSelector(bridge::GearSelector::NEUTRAL);
+    twin_->update(0.016, sig);
     EXPECT_EQ(twin_->getState(), TwinState::IDLE)
-        << "RUNNING->IDLE should transition when speed < 1.0 km/h and throttle < 2%";
+        << "RUNNING->IDLE only on a selector move to P/N";
 }
 
 TEST_F(VirtualIceTwinTest, RunningStaysRunning_WhenSpeedAboveStandstillThreshold) {
@@ -791,6 +841,10 @@ double impliedRpmFor(double wheelKmh, int gear, const IceVehicleProfile& p) {
 // lock of 1.0, and not a fixed creep). With the engine well above its stall speed
 // the launch pressure is the sustainable stall cap scaled by throttle.
 TEST_F(VirtualIceTwinTest, RunningUsesTorqueConverterLaunchAtStandstill_Free) {
+    // Verifies the LEGACY launch-assist (computeLaunchPressure), now behind
+    // --coupling-model legacy: the default clutch-map owns its own smooth
+    // pressure and skips launch-assist. Select legacy to test this path.
+    twin_->setCouplingModel(twin::CouplingModelKind::Legacy);
     advanceThroughCranking();
     auto sig = makeValidSignal(0.5, 0.0);
     twin_->update(0.016, sig);  // IDLE -> RUNNING
@@ -815,6 +869,9 @@ TEST_F(VirtualIceTwinTest, RunningUsesTorqueConverterLaunchAtStandstill_Free) {
 // does NOT yank it down (the catch-22 that used to crash the RPM to ~100). The old
 // fixed-creep model would have applied 0.10*throttle regardless of engine RPM.
 TEST_F(VirtualIceTwinTest, FreeLaunchUnloadsEngineNearIdle_NoBog) {
+    // Verifies the LEGACY launch-assist anti-bog behaviour (now behind
+    // --coupling-model legacy). Select legacy to test this path.
+    twin_->setCouplingModel(twin::CouplingModelKind::Legacy);
     advanceThroughCranking();
     auto sig = makeValidSignal(0.5, 0.0);
     twin_->update(0.016, sig);  // IDLE -> RUNNING
@@ -856,7 +913,10 @@ TEST_F(VirtualIceTwinTest, RunningLocksWhenActualWheelSpeedMatchesEngine_Free) {
     twin_->setEngineRpmFeedback(targetRpm);
     twin_->setVehicleSpeedFeedback(feedbackKmh);
     sig = makeValidSignal(0.5, 0.0);
-    auto out = twin_->update(0.016, sig);
+    // The clutch is RATE-LIMITED toward the slip-lock value (anti-slam); settle
+    // a few frames for it to ramp to lock before asserting.
+    twin::TwinOutput out;
+    for (int i = 0; i < 60; ++i) out = twin_->update(0.016, sig);
 
     EXPECT_GT(out.clutchPressure, 0.9) << "Clutch should lock when wheel speed implies engine RPM";
     // Sanity: confirm the chosen feedback actually implies ~targetRpm.
@@ -909,7 +969,10 @@ TEST_F(VirtualIceTwinTest, FreeModeSlipLockUsesActualWheelSpeedNotCsv) {
     twin_->setEngineRpmFeedback(3000.0);
     twin_->setVehicleSpeedFeedback(50.0);   // ACTUAL wheel speed = 50 (near lock)
     sig = makeValidSignal(0.5, 5.0);
-    auto freeOut = twin_->update(0.016, sig);
+    // The clutch is RATE-LIMITED toward the slip-lock value (anti-slam); settle
+    // a few frames for it to ramp to lock before asserting.
+    twin::TwinOutput freeOut;
+    for (int i = 0; i < 60; ++i) freeOut = twin_->update(0.016, sig);
 
     EXPECT_GT(freeOut.clutchPressure, 0.9)
         << "FREE must use ACTUAL wheel speed (50 -> near lock), not CSV (5 -> creep)";
@@ -1235,4 +1298,201 @@ TEST_F(VirtualIceTwinTest, MidDriveStall_RestartsWithIgnitionOn_GBfix3) {
     }
     EXPECT_TRUE(restarted)
         << "A mid-drive stall with ignition ON must restart (twin re-cranks)";
+}
+
+// ============================================================================
+// #24 SLOW-SPEED STALL — declarative rpm-floor / creep-relief invariant.
+// The bug: at ~6 mph (CSV 10.5-10.7 km/h — the displayed mph is the pinned sim
+// speed which lags the CSV pin target) in DA1 with PIN coupling, the creep-relief
+// threshold (creepReliefThresholdKmh ≈ 10.3 km/h, where road-implied == idle)
+// sits JUST below the actual road speed. The road-implied RPM (~963) is slightly
+// ABOVE idle (950) but inside the slip band (< idle × kLockEngageIdleFactor ≈
+// 1425). The slip-lock engaged at low pressure there engine-braked the lifted-
+// throttle engine below idle to a death-spiral stall. The fix: the relief must
+// cover the ENTIRE slip band (road-implied < idle × kLockEngageIdleFactor), not
+// just below the creep ceiling. These tests assert the DECLARATIVE INVARIANT:
+// in the slip band with PIN, the relief MUST open the clutch (pressure 0) so the
+// engine idles decoupled and cannot be dragged to stall. RED before the fix
+// (relief did not fire above 10.3 km/h), GREEN after.
+// ============================================================================
+
+// Enter RUNNING with PIN + C63 ratios, then settle one frame at the given road
+// speed + engine rpm. Returns the twin output for that frame.
+twin::TwinOutput sampleRunningFrame(twin::VirtualIceTwin& twin, double speedKmh,
+                                    double engineRpm, double throttle = 0.0) {
+    input::UpstreamSignal sig;
+    sig.isValid = true;
+    sig.timestampUtcMs = 50000;
+    sig.throttleFraction = throttle;
+    sig.speedKmh = speedKmh;
+    twin.setEngineRpmFeedback(engineRpm);
+    twin.setVehicleSpeedFeedback(speedKmh);
+    return twin.update(0.016, sig);
+}
+
+TEST_F(VirtualIceTwinTest, CreepRelief_GatesOnEngineRpm_OverFireFix_Issue24) {
+    // The #24 slow-speed stall protection (LEGACY binary relief, now behind
+    // --coupling-model legacy). The default clutch-map never fires the relief
+    // (its smooth curve replaces it), so select legacy to exercise this path.
+    twin_->setCouplingModel(twin::CouplingModelKind::Legacy);
+    // The #24 slow-speed stall protection. The slip-band lug rescue gates on
+    // ACTUAL engine rpm (engineRpmFeedback_ < idle), NOT on road-implied — the
+    // road-implied gate OVER-FIRED: at 9-10 mph with the engine at 4700 rpm
+    // (driver accelerating) the relief opened the clutch, the engine free-revved
+    // decoupled, then slammed 4700→771 when the relief released. Engine-rpm
+    // gating fires ONLY when the engine is genuinely lugging.
+    twin_->reconfigureProfile(kC63Ratios, kC63Diff, kC63TireM);
+    twin_->setWheelCouplingMode(twin::WheelCouplingMode::Pin);
+    advanceThroughCranking();
+    twin_->setGearSelector(bridge::GearSelector::DRIVE);
+    twin_->setEngineRpmFeedback(900.0);
+    twin_->update(0.016, makeValidSignal(0.2, 5.0));
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    const double idle = twin_->getProfile().idleRpm;          // 950
+    const double ceilingKmh = twin_->getProfile().creepReliefThresholdKmh;  // ~10.3
+    // The slip band upper bound in road speed: where road-implied == idle×kLock.
+    const auto impliedRpmFor = [&](double kmh) {
+        const double speedMs = kmh / 3.6;
+        const double wheelRpm = speedMs / (2.0 * M_PI * kC63TireM) * 60.0;
+        return wheelRpm * kC63Ratios[0] * kC63Diff;
+    };
+    const double lockEngageKmh = [impliedRpmFor, idle, ceilingKmh]() {
+        for (double k = ceilingKmh; k < 40.0; k += 0.05)
+            if (impliedRpmFor(k) >= idle * twin::kLockEngageIdleFactor) return k;
+        return 40.0;
+    }();
+
+    // (1) CREEP REGIME (speed < ceiling), engine HIGH: relief MUST NOT fire —
+    //     the engine is healthy (driver accelerating). The slip-lock owns the
+    //     clutch (floor pressure, engine revs with slip). Firing here was the
+    //     over-fire regression (engine 4677 free-revved decoupled, then slammed).
+    const auto outCreepHigh = sampleRunningFrame(*twin_, ceilingKmh - 1.0, idle * 4.0, 0.3);
+    EXPECT_FALSE(outCreepHigh.creepReliefFired)
+        << "Relief must NOT fire when the engine is healthy/high, even below the ceiling";
+
+    // (1b) CREEP REGIME (speed < ceiling), engine LUGGING (below idle): relief
+    //      MUST fire — the engine cannot sustain, the clutch must open.
+    const auto outCreepLug = sampleRunningFrame(*twin_, ceilingKmh - 1.0, idle - 60.0, 0.0);
+    EXPECT_TRUE(outCreepLug.creepReliefFired)
+        << "Below the ceiling with the engine lugging, the relief must fire";
+
+    // (2) ABOVE THE CEILING, engine HEALTHY (e.g. 4700 rpm at 9-10 mph): the
+    //     relief MUST NOT fire — the over-firing regression. The slip-lock owns
+    //     the clutch; the engine is driving, not lugging.
+    for (double kmh = ceilingKmh + 1.0; kmh < 18.0; kmh += 1.0) {
+        const auto out = sampleRunningFrame(*twin_, kmh, 4700.0, 0.25);
+        EXPECT_FALSE(out.creepReliefFired)
+            << "OVER-FIRE regression: relief must NOT fire at " << kmh << " km/h when "
+            << "the engine is healthy (4700 rpm) — only when lugging below idle";
+    }
+
+    // (3) ABOVE THE CEILING, engine LUGGING (below idle) AND in the slip band:
+    //     the relief MUST fire — this is the #24 rescue. The engine is being
+    //     dragged under idle through the partial clutch; opening it lets the
+    //     idle-sustain recover the engine. Capped at the lock-engage point (above
+    //     it the road-implied is high enough that the rescue condition doesn't hold).
+    for (double kmh = ceilingKmh + 0.5; kmh < lockEngageKmh - 0.3; kmh += 0.7) {
+        const auto out = sampleRunningFrame(*twin_, kmh, idle - 60.0, 0.0);
+        EXPECT_TRUE(out.creepReliefFired)
+            << "Relief MUST fire at " << kmh << " km/h when the engine is lugging "
+            << "(below idle) in the slip band — the #24 slow-speed stall rescue";
+    }
+}
+
+TEST_F(VirtualIceTwinTest, CreepRelief_RampsClutchPressure_NoBinarySlam_Issue24) {
+    // LEGACY binary relief path (now behind --coupling-model legacy). The default
+    // clutch-map never fires the relief; select legacy to exercise this path.
+    twin_->setCouplingModel(twin::CouplingModelKind::Legacy);
+    // The clutch pressure is RATE-LIMITED toward the desired (relief=0, else
+    // slip-lock). This prevents the binary 0%↔100% slam that crashed the engine
+    // 4700→771 rpm in one frame when the relief released and the slip-lock
+    // re-engaged. Assert: the clutch RAMPS open over several frames (not 1) and
+    // ramps back up smoothly on release.
+    twin_->reconfigureProfile(kC63Ratios, kC63Diff, kC63TireM);
+    twin_->setWheelCouplingMode(twin::WheelCouplingMode::Pin);
+    advanceThroughCranking();
+    twin_->setGearSelector(bridge::GearSelector::DRIVE);
+    twin_->setEngineRpmFeedback(900.0);
+    twin_->update(0.016, makeValidSignal(0.2, 5.0));
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    // Settle the clutch engaged at cruise (road-implied well above idle: the
+    // slip-lock locks). 30 km/h in 1st -> road-implied ~2760 rpm >> idle 950.
+    double clutchAtCruise = 1.0;
+    for (int i = 0; i < 60; ++i) {
+        const auto out = sampleRunningFrame(*twin_, 30.0, 2760.0, 0.3);
+        clutchAtCruise = out.clutchPressure;
+    }
+    EXPECT_GT(clutchAtCruise, 0.5) << "Precondition: clutch locked at cruise";
+
+    // Now drop the engine below idle at low speed (the lug). The relief fires;
+    // the clutch must RAMP DOWN (not snap to 0 in one frame). Over several frames
+    // it reaches ~0, but NEVER in a single 0→0 step from cruise.
+    const auto outFirstRelief = sampleRunningFrame(*twin_, 11.0, 900.0, 0.0);
+    EXPECT_TRUE(outFirstRelief.creepReliefFired);
+    // The first relief frame must NOT snap to exactly 0 from a cruise lock — the
+    // rate limiter bounds the per-frame drop (anti-slam).
+    const double maxDrop = EngineSimDefaults::CLUTCH_RELEASE_RATE_PER_SEC * 0.016 + 1e-9;
+    EXPECT_GT(outFirstRelief.clutchPressure, clutchAtCruise - maxDrop - 0.01)
+        << "Clutch must RAMP down (rate-limited), not slam to 0 in one frame";
+
+    // Continue relief: the clutch converges to 0 over a few frames.
+    double clutchRelieved = outFirstRelief.clutchPressure;
+    for (int i = 0; i < 20 && clutchRelieved > 0.001; ++i) {
+        clutchRelieved = sampleRunningFrame(*twin_, 11.0, 900.0, 0.0).clutchPressure;
+    }
+    EXPECT_NEAR(clutchRelieved, 0.0, 0.02)
+        << "After sustained relief the clutch converges to 0 (ramped, not slammed)";
+
+    // Release the relief (engine above idle, still low speed): the clutch must
+    // RAMP UP smoothly (not snap to the slip-lock value in one frame).
+    const auto outReengage = sampleRunningFrame(*twin_, 11.0, 1500.0, 0.3);
+    EXPECT_FALSE(outReengage.creepReliefFired);
+    const double maxRise = EngineSimDefaults::CLUTCH_ENGAGE_RATE_PER_SEC * 0.016 + 1e-9;
+    EXPECT_LT(outReengage.clutchPressure, clutchRelieved + maxRise + 0.01)
+        << "Re-engage must RAMP up (rate-limited), not slam to the slip-lock value";
+}
+
+TEST_F(VirtualIceTwinTest, CreepRelief_HoldsReliefIdleSustainThrottle_DecoupledEngine_Issue24) {
+    // LEGACY binary relief path (now behind --coupling-model legacy). The default
+    // clutch-map never fires the relief; select legacy to exercise this path.
+    twin_->setCouplingModel(twin::CouplingModelKind::Legacy);
+    // When the relief fires the engine is decoupled; the relief MUST apply its
+    // stronger idle-sustain floor (RELIEF_IDLE_SUSTAIN_THROTTLE) so the decoupled
+    // engine holds idle instead of drooping on the normal 5% floor. This is the
+    // relief's decoupled-idle behavior — declaratively owned by the relief.
+    twin_->reconfigureProfile(kC63Ratios, kC63Diff, kC63TireM);
+    twin_->setWheelCouplingMode(twin::WheelCouplingMode::Pin);
+    advanceThroughCranking();
+    twin_->setGearSelector(bridge::GearSelector::DRIVE);
+    twin_->setEngineRpmFeedback(900.0);
+    twin_->update(0.016, makeValidSignal(0.2, 5.0));
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    // Mid-slip-band, engine below idle, driver lifted (0% throttle): the relief
+    // fires AND the relief idle-sustain floor owns the throttle.
+    const auto out = sampleRunningFrame(*twin_, 11.0, 940.0, 0.0);
+    EXPECT_TRUE(out.creepReliefFired);
+    EXPECT_GE(out.throttle, EngineSimDefaults::RELIEF_IDLE_SUSTAIN_THROTTLE)
+        << "Relief must floor throttle at RELIEF_IDLE_SUSTAIN_THROTTLE so the "
+        << "decoupled engine holds idle (the normal 5% floor droops to ~800 rpm)";
+}
+
+TEST_F(VirtualIceTwinTest, CreepRelief_DoesNotFireForFreeCoupling_LaunchIntact_Issue24) {
+    // FREE coupling does NOT relieve (relievesCreepDragAtStandstill == false):
+    // its launch-assist owns the clutch at standstill/low speed. The relief is
+    // PIN-only. Asserting OCP: the strategy declares the behavior, the twin
+    // carries no mode conditional.
+    twin_->reconfigureProfile(kC63Ratios, kC63Diff, kC63TireM);
+    twin_->setWheelCouplingMode(twin::WheelCouplingMode::Free);  // NOT Pin
+    advanceThroughCranking();
+    twin_->setGearSelector(bridge::GearSelector::DRIVE);
+    twin_->setEngineRpmFeedback(900.0);
+    twin_->update(0.016, makeValidSignal(0.2, 5.0));
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+
+    const auto out = sampleRunningFrame(*twin_, 11.0, 940.0, 0.0);
+    EXPECT_FALSE(out.creepReliefFired)
+        << "FREE coupling must not relieve (launch-assist owns the clutch)";
 }

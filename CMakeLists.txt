@@ -178,6 +178,8 @@ set(BRIDGE_SOURCES
     src/twin/VirtualIceTwin.cpp
     src/twin/ManualTwin.cpp
     src/twin/SlipLockController.cpp
+    src/twin/ClutchMapModel.cpp
+    src/twin/TorqueConverter.cpp
     src/twin/TorqueConverterLaunch.cpp
     # Input providers
     src/input/VirtualIceInputProvider.cpp
@@ -643,6 +645,7 @@ if(BUILD_BRIDGE_TESTS)
         test/twin/ManualTwinTest.cpp
         test/twin/SlipLockControllerTest.cpp
         test/twin/TorqueConverterLaunchTest.cpp
+        test/twin/TorqueConverterTest.cpp
         test/twin/WheelCouplingTest.cpp
     )
     target_include_directories(twin_core_tests PRIVATE

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <cstdio>
@@ -215,6 +216,54 @@ const ReplayTelemetryProvider::Sample& ReplayTelemetryProvider::sampleAt(double 
     return samples_.back();
 }
 
+// Two recorded samples are treated as the SAME speed level when their road
+// speeds differ by less than this. The CAN quantization step is ~0.8 km/h, so
+// 0.1 km/h cleanly separates real level changes from float jitter while never
+// splitting a genuine level.
+constexpr double kLevelStepKmh = 0.1;
+
+double ReplayTelemetryProvider::interpolatedRoadSpeedKmh(double t) const {
+    if (samples_.empty()) return -2.0;
+    if (t <= samples_.front().timeS) return samples_.front().roadSpeedKmh;
+    if (t >= samples_.back().timeS) return samples_.back().roadSpeedKmh;
+
+    // Index of the last sample at/below t (the current sample).
+    size_t i = 1;
+    for (; i < samples_.size(); ++i) {
+        if (samples_[i].timeS > t) break;
+    }
+    const size_t curIdx = i - 1;
+    const double curSpeed = samples_[curIdx].roadSpeedKmh;
+    if (curSpeed < 0.0) return curSpeed;  // dyno-off sentinel: pass through
+
+    // Level START: walk back to the first sample of the contiguous same-speed run.
+    // This is the fixed anchor that makes the interpolation fraction sweep the
+    // whole level (using the tracking sample curIdx would leave frac ~0 because it
+    // tracks t).
+    size_t startIdx = curIdx;
+    while (startIdx > 0 &&
+           std::abs(samples_[startIdx - 1].roadSpeedKmh - curSpeed) <= kLevelStepKmh) {
+        --startIdx;
+    }
+    // NEXT level: first sample after curIdx whose speed differs (the ramp target).
+    size_t nextIdx = samples_.size();
+    for (size_t j = curIdx + 1; j < samples_.size(); ++j) {
+        if (std::abs(samples_[j].roadSpeedKmh - curSpeed) > kLevelStepKmh) {
+            nextIdx = j;
+            break;
+        }
+    }
+    if (nextIdx >= samples_.size()) return curSpeed;  // no next level: hold (steady)
+
+    const double startT = samples_[startIdx].timeS;
+    const double nextT = samples_[nextIdx].timeS;
+    if (nextT <= startT) return curSpeed;
+    double frac = (t - startT) / (nextT - startT);
+    if (frac < 0.0) frac = 0.0;
+    else if (frac > 1.0) frac = 1.0;
+    return curSpeed + frac * (samples_[nextIdx].roadSpeedKmh - curSpeed);
+}
+
 EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
     EngineInput input;
     if (applyTimeSlicing(input, dt)) return input;
@@ -222,6 +271,10 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
     const Sample& s = sampleAt(elapsedS_);
     currentTimestampS_ = s.timeS;
     buildBaseEngineInput(input, s);
+    // De-quantized road speed: the recorded value is a CAN staircase (levels held
+    // ~0.2 s). Feed the interpolated ramp so a pinned/slip-locked RPM does not
+    // step in lockstep with the staircase. s still supplies throttle/selector/gear.
+    const double smoothRoadSpeedKmh = interpolatedRoadSpeedKmh(elapsedS_);
 
     if (autoGearbox_ && gearbox_) {
         // Follow the gear stalk. In PARK/NEUTRAL the clutch disengages + the
@@ -232,10 +285,9 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
             ? bridge::GearSelector::NEUTRAL : parseGearSelector(s.gearSelector);
         gearbox_->setGearSelector(sel);
         input.gearSelector = static_cast<int>(sel);
-        input.roadSpeedKmh = s.roadSpeedKmh;
+        input.roadSpeedKmh = smoothRoadSpeedKmh;
         if (sel == bridge::GearSelector::DRIVE) {
-            const double speedForBox = (s.roadSpeedKmh >= 0.0) ? s.roadSpeedKmh : 0.0;
-            handleAutoGearboxDrive(input, s, dt, speedForBox);
+            handleAutoGearboxDrive(input, s, dt, smoothRoadSpeedKmh);
         } else {
             handleAutoGearboxNonDrive(input);
         }
@@ -279,13 +331,16 @@ void ReplayTelemetryProvider::buildBaseEngineInput(EngineInput& input, const Sam
 }
 
 void ReplayTelemetryProvider::handleAutoGearboxDrive(EngineInput& input, const Sample& s,
-                                                     double dt, double speedForBox) const {
+                                                     double dt, double roadSpeedKmh) const {
+    // roadSpeedKmh is the interpolated (de-quantized) feed; clamp to >=0 for the
+    // gearbox's own speed input (a dyno-off sentinel would otherwise confuse it).
+    const double speedForBox = (roadSpeedKmh >= 0.0) ? roadSpeedKmh : 0.0;
     gearbox_->update(dt, speedForBox, s.throttle, 0.0);
     input.gearAbsolute = gearbox_->getCurrentGear();
     input.gearAutoMode = true;
 
     // SlipLockController — pressure-modulated clutch launch controller
-    // (dyno OFF). Drive the WHEELS to the CSV road speed
+    // (dyno OFF). Drive the WHEELS to the (interpolated) road speed
     // (vehicleSpeedTargetKmh) and let the clutch couple them to the
     // engine via the torque-converter slip characteristic:
     //   - standstill (road-implied < idle):   pressure 0   (engine free to idle, no stall)
@@ -295,7 +350,7 @@ void ReplayTelemetryProvider::handleAutoGearboxDrive(EngineInput& input, const S
     // The stall floor (pressure == 0 whenever roadSpeedImpliedRpm < idleRpm)
     // is the lesson from the stall/redline circle: coupling below idle drags
     // the engine under idle and stalls it. See twin/SlipLockController.h.
-    input.vehicleSpeedTargetKmh = s.roadSpeedKmh;
+    input.vehicleSpeedTargetKmh = roadSpeedKmh;
     input.engineRpmFloor = 0.0;  // dyno disabled downstream
 
     // Road-speed-implied engine RPM: the RPM the engine would be at if the

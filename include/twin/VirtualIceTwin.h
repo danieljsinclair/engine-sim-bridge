@@ -7,6 +7,7 @@
 #include <twin/ThrottleSmoother.h>
 #include <twin/IGearboxLogger.h>
 #include <twin/WheelCoupling.h>
+#include <twin/CouplingModelSelector.h>
 #include <io/UpstreamSignal.h>
 #include <simulator/GearConventions.h>
 #include <memory>
@@ -54,6 +55,16 @@ public:
         coupling_ = makeWheelCoupling(mode);
     }
 
+    // Select the coupling MODEL (how the clutch pressure is derived). Default is
+    // ClutchMap (declarative smooth governor — no binary relief, no oscillation).
+    // Legacy runs the historical slip-lock + binary-relief path for A/B;
+    // TorqueConverter runs the fluid-coupling model. See CouplingModelSelector.h.
+    void setCouplingModel(CouplingModelKind kind) {
+        couplingModelKind_ = kind;
+        couplingModel_ = makeCouplingModel(kind);
+    }
+    CouplingModelKind getCouplingModelKind() const { return couplingModelKind_; }
+
 private:
     IceVehicleProfile profile_;  // owned (was const ref — caused dangling + no reconfigure)
     std::unique_ptr<AutomaticGearbox> gearbox_;
@@ -63,6 +74,12 @@ private:
     double timeWithoutValidTelemetryS_ = 0.0;
     double shiftTimerS_ = 0.0;
     double crankingTimerS_ = 0.0;
+    // Edge-detection latch for the RUNNING-state restart-on-stall: true while
+    // the engine is (or was just) stalled, so the one-tick starter edge fires
+    // ONLY on the not-stalled->stalled transition. Re-arms (->false) the moment
+    // the engine recovers above kStallRpm, so each genuine stall event gets
+    // exactly one clean crank attempt. See VirtualIceTwin.cpp RUNNING case.
+    bool wasStalled_ = false;
     double engineRpmFeedback_ = 0.0;
     double vehicleSpeedFeedbackKmh_ = 0.0;
     double drivetrainTorqueNm_ = 0.0;
@@ -72,6 +89,12 @@ private:
 
     WheelCouplingMode wheelCouplingMode_ = WheelCouplingMode::Free;
     std::unique_ptr<IWheelCoupling> coupling_ = makeWheelCoupling(WheelCouplingMode::Free);
+
+    // Coupling MODEL (how the clutch pressure is derived). Default ClutchMap: a
+    // declarative smooth governor curve that replaces the legacy binary relief
+    // (the bang-bang oscillation source). See CouplingModelSelector.h.
+    CouplingModelKind couplingModelKind_ = CouplingModelKind::ClutchMap;
+    std::unique_ptr<ICouplingModel> couplingModel_ = makeCouplingModel(CouplingModelKind::ClutchMap);
 
     // RPM the engine would be at if locked to the given wheel speed in the
     // current gear (clones the replay formula). Fallback idleRpm when gear is

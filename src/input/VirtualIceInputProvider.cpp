@@ -87,6 +87,11 @@ EngineInput VirtualIceInputProvider::OnUpdateSimulation(double dt) {
     // motor_torque_nm so the solver integrates road speed from it.
     input.drivetrainInputTorqueNm = output.drivetrainInputTorqueNm;
 
+    // Thread live clutch diagnostics through to presentation (inline clutch
+    // readout + CSV-out spelunking).
+    input.roadImpliedRpm = output.roadImpliedRpm;
+    input.creepReliefFired = output.creepReliefFired;
+
     return input;
 }
 
@@ -117,6 +122,12 @@ void VirtualIceInputProvider::setIgnition(bool on) {
 void VirtualIceInputProvider::setWheelCouplingMode(twin::WheelCouplingMode mode) {
     if (twin_) {
         twin_->setWheelCouplingMode(mode);
+    }
+}
+
+void VirtualIceInputProvider::setCouplingModel(twin::CouplingModelKind kind) {
+    if (twin_) {
+        twin_->setCouplingModel(kind);
     }
 }
 

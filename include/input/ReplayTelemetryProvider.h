@@ -94,11 +94,24 @@ private:
     // nesting under the sonar thresholds).
     bool applyTimeSlicing(EngineInput& input, double dt);
     void buildBaseEngineInput(EngineInput& input, const Sample& s) const;
-    void handleAutoGearboxDrive(EngineInput& input, const Sample& s, double dt, double speedForBox) const;
+    void handleAutoGearboxDrive(EngineInput& input, const Sample& s, double dt, double roadSpeedKmh) const;
     void handleAutoGearboxNonDrive(EngineInput& input) const;
     void handleNonAutoGearbox(EngineInput& input, const Sample& s) const;
 
     const Sample& sampleAt(double t) const;
+
+    // Continuous (de-quantized) road speed at time t. A recorded CSV road speed
+    // is a STAIRCASE: CAN-quantized (~0.8 km/h) with each level held ~0.2 s, so
+    // feeding the held value makes a hard-pinned/slip-locked RPM step in lockstep
+    // (the "rpm stepper"). This linearly interpolates between the START of the
+    // speed level containing t and the START of the NEXT speed level, by fractional
+    // time — so the feed ramps smoothly across the whole hold instead of step-
+    // holding. Anchoring at the level START (not the last sample at/below t) is
+    // what makes the fraction sweep 0->1 across the level; anchoring at the
+    // tracking sample would leave it ~0. Dyno-off sentinels (speed < 0) are passed
+    // through unchanged. Pure feed interpolation — no RPM/output filtering.
+    double interpolatedRoadSpeedKmh(double t) const;
+
     void processKeyboardInput(EngineInput& input);
     void processReplayKey(int key, EngineInput& input);
 

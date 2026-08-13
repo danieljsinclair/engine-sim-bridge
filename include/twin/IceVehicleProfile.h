@@ -41,10 +41,19 @@ struct IceVehicleProfile {
     double tipOutGradientThreshold = -10.0;  // %/s negative gradient blocks upshifts
     double tipInhibitWindowS = 0.4;          // transient upshift-inhibit after a tip event
     double redlineRpm = 6500.0;
-    double idleRpm = 750.0;
+    double idleRpm = 950.0;   // C63 M156 V3 emergent idle (measured ~930-990, NOT the stale .mr "400-600")
     double throttleIdleThreshold = 0.05;     // IDLE → RUNNING transition (5%)
     double idleThrottle = 0.0;               // No throttle injection — engine idles on physics alone
     double standstillThresholdKmh = 1.0;     // Below this speed = standstill
+    // Creep-drag relief ceiling (vehicle-speed gate). Below this road speed a
+    // coupling that pins the wheels to the road (PIN) opens the clutch so the
+    // engine idles decoupled instead of being lugged by 1st-gear road-implied
+    // RPM (the creep-lug bug). Covers the FULL creep regime — raised from the
+    // old standstill-only 1.0 km/h, which left 1-3 mph lugged. reconfigureProfile
+    // sets this to the road speed at which 1st-gear road-implied RPM reaches
+    // idle (so it is always coherent with the actual ratios); the default keeps
+    // the prior near-standstill behaviour for non-reconfigured profiles.
+    double creepReliefThresholdKmh = 5.0;
 
     // ---- Declarative shift-decision thresholds (no magic constants in logic) ----
     // Lug guard: the box downshifts whenever the ACTUAL engine RPM in the current
@@ -180,7 +189,7 @@ struct IceVehicleProfile {
 
         // Engine parameters
         p.redlineRpm = 6500.0;
-        p.idleRpm = 750.0;
+        p.idleRpm = 950.0;
         p.throttleIdleThreshold = 0.05;
         p.idleThrottle = 0.0;
         p.standstillThresholdKmh = 1.0;

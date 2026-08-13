@@ -61,6 +61,9 @@ bool LiveTelemetryProvider::Initialize() {
         eofSeen_ = false;
         headerParsed_ = false;
         elapsedS_ = 0.0;
+        rowBuffer_.clear();
+        hasCurSpeedLevel_ = false;
+        hasNextSpeedLevel_ = false;
     }
 
     if (!initTwinProvider()) {
@@ -129,7 +132,11 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
         UpstreamSignal signal;
         if (hasSample_) {
             signal.throttleFraction = currentSample_.throttle;
-            signal.speedKmh = currentSample_.roadSpeedKmh;
+            // De-quantized road speed: the recorded value is a CAN staircase
+            // (levels held ~0.2 s); feed the interpolated ramp so a hard-pinned
+            // RPM does not step in lockstep. currentSample_ still owns the other
+            // fields (throttle/torque/selector) — only the speed feed is smoothed.
+            signal.speedKmh = interpolatedSpeedKmh(elapsedS_);
             signal.motorTorqueNm = currentSample_.motorTorqueNm;
             // The row is valid telemetry even when speed is blank (dyno off); a
             // non-zero timestamp keeps the twin's telemetry-timeout guard happy.
@@ -161,7 +168,15 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
                       : bridge::GearSelector::PARK;
         }
         twinProvider_->setGearSelector(static_cast<int>(sel));
-        return twinProvider_->OnUpdateSimulation(dt);
+        EngineInput input = twinProvider_->OnUpdateSimulation(dt);
+        // Surface the live sim/CSV elapsed time so each per-frame console line
+        // carries a [mm:ss.ms] timecode the user can read back as --start-from.
+        // The replay path sets this from currentTimestampS_; the live path tracks
+        // elapsedS_ (anchored to startFromS_ above) but previously never surfaced
+        // it, so --live-telemetry output had no timecode. elapsedS_ already
+        // accounts for --start-from, so the timecode matches the seek origin.
+        input.replayTimestampS = elapsedS_;
+        return input;
     }
 
     // JSON network path (master)
@@ -216,6 +231,12 @@ void LiveTelemetryProvider::setIgnition(bool on) {
 void LiveTelemetryProvider::setWheelCouplingMode(twin::WheelCouplingMode mode) {
     if (twinProvider_) {
         twinProvider_->setWheelCouplingMode(mode);
+    }
+}
+
+void LiveTelemetryProvider::setCouplingModel(twin::CouplingModelKind kind) {
+    if (twinProvider_) {
+        twinProvider_->setCouplingModel(kind);
     }
 }
 
@@ -280,130 +301,100 @@ bool LiveTelemetryProvider::isSampleBlank(const CsvSample& s) {
     return s.throttle == 0.0 && s.roadSpeedKmh == -2.0;
 }
 
-LiveTelemetryProvider::RowDisposition
-LiveTelemetryProvider::classifyRow(const CsvSample& sample, double simElapsedS) {
-    // Rows before --start-from are consumed-and-discarded (the stream has no seek).
-    if (startFromS_ >= 0.0 && sample.timeS < startFromS_) return RowDisposition::Skip;
-    // Anchor absolute epoch-style timeS to a relative offset on the first row.
-    if (baselineTimeS_ < 0.0) baselineTimeS_ = sample.timeS;
-    // Future row: stop scanning + surface the last in-window row. getline has
-    // consumed this row, so it is not re-read next call — a minor ~1-row/call
-    // skew on high-rate streams (negligible for the gearbox at ~442 rows/s).
-    if (double recordingRelativeS = sample.timeS - baselineTimeS_;
-        recordingRelativeS > simElapsedS) {
-        return RowDisposition::Future;
+void LiveTelemetryProvider::updateCurrentSpeedLevel(double relT, double speedKmh) {
+    // A new level starts whenever the road speed steps outside the level tolerance.
+    // The level START (relT) is recorded once and held until the next step, so
+    // interpolatedSpeedKmh()'s fraction sweeps the full ~0.2 s hold instead of
+    // tracking the sim clock (which would leave it ~0 — the adjacent-row trap).
+    if (!hasCurSpeedLevel_ || std::abs(speedKmh - curSpeedLevelKmh_) > kLevelStepKmh) {
+        curSpeedLevelT_ = relT;
+        curSpeedLevelKmh_ = speedKmh;
+        hasCurSpeedLevel_ = true;
     }
-    return RowDisposition::Surface;
 }
 
+double LiveTelemetryProvider::interpolatedSpeedKmh(double simElapsedS) const {
+    if (!hasCurSpeedLevel_) return currentSample_.roadSpeedKmh;   // no level seen yet
+    if (curSpeedLevelKmh_ == -2.0) return curSpeedLevelKmh_;      // dyno-off sentinel
+    // No next level known (true live feed whose next sample has not arrived) or
+    // the next level is a dyno-off sentinel: hold the current level rather than
+    // ramp into a non-commanded value.
+    if (!hasNextSpeedLevel_ || nextSpeedLevelKmh_ == -2.0) return curSpeedLevelKmh_;
+    if (nextSpeedLevelT_ <= curSpeedLevelT_) return curSpeedLevelKmh_;  // degenerate bracket
+    double frac = (simElapsedS - curSpeedLevelT_) / (nextSpeedLevelT_ - curSpeedLevelT_);
+    if (frac < 0.0) frac = 0.0;
+    else if (frac > 1.0) frac = 1.0;
+    return curSpeedLevelKmh_ + frac * (nextSpeedLevelKmh_ - curSpeedLevelKmh_);
+}
+
+// Buffered, timestamp-paced consumption (unifies the former live/paced paths).
+// The CSV stream is forward-only and getline is destructive, so upcoming rows are
+// staged in rowBuffer_ rather than consumed-and-lost. Each call:
+//   1. Refills rowBuffer_ from the stream until its tail is ~kLevelLookaheadS
+//      ahead of the sim clock (enough lookahead to see the NEXT speed level, so
+//      the road-speed feed can be interpolated across the ~0.2 s CAN hold) or EOF.
+//   2. Pops every buffered row at/below the sim clock into currentSample_
+//      (selector/throttle/torque/gear — unchanged contract) and updates the
+//      current speed-level start.
+//   3. Scans the remaining (future) tail for the next speed level.
+// Blank/malformed/pre-start-from rows are skipped. 1 s of sim time == 1 s of
+// recording time (paced), and on a file-redirected capture the gearbox still
+// walks the speed ramp row-by-row (the drain-to-EOF freeze cannot recur: only
+// the lookahead tail is ever held, never the whole stream).
 bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
     if (eofSeen_ || !stream_ || !ensureHeaderParsed()) return false;
 
-    // LIVE mode (engine-sim-cli --live-telemetry stdin pipe): surface the LATEST
-    // row currently available in the stream every frame. A live pipe delivers
-    // rows in real time, so the freshest sample IS the current state — there is
-    // no reason to hold an old row until a sim clock "catches up" to its recorded
-    // timestamp. Timestamp pacing (tryReadNextRowPaced) is correct for a seekable
-    // replay file, but on a live feed it forces the sim clock (elapsedS_, advanced
-    // by dt per frame) to reach each row's time before it is shown — adding up to
-    // ~0.5s+ latency (worst between sparse rows, e.g. t=0,2,3.5,4,6,8s). Echoing
-    // the latest sample immediately makes the live response as instant as keyboard.
-    if (liveStream_) return tryReadNextRowLive(simElapsedS);
-
-    return tryReadNextRowPaced(simElapsedS);
-}
-
-// LIVE stdin path: surface the latest row available within a small time
-// lookahead of the sim clock, with no strict timestamp pacing. Malformed rows,
-// --start-from-prior rows, and blank rows (throttle=0 + road speed at the dyno-off
-// sentinel) are skipped; everything else updates the current sample.
-//
-// The lookahead window (kLiveLookaheadS) is the latency/responsiveness trade-off:
-//   - A live pipe delivers rows in real time, so the newest row is almost always
-//     within the window -> surfaced next frame. Latency stays sub-window (as
-//     instant as keyboard), which is what the a321e1f latency fix wanted.
-//   - A file-redirected capture is fully buffered, so rows advance through the
-//     window as the sim clock (simElapsedS) sweeps forward -> the twin walks the
-//     speed ramp and the gearbox shifts. This is what drain-to-EOF broke: that
-//     loop read the ENTIRE stream in one call and pinned currentSample_ to the
-//     capture's FINAL (often near-standstill) row, freezing the gearbox in 1st.
-// We stop reading at the first row beyond the window (or EOF) so the stream
-// position advances correctly for both feed types.
-bool LiveTelemetryProvider::tryReadNextRowLive(double simElapsedS) {
-    // Same in-window scan as the paced path, but with a small lookahead horizon
-    // (kLiveLookaheadS) instead of strict simElapsedS gating. This keeps a live
-    // feed responsive (rows arriving near real time fall inside the horizon and are
-    // surfaced next frame — latency stays sub-window, as instant as keyboard) while
-    // still WALKING a file-redirected capture row-by-row as the sim clock sweeps
-    // forward, so the twin sees the speed ramp and the gearbox shifts. The strict
-    // paced path is correct for seekable replay files but added ~0.5s+ latency on a
-    // live pipe (holding rows until the sim clock caught their timestamp); the
-    // lookahead removes that wait. The ~1-row/call skew from breaking on the first
-    // beyond-horizon row is the same minor effect the paced path already accepts.
-    constexpr double kLiveLookaheadS = 0.25;  // latency budget
+    constexpr double kLevelLookaheadS = 0.30;  // read-ahead horizon to find the next speed level
     const double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
-    std::string line;
-    CsvSample lastInWindow{};
-    bool foundInWindow = false;
-    while (std::getline(*stream_, line)) {
-        if (isBlankLine(line)) continue;
-        CsvSample sample;
-        if (std::string parseError; !csvParser_.parseRow(line, timeDivisor, sample, parseError)) {
-            continue;  // malformed data row: skip
-        }
-        if (isSampleBlank(sample)) continue;
-        if (startFromS_ >= 0.0 && sample.timeS < startFromS_) continue;
-        // Anchor absolute epoch-style timeS to a relative offset on the first row,
-        // then compare against the sim clock + lookahead horizon.
-        if (baselineTimeS_ < 0.0) baselineTimeS_ = sample.timeS;
-        if (const double recordingRelativeS = sample.timeS - baselineTimeS_;
-            recordingRelativeS > simElapsedS + kLiveLookaheadS) break;  // future row
-        lastInWindow = sample;
-        foundInWindow = true;
-    }
-    if (stream_->eof() && !foundInWindow) eofSeen_ = true;
-    if (foundInWindow) {
-        currentSample_ = lastInWindow;
-        hasSample_ = true;
-    }
-    return foundInWindow;
-}
 
-// Timestamp-paced consumption (replay file path): surface the LAST row whose
-// recording-time (relative to baselineTimeS_) is at or before simElapsedS, so
-// 1 s of sim time == 1 s of recording time. Fixes the "stuck at 0–3 km/h" bug
-// where a high-rate recording was consumed at one row per sim frame. Blank rows
-// (no decoded signals) are skipped so they don't pollute the in-window sample.
-bool LiveTelemetryProvider::tryReadNextRowPaced(double simElapsedS) {
-    CsvSample lastInWindow{};
-    bool foundInWindow = false;
-    std::string line;
-    while (std::getline(*stream_, line)) {
+    // 1) Refill the lookahead buffer until its tail is far enough ahead (or EOF).
+    while (true) {
+        if (!rowBuffer_.empty() &&
+            (rowBuffer_.back().timeS - baselineTimeS_) > simElapsedS + kLevelLookaheadS) {
+            break;
+        }
+        std::string line;
+        if (!std::getline(*stream_, line)) break;  // EOF / error: stop refilling
         if (isBlankLine(line)) continue;
         CsvSample sample;
         std::string parseError;
-        if (double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
-            !csvParser_.parseRow(line, timeDivisor, sample, parseError)) {
-            return false;  // malformed data row
-        }
-        // Skip blank rows (no decoded CAN signals) — they carry no telemetry
-        // and would otherwise overwrite a valid in-window sample.
+        if (!csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;  // malformed
         if (isSampleBlank(sample)) continue;
+        if (startFromS_ >= 0.0 && sample.timeS < startFromS_) continue;  // pre-window
+        if (baselineTimeS_ < 0.0) baselineTimeS_ = sample.timeS;          // anchor on first kept row
+        rowBuffer_.push_back(sample);
+    }
 
-        const RowDisposition disposition = classifyRow(sample, simElapsedS);
-        if (disposition == RowDisposition::Skip) continue;
-        if (disposition == RowDisposition::Future) break;
-        lastInWindow = sample;
-        foundInWindow = true;
-    }
-    // Mark EOF only on genuine exhaustion — a call that surfaced a row stays
-    // "connected"; EOF is confirmed on a later call that surfaces nothing.
-    if (stream_->eof() && !foundInWindow) eofSeen_ = true;
-    if (foundInWindow) {
-        currentSample_ = lastInWindow;
+    // 2) Advance currentSample_ through every row the sim clock has reached.
+    bool found = false;
+    while (!rowBuffer_.empty()) {
+        const double relT = rowBuffer_.front().timeS - baselineTimeS_;
+        if (relT > simElapsedS) break;
+        currentSample_ = rowBuffer_.front();
+        rowBuffer_.pop_front();
         hasSample_ = true;
+        found = true;
+        updateCurrentSpeedLevel(relT, currentSample_.roadSpeedKmh);
     }
-    return foundInWindow;  // false at clean EOF after all in-window rows consumed
+
+    // 3) Find the next speed level in the (future) tail for interpolation.
+    hasNextSpeedLevel_ = false;
+    if (hasCurSpeedLevel_) {
+        for (const CsvSample& s : rowBuffer_) {
+            if (std::abs(s.roadSpeedKmh - curSpeedLevelKmh_) > kLevelStepKmh) {
+                nextSpeedLevelT_ = s.timeS - baselineTimeS_;
+                nextSpeedLevelKmh_ = s.roadSpeedKmh;
+                hasNextSpeedLevel_ = true;
+                break;
+            }
+        }
+    }
+
+    // EOF only when the stream AND the lookahead buffer are fully drained (a call
+    // that surfaced a row stays "connected"; EOF is confirmed on a later call that
+    // surfaces nothing) — mirrors the former live/paced contract.
+    if (stream_->eof() && rowBuffer_.empty() && !found) eofSeen_ = true;
+    return found;
 }
 
 bridge::GearSelector LiveTelemetryProvider::csvGearSelector() const {

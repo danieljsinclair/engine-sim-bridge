@@ -30,6 +30,7 @@
 #include "simulator/EngineSimTypes.h"
 
 #include <atomic>
+#include <deque>
 #include <istream>
 #include <memory>
 #include <string>
@@ -86,6 +87,11 @@ public:
     /// Select the live clutch wheel-coupling strategy (FREE/PIN).
     void setWheelCouplingMode(twin::WheelCouplingMode mode);
 
+    /// Select the coupling MODEL (how the clutch pressure is derived): clutch-map
+    /// (default — declarative smooth governor, no binary relief), torque-converter
+    /// (fluid coupling), or legacy (historical slip-lock + binary relief, A/B).
+    void setCouplingModel(twin::CouplingModelKind kind);
+
     /// Forward simulator RPM feedback to the twin for cranking transition.
     void provideFeedback(const EngineSimStats& stats) override;
 
@@ -117,24 +123,6 @@ private:
     /// header is found (or EOF).
     bool ensureHeaderParsed();
 
-    /// LIVE stdin path: surface the latest row available within a small time
-    /// lookahead of the sim clock (no strict timestamp pacing) — keeps a live feed
-    /// responsive while still walking a file-redirected capture row-by-row so the
-    /// gearbox sees the speed ramp. Returns true if a sample was found.
-    bool tryReadNextRowLive(double simElapsedS);
-
-    /// Timestamp-paced path (replay file): surface the last row at/before the sim
-    /// window. Returns true if a sample was found.
-    bool tryReadNextRowPaced(double simElapsedS);
-
-    /// Outcome of classifying one parsed row against the current sim window.
-    enum class RowDisposition { Skip, Surface, Future };
-
-    /// Classify a row vs the sim window: before --start-from (Skip), within the
-    /// window (Surface), or ahead of sim time (Future). Sets baselineTimeS_ on
-    /// the first surfaced row.
-    RowDisposition classifyRow(const CsvSample& sample, double simElapsedS);
-
     /// True if a line is all whitespace.
     static bool isBlankLine(std::string_view s);
 
@@ -154,6 +142,29 @@ private:
     /// Monotonic non-zero ms so the twin's telemetry-timeout guard never fires.
     uint64_t streamTimestampUtcMs() const;
 
+    /// Record a consumed row's (recording-relative time, road speed) into the
+    /// speed-level state. A "level" is a contiguous run of rows whose road speed
+    /// is within kLevelStepKmh; the level START (first row of the run) is the
+    /// fixed anchor used by interpolatedSpeedKmh() so its fraction sweeps the
+    /// whole ~0.2 s hold rather than tracking the sim clock (which would leave
+    /// it ~0). Dyno-off sentinels form their own level.
+    void updateCurrentSpeedLevel(double relT, double speedKmh);
+
+    /// Continuous (de-quantized) road speed at the sim clock. The CSV road speed
+    /// is a STAIRCASE (CAN-quantized ~0.8 km/h, each level held ~0.2 s); feeding
+    /// the held value makes a hard-pinned/slip-locked RPM step in lockstep (the
+    /// "rpm stepper"). This linearly interpolates between the current level START
+    /// and the next level, by fractional recording time, so the feed ramps
+    /// smoothly across the whole hold. Pure feed interpolation — no RPM filter.
+    /// Falls back to the held level when no next level is known (true live feed
+    /// whose next sample has not arrived) and passes dyno-off sentinels through.
+    double interpolatedSpeedKmh(double simElapsedS) const;
+
+    /// Two recorded samples are the SAME speed level when their road speeds differ
+    /// by <= this. The CAN quantization step is ~0.8 km/h, so 0.1 cleanly separates
+    /// real level changes from float jitter while never splitting a genuine level.
+    static constexpr double kLevelStepKmh = 0.1;
+
     // JSON mode: external profile ref. CSV mode: owned profile + istream.
     twin::IceVehicleProfile ownedProfile_;          // used only in CSV mode
     const twin::IceVehicleProfile& profile_;        // points to ownedProfile_ or external
@@ -168,7 +179,7 @@ private:
 
     /// CSV stdin members (unused in JSON mode)
     std::istream* stream_ = nullptr;
-    bool liveStream_ = false;  // true => surface latest row every frame (no pacing)
+    bool liveStream_ = false;  // retained for the ctor signature; the buffered scan unifies both paths
     CsvTelemetryParser csvParser_;
     CsvSample currentSample_{};
     bool hasSample_ = false;
@@ -177,6 +188,27 @@ private:
     bool headerParsed_ = false;  // header parsed once; later calls read data rows only
     double startFromS_ = -1.0;   // skip CSV rows before this time (-1 = disabled)
     double baselineTimeS_ = -1.0;  // recording-time of the first consumed row (set on first success)
+
+    /// Read-ahead buffer of parsed rows NOT yet past the sim clock. The CSV stream
+    /// is forward-only and getline is destructive, so to interpolate the road
+    /// speed between the current level and the NEXT level (which lives in the
+    /// near future, ~0.2 s ahead) the upcoming rows are buffered here rather than
+    /// consumed-and-lost. Rows are popped to currentSample_ as the sim clock
+    /// reaches them; the remaining tail holds the lookahead used to find the next
+    /// speed level. Bounded by kLevelLookaheadS (~0.3 s of rows).
+    std::deque<CsvSample> rowBuffer_;
+
+    /// Speed-level state for interpolatedSpeedKmh(). curSpeedLevelT_ is the
+    /// recording-relative time at which the CURRENT speed level started (fixed
+    /// while the sim clock is inside the level); nextSpeedLevel* is the first
+    /// level after it (looked ahead in rowBuffer_), or hasNextSpeedLevel_=false
+    /// when unknown (true live feed, next sample not yet arrived -> hold).
+    double curSpeedLevelT_ = 0.0;
+    double curSpeedLevelKmh_ = 0.0;
+    bool hasCurSpeedLevel_ = false;
+    double nextSpeedLevelT_ = 0.0;
+    double nextSpeedLevelKmh_ = 0.0;
+    bool hasNextSpeedLevel_ = false;
 };
 
 } // namespace input
