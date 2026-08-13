@@ -182,6 +182,10 @@ private:
     // When clock is injected via deps.clock, we use that; otherwise we own steadyClock_
     ILoopClock* clock_ = nullptr;  // Non-owning pointer, points to either injectedClock_ or steadyClock_
     std::unique_ptr<ILoopClock> steadyClock_;  // Owning pointer for default steady clock
+
+    // Last-frame starter state — the cranking notice logs on the engage
+    // TRANSITION, not every frame the starter is held.
+    bool lastStarterEngaged_ = false;
 };
 
 // ============================================================================

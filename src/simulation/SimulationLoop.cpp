@@ -213,9 +213,10 @@ void SimulationLoop::applyVehicleControls(
         // Non-bridge path: dyno only when starter not engaged (legacy).
         applyDynoControl(simulator_, input.dynoTorqueScale, lastDynoTorqueScale);
     }
-    if (crankingState.starterEngaged) {
+    if (crankingState.starterEngaged && !lastStarterEngaged_) {
         logger_->info(LogMask::BRIDGE, "Cranking: starter engaged, dyno disabled - consider using the clutch instead");
     }
+    lastStarterEngaged_ = crankingState.starterEngaged;
 
     // Twin clutch control (direct pressure, overrides applyGearChange's hardwired clutch)
     if (input.clutchPressure >= 0.0) {
