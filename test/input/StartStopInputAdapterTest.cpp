@@ -43,7 +43,7 @@ protected:
     static UpstreamSignal makeSignal(bool brakePressed, GearSelector gear) {
         UpstreamSignal s;
         s.isValid = true;
-        s.brakePedalState = brakePressed ? 1 : 0;  // ON=1, else OFF(0)
+        s.brakeLight = brakePressed;  // true = light on (pedal pressed)
         s.gearSelector = gear;
         return s;
     }
@@ -128,6 +128,32 @@ TEST_F(StartStopInputAdapterTest, StarterPulseIsSingleFramePerRisingEdge) {
     EXPECT_TRUE(adapter_->OnUpdateSimulation(0.016).starterButton);  // pulse
     EXPECT_FALSE(adapter_->OnUpdateSimulation(0.016).starterButton); // suppressed
     EXPECT_FALSE(adapter_->OnUpdateSimulation(0.016).starterButton); // still suppressed
+}
+
+// (v) Gear-D start reflected through the decorator seam: the controller's
+// instant gear start (starter + ignition at t=0) must surface as ignition TRUE
+// on the FIRST frame, with the starter's rising-edge pulse.
+TEST_F(StartStopInputAdapterTest, GearDSelected_CombustionStartsImmediately) {
+    live_->submitSignal(makeSignal(/*brake=*/false, GearSelector::DRIVE));
+
+    EngineInput f0 = adapter_->OnUpdateSimulation(0.2);
+    EXPECT_TRUE(f0.ignition);        // instant: no 0.5s crank delay
+    EXPECT_TRUE(f0.starterButton);   // rising edge -> pulse fires this frame
+}
+
+// (vi) An absent brake light (nullopt) is NOT a pressed pedal: no start is
+// invented across several frames.
+TEST_F(StartStopInputAdapterTest, AbsentBrakeLight_TreatedAsNotPressed) {
+    UpstreamSignal s;
+    s.isValid = true;
+    s.gearSelector = GearSelector::NEUTRAL;  // brakeLight left nullopt
+    live_->submitSignal(s);
+
+    for (int i = 0; i < 5; ++i) {
+        EngineInput frame = adapter_->OnUpdateSimulation(0.2);
+        EXPECT_FALSE(frame.ignition);
+        EXPECT_FALSE(frame.starterButton);
+    }
 }
 
 } // namespace

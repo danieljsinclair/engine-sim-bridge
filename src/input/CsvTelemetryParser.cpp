@@ -89,9 +89,8 @@ bool CsvTelemetryParser::parseHeader(const std::string& headerLine, std::string&
             header_.colClutch = static_cast<int>(i);
         } else if (name == "motor_torque_nm" || name == "motor_torque" || name == "torque_nm") {
             header_.colMotorTorque = static_cast<int>(i);
-        } else if (name == "brake_percent" || name == "brake_pedal_state" ||
-                   name == "brake_pedalstate" || name == "di_brakepedalstate") {
-            header_.colBrakePedalState = static_cast<int>(i);
+        } else if (name == "brake_light" || name == "brakelight") {
+            header_.colBrakeLight = static_cast<int>(i);
         }
     }
 
@@ -163,14 +162,15 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
         s.motorTorqueNm = v;
     }
 
-    // DI_brakePedalState enum (0=OFF, 1=ON, 2=INVALID). The decoded capture column
-    // is integer-valued; an unparseable/blank value keeps the default (0=OFF).
-    if (header_.colBrakePedalState >= 0 &&
-        header_.colBrakePedalState < static_cast<int>(fields.size()) &&
-        parseInt(fields[header_.colBrakePedalState], s.brakePedalState)) {
-        // Clamp to the documented 2-bit enum domain so a stray large value cannot
-        // be mistaken for a valid pedal state downstream.
-        if (s.brakePedalState < 0 || s.brakePedalState > 2) s.brakePedalState = 2;
+    // brake_light: a binary column. "1" = on, "0" = off; blank/unparseable/
+    // out-of-domain values leave the field absent (nullopt) — never a guess.
+    if (header_.colBrakeLight >= 0 &&
+        header_.colBrakeLight < static_cast<int>(fields.size())) {
+        int brakeLight = 0;
+        if (parseInt(fields[header_.colBrakeLight], brakeLight)) {
+            if (brakeLight == 1)      s.brakeLight = true;
+            else if (brakeLight == 0) s.brakeLight = false;
+        }
     }
 
     out = s;

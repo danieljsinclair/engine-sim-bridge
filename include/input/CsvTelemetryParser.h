@@ -11,10 +11,15 @@
 //   gear            blank/-1 = unchanged; 0 = neutral; 1..8 = forward (set directly)
 //   gear_selector   PRNDL string (P/R/N/D) — followed by the auto gearbox
 //   clutch_pct      0..100 -> clutch pressure 0..1. Blank/-1 = unchanged
+//   brake_light     1 = brake light on (pedal pressed), 0 = off. Blank/unparseable
+//                  = absent. The retired brake_percent / brake_pedal_state
+//                  columns are no longer consumed (they fall through to the
+//                  unknown-column path so old captures still parse).
 
 #ifndef INPUT_CSV_TELEMETRY_PARSER_H
 #define INPUT_CSV_TELEMETRY_PARSER_H
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -29,7 +34,7 @@ struct CsvHeader {
     int colClutch = -1;
     int colGearSelector = -1;
     int colMotorTorque = -1;
-    int colBrakePedalState = -1;  // DI_brakePedalState enum: 0=OFF,1=ON,2=INVALID
+    int colBrakeLight = -1;  // brake_light: 1=on, 0=off
     bool timeInMs = false;
     bool rawCanFormat = false;  // true if can_id + data_hex columns detected
 };
@@ -43,7 +48,7 @@ struct CsvSample {
     double clutchPct = -1.0;         // -1 = unchanged; 0..1
     std::string gearSelector;        // PRNDL string from vehicle-sim captures
     double motorTorqueNm = 0.0;      // Recorded motor/engine torque (Nm); -1 = missing
-    int brakePedalState = 0;         // DI_brakePedalState enum: 0=OFF,1=ON,2=INVALID
+    std::optional<bool> brakeLight;  // brake light: true=on, false=off, nullopt=absent
 };
 
 class CsvTelemetryParser {

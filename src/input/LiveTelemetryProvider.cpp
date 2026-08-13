@@ -119,11 +119,11 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
             signal.speedKmh = currentSample_.roadSpeedKmh;
             signal.motorTorqueNm = currentSample_.motorTorqueNm;
             // The start/stop decision layer (VehicleStartController, read by
-            // StartStopInputAdapter via getCurrentSignal()) needs the raw brake
-            // enum and the resolved gear. The CSV path is the documented
+            // StartStopInputAdapter via getCurrentSignal()) needs the brake
+            // light and the resolved gear. The CSV path is the documented
             // vehicle-sim --stdout-csv pipe, so it must populate these here —
             // the JSON network path does the equivalent via submitSignal().
-            signal.brakePedalState = currentSample_.brakePedalState;
+            signal.brakeLight = currentSample_.brakeLight;
             signal.gearSelector = csvGearSelector();
             // The row is valid telemetry even when speed is blank (dyno off); a
             // non-zero timestamp keeps the twin's telemetry-timeout guard happy.
@@ -139,7 +139,10 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
 
         twinProvider_->setUpstreamSignal(signal);
         twinProvider_->setGearSelector(static_cast<int>(csvGearSelector()));
-        return twinProvider_->OnUpdateSimulation(dt);
+        EngineInput input = twinProvider_->OnUpdateSimulation(dt);
+        // Echo the brake light for display (the twin does not consume it).
+        input.brakeLight = signal.brakeLight;
+        return input;
     }
 
     // JSON network path (master)
@@ -156,6 +159,9 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
 
     // Delegate to the twin for gearbox/clutch/throttle processing
     input = twinProvider_->OnUpdateSimulation(dt);
+
+    // Echo the brake light for display (the twin does not consume it).
+    input.brakeLight = signal.brakeLight;
 
     return input;
 }

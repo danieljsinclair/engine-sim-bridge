@@ -61,10 +61,21 @@ void VehicleStartController::beginStart(bool driveSelected) {
         actuator_.setStarterMotor(true);
     }
     engineOn_ = true;
+    if (driveSelected) {
+        // Gear-initiated start: ignition fires on the SAME update as the
+        // starter (t=0, no crank delay) and no timer is armed. Any start
+        // demand that includes a drive gear is instant — even when the brake
+        // is also pressed (the gear dominates the delay rule).
+        fireIgnition();
+        return;
+    }
     if (!crankPending_) {
+        // Brake-initiated crank: accumulate crankDelayS of dt, then ignite.
+        // Only this path arms the timer, so a pending crank is always
+        // brake-only; a drive gear arriving mid-crank fast-forwards ignition.
         crankPending_ = true;
         crankAccumS_ = 0.0;
-        crankFromBrakeOnly_ = !driveSelected;
+        crankFromBrakeOnly_ = true;
     }
 }
 

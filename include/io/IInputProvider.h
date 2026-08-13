@@ -7,6 +7,7 @@
 #ifndef I_INPUT_PROVIDER_H
 #define I_INPUT_PROVIDER_H
 
+#include <optional>
 #include <string>
 
 struct EngineSimStats;
@@ -31,6 +32,11 @@ struct EngineInput {
 
     // Brake control (HACK: engine braking via dyno, not wheel braking)
     double brakeLevel = 0.0;        // 0.0 = no brake, 1.0 = full brake
+
+    // Vehicle brake LIGHT (from the live telemetry feed's brake-light signal).
+    // nullopt = not reported; true = pedal pressed (light on). Display-only —
+    // the start/stop decision reads the signal, not this echo.
+    std::optional<bool> brakeLight;
 
     // Twin control
     int gearAbsolute = -1;          // -1 = use gearDelta logic, 0+ = set this gear directly

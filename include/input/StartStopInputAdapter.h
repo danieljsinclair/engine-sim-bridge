@@ -77,7 +77,7 @@ public:
 
 private:
     // Map the upstream signal to (brakePressed, gear) for the decision layer.
-    // brake: ON(1) => pressed; OFF(0) and INVALID(2) => not pressed.
+    // brake: brakeLight true => pressed; false/absent => not pressed.
     static void decodeSignal(const UpstreamSignal& signal,
                              bool& outBrakePressed,
                              bridge::GearSelector& outGear);

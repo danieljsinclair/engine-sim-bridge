@@ -47,10 +47,6 @@ EngineInput StartStopInputAdapter::OnUpdateSimulation(double dt) {
     bool brakePressed = false;
     bridge::GearSelector gear = bridge::GearSelector::NEUTRAL;
     decodeSignal(signal, brakePressed, gear);
-    if (std::getenv("BENCH_SS") != nullptr)
-        std::fprintf(stderr, "[SS] dt=%.3f brake=%d gear=%d engOn=%d obsIgn=%d obsStr=%d\n",
-                     dt, signal.brakePedalState, static_cast<int>(signal.gearSelector),
-                     controller_.isEngineOn(), observer_.ignition_, observer_.starter_);
 
     // 3. Advance the decision layer. The controller writes to observer_ only;
     //    it does NOT touch the real actuator.
@@ -77,8 +73,9 @@ std::string StartStopInputAdapter::GetLastError() const {
 void StartStopInputAdapter::decodeSignal(const UpstreamSignal& signal,
                                           bool& outBrakePressed,
                                           bridge::GearSelector& outGear) {
-    // DI_brakePedalState: ON=1 pressed, OFF=0 / INVALID=2 not pressed.
-    outBrakePressed = (signal.brakePedalState == 1);
+    // Brake light: absent (nullopt) means the signal was not reported — treated
+    // as not pressed rather than inventing a pedal state.
+    outBrakePressed = signal.brakeLight.value_or(false);
     outGear = signal.gearSelector;
 }
 

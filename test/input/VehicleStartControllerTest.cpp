@@ -74,21 +74,63 @@ TEST(VehicleStartControllerTest, BrakePressWhileOff_CranksThenIgnitesAfterDelay)
     EXPECT_FALSE(vsc.isStopLatched());
 }
 
-// 2. Gear D while off (no brake): same crank-then-delay behaviour as #1.
-TEST(VehicleStartControllerTest, GearDWhileOff_CranksThenIgnitesAfterDelay) {
+// 2. Gear D while off (no brake): a start demand that includes a drive gear
+// fires starter AND ignition together on the first update (t=0, no crank
+// delay — the delay applies only to brake-initiated cranks).
+TEST(VehicleStartControllerTest, GearDWhileOff_StartsInstantly) {
     SpyActuator spy;
     VehicleStartController vsc(spy);
 
     vsc.update(0.2, /*brakePressed=*/false, GearSelector::DRIVE);
-    EXPECT_TRUE(spy.starter_);
-    EXPECT_FALSE(spy.ignition_);
+    EXPECT_TRUE(spy.starter_);     // starter engaged at t0
+    EXPECT_TRUE(spy.ignition_);    // ignition fired on the SAME update
     EXPECT_TRUE(vsc.isEngineOn());
+    EXPECT_FALSE(vsc.isStopLatched());
+    EXPECT_GE(spy.ignitionCalls_, 1);
+}
 
-    vsc.update(0.2, false, GearSelector::DRIVE); // accumulated 0.4
-    EXPECT_FALSE(spy.ignition_);
+// 2b. Gear R while off: REVERSE is a drive gear too — the instant start must
+// not be D-only logic.
+TEST(VehicleStartControllerTest, GearRWhileOff_StartsInstantly) {
+    SpyActuator spy;
+    VehicleStartController vsc(spy);
 
-    vsc.update(0.1, false, GearSelector::DRIVE); // accumulated 0.5
+    vsc.update(0.2, /*brakePressed=*/false, GearSelector::REVERSE);
+    EXPECT_TRUE(spy.starter_);
     EXPECT_TRUE(spy.ignition_);
+    EXPECT_TRUE(vsc.isEngineOn());
+    EXPECT_FALSE(vsc.isStopLatched());
+}
+
+// 2c. Brake AND gear D together while off: the presence of a drive gear
+// dominates the delay rule — ignition still fires on the first update.
+TEST(VehicleStartControllerTest, BrakeAndGearDTogetherWhileOff_IgnitesImmediately) {
+    SpyActuator spy;
+    VehicleStartController vsc(spy);
+
+    vsc.update(0.2, /*brakePressed=*/true, GearSelector::DRIVE);
+    EXPECT_TRUE(spy.ignition_);
+    EXPECT_TRUE(spy.starter_);
+    EXPECT_TRUE(vsc.isEngineOn());
+}
+
+// 2d. A gear start must not arm the crank timer: after the instant start,
+// continued DRIVE updates with no brake never re-fire ignition or drop it.
+TEST(VehicleStartControllerTest, GearStartDoesNotArmCrankTimer) {
+    SpyActuator spy;
+    VehicleStartController vsc(spy);
+
+    vsc.update(0.2, false, GearSelector::DRIVE);  // instant start
+    ASSERT_TRUE(spy.ignition_);
+    const int callsAtStart = spy.ignitionCalls_;
+
+    // Accumulate well past the 0.5s crank delay in DRIVE with no brake.
+    for (int i = 0; i < 10; ++i) {
+        vsc.update(0.1, false, GearSelector::DRIVE);
+    }
+
+    EXPECT_TRUE(spy.ignition_);          // ignition never dropped
+    EXPECT_EQ(spy.ignitionCalls_, callsAtStart);  // no re-fire artefact
     EXPECT_TRUE(vsc.isEngineOn());
     EXPECT_FALSE(vsc.isStopLatched());
 }

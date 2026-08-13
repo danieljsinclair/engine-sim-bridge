@@ -456,6 +456,39 @@ TEST(LiveTelemetryStreamTest, CsvRoadSpeedIsSurfacedOnEngineInput) {
         << "CSV speed_kmh=100 must surface on EngineInput.roadSpeedKmh (was dropped)";
 }
 
+// T10b: the brake_light column surfaces end-to-end on the provider's current
+// signal (the seam StartStopInputAdapter polls via getCurrentSignal()). The
+// tri-state must survive: 1 -> true, 0 -> false, blank -> nullopt.
+//
+// Rows are duplicated per state: the paced reader drops the FIRST row beyond
+// the sim clock each call (the documented ~1-row skew), so each asserted state
+// needs a second row inside the window to surface.
+TEST(LiveTelemetryStreamTest, CsvBrakeLightColumn_SurfacesOnCurrentSignal) {
+    StreamHarness h(
+        "time_s,throttle_pct,brake_light\n"
+        "0.0,10,1\n"
+        "1.0,10,1\n"
+        "2.0,20,0\n"
+        "3.0,20,0\n"
+        "4.0,30,\n"
+        "5.0,30,\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    // simElapsedS=1.5: rows t=0,1 in window; t=2 dropped as future. -> true.
+    h.provider->OnUpdateSimulation(1.5);
+    EXPECT_TRUE(h.provider->getCurrentSignal().brakeLight.has_value());
+    EXPECT_TRUE(*h.provider->getCurrentSignal().brakeLight);
+
+    // simElapsedS=3.5: row t=3 in window; t=4 dropped. -> false.
+    h.provider->OnUpdateSimulation(2.0);
+    EXPECT_TRUE(h.provider->getCurrentSignal().brakeLight.has_value());
+    EXPECT_FALSE(*h.provider->getCurrentSignal().brakeLight);
+
+    // simElapsedS=5.5: row t=5 in window. -> blank -> nullopt.
+    h.provider->OnUpdateSimulation(2.0);
+    EXPECT_FALSE(h.provider->getCurrentSignal().brakeLight.has_value());
+}
+
 // T11: LIVE stream mode (engine-sim-cli --live-telemetry stdin pipe) surfaces the
 // LATEST row available in the stream on the FIRST frame — no consumption pacing
 // by recording timestamp. This is the latency fix: under timestamp pacing a
