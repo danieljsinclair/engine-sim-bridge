@@ -323,7 +323,10 @@ public:
             }
         }
 
-        // Create loop with injected dependencies — no parameter plumbing
+        // Create loop with injected dependencies — no parameter plumbing.
+        // Deterministic mode paces with the no-op clock: the run advances at
+        // CPU speed with zero wall-clock dependence (input rows are consumed
+        // on the loop's fixed sim clock, physics on the same thread).
         SessionDependencies loopDeps{
             audioBuffer_,
             &crankingController_,
@@ -332,7 +335,8 @@ public:
             presentation_,
             telemetryWriter_,
             telemetryReader_,
-            logger_
+            logger_,
+            config_.deterministic ? &fakeClock_ : nullptr
         };
         SimulationLoop loop(*simulator_, config_, loopDeps);
 
@@ -447,6 +451,8 @@ private:
     ILogging* logger_;
     CrankingController crankingController_;
     std::atomic<bool> stopRequested_{false};
+    // No-op clock for deterministic mode (unpaced, CPU-speed replay).
+    FakeLoopClock fakeClock_;
     bool closed_{false};
 };
 

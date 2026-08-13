@@ -137,6 +137,7 @@ set(BRIDGE_SOURCES
     # Audio strategies
     src/strategy/ThreadedStrategy.cpp
     src/strategy/SyncPullStrategy.cpp
+    src/strategy/DeterministicStrategy.cpp
     src/strategy/IAudioBufferFactory.cpp
     # Audio hardware
     src/hardware/AudioHardwareProviderFactory.cpp
@@ -397,6 +398,7 @@ if(BUILD_BRIDGE_TESTS)
         test/PresetEngineFactoryTests.cpp
         test/BridgeSimulatorContractTests.cpp
         test/SyncPullStrategyContractTests.cpp
+        test/strategy/DeterministicStrategyTests.cpp
         test/InMemoryTelemetryResetTests.cpp
         test/SimulatorFactoryBoundaryTests.cpp
         test/ScriptLoadHelpersResolveAssetBasePathTests.cpp

@@ -94,6 +94,11 @@ struct SimulationConfig {
     bool playAudio = false;
     float volume = EngineSimDefaults::DEFAULT_HARDWARE_VOLUME;
     bool syncPull = true;
+    // Deterministic replay/gate mode: the simulation advances on the loop
+    // thread at the fixed update interval (DeterministicStrategy) with a
+    // no-op loop clock — no audio callback thread, no wall-clock pacing.
+    // Live playback (the default) keeps the sync-pull behavior untouched.
+    bool deterministic = false;
     double targetLoad = -1.0;   // -1 = no dyno, 0.0-1.0 = load torque fraction
     const char* outputWav = nullptr;
     int preFillMs = EngineSimDefaults::DEFAULT_PREFILL_MS;
