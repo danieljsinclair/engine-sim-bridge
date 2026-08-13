@@ -121,7 +121,8 @@ struct ISimulatorConfig {
 
 // Runtime statistics
 struct EngineSimStats {
-    double currentRPM = 0.0;
+    double currentRPM = 0.0;       // raw crank rpm
+    double filteredRPM = 0.0;      // tach-sensor rpm (first-order, tau=0.1s)
     double currentLoad = 0.0;
     double exhaustFlow = 0.0;
     double manifoldPressure = 0.0;

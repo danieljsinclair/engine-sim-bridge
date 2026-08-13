@@ -593,6 +593,8 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
     }
 
     output.clutchPressure = clutchPressure_;
+    output.couplingIsTorqueConverter =
+        (couplingModelKind_ == twin::CouplingModelKind::TorqueConverter);
     output.gearSelector = selector_;
     return output;
 }

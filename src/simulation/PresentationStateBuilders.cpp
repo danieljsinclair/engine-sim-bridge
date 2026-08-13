@@ -10,7 +10,11 @@ namespace presentation::builders {
 
         EngineState::Engine buildEngineState(const EngineSimStats& stats, const CrankingController::State& cranking) {
             EngineState::Engine engine;
-            engine.rpm = stats.currentRPM;
+            // The tach reads the FILTERED sensor (same as the gate CSV's rpm
+            // column); the raw crank speed rides along as rpmRaw so evidence
+            // is never destroyed by the measurement model.
+            engine.rpm = stats.filteredRPM;
+            engine.rpmRaw = stats.currentRPM;
             engine.load = stats.currentLoad;
             engine.exhaustFlow = stats.exhaustFlow;
             engine.engineTorqueNm = stats.engineTorqueNm;
@@ -32,6 +36,7 @@ namespace presentation::builders {
             drivetrain.clutchPressure = input.clutchPressure;
             drivetrain.roadImpliedRpm = input.roadImpliedRpm;
             drivetrain.creepReliefFired = input.creepReliefFired;
+            drivetrain.couplingIsTorqueConverter = input.couplingIsTorqueConverter;
             return drivetrain;
         }
 

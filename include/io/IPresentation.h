@@ -21,7 +21,8 @@ namespace presentation {
 struct EngineState {
     // Engine physics + operational state
     struct Engine {
-        double rpm = 0.0;
+        double rpm = 0.0;             // tach-sensor rpm (first-order, tau=0.1s)
+        double rpmRaw = 0.0;          // raw crank rpm (evidence; never destroy it)
         double load = 0.0;
         double exhaustFlow = 0.0;     // m^3/s
         double engineTorqueNm = 0.0;
@@ -38,11 +39,16 @@ struct EngineState {
         double dynoTorque = 0.0;
         double dynoTargetRPM = 0.0;
         double replayTimestampS = -1.0;  // absolute CSV timestamp (-1 = not replaying)
-        // Live clutch diagnostics (surfaced from the twin for the inline
-        // [Gear:DAx Cl NN%] readout and the CSV-out spelunking path).
-        double clutchPressure = -1.0;    // 0=open/relieved .. 1=locked (-1=unknown)
+        // Live coupling diagnostics (surfaced from the twin for the inline
+        // [Gear:DAx TC/Cl NN%] readout and the CSV-out spelunking path).
+        double clutchPressure = -1.0;    // coupling engagement: 0=decoupled .. 1=coupled (-1=unknown)
         double roadImpliedRpm = 0.0;     // RPM if engine locked to wheels in current gear
         bool creepReliefFired = false;   // creep-drag relief opened the clutch this frame
+        // Label selector for clutchPressure: 'TC' when the torque-converter
+        // model produced it (fluid coupling engagement), 'Cl' for the
+        // clutch-map/legacy friction-clutch pressure. Same field either way —
+        // normalized coupling engagement.
+        bool couplingIsTorqueConverter = false;
     } drivetrain;
 
     // User control inputs (what the driver is commanding)

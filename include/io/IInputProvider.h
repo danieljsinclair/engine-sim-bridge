@@ -57,9 +57,11 @@ struct EngineInput {
     // Live twin diagnostics threaded through to presentation (inline clutch
     // readout + CSV-out). roadImpliedRpm = RPM if locked to wheels in current
     // gear; creepReliefFired = the creep-drag relief opened the clutch (the
-    // #24 slow-speed stall protection) this frame.
+    // #24 slow-speed stall protection) this frame; couplingIsTorqueConverter
+    // selects the display label for clutchPressure ('TC' vs 'Cl').
     double roadImpliedRpm = 0.0;
     bool creepReliefFired = false;
+    bool couplingIsTorqueConverter = false;
 
     // Simulator auto-disengages starter when RPM > threshold
     // Preset cycling

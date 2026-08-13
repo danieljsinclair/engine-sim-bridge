@@ -92,6 +92,7 @@ EngineInput VirtualIceInputProvider::OnUpdateSimulation(double dt) {
     // readout + CSV-out spelunking).
     input.roadImpliedRpm = output.roadImpliedRpm;
     input.creepReliefFired = output.creepReliefFired;
+    input.couplingIsTorqueConverter = output.couplingIsTorqueConverter;
 
     return input;
 }
