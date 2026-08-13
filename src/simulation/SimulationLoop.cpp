@@ -13,6 +13,7 @@
 #include "simulator/ISimulator.h"
 #include "simulator/ICombustionEngine.h"
 #include "simulator/BridgeSimulator.h"
+#include "input/VirtualIceInputProvider.h"
 #include "simulator/EngineSimTypes.h"
 #include "simulator/SimulatorFactory.h"
 
@@ -606,6 +607,14 @@ std::unique_ptr<ISimulatorSession> createSession(
     initializeSimulator(*simulator, config, logger, telemetryWriter, &config.engineConfig);
     SimulationConfig sessionConfig = config;
     sessionConfig.configPath = scriptPath;
+
+    // Bind the live BridgeSimulator to the input provider so it can install the
+    // fluid-coupling torque converter on the transmission when --coupling-model
+    // torque-converter is selected (the provider is constructed BEFORE the
+    // simulator exists, so the install is deferred until here).
+    if (auto* virtualIce = dynamic_cast<input::VirtualIceInputProvider*>(inputProvider)) {
+        virtualIce->setBridgeSimulator(dynamic_cast<::BridgeSimulator*>(simulator.get()));
+    }
 
     // Initialize audio buffer and create hardware provider (first run only)
     AudioBufferConfig strategyConfig;

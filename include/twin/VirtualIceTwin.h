@@ -74,12 +74,20 @@ private:
     double timeWithoutValidTelemetryS_ = 0.0;
     double shiftTimerS_ = 0.0;
     double crankingTimerS_ = 0.0;
-    // Edge-detection latch for the RUNNING-state restart-on-stall: true while
-    // the engine is (or was just) stalled, so the one-tick starter edge fires
-    // ONLY on the not-stalled->stalled transition. Re-arms (->false) the moment
-    // the engine recovers above kStallRpm, so each genuine stall event gets
-    // exactly one clean crank attempt. See VirtualIceTwin.cpp RUNNING case.
-    bool wasStalled_ = false;
+    // Re-crank cooldown for the RUNNING-state restart-on-stall. Counts down from
+    // RECRANK_PERIOD_S after a one-tick starter edge; the twin pulses the starter
+    // ONLY when this reaches 0 while stalled. The bridge's
+    // CrankingController::engageStarter is a momentary TOGGLE -- a starterButton
+    // edge while already Cranking forces the phase BACK to Stopped
+    // (CrankingController.cpp:27-31) -- so re-firing faster than a crank attempt
+    // toggles Stopped<->Cranking every tick (the 1/0/1/0 oscillation documented
+    // in the CRANKING case). One edge ENGAGES; the bridge's step() then cranks
+    // autonomously until catch. The cooldown bounds RETRY: if the engine is still
+    // stalled RECRANK_PERIOD_S after the last edge (crank failed to raise rpm
+    // above kStallRpm), fire one fresh edge for a new clean attempt. Resets to 0
+    // the instant the engine recovers, so the next genuine stall fires promptly.
+    // See VirtualIceTwin.cpp RUNNING case.
+    double reCrankCooldownS_ = 0.0;
     double engineRpmFeedback_ = 0.0;
     double vehicleSpeedFeedbackKmh_ = 0.0;
     double drivetrainTorqueNm_ = 0.0;

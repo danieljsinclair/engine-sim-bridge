@@ -5,6 +5,7 @@
 
 #include "simulator/BridgeSimulator.h"
 #include "simulator/GearConventions.h"
+#include "simulator/ScriptLoadHelpers.h"
 #include "twin/SpeedRpmConversion.h"
 
 #include <vector>
@@ -311,6 +312,20 @@ void BridgeSimulator::setDrivetrainInputTorque(double nm) {
 
 void BridgeSimulator::setBrakePressure(double pressure) {
     m_brakeConstraint.setBrakeLevel(pressure);
+}
+
+void BridgeSimulator::setUseTorqueConverter(bool enabled) {
+    if (!enabled) {
+        usesTorqueConverter_ = false;
+        return;  // disabling is a no-op: the converter is only ever added, never removed
+    }
+    // The converter is installed on the transmission at factory wiring time
+    // (SimulatorFactory::createDefaultTransmission / ensureTorqueConverter, both
+    // before addToSystem runs) — adding a constraint to an already-initialized
+    // live rigid-body system corrupts the solver's pre-sized buffers. So here we
+    // only record the flag and confirm the transmission already carries one.
+    auto* trans = m_simulator->getTransmission();
+    usesTorqueConverter_ = (trans != nullptr && trans->hasTorqueConverter());
 }
 
 double BridgeSimulator::getEngineRpm() const {

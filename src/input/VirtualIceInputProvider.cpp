@@ -1,4 +1,5 @@
 #include "input/VirtualIceInputProvider.h"
+#include "simulator/BridgeSimulator.h"
 #include "common/PresetExceptions.h"
 
 namespace input {
@@ -128,6 +129,20 @@ void VirtualIceInputProvider::setWheelCouplingMode(twin::WheelCouplingMode mode)
 void VirtualIceInputProvider::setCouplingModel(twin::CouplingModelKind kind) {
     if (twin_) {
         twin_->setCouplingModel(kind);
+    }
+    // The proper torque converter is an SCS direct-torque constraint installed
+    // on the live transmission. Remember the request and apply it to the bridge
+    // sim (which may not exist yet when this is called from CLI setup).
+    pendingTorqueConverter_ = (kind == twin::CouplingModelKind::TorqueConverter);
+    if (bridgeSim_ != nullptr) {
+        bridgeSim_->setUseTorqueConverter(pendingTorqueConverter_);
+    }
+}
+
+void VirtualIceInputProvider::setBridgeSimulator(BridgeSimulator* sim) {
+    bridgeSim_ = sim;
+    if (sim != nullptr && pendingTorqueConverter_) {
+        sim->setUseTorqueConverter(true);
     }
 }
 

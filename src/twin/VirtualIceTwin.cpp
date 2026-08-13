@@ -333,37 +333,50 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             //      OFF->CRANKING path uses, applied locally so a mid-drive stall
             //      self-heals instead of latching Stopped forever.
             const double kStallRpm = 30.0;  // below this = engine has stopped
+            // Re-crank period: a crank attempt gets the same 3s budget as the
+            // initial OFF->CRANK crank (CRANK_FALLBACK_DURATION_S). The bridge's
+            // CrankingController::engageStarter is a momentary TOGGLE -- calling
+            // it with starterButton=true while already Cranking forces the phase
+            // BACK to Stopped (CrankingController.cpp:27-31) -- so the twin must
+            // pulse the starter for ONE tick to ENGAGE, then NOT re-toggle while
+            // the bridge cranks. The bridge's step() owns the crank: it keeps
+            // starterMotor=true in Cranking until the engine catches. This period
+            // bounds RETRY: if the engine is still stalled this long after the
+            // last edge (the crank failed to raise rpm above kStallRpm), fire one
+            // fresh edge for a new clean attempt. Normal cranks catch in well
+            // under this, so the cooldown never re-fires in the happy path; it is
+            // the safety net the old held-starter gave crudely (every tick) and
+            // which a single edge alone does not.
+            constexpr double kRecrankPeriodS = 3.0;
             const bool engineStalled = engineRpmFeedback_ <= kStallRpm;
+            reCrankCooldownS_ = std::max(0.0, reCrankCooldownS_ - dt);
             if (engineStalled) {
-                // Re-crank: feed a cranking-throttle floor every stalled frame
-                // (helps the next sample catch), but pulse the STARTER for ONE
-                // tick only -- on the not-stalled->stalled EDGE -- then let the
-                // bridge's CrankingController own the crank duration via its own
-                // tick counter, exactly like the OFF->CRANKING edge at the top
-                // of this switch. Holding output.starterMotor=true every frame
-                // re-toggles CrankingController::engageStarter each tick: a held
-                // starterButton while Cranking forces the bridge phase to Stopped
-                // and cuts the starter, so the next tick re-engages -> Cranking
-                // -> Stopped -> ... a Stopped<->Cranking limit cycle with the
-                // starter toggling 1/0/1/0 for hundreds of frames (the very
-                // anti-pattern documented in the CRANKING case above). The edge
-                // re-arms (wasStalled_->false) the instant the engine recovers
-                // above kStallRpm, so each genuine stall event gets exactly one
-                // clean crank attempt rather than a held-starter oscillation.
-                if (!wasStalled_) {
-                    output.starterMotor = true;  // one-tick edge on the transition
+                // Pulse the starter for ONE tick, then wait kRecrankPeriodS before
+                // retrying -- never every frame. A held starter re-toggles
+                // engageStarter each tick and drives a Stopped<->Cranking limit
+                // cycle (starter 1/0/1/0 for hundreds of frames -- the very
+                // anti-pattern documented in the CRANKING case above). One edge
+                // engages; the cooldown gives the bridge a clean crank window and
+                // retries only on failure.
+                if (reCrankCooldownS_ <= 0.0) {
+                    output.starterMotor = true;  // one-tick edge
+                    reCrankCooldownS_ = kRecrankPeriodS;
                 }
                 output.throttle = std::max(
                     std::max(throttleSmoother_.getCurrentValue(),
                              EngineSimDefaults::CRANKING_THROTTLE),
                     EngineSimDefaults::IDLE_SUSTAIN_THROTTLE);
-            } else if (engineRpmFeedback_ < profile_.idleRpm) {
-                // Engine alive but dipping below idle: hold the sustain floor so
-                // it cannot coast through the Stopped latch.
-                output.throttle = std::max(throttleSmoother_.getCurrentValue(),
-                                           EngineSimDefaults::IDLE_SUSTAIN_THROTTLE);
+            } else {
+                // Engine recovered above kStallRpm: re-arm the cooldown so the
+                // next genuine stall fires a fresh edge promptly.
+                reCrankCooldownS_ = 0.0;
+                if (engineRpmFeedback_ < profile_.idleRpm) {
+                    // Engine alive but dipping below idle: hold the sustain floor
+                    // so it cannot coast through the Stopped latch.
+                    output.throttle = std::max(throttleSmoother_.getCurrentValue(),
+                                               EngineSimDefaults::IDLE_SUSTAIN_THROTTLE);
+                }
             }
-            wasStalled_ = engineStalled;
 
             // RUNNING->IDLE: only on a selector move to P/N. A real auto STAYS in
             // 1st at creep / a stoplight (clutch relieved, engine idling decoupled)
@@ -431,7 +444,46 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
                 (creepRegimeRelief || slipBandLugRescue);
 
             double desiredPressure;
-            if (twin::modelOwnsPressure(couplingOut)) {
+            const bool tcMode = (couplingModelKind_ == twin::CouplingModelKind::TorqueConverter);
+            if (tcMode) {
+                static int twinDbg = 0;
+                if (twinDbg < 30) {
+                    std::fprintf(stderr, "[TWIN-DBG] tcMode=1 gear=%d desiredPressure=%.3f clutchP_=%.3f\n",
+                                 gearbox_->getCurrentGear(), (gearbox_->getCurrentGear() >= 1) ? couplingOut.clutchPressure : 0.0, clutchPressure_);
+                    ++twinDbg;
+                }
+                // PROPER torque converter (SCS direct-torque fluid coupling). The
+                // fluid IS the load path: the engine is ALWAYS loaded by the
+                // converter's K*N^2 pump law (stall multiplication at low speed,
+                // 1:1 lockup at cruise). The friction clutch is held OPEN by the
+                // Transmission (it would rigidly lock the engine to the pinned
+                // wheels and stall).
+                //
+                // The clutch pressure drives the converter's CAPACITY SCALE (see
+                // transmission.cpp: the TC mode sets capacityScale = clutchPressure
+                // and zeroes the friction clutch). The converter's OWN model
+                // (TorqueConverter::compute) already returns the correct smooth,
+                // ROAD-DRIVEN pressure: a small CREEP floor at standstill (the
+                // engine idles DECOUPLED — the pinned wheel cannot be yanked, so
+                // no standstill oscillation), ramping through the slip band to a
+                // full 1.0 LOCKUP at cruise (road-implied > idle*1.6, high speed
+                // ratio). We MUST use that smooth ramp here — forcing 1.0 at
+                // standstill (the old code) set capacityScale=1.0, which rigidly
+                // coupled the engine to the CSV-pinned stationary wheel and drove
+                // the ±345 rpm limit cycle the driveability gate flags
+                // (NO_OSCILLATION). Neutral opens it fully (engine free-revs,
+                // correct). The shift logic (updateShiftExecution) overrides
+                // clutchPressure_ during SHIFTING to keep the engine loaded, so we
+                // must NOT touch desiredPressure there.
+                desiredPressure = (gearbox_->getCurrentGear() >= 1)
+                    ? couplingOut.clutchPressure
+                    : 0.0;
+                // No creep-relief in TC mode: the converter's fluid slip IS the
+                // standstill decouple (gentle load, no stall, no free-rev). Zeroing
+                // the pressure here would fully open the fluid path and let the
+                // engine free-rev under throttle — the exact failure we replaced.
+                output.creepReliefFired = false;
+            } else if (twin::modelOwnsPressure(couplingOut)) {
                 // Declarative model (ClutchMap default, or TorqueConverter): use
                 // its smooth floored pressure directly. The creep-relief (above)
                 // applies uniformly below; no per-branch binary relief is needed
@@ -469,12 +521,13 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
                 }
             }
 
-            // Apply the creep-drag relief uniformly (every path). Opening the
-            // clutch decouples the engine so it idles instead of lugging against
-            // road-implied RPM; the relief-idle-sustain floor holds it near idle
-            // through the open clutch (the M156 droops to ~750 on the plain 5%
-            // idle-sustain floor alone).
-            if (output.creepReliefFired) {
+            // Apply the creep-drag relief uniformly (every non-TC path). Opening
+            // the clutch decouples the engine so it idles instead of lugging
+            // against road-implied RPM; the relief-idle-sustain floor holds it
+            // near idle through the open clutch (the M156 droops to ~750 on the
+            // plain 5% idle-sustain floor alone). TC mode skips this (see above:
+            // the converter's fluid slip is the decouple).
+            if (!tcMode && output.creepReliefFired) {
                 desiredPressure = 0.0;
                 output.throttle = std::max(throttleSmoother_.getCurrentValue(),
                                            EngineSimDefaults::RELIEF_IDLE_SUSTAIN_THROTTLE);
@@ -484,23 +537,37 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             // the anti-slam fix: without it the relief released the clutch to 0
             // in one frame and the slip-lock slammed it back to ~100% the next,
             // crashing the engine 4700→771 rpm. Asymmetric — the relief OPEN is
-            // fast (a lugging engine must be decoupled before it death-spirals),
-            // the re-ENGAGE is smooth (0→1 in ~0.33s at 3/s, no slam).
+            // fast (a lugging engine must be decoupled before it death-spirals;
+            // 0.076→0 in ~1 frame at 10/s), the re-ENGAGE is smooth (0→1 in
+            // ~0.33s at 3/s, no slam). std::clamp(delta, -maxRelease, maxEngage)
+            // gives the asymmetry: negative deltas (release) are bounded by the
+            // fast rate, positive deltas (engage) by the slow rate.
             //
-            // When the relief FIRES, release INSTANTLY (same frame) instead of
-            // rate-limiting the release: the fast release (10/s) still leaves one
-            // frame of residual (0.05-0.068) coupling the engine to the stopped
-            // wheel, which at ~600-800Nm dips a standstill engine to ~20rpm (the
-            // t=7.78 TC standstill stall). Re-engage on the next non-relief frame
-            // is still bounded by maxEngage (smooth), so this does NOT reintroduce
-            // the old 4700→771 slam — that was the slip-lock RE-ENGAGE, not the
-            // release; only the release direction is made instant here.
-            if (output.creepReliefFired) {
-                clutchPressure_ = 0.0;
+            // The relief (desiredPressure -> 0 above) does NOT need a special
+            // instant-release bypass: the fast release rate (10/s -> ~0.16/frame
+            // at 60Hz) already drives the TC's small standstill floor (0.05) to
+            // EXACTLY 0 in one frame (0.05 < 0.16), so the standstill engine is
+            // decoupled the same frame the relief fires. Bypassing the rate-limit
+            // would only change the LEGACY high-clutch case (0.83 -> 0), where it
+            // WOULD be a slam — so the uniform rate-limit is kept to preserve the
+            // no-slam invariant guarded by CreepRelief_RampsClutchPressure.
+            const double maxRelease = EngineSimDefaults::CLUTCH_RELEASE_RATE_PER_SEC * dt;
+            const double maxEngage  = EngineSimDefaults::CLUTCH_ENGAGE_RATE_PER_SEC  * dt;
+            const double clutchDelta = desiredPressure - clutchPressure_;
+            if (tcMode) {
+                // Torque-converter mode: the converter capacity scale is NOT the
+                // friction-clutch pressure. The converter's own fluid slip is what
+                // smooths engagement/launch, so the capacity must track the desired
+                // value IMMEDIATELY (1.0 in gear, 0 in neutral). Rate-limiting it
+                // through the friction-clutch engage rate (3/s -> ~6s to full) left
+                // the converter weakly coupled for seconds after a gear engage, so
+                // the engine free-revved (7000+ rpm) under throttle until the scale
+                // crawled up — the NO_FREE_REV / NO_HI_THROTTLE_FREE_REV failures.
+                // Setting it directly couples the engine to the fluid path at once;
+                // the converter's stall/lockup physics then does the launch/creep
+                // work with no slam (there is no rigid clutch to slam).
+                clutchPressure_ = desiredPressure;
             } else {
-                const double maxRelease = EngineSimDefaults::CLUTCH_RELEASE_RATE_PER_SEC * dt;
-                const double maxEngage  = EngineSimDefaults::CLUTCH_ENGAGE_RATE_PER_SEC  * dt;
-                const double clutchDelta = desiredPressure - clutchPressure_;
                 clutchPressure_ += std::clamp(clutchDelta, -maxRelease, maxEngage);
             }
             output.roadImpliedRpm = roadSpeedImpliedRpm;
@@ -518,6 +585,13 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             updateShiftExecution(dt);
             output.ignition = true;
             output.gear = gearbox_->getCurrentGear();
+            // Surface the road-implied RPM during a shift too (computed from the
+            // current gear + the coupling wheel speed) so the driveability gate's
+            // NO_FREE_REV check sees the real road-implied speed instead of the
+            // default 0 and does not false-flag the brief over-rev while the gear
+            // changes. Mirrors the RUNNING branch's roadImpliedRpm assignment.
+            output.roadImpliedRpm = roadSpeedImpliedRpmFor(
+                coupling_->slipLockWheelSpeedKmh(vehicleSpeedFeedbackKmh_, signal.speedKmh));
             break;
     }
 
@@ -543,6 +617,28 @@ void VirtualIceTwin::updateShiftExecution(double dt) {
     disengageDuration = profile_.shiftDisengageMs * EngineSimDefaults::MS_TO_SECONDS;
     pauseDuration = profile_.shiftPauseMs * EngineSimDefaults::MS_TO_SECONDS;
     reengageDuration = profile_.shiftReengageMs * EngineSimDefaults::MS_TO_SECONDS;
+
+    const bool tcMode = (couplingModelKind_ == twin::CouplingModelKind::TorqueConverter);
+    if (tcMode) {
+        // Torque-converter mode: the converter (not the friction clutch) is the
+        // coupling path, and the Transmission holds the friction clutch OPEN
+        // through the whole shift (transmission.cpp::update zeroes the clutch
+        // torque while a converter is installed). So the shift must NOT open the
+        // converter's capacity — doing so (the friction-clutch floor/ramp below)
+        // weakly coupled the engine during the shift and let it free-rev to
+        // 7000+ rpm under throttle (the NO_FREE_REV / NO_HI_THROTTLE_FREE_REV
+        // failures). The converter's own fluid slip carries the shift smoothly;
+        // holding capacity at 1.0 keeps the engine loaded the entire time. The
+        // gear change still happens via gearbox_->update() in the pause below.
+        clutchPressure_ = 1.0;
+        if (shiftTimerS_ > disengageDuration + pauseDuration / 2.0) {
+            gearbox_->update(0, 0, 0);
+        }
+        if (shiftTimerS_ > disengageDuration + pauseDuration + reengageDuration) {
+            state_ = TwinState::RUNNING;
+        }
+        return;
+    }
 
     // The clutch is NEVER fully open — the slip-lock floor rule
     // (kSlipLockPressureFloor). During a shift the clutch unloads so the gear

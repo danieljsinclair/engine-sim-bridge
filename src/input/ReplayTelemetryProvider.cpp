@@ -1,8 +1,8 @@
 // ReplayTelemetryProvider.cpp
 #include "input/ReplayTelemetryProvider.h"
-#include "twin/AutomaticGearbox.h"
+#include "input/VirtualIceInputProvider.h"
 #include "twin/IceVehicleProfile.h"
-#include "twin/SlipLockController.h"
+#include "io/UpstreamSignal.h"
 #include "simulator/GearConventions.h"
 #include "simulator/EngineSimTypes.h"
 
@@ -39,29 +39,99 @@ bridge::GearSelector parseGearSelector(const std::string& s) {
     return bridge::GearSelector::DRIVE;  // "d"/"drive"/unknown
 }
 
+// Two recorded samples are treated as the SAME speed level when their road
+// speeds differ by less than this. The CAN quantization step is ~0.8 km/h, so
+// 0.1 km/h cleanly separates real level changes from float jitter while never
+// splitting a genuine level.
+constexpr double kLevelStepKmh = 0.1;
+
+// Continuous (de-quantized) road speed at time t. A recorded CSV road speed is a
+// STAIRCASE: CAN-quantized (~0.8 km/h) with each level held ~0.2 s. Feeding the
+// held value makes a hard-pinned/slip-locked RPM step in lockstep (the "rpm
+// stepper"). This linearly interpolates between the START of the speed level
+// containing t and the START of the NEXT speed level, by fractional time — so the
+// feed ramps smoothly across the whole hold instead of step-holding. Dyno-off
+// sentinels (speed < 0) are passed through unchanged. Pure feed interpolation.
+double interpolateRoadSpeedKmh(const std::vector<CsvSample>& samples, double t) {
+    if (samples.empty()) return -2.0;
+    if (t <= samples.front().timeS) return samples.front().roadSpeedKmh;
+    if (t >= samples.back().timeS) return samples.back().roadSpeedKmh;
+
+    size_t i = 1;
+    for (; i < samples.size(); ++i) {
+        if (samples[i].timeS > t) break;
+    }
+    const size_t curIdx = i - 1;
+    const double curSpeed = samples[curIdx].roadSpeedKmh;
+    if (curSpeed < 0.0) return curSpeed;
+
+    size_t startIdx = curIdx;
+    while (startIdx > 0 &&
+           std::abs(samples[startIdx - 1].roadSpeedKmh - curSpeed) <= kLevelStepKmh) {
+        --startIdx;
+    }
+    size_t nextIdx = samples.size();
+    for (size_t j = curIdx + 1; j < samples.size(); ++j) {
+        if (std::abs(samples[j].roadSpeedKmh - curSpeed) > kLevelStepKmh) {
+            nextIdx = j;
+            break;
+        }
+    }
+    if (nextIdx >= samples.size()) return curSpeed;
+
+    const double startT = samples[startIdx].timeS;
+    const double nextT = samples[nextIdx].timeS;
+    if (nextT <= startT) return curSpeed;
+    double frac = (t - startT) / (nextT - startT);
+    if (frac < 0.0) frac = 0.0;
+    else if (frac > 1.0) frac = 1.0;
+    return curSpeed + frac * (samples[nextIdx].roadSpeedKmh - curSpeed);
+}
+
 } // namespace
 
 ReplayTelemetryProvider::ReplayTelemetryProvider(std::string csvPath, bool autoStart,
                                                  bool autoGearbox)
     : csvPath_(std::move(csvPath)), autoStart_(autoStart), autoGearbox_(autoGearbox) {
+    // The twin provider is created lazily in Initialize() (after the CSV is
+    // parsed) so it always owns at least one valid trace. autoGearbox_ gates
+    // whether a twin is created at all (a non-auto replay has no gearbox/clutch
+    // to drive; the CSV drives throttle/gear/clutch directly).
     if (autoGearbox_) {
-        gearboxProfile_ = twin::IceVehicleProfile::zf8hp45();  // owned; gearbox refs this
-        gearbox_ = std::make_unique<twin::AutomaticGearbox>(gearboxProfile_);
-        gearbox_->setGearSelector(bridge::GearSelector::DRIVE);
+        // Seed the owned profile with the ZF8 default; reconfigureProfile() (called
+        // from CLIMain once the real .mr transmission is loaded) replaces it with
+        // the actual engine's ratios. The twin copies this profile.
+        gearboxProfile_ = twin::IceVehicleProfile::zf8hp45();
     }
 }
 
 ReplayTelemetryProvider::~ReplayTelemetryProvider() = default;
 
 void ReplayTelemetryProvider::provideFeedback(const EngineSimStats& stats) {
-    engineRpmFeedback_ = stats.currentRPM;
+    if (twinProvider_) twinProvider_->provideFeedback(stats);
 }
 
 bool ReplayTelemetryProvider::Initialize() {
     if (!parseCsv()) return false;
     connected_ = !samples_.empty();
-    if (!connected_) lastError_ = "No telemetry rows parsed from " + csvPath_;
-    return connected_;
+    if (!connected_) {
+        lastError_ = "No telemetry rows parsed from " + csvPath_;
+        return false;
+    }
+    // The DRIVE branch routes through VirtualIceInputProvider -> VirtualIceTwin —
+    // the SAME twin the live/Demo paths use — so --coupling-model / --wheel-coupling
+    // take effect on replay. Only created when the auto-gearbox is enabled.
+    if (autoGearbox_) {
+        twinProvider_ = std::make_unique<VirtualIceInputProvider>(gearboxProfile_);
+        if (!twinProvider_->Initialize()) {
+            lastError_ = "Failed to initialize twin provider: " + twinProvider_->GetLastError();
+            twinProvider_.reset();
+            return false;
+        }
+        twinProvider_->setWheelCouplingMode(wheelCouplingMode_);
+        twinProvider_->setCouplingModel(couplingModelKind_);
+    }
+    return true;
 }
 
 double ReplayTelemetryProvider::durationS() const {
@@ -69,82 +139,26 @@ double ReplayTelemetryProvider::durationS() const {
 }
 
 void ReplayTelemetryProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
-    // Forwards to the owned AutomaticGearbox so the oracle (section D) can parse
+    // Forwards to the owned twin provider so the oracle (section D) can parse
     // per-frame gear/rpm/mph from the gearbox log during replay. No-op when the
-    // auto-gearbox is disabled (gearbox_ null).
-    if (gearbox_) gearbox_->setLogger(logger);
+    // auto-gearbox is disabled (twin provider null).
+    if (twinProvider_) twinProvider_->setGearboxLogger(logger);
+}
+
+void ReplayTelemetryProvider::setWheelCouplingMode(twin::WheelCouplingMode mode) {
+    wheelCouplingMode_ = mode;
+    if (twinProvider_) twinProvider_->setWheelCouplingMode(mode);
+}
+
+void ReplayTelemetryProvider::setCouplingModel(twin::CouplingModelKind kind) {
+    couplingModelKind_ = kind;
+    if (twinProvider_) twinProvider_->setCouplingModel(kind);
 }
 
 void ReplayTelemetryProvider::reconfigureProfile(const std::vector<double>& gearRatios,
                                                   double diffRatio, double tireRadiusM) {
-    if (gearRatios.empty() || !autoGearbox_) return;
-    gearboxProfile_.gearRatios = gearRatios;
-    gearboxProfile_.diffRatio = diffRatio;
-    gearboxProfile_.tireRadiusM = tireRadiusM;
-    // BAND-TOP SHIFT MAP — identical to VirtualIceTwin::reconfigureProfile so the
-    // replay path and the live (twin) path select the same gear at the same road
-    // speed. The OLD map derived each upshift from `redline*(0.40+0.45*thr)`,
-    // which at WOT pushed DA1->DA2 to ~33.8 mph (85% redline = 5525 rpm in DA1)
-    // and left the box a gear or two LOW at every cruise speed vs the oracle
-    // (the "DA1 at 25 mph" / over-rev symptom). The band-top map instead pins
-    // each upshift to a ROAD SPEED (the top of the originating gear's band),
-    // with only a ±5% throttle nudge, so the gear follows the oracle
-    // (DA1->DA2 at ~15 mph ... DA6->DA7 at ~65 mph) independent of throttle.
-    //   band tops (mph->km/h): 15,25,35,45,55,65 mph.
-    static const std::vector<double> kUpshiftBandTopKmh = {24.14, 40.23, 56.33, 72.42, 88.51, 104.61};
-    static constexpr double kDownshiftHysteresisKmh = 5.0;  // held band below each top
-    // Narrow throttle sensitivity: light throttle upshifts a touch earlier, WOT
-    // holds each gear a touch longer — but always centered on the band top so the
-    // map owns steady-state (throttle never breaks convergence).
-    auto bandScale = [](double thr) {
-        const double t = std::clamp((thr - 0.05) / 0.95, 0.0, 1.0);
-        return 0.95 + 0.10 * t;  // 0.95 (light) .. 1.05 (WOT)
-    };
-
-    const int numCols = static_cast<int>(gearRatios.size()) - 1;
-    std::vector<double> upTops;
-    upTops.reserve(numCols);
-    for (int i = 0; i < numCols; ++i) {
-        if (i < static_cast<int>(kUpshiftBandTopKmh.size())) {
-            upTops.push_back(kUpshiftBandTopKmh[i]);
-        } else {
-            upTops.push_back(kUpshiftBandTopKmh.back() + 10.0 * (i - static_cast<int>(kUpshiftBandTopKmh.size()) + 1));
-        }
-    }
-
-    gearboxProfile_.shiftTableThrottleLevels = {0.05,0.15,0.25,0.40,0.55,0.70,0.80,0.90,0.95,1.00};
-    gearboxProfile_.shiftTable.clear();
-    for (double thr : gearboxProfile_.shiftTableThrottleLevels) {
-        const double s = bandScale(thr);
-        std::vector<double> row;
-        for (double top : upTops) {
-            row.push_back(top * s);  // upshift N->N+1 at the top of N's band
-        }
-        gearboxProfile_.shiftTable.push_back(row);
-    }
-    gearboxProfile_.separateDownshiftTableEnabled = true;
-    gearboxProfile_.downshiftTableThrottleLevels = gearboxProfile_.shiftTableThrottleLevels;
-    gearboxProfile_.downshiftTable.clear();
-    // Downshift G->G-1 fires at the BOTTOM of G's band (the top that entered G)
-    // minus hysteresis: a symmetric dead band below the upshift, so a single
-    // speed can never satisfy both an up- and a down-shift (no hunting).
-    for (double thr : gearboxProfile_.downshiftTableThrottleLevels) {
-        const double s = bandScale(thr);
-        std::vector<double> row;
-        for (double top : upTops) {
-            row.push_back(std::max(0.0, top - kDownshiftHysteresisKmh) * s);
-        }
-        gearboxProfile_.downshiftTable.push_back(row);
-    }
-    gearboxProfile_.hysteresisFactor = 0.85;
-    // Ground the idle floor in the V3's EMERGENT idle (~500 rpm, per the .mr —
-    // the M156 has no idle scalar). The old hardcoded 750 was wrong for this
-    // engine. Consumed declaratively by the anti-lug guard (idle + margin) and
-    // by the SlipLock stall floor (clutch decouples below idle).
-    gearboxProfile_.idleRpm = 500.0;
-    // Reconstruct the gearbox with the matched profile
-    gearbox_ = std::make_unique<twin::AutomaticGearbox>(gearboxProfile_);
-    gearbox_->setGearSelector(bridge::GearSelector::DRIVE);
+    if (!twinProvider_) return;
+    twinProvider_->reconfigureProfile(gearRatios, diffRatio, tireRadiusM);
 }
 
 bool ReplayTelemetryProvider::parseCsv() {
@@ -216,54 +230,6 @@ const ReplayTelemetryProvider::Sample& ReplayTelemetryProvider::sampleAt(double 
     return samples_.back();
 }
 
-// Two recorded samples are treated as the SAME speed level when their road
-// speeds differ by less than this. The CAN quantization step is ~0.8 km/h, so
-// 0.1 km/h cleanly separates real level changes from float jitter while never
-// splitting a genuine level.
-constexpr double kLevelStepKmh = 0.1;
-
-double ReplayTelemetryProvider::interpolatedRoadSpeedKmh(double t) const {
-    if (samples_.empty()) return -2.0;
-    if (t <= samples_.front().timeS) return samples_.front().roadSpeedKmh;
-    if (t >= samples_.back().timeS) return samples_.back().roadSpeedKmh;
-
-    // Index of the last sample at/below t (the current sample).
-    size_t i = 1;
-    for (; i < samples_.size(); ++i) {
-        if (samples_[i].timeS > t) break;
-    }
-    const size_t curIdx = i - 1;
-    const double curSpeed = samples_[curIdx].roadSpeedKmh;
-    if (curSpeed < 0.0) return curSpeed;  // dyno-off sentinel: pass through
-
-    // Level START: walk back to the first sample of the contiguous same-speed run.
-    // This is the fixed anchor that makes the interpolation fraction sweep the
-    // whole level (using the tracking sample curIdx would leave frac ~0 because it
-    // tracks t).
-    size_t startIdx = curIdx;
-    while (startIdx > 0 &&
-           std::abs(samples_[startIdx - 1].roadSpeedKmh - curSpeed) <= kLevelStepKmh) {
-        --startIdx;
-    }
-    // NEXT level: first sample after curIdx whose speed differs (the ramp target).
-    size_t nextIdx = samples_.size();
-    for (size_t j = curIdx + 1; j < samples_.size(); ++j) {
-        if (std::abs(samples_[j].roadSpeedKmh - curSpeed) > kLevelStepKmh) {
-            nextIdx = j;
-            break;
-        }
-    }
-    if (nextIdx >= samples_.size()) return curSpeed;  // no next level: hold (steady)
-
-    const double startT = samples_[startIdx].timeS;
-    const double nextT = samples_[nextIdx].timeS;
-    if (nextT <= startT) return curSpeed;
-    double frac = (t - startT) / (nextT - startT);
-    if (frac < 0.0) frac = 0.0;
-    else if (frac > 1.0) frac = 1.0;
-    return curSpeed + frac * (samples_[nextIdx].roadSpeedKmh - curSpeed);
-}
-
 EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
     EngineInput input;
     if (applyTimeSlicing(input, dt)) return input;
@@ -274,36 +240,51 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
     // De-quantized road speed: the recorded value is a CAN staircase (levels held
     // ~0.2 s). Feed the interpolated ramp so a pinned/slip-locked RPM does not
     // step in lockstep with the staircase. s still supplies throttle/selector/gear.
-    const double smoothRoadSpeedKmh = interpolatedRoadSpeedKmh(elapsedS_);
+    const double smoothRoadSpeedKmh = interpolateRoadSpeedKmh(samples_, elapsedS_);
 
-    if (autoGearbox_ && gearbox_) {
-        // Follow the gear stalk. In PARK/NEUTRAL the clutch disengages + the
-        // engine free-revs naturally (no dyno, no pinned RPM, natural idle
-        // variation). Only in DRIVE does the gearbox decide gears + the dyno
-        // tracks road speed.
-        const bridge::GearSelector sel = s.gearSelector.empty()
-            ? bridge::GearSelector::NEUTRAL : parseGearSelector(s.gearSelector);
-        gearbox_->setGearSelector(sel);
-        input.gearSelector = static_cast<int>(sel);
-        input.roadSpeedKmh = smoothRoadSpeedKmh;
-        if (sel == bridge::GearSelector::DRIVE) {
-            handleAutoGearboxDrive(input, s, dt, smoothRoadSpeedKmh);
-        } else {
-            handleAutoGearboxNonDrive(input);
-        }
+    if (autoGearbox_ && twinProvider_) {
+        // Route the replay sample THROUGH the twin provider (the SAME twin the
+        // live/Demo paths use) so --coupling-model / --wheel-coupling take effect
+        // on replay. The twin owns the gearbox/clutch/coupling-model processing and
+        // the cranking lifecycle. In PARK/NEUTRAL the twin disengages the clutch
+        // and the engine free-revs; only in DRIVE does it couple + track road speed.
+        input = driveThroughTwin(s, dt, smoothRoadSpeedKmh);
     } else {
         // Non-auto (e.g. rev-in-park): no gear forced, clutch disengaged, free-rev.
         handleNonAutoGearbox(input, s);
-    }
-
-    // One-shot starter pulse on the first frame so the CrankingController cranks.
-    if (autoStart_ && !startFired_) {
-        input.starterButton = true;
-        startFired_ = true;
+        // One-shot starter pulse on the first frame so the CrankingController
+        // cranks. (The auto/twin path above lets the twin own the cranking
+        // lifecycle — mirroring the live path — so the pulse is only needed here.)
+        if (autoStart_ && !startFired_) {
+            input.starterButton = true;
+            startFired_ = true;
+        }
     }
 
     processKeyboardInput(input);
     return input;
+}
+
+EngineInput ReplayTelemetryProvider::driveThroughTwin(const Sample& s, double dt,
+                                                       double roadSpeedKmh) {
+    input::UpstreamSignal signal;
+    signal.throttleFraction = s.throttle;
+    signal.speedKmh = roadSpeedKmh;
+    signal.motorTorqueNm = s.motorTorqueNm;
+    signal.isValid = true;
+    // Monotonic non-zero timestamp (the twin treats 0 as invalid + times out).
+    signal.timestampUtcMs = std::max<uint64_t>(1, static_cast<uint64_t>(elapsedS_ * 1000.0));
+    // The CSV stalk (D/R/N/P) drives the twin's selector. A missing/blank selector
+    // defaults to DRIVE so the bench-driving run engages and exercises the coupling
+    // model (mirrors the live CSV path's default-selector contract).
+    const bridge::GearSelector sel = s.gearSelector.empty()
+        ? bridge::GearSelector::DRIVE : parseGearSelector(s.gearSelector);
+    twinProvider_->setGearSelector(static_cast<int>(sel));
+    twinProvider_->setUpstreamSignal(signal);
+    // VirtualIceInputProvider maps TwinOutput -> EngineInput (throttle, gear,
+    // clutchPressure, ignition, starter, gearSelector, gearAutoMode, road speed
+    // pin, injected torque, diagnostics) — identical to the live path.
+    return twinProvider_->OnUpdateSimulation(dt);
 }
 
 bool ReplayTelemetryProvider::applyTimeSlicing(EngineInput& input, double dt) {
@@ -328,68 +309,6 @@ void ReplayTelemetryProvider::buildBaseEngineInput(EngineInput& input, const Sam
     input.replayTimestampS = currentTimestampS_;
     input.throttle = s.throttle;
     input.ignition = ignitionOn_;
-}
-
-void ReplayTelemetryProvider::handleAutoGearboxDrive(EngineInput& input, const Sample& s,
-                                                     double dt, double roadSpeedKmh) const {
-    // roadSpeedKmh is the interpolated (de-quantized) feed; clamp to >=0 for the
-    // gearbox's own speed input (a dyno-off sentinel would otherwise confuse it).
-    const double speedForBox = (roadSpeedKmh >= 0.0) ? roadSpeedKmh : 0.0;
-    gearbox_->update(dt, speedForBox, s.throttle, 0.0);
-    input.gearAbsolute = gearbox_->getCurrentGear();
-    input.gearAutoMode = true;
-
-    // SlipLockController — pressure-modulated clutch launch controller
-    // (dyno OFF). Drive the WHEELS to the (interpolated) road speed
-    // (vehicleSpeedTargetKmh) and let the clutch couple them to the
-    // engine via the torque-converter slip characteristic:
-    //   - standstill (road-implied < idle):   pressure 0   (engine free to idle, no stall)
-    //   - launch under throttle (high slip):  partial       (TC slip in power band)
-    //   - road catches up (slip -> 0):        pressure -> 1 (locked, direct coupling)
-    //   - decel (engine slower than road):    pressure 1    (locked, engine braking)
-    // The stall floor (pressure == 0 whenever roadSpeedImpliedRpm < idleRpm)
-    // is the lesson from the stall/redline circle: coupling below idle drags
-    // the engine under idle and stalls it. See twin/SlipLockController.h.
-    input.vehicleSpeedTargetKmh = roadSpeedKmh;
-    input.engineRpmFloor = 0.0;  // dyno disabled downstream
-
-    // Road-speed-implied engine RPM: the RPM the engine would be at if the
-    // clutch were locked in the current gear at the current road speed.
-    // engineRpm = wheelRadS * gearRatio * diffRatio,  wheelRadS = v / tireRadius.
-    const int gear = gearbox_->getCurrentGear();
-    double roadSpeedImpliedRpm = gearboxProfile_.idleRpm;  // fallback above the floor
-    if (gear >= 1 && gear <= static_cast<int>(gearboxProfile_.gearRatios.size())) {
-        const double speedMs = speedForBox / 3.6;
-        const double wheelRadS = speedMs / gearboxProfile_.tireRadiusM;
-        roadSpeedImpliedRpm = wheelRadS
-                              * gearboxProfile_.gearRatios[gear - 1]
-                              * gearboxProfile_.diffRatio
-                              * 30.0 / 3.14159265358979;
-    }
-
-    // maxCreepPressure: clutch pressure at full throttle with zero road
-    // speed. Mimics TC fluid coupling — 0.10 = 10% clutch at stall.
-    // Tunable: lower = less creep (engine freer to rev), higher = more
-    // creep (stronger launch feel, but risk of stall at high throttle).
-    constexpr double kMaxCreepPressure = 0.10;
-    const twin::SlipLockOutput slipLock = twin::computeSlipLockPressure(
-        twin::SlipLockInput{
-            engineRpmFeedback_,
-            roadSpeedImpliedRpm,
-            s.throttle,
-            gearboxProfile_.idleRpm,
-            gearboxProfile_.redlineRpm},
-        kMaxCreepPressure);
-    input.clutchPressure = slipLock.clutchPressure;
-}
-
-void ReplayTelemetryProvider::handleAutoGearboxNonDrive(EngineInput& input) const {
-    // PARK/NEUTRAL/REVERSE: force neutral (0 = clutch out, dyno off, free-rev).
-    // NOT -1 (which means "don't change" — the gear would stick at 1 from DRIVE).
-    input.gearAbsolute = 0;
-    input.gearAutoMode = false;
-    // Make sure any prior vehicle-speed constraint is released.
-    input.vehicleSpeedTargetKmh = -1.0;
 }
 
 void ReplayTelemetryProvider::handleNonAutoGearbox(EngineInput& input, const Sample& s) const {

@@ -9,6 +9,7 @@
 #include "engine.h"
 #include "vehicle.h"
 #include "transmission.h"
+#include "torque_converter.h"
 #include "units.h"
 #include "common/ILogging.h"
 
@@ -144,16 +145,46 @@ inline Vehicle* createDefaultVehicle() {
     return vehicle;
 }
 
+// Standard converter characteristic: 2.0 stall ratio, K*N^2 pump law, 1500 RPM
+// lockup. Tuned for the M156 / C63 clutch envelope.
+//
+// CapacityFactor is chosen so the engine settles at its STALL SPEED (turbine
+// pinned, TR ~ 2.0) a few hundred rpm BELOW the 3000 rpm free-rev bar even at
+// WOT: equilibrium is combustionTorque = CapacityFactor * N^2 * TR, so for
+// ~450 Nm at N = 2800 rpm, CapacityFactor ~ 2.9e-5. This keeps a standstill
+// WOT launch loaded (no free-rev) while the fluid still slips (no stall).
+inline const TorqueConverter::Parameters kDefaultTorqueConverterParams = {
+    /* StallTorqueRatio */ 2.0,
+    /* CapacityFactor   */ 2.9e-5,
+    /* LockupRpm        */ 1500.0,
+    /* MaxInputTorque   */ 1250.0,
+    /* LockupSpeedRatio */ 0.85,
+    /* LockupHysteresis */ 150.0,
+    /* LockupEnabled    */ true,
+};
+
 /**
  * Create default transmission with sensible gear ratios.
+ *
+ * @param useTorqueConverter when true, installs the fluid-coupling
+ *        TorqueConverter (proper SCS direct-torque model) in parallel with the
+ *        friction clutch. The friction clutch is then only used to open the
+ *        driveline during a shift; the converter carries the pump/turbine fluid
+ *        torque so the engine is always loaded by the fluid path.
+ * @param tcParams optional override for the converter characteristic; defaults
+ *        to the standard C63/M156-tuned 2.0 stall-ratio pump law when null.
  */
-inline Transmission* createDefaultTransmission() {
+inline Transmission* createDefaultTransmission(
+        bool useTorqueConverter = false,
+        const TorqueConverter::Parameters* tcParams = nullptr) {
     const double gearRatios[] = { 2.97, 2.07, 1.43, 1.00, 0.84, 0.56 };
 
     Transmission::Parameters tParams;
     tParams.GearCount = 6;
     tParams.GearRatios = gearRatios;
     tParams.MaxClutchTorque = units::torque(1000.0, units::ft_lb);
+    tParams.TorqueConverterParams =
+        useTorqueConverter ? (tcParams ? tcParams : &kDefaultTorqueConverterParams) : nullptr;
 
     Transmission* transmission = new Transmission;
     transmission->initialize(tParams);

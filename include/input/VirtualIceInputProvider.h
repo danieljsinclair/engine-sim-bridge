@@ -12,6 +12,8 @@
 #include <vector>
 #include <string>
 
+class BridgeSimulator;  // forward decl — full definition via simulator/BridgeSimulator.h in the .cpp
+
 namespace input {
 
 class VirtualIceInputProvider : public IInputProvider {
@@ -54,6 +56,14 @@ public:
     // Enable gearbox diagnostic logging
     void setGearboxLogger(twin::IGearboxLogger* logger);
 
+    // Bind the live BridgeSimulator so the provider can install the fluid-
+    // coupling torque converter on the transmission when --coupling-model
+    // torque-converter is selected. The session sets this AFTER creating the
+    // simulator (the provider is constructed before the simulator exists), so
+    // setCouplingModel() may arrive earlier — the requested kind is remembered
+    // and applied here (and on any later setCouplingModel).
+    void setBridgeSimulator(BridgeSimulator* sim);
+
 private:
     twin::IceVehicleProfile profile_;  // owned (was const ref)
     std::unique_ptr<twin::VirtualIceTwin> twin_;
@@ -62,6 +72,12 @@ private:
     twin::IGearboxLogger* pendingLogger_ = nullptr;
 
     UpstreamSignal currentSignal_;
+
+    // Live BridgeSimulator handle (set by the session after simulator creation).
+    // Null until then; the requested torque-converter install is deferred until
+    // it is set (or re-applied on a later setCouplingModel).
+    BridgeSimulator* bridgeSim_ = nullptr;
+    bool pendingTorqueConverter_ = false;
 };
 
 }

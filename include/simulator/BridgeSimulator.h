@@ -69,6 +69,16 @@ public:
     void setClutchPressure(double pressure) override;
     void setBrakePressure(double pressure) override;
 
+    // Install the fluid-coupling torque converter on the live transmission
+    // (proper SCS direct-torque model). Called when --coupling-model
+    // torque-converter is selected. The converter is added in parallel with the
+    // friction clutch; the friction clutch is then only used to open the
+    // driveline during a shift. Safe to call once after the simulator has loaded
+    // its script. No-op if the converter is already installed or the
+    // transmission is unavailable.
+    void setUseTorqueConverter(bool enabled);
+    bool usesTorqueConverter() const { return usesTorqueConverter_; }
+
     // MATCH mode: inject recorded drivetrain torque (Nm) at the transmission
     // input / rotating-mass side. The torque flows clutch->gearbox->diff->wheels.
     void setDrivetrainInputTorque(double nm);
@@ -163,6 +173,10 @@ private:
     // Audio config
     std::vector<int16_t> m_audioConversionBuffer;
     ISimulatorConfig engineConfig_;
+
+    // Whether the fluid-coupling torque converter (proper SCS direct-torque
+    // model) is installed on the live transmission.
+    bool usesTorqueConverter_ = false;
 };
 
 #endif // BRIDGE_SIMULATOR_H
