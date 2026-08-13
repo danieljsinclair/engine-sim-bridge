@@ -1,6 +1,7 @@
 #include <algorithm>
 
 #include <twin/VirtualIceTwin.h>
+#include <simulation/CrankingController.h>
 #include <twin/SlipLockController.h>
 #include <twin/TorqueConverterLaunch.h>
 #include <simulator/GearConventions.h>
@@ -49,7 +50,7 @@ void VirtualIceTwin::reconfigureProfile(const std::vector<double>& gearRatios,
     // converted to true km/h (mph * 1.60934): 15,25,35,45,55,65 mph ->
     // 24.14, 40.23, 56.33, 72.42, 88.51, 104.61 km/h, so DA5 unlocks only above
     // ~45 mph, not ~18 mph.
-    static const std::vector<double> kUpshiftBandTopKmh = {24.14, 40.23, 56.33, 72.42, 88.51, 104.61};
+    static const std::vector kUpshiftBandTopKmh = {24.14, 40.23, 56.33, 72.42, 88.51, 104.61};
     static constexpr double kDownshiftHysteresisKmh = 5.0;  // held band below each top
     // Mild throttle sensitivity: light throttle upshifts a touch earlier, WOT
     // holds each gear a touch longer — but always centered on the band top so
@@ -332,7 +333,16 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             //      catches (RPM recovers). This is the same cranking throttle the
             //      OFF->CRANKING path uses, applied locally so a mid-drive stall
             //      self-heals instead of latching Stopped forever.
-            const double kStallRpm = 30.0;  // below this = engine has stopped
+            // Below the engine's own Running->Stopped latch bar = stalled. This
+            // MUST be the engine's bar (CrankingController::STOPPED_RPM), not a
+            // twin-local guess: the restart pulse below is a ONE-TICK edge, and
+            // engageStarter() only honours the button once the phase has latched
+            // Stopped. A higher twin threshold (the old 30 rpm) pulses while the
+            // phase is still Running on a slow decay — the button is dropped and
+            // the retry cooldown then blanks the starter for its full 3 s past
+            // the moment the phase does latch. The feedback signal is one step
+            // in arrears of the latch, which keeps the ordering safe by one tick.
+            const double kStallRpm = CrankingController::STOPPED_RPM;
             // Re-crank period: a crank attempt gets the same 3s budget as the
             // initial OFF->CRANK crank (CRANK_FALLBACK_DURATION_S). The bridge's
             // CrankingController::engageStarter is a momentary TOGGLE -- calling
