@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 
 #include <twin/VirtualIceTwin.h>
 #include <simulation/CrankingController.h>
@@ -372,6 +373,13 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
                     output.starterMotor = true;  // one-tick edge
                     reCrankCooldownS_ = kRecrankPeriodS;
                 }
+                // Starter/crank handoff = the one place the idle-hold
+                // integral is hard-flushed: a wound-up term re-engaging on a
+                // fresh catch is the classic idle-flare source. Everywhere
+                // else the integral decays (tau ~2s), not flushes.
+                idleHoldIntegralPct_ = 0.0;
+                idleHoldOutputPct_ = 0.0;
+                idleHoldActive_ = false;
                 output.throttle = std::max(
                     std::max(throttleSmoother_.getCurrentValue(),
                              EngineSimDefaults::CRANKING_THROTTLE),
@@ -380,11 +388,17 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
                 // Engine recovered above kStallRpm: re-arm the cooldown so the
                 // next genuine stall fires a fresh edge promptly.
                 reCrankCooldownS_ = 0.0;
-                if (engineRpmFeedback_ < profile_.idleRpm) {
-                    // Engine alive but dipping below idle: hold the sustain floor
-                    // so it cannot coast through the Stopped latch.
+
+                // Idle-hold controller (guard (a), upgraded — see
+                // idleHoldFloor()): engine alive but sagging below idle. The
+                // old guard was a static 5% floor; this is the ECU idle-air
+                // equivalent. Returns 0 when it has nothing to add.
+                const double idleFloor = idleHoldFloor(dt, engineRpmFeedback_);
+                if (idleFloor > 0.0) {
+                    // FLOOR semantics, stated in code: the controller can
+                    // only ADD throttle, never take it away.
                     output.throttle = std::max(throttleSmoother_.getCurrentValue(),
-                                               EngineSimDefaults::IDLE_SUSTAIN_THROTTLE);
+                                               idleFloor);
                 }
             }
 
@@ -607,6 +621,93 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
         (couplingModelKind_ == twin::CouplingModelKind::TorqueConverter);
     output.gearSelector = selector_;
     return output;
+}
+
+double VirtualIceTwin::idleHoldFloor(double dt, double feedbackRpm) {
+    // Idle-hold controller (the RUNNING case's not-stalled guard): a small PI
+    // on (idleRpm - feedback) whose output FLOORS the throttle (see the header
+    // for the floor/semantics contract). Replaces the old static 5%
+    // IDLE_SUSTAIN_THROTTLE floor, which could not hold the engine against the
+    // converter's low-speed capacity drag. All constants are FRACTIONS OF
+    // FULL THROTTLE (0.20 = 20%):
+    //   - engage below idle, release at idle + 150 rpm hysteresis so the
+    //     one-step-arrears feedback cannot chatter the band;
+    //   - P = 0.05%/rpm (=5e-4 per rpm), immediate authority, clamped
+    //     [5%, 20%] — a -600rpm sag commands +30% -> clamps to 20% same-tick;
+    //     the 20% ceiling sits far below kickdown (>=95%) and the WOT gate
+    //     (>=90%), so it cannot disturb shift logic. NOTE: doubling this gain
+    //     to 0.1%/rpm REGRESSED the sf0 sweep (RNZ 82 -> 332, a 549-frame
+    //     dead episode): the marginal cold-start trajectory is entry-state
+    //     sensitive. Do not retune without the full sf0/60/95/120 sweep.
+    //   - I trims the steady-state drag: tau 1s, rate-limited to 2%/s,
+    //     capped at 8%. While disengaged the integral DECAYS (tau 2s)
+    //     instead of flushing — the flush reset the hold offset every
+    //     sawtooth cycle; the hard flush lives only at the starter/crank
+    //     handoff in the RUNNING case's stalled branch (flare risk).
+    //   - Release ramps down at 40%/s (0.67%/frame): smooth per frame, but
+    //     fast enough that the engine does not coast ~700rpm past the release
+    //     point on the residual floor (a 10%/s ramp held ~18% for a full
+    //     second and drove the 950->1800 overshoot in the sweep traces).
+    constexpr double kReleaseMarginRpm = 150.0;
+    constexpr double kMaxFloor = 0.20;
+    constexpr double kKpPerRpm = 5e-4;
+    constexpr double kIntegralTauS = 1.0;
+    constexpr double kIntegralCap = 0.08;
+    constexpr double kIntegralRatePerS = 0.02;
+    constexpr double kReleaseRatePerS = 0.40;
+    constexpr double kIntegralDecayTauS = 2.0;
+    const double minFloor = EngineSimDefaults::IDLE_SUSTAIN_THROTTLE;
+
+    // State machine (flat on purpose — this grew out of a 5-deep nested
+    // block that Sonar rightly flagged):
+    //   release at idle + margin (integral RETAINED — decays below; flushing
+    //   here reset the hold offset on every sawtooth cycle and re-created the
+    //   droop each time; the hard flush lives at the starter/crank handoff in
+    //   the RUNNING case's stalled branch, where the flare risk actually is);
+    //   engage below idle; hysteresis in between holds the current state.
+    if (idleHoldActive_ && feedbackRpm > profile_.idleRpm + kReleaseMarginRpm) {
+        idleHoldActive_ = false;
+    }
+    if (!idleHoldActive_ && feedbackRpm < profile_.idleRpm) {
+        idleHoldActive_ = true;
+        idleHoldOutputPct_ = minFloor;
+    }
+
+    if (idleHoldActive_) {
+        const double errorRpm = profile_.idleRpm - feedbackRpm;
+        // P: immediate, un-rate-limited — the engine dies in under a second
+        // under a heavy drag; a ramp would arrive after the funeral.
+        const double pTerm = kKpPerRpm * errorRpm;
+        // I: slow trim, rate-limited both directions, hard-capped.
+        const double integIncr = std::clamp(
+            kKpPerRpm * errorRpm * dt / kIntegralTauS,
+            -kIntegralRatePerS * dt, kIntegralRatePerS * dt);
+        idleHoldIntegralPct_ = std::clamp(idleHoldIntegralPct_ + integIncr,
+                                          0.0, kIntegralCap);
+        const double target = std::clamp(pTerm + idleHoldIntegralPct_,
+                                         minFloor, kMaxFloor);
+        // Release-direction ramp only: upward steps inside the clamp are
+        // harmless (see above), downward ramps keep the gearbox's throttle
+        // input smooth.
+        idleHoldOutputPct_ =
+            (target < idleHoldOutputPct_)
+                ? std::max(target, idleHoldOutputPct_ - kReleaseRatePerS * dt)
+                : target;
+        return idleHoldOutputPct_;
+    }
+
+    // Disengaged: exponential integral decay (tau 2s) — short releases
+    // across the idle band keep most of the learned hold offset; a genuinely
+    // long release forgets it.
+    idleHoldIntegralPct_ *= std::exp(-dt / kIntegralDecayTauS);
+    if (idleHoldOutputPct_ <= minFloor) {
+        return 0.0;  // fully released, nothing to floor
+    }
+    // Still ramping the residual floor down — the release-direction rate
+    // limit above, continued.
+    idleHoldOutputPct_ = std::max(minFloor,
+                                  idleHoldOutputPct_ - kReleaseRatePerS * dt);
+    return idleHoldOutputPct_;
 }
 
 void VirtualIceTwin::updateShiftExecution(double dt) {
