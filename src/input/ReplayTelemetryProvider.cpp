@@ -312,6 +312,18 @@ void ReplayTelemetryProvider::primeTwinToRunning() {
     // is taken from the first sample (default DRIVE), so a PARK/NEUTRAL trace
     // never leaves IDLE — it is not "running". The prime result is discarded; only
     // the resulting RUNNING state matters.
+    //
+    // HANDOFF CONTRACT (twin/core agreement): these synthetic frames advance the
+    // TWIN's state machine only — the engine-sim core is not stepped here (the
+    // provider does not own it), so the core starts Stopped. Agreement is
+    // restored on the first REAL replay frames, through the core's own physics:
+    //   - at road speed the drivetrain drags the crank above the catch bar and
+    //     CrankingController::step bump-starts Stopped -> Running (push-start);
+    //   - at standstill (rpm ~ 0) the twin's RUNNING stall guard pulses the
+    //     starter and the core cranks and catches for real.
+    // Either way the core phase must be Running within the first replay second;
+    // the driveability gate's NO_STOPPED_LATCH check enforces the same
+    // invariant on the deterministic sweep legs.
     const Sample& first = samples_.front();
     const bridge::GearSelector sel = first.gearSelector.empty()
         ? bridge::GearSelector::DRIVE : parseGearSelector(first.gearSelector);
