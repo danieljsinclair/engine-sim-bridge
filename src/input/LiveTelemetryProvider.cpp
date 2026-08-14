@@ -157,6 +157,16 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
     UpstreamSignal signal = currentSignal_.load();
     twinProvider_->setUpstreamSignal(signal);
 
+    // Relay the decoded gear to the twin. The twin learns the selector ONLY via
+    // setGearSelector (its `selector_` member) — it does NOT read
+    // signal.gearSelector — so without this the network path leaves selector_ at
+    // its NEUTRAL default and emits engineInput.gearSelector == 0 every frame.
+    // That kills gear-initiated instant starts (driveSelected stays false) on the
+    // live JSON path, unlike the CSV path (line 141) which relays the gear. The
+    // twin remains the single owner of the selector; we only feed it the signal
+    // that submitSignal() already published above.
+    twinProvider_->setGearSelector(static_cast<int>(signal.gearSelector));
+
     // Delegate to the twin for gearbox/clutch/throttle processing
     input = twinProvider_->OnUpdateSimulation(dt);
 

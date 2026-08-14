@@ -131,6 +131,60 @@ TEST_F(LiveTelemetryProviderTest, DelegatesForwardToTwin) {
     EXPECT_TRUE(provider_->IsConnected());
 }
 
+// Regression: the JSON network path must populate engineInput.gearSelector from
+// the decoded gear in the submitted signal. The inner twin learns the selector
+// ONLY via setGearSelector (it does NOT read signal.gearSelector); the network
+// path relays it. Without this, engineInput.gearSelector stays NEUTRAL(0) and
+// gear-initiated instant starts (driveSelected) are dead on the live path.
+TEST_F(LiveTelemetryProviderTest, NetworkPath_PopulatesGearSelectorFromSignal) {
+    ASSERT_TRUE(provider_->Initialize());
+
+    // Network path: a DRIVE-gear, valid telemetry frame (the master live feed).
+    input::UpstreamSignal signal;
+    signal.gearSelector = bridge::GearSelector::DRIVE;
+    signal.isValid = true;
+    signal.throttleFraction = 0.5;
+    signal.speedKmh = 30.0;
+    provider_->submitSignal(signal);
+
+    // Pump RPM feedback so the twin leaves CRANKING/IDLE quickly and the box
+    // reaches RUNNING; gearSelector is echoed on every frame regardless of state.
+    EngineSimStats stats;
+    stats.currentRPM = 900.0;
+
+    input::EngineInput input;
+    for (int i = 0; i < 5; ++i) {
+        provider_->provideFeedback(stats);
+        input = provider_->OnUpdateSimulation(0.05);
+    }
+
+    EXPECT_EQ(input.gearSelector, static_cast<int>(bridge::GearSelector::DRIVE))
+        << "Network live frame must report the decoded gear via engineInput.gearSelector";
+}
+
+// Contrast: a NEUTRAL-gear network frame must surface NEUTRAL, proving the field
+// is genuinely driven by the signal (not hardcoded to DRIVE).
+TEST_F(LiveTelemetryProviderTest, NetworkPath_NeutralGearSurfacesNeutral) {
+    ASSERT_TRUE(provider_->Initialize());
+
+    input::UpstreamSignal signal;
+    signal.gearSelector = bridge::GearSelector::NEUTRAL;
+    signal.isValid = true;
+    signal.throttleFraction = 0.5;
+    signal.speedKmh = 30.0;
+    provider_->submitSignal(signal);
+
+    EngineSimStats stats;
+    stats.currentRPM = 900.0;
+    input::EngineInput input;
+    for (int i = 0; i < 5; ++i) {
+        provider_->provideFeedback(stats);
+        input = provider_->OnUpdateSimulation(0.05);
+    }
+
+    EXPECT_EQ(input.gearSelector, static_cast<int>(bridge::GearSelector::NEUTRAL));
+}
+
 }  // namespace
 
 // ============================================================================

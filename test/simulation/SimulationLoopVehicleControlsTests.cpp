@@ -27,6 +27,8 @@
 #include "common/ILogging.h"
 #include "simulation/CrankingController.h"
 #include "simulator/GearConventions.h"
+#include "input/LiveTelemetryProvider.h"
+#include "twin/IceVehicleProfile.h"
 
 #include <gtest/gtest.h>
 
@@ -584,6 +586,114 @@ TEST_F(SimulationLoopVehicleControlsTest, HeldBrakeStarterPulseIsSingleFrame) {
     }
     EXPECT_FALSE(calls_->lastIgnition)    // 3 frames = 0.05s < 0.5s delay
         << "Crank delay must not have elapsed yet";
+}
+
+// ---------------------------------------------------------------------------
+// Live provider end-to-end: a gear-only network frame (DRIVE, no brake) must
+// reach the consolidated applyStartStopDecision site with engineInput.gearSelector
+// == DRIVE, so driveSelected is true and the engine starts WITHOUT a crank delay
+// (ignition ON on frame 1). This is the regression guard for the live JSON path:
+// the network branch of LiveTelemetryProvider must relay signal.gearSelector to
+// the twin, which is the only owner of the selector the decision site reads.
+// ---------------------------------------------------------------------------
+
+// Thin adapter so the real LiveTelemetryProvider (an IInputProvider) can be fed
+// to SimulationLoop, exactly as the production --live-telemetry wiring does.
+class FakeStartStopProvider : public IInputProvider {
+public:
+    explicit FakeStartStopProvider(std::unique_ptr<input::LiveTelemetryProvider> p)
+        : provider_(std::move(p)) {}
+
+    EngineInput OnUpdateSimulation(double dt) override {
+        return provider_->OnUpdateSimulation(dt);
+    }
+    void provideFeedback(const EngineSimStats& s) override { provider_->provideFeedback(s); }
+    bool Initialize() override { return provider_->Initialize(); }
+    void Shutdown() override { provider_->Shutdown(); }
+    bool IsConnected() const override { return provider_->IsConnected(); }
+    std::string GetProviderName() const override { return provider_->GetProviderName(); }
+    std::string GetLastError() const override { return provider_->GetLastError(); }
+
+private:
+    std::unique_ptr<input::LiveTelemetryProvider> provider_;
+};
+
+TEST_F(SimulationLoopVehicleControlsTest, LiveNetworkFrame_DriveGearStartsInstantly) {
+    // Build the REAL live provider (network mode: no stream), submit a DRIVE
+    // gear frame, and run it through the loop's start/stop decision site.
+    auto liveProvider = std::make_unique<input::LiveTelemetryProvider>(
+        twin::IceVehicleProfile::zf8hp45());
+    ASSERT_TRUE(liveProvider->Initialize());
+
+    input::UpstreamSignal signal;
+    signal.gearSelector = bridge::GearSelector::DRIVE;  // gear-only, NO brake
+    signal.isValid = true;
+    signal.throttleFraction = 0.5;
+    signal.speedKmh = 30.0;
+    liveProvider->submitSignal(signal);
+
+    auto provider = std::make_unique<FakeStartStopProvider>(std::move(liveProvider));
+
+    SessionDependencies deps{
+        audioBuffer_.get(),
+        crankingController_.get(),
+        stopRequested_.get(),
+        provider.get(),
+        presentation_.get(),
+        telemetryWriter_.get(),
+        telemetryReader_.get(),
+        logger_.get()
+    };
+
+    SimulationLoop loop(*simulator_, simConfig_, deps);
+
+    // Frame 1 of a gear-only live frame: the decision site must see DRIVE and
+    // start instantly (starter pulse + ignition ON), no 0.5s crank delay.
+    LoopState state = makeState(input::EngineInput{});
+    loop.step(state);
+
+    EXPECT_EQ(simulator_->getEnginePhase(), EnginePhase::Cranking)
+        << "Live DRIVE frame must fire the starter pulse on frame 1";
+    EXPECT_TRUE(calls_->lastIgnition)
+        << "Live DRIVE frame is an instant start — ignition must be ON, no crank delay";
+}
+
+// Contrast: a live NEUTRAL frame (gear-only, no brake) must NOT start — it must
+// remain Stopped, proving the selector value genuinely flows from the signal and
+// the decision site distinguishes DRIVE from NEUTRAL. Guards against the field
+// being hardcoded to a start-triggering value.
+TEST_F(SimulationLoopVehicleControlsTest, LiveNetworkFrame_NeutralDoesNotStart) {
+    auto liveProvider = std::make_unique<input::LiveTelemetryProvider>(
+        twin::IceVehicleProfile::zf8hp45());
+    ASSERT_TRUE(liveProvider->Initialize());
+
+    input::UpstreamSignal signal;
+    signal.gearSelector = bridge::GearSelector::NEUTRAL;
+    signal.isValid = true;
+    signal.throttleFraction = 0.5;
+    signal.speedKmh = 30.0;
+    liveProvider->submitSignal(signal);
+
+    auto provider = std::make_unique<FakeStartStopProvider>(std::move(liveProvider));
+
+    SessionDependencies deps{
+        audioBuffer_.get(),
+        crankingController_.get(),
+        stopRequested_.get(),
+        provider.get(),
+        presentation_.get(),
+        telemetryWriter_.get(),
+        telemetryReader_.get(),
+        logger_.get()
+    };
+
+    SimulationLoop loop(*simulator_, simConfig_, deps);
+
+    LoopState state = makeState(input::EngineInput{});
+    loop.step(state);
+
+    EXPECT_EQ(simulator_->getEnginePhase(), EnginePhase::Stopped)
+        << "Live NEUTRAL frame must not start the engine";
 }
 
 // ---------------------------------------------------------------------------
