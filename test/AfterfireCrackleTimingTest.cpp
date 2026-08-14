@@ -2,16 +2,16 @@
 // afterfire pops fire relative to the rev-drop on a throttle cut.
 //
 // Originally the RED-phase proof of the "immediate-release pop" bug (baseline
-// fired the first pop on the very tick of the cut at ~91% of peak revs). With the
-// displacement-driven motoring scavenge variant it now measures that fix: the
-// first pop is pushed to ~88.7% of peak (~133 ms after the cut).
+// fired the first pop on the very tick of the cut at ~91% of peak revs). The
+// rev-relative DFCO fix (cut the raw-fuel credit above dfcoRevDropFraction of the
+// frozen on-throttle peak) is verified at TWO rev ranges: a WOT pull to ~7333 and
+// a part-throttle blip to a MODERATE peak (~4000, the user's real driving). At
+// both, the first pop must land AFTER the rev-drop (O1, <= 0.85 of peak).
 //
 // It drives the REAL CLI bridge path (SimulatorFactory -> BridgeSimulator ->
-// setThrottle -> update -> afterfire) using the REALISTIC DEFAULT AfterfireConfig
-// (enabled=true, ignitionDelayRefS=0.3 — the real default, NOT the aggressive
-// 0.001 used by the wiring-proof test). It revs to a peak, then cuts the
-// throttle and coasts, recording each pop's (time-since-cut, RPM) so we can
-// assert O1 against this variant's relaxed bar (kO1FirstPopFraction).
+// setThrottle -> update -> afterfire) using the realistic AfterfireConfig
+// (ignitionDelayRefS=0.3 — NOT the bridge's stale 3.0 default and not the 0.001
+// wiring-proof value).
 
 #include <gtest/gtest.h>
 #include <cmath>
@@ -34,12 +34,12 @@
 
 namespace {
 
-// O1 target for this variant: the first pop must wait until revs have fallen to
-// at most this fraction of peak before firing. The displacement-driven scavenge
-// variant moves the first pop to ~88.7% of peak, so the bar here is relaxed from
-// the 0.85 used to PROVE the baseline bug to 0.89 — variant 1's own passing bar.
-// (firstPopRpm and peak are also exported as record properties for visibility.)
-constexpr double kO1FirstPopFraction = 0.89;
+// O1 target: the first pop must wait until revs have fallen to at most this
+// fraction of peak before firing (the original >=15% drop bar). The rev-relative
+// DFCO variant reinstates fuel only below dfcoRevDropFraction*peak, so the first
+// pop lands well under this at any peak; the baseline's ~91% (pop on the cut
+// tick) would fail it. firstPopRpm/peak are also exported as record properties.
+constexpr double kO1FirstPopFraction = 0.85;
 
 // A single observed pop: when it happened relative to the cut, and at what RPM.
 struct PopSample {
@@ -49,7 +49,7 @@ struct PopSample {
 };
 
 // Drives a rev-to-peak then throttle-cut coast and records every afterfire pop.
-// Uses the realistic default AfterfireConfig. Returns the measurement summary.
+// Returns the measurement summary.
 struct CrackleMeasurement {
     double peakRevRpm = 0.0;
     double firstPopDelayMs = -1.0;
@@ -58,14 +58,21 @@ struct CrackleMeasurement {
     std::vector<PopSample> pops;
 };
 
-CrackleMeasurement measureCrackle(BridgeSimulator& bridge) {
+// Rev to a peak at `revThrottle`, then cut and coast ~4s, recording every pop.
+// If `targetPeakRpm > 0`, the rev phase stops as soon as rpm reaches it (a WOT-
+// to-moderate-target lift: the no-load engine free-revs to ~7300 at any throttle
+// >= ~0.3, so a sustained moderate peak only exists by lifting at a target rpm).
+CrackleMeasurement measureCrackle(BridgeSimulator& bridge, double revThrottle,
+                                  double targetPeakRpm = 0.0) {
     CrackleMeasurement m;
 
     const double dt = 1.0 / 60.0;
 
-    // --- REV to peak: ~3s at full throttle ---
+    // --- REV to peak: up to ~3s at the requested throttle, or until rpm reaches
+    // targetPeakRpm if set. ---
     for (int i = 0; i < 360; ++i) {
-        bridge.setThrottle(1.0);
+        if (targetPeakRpm > 0.0 && m.peakRevRpm >= targetPeakRpm) break;
+        bridge.setThrottle(revThrottle);
         if (i == 60) bridge.setStarterMotor(false);
         bridge.update(dt);
         m.peakRevRpm = std::max(m.peakRevRpm, bridge.getEngineRpm());
@@ -76,11 +83,13 @@ CrackleMeasurement measureCrackle(BridgeSimulator& bridge) {
     std::vector<int> prevEvents(baseline.size(), 0);
     for (size_t c = 0; c < baseline.size(); ++c) prevEvents[c] = baseline[c].eventCount;
 
-    // O3: no pops under WOT. The rev phase above held the pedal flat (throttle=1.0);
-    // the afterfire throttle gate must refuse throughout, so no chamber may have fired.
-    int wotPops = 0;
-    for (const auto& d : baseline) wotPops += d.eventCount;
-    EXPECT_EQ(wotPops, 0) << "O3 violated: " << wotPops << " pop(s) fired during WOT rev phase";
+    // O3: no pops under throttle. The rev phase above held the pedal down
+    // (revThrottle >= throttleCutoff), so the afterfire throttle gate must have
+    // refused throughout and no chamber may have fired.
+    int onThrottlePops = 0;
+    for (const auto& d : baseline) onThrottlePops += d.eventCount;
+    EXPECT_EQ(onThrottlePops, 0) << "O3 violated: " << onThrottlePops
+                                 << " pop(s) fired during the on-throttle rev phase";
 
     for (int i = 0; i < 360; ++i) {
         bridge.setThrottle(0.0);
@@ -112,20 +121,14 @@ CrackleMeasurement measureCrackle(BridgeSimulator& bridge) {
     return m;
 }
 
-}  // namespace
-
-// O1 (KEY): first-pop-RPM must be <= kO1FirstPopFraction * peak-revRPM. Against
-// this variant's 0.89 bar the displacement-driven scavenge (first pop at ~88.7%
-// of peak) passes GREEN; the baseline's ~91% would still fail it.
-TEST(AfterfireCrackleTimingTest, RevsHighThenCuts_PopsAfterRevsDrop) {
-#ifndef ATG_ENGINE_SIM_AFTERFIRE_SPIKE
-    GTEST_SKIP() << "ATG_ENGINE_SIM_AFTERFIRE_SPIKE not compiled in";
-#else
-    // C63_M156_V3 reaches the runner temperatures (~1880-1910 K) the realistic
-    // default config is tuned for; v8_gm_ls tops out near ~1100 K and never
-    // lights off at ignitionDelayRefS=0.3 (induction never completes). The
-    // EngineSimTypes.h benchmark table (0.3 -> 0.050 s, 20 pops) is measured on
-    // this C63 scenario, so it is the correct engine to characterise the bug on.
+// Build the C63 simulator with the realistic afterfire config and run one
+// rev-then-cut crackle scenario. Asserts O1 (first pop after the rev-drop), O3
+// (no pops on-throttle), and that real pops occurred. Shared by the high-rev and
+// moderate-rev cases — the rev-relative DFCO must hold at BOTH rev ranges.
+void runCrackleScenario(double revThrottle, double targetPeakRpm, const std::string& label) {
+    // C63_M156_V3 reaches the runner temperatures the realistic config is tuned
+    // for; the EngineSimTypes.h benchmark table (0.3 -> 0.050 s, 20 pops) is
+    // measured on this C63 scenario, so it is the correct engine to test on.
     const std::string presetPath = std::string(TEST_PRESET_DIR) + "/C63_M156_V3.json";
     ASSERT_TRUE(std::filesystem::exists(presetPath)) << "Missing preset: " << presetPath;
 
@@ -150,20 +153,39 @@ TEST(AfterfireCrackleTimingTest, RevsHighThenCuts_PopsAfterRevsDrop) {
     ASSERT_NE(innerSim, nullptr);
     SimulatorInitHelpers::initializeConvolutionFilters(innerSim);
 
-    // REALISTIC DEFAULT config: construct AfterfireConfig defaults, enable it,
-    // and use the real default ignitionDelayRefS (0.3). NOT the aggressive 0.001
-    // wiring-proof config and NOT a hardcoded timer — this must be physical.
+    // REALISTIC config: ignitionDelayRefS=0.3 (the real default, NOT the bridge's
+    // stale 3.0 and not the 0.001 wiring-proof value).
     AfterfireConfig af;
     af.enabled = true;
     af.ignitionDelayRefS = 0.3;
-    af.diagnostics = true;        // also surface the [AFTERFIRE] pop lines
+    af.diagnostics = true;        // surface the [AFTERFIRE] pop lines
     SimulatorFactory::configureAfterfire(sim.get(), af, nullptr);
 
-    // --- Start the engine ---
     bridge->setIgnition(true);
     bridge->setStarterMotor(true);
 
-    const CrackleMeasurement m = measureCrackle(*bridge);
+    const CrackleMeasurement m = measureCrackle(*bridge, revThrottle, targetPeakRpm);
+
+    // Diagnostics: WHY did/didn't it pop? skip counters name the missing physical
+    // precondition; maxRunnerTempK shows how hot the runner ever got this scenario.
+    {
+        const auto diags = bridge->getAfterfireDiagnostics();
+        int skipCold = 0, skipFuel = 0, skipO2 = 0, skipReady = 0, skipThr = 0, misfire = 0;
+        double maxT = 0.0, maxProg = 0.0, maxRawFrac = 0.0;
+        for (const auto& d : diags) {
+            skipCold += d.skippedTooCold; skipFuel += d.skippedNoFuel;
+            skipO2 += d.skippedNoOxygen; skipReady += d.skippedNotReady;
+            skipThr += d.skippedThrottle; misfire += d.misfireCycles;
+            maxT = std::max(maxT, d.maxRunnerTempK);
+            maxProg = std::max(maxProg, d.maxIgnitionProgress);
+            maxRawFrac = std::max(maxRawFrac, d.maxRawFuelFraction);
+        }
+        printf("[CRACKLE-DIAG/%s] maxRunnerT=%.0fK maxIgnProgress=%.3f maxRawFuelFrac=%.5g "
+               "misfireCycles=%d skip(tooCold=%d noFuel=%d noO2=%d notReady=%d throttle=%d)\n",
+               label.c_str(), maxT, maxProg, maxRawFrac, misfire,
+               skipCold, skipFuel, skipO2, skipReady, skipThr);
+        fflush(stdout);
+    }
 
     // --- Pop-timing distribution (bucketted by 500 ms windows after the cut) ---
     const int bucketMs = 500;
@@ -174,13 +196,12 @@ TEST(AfterfireCrackleTimingTest, RevsHighThenCuts_PopsAfterRevsDrop) {
         else if (b >= static_cast<int>(buckets.size())) buckets.back()++;
     }
 
-    // --- Clear summary line ---
-    printf("[CRACKLE-RESULT] peakRevRpm=%.0f firstPopDelayMs=%.1f firstPopRpm=%.0f "
+    const double firstPopRatio = (m.peakRevRpm > 0.0) ? m.firstPopRpm / m.peakRevRpm : 0.0;
+    printf("[CRACKLE-RESULT/%s] peakRevRpm=%.0f firstPopDelayMs=%.1f firstPopRpm=%.0f "
            "totalPops=%d O1_threshold=%.0f firstPopRatio=%.3f\n",
-           m.peakRevRpm, m.firstPopDelayMs, m.firstPopRpm, m.totalPops,
-           kO1FirstPopFraction * m.peakRevRpm,
-           (m.peakRevRpm > 0.0) ? m.firstPopRpm / m.peakRevRpm : 0.0);
-    printf("[CRACKLE-DIST] buckets(500ms):");
+           label.c_str(), m.peakRevRpm, m.firstPopDelayMs, m.firstPopRpm, m.totalPops,
+           kO1FirstPopFraction * m.peakRevRpm, firstPopRatio);
+    printf("[CRACKLE-DIST/%s] buckets(500ms):", label.c_str());
     for (size_t b = 0; b < buckets.size(); ++b) {
         printf(" [%d-%dms]=%d", static_cast<int>(b) * bucketMs,
                static_cast<int>(b + 1) * bucketMs, buckets[b]);
@@ -188,22 +209,46 @@ TEST(AfterfireCrackleTimingTest, RevsHighThenCuts_PopsAfterRevsDrop) {
     printf("\n");
     fflush(stdout);
 
-    RecordProperty("peak_rev_rpm", std::to_string(m.peakRevRpm));
-    RecordProperty("first_pop_delay_ms", std::to_string(m.firstPopDelayMs));
-    RecordProperty("first_pop_rpm", std::to_string(m.firstPopRpm));
-    RecordProperty("total_pops", std::to_string(m.totalPops));
-    RecordProperty("o1_threshold_rpm", std::to_string(kO1FirstPopFraction * m.peakRevRpm));
-    RecordProperty("first_pop_ratio", std::to_string(
-        (m.peakRevRpm > 0.0) ? m.firstPopRpm / m.peakRevRpm : 0.0));
+    ::testing::Test::RecordProperty("scenario", label);
+    ::testing::Test::RecordProperty("peak_rev_rpm", std::to_string(m.peakRevRpm));
+    ::testing::Test::RecordProperty("first_pop_delay_ms", std::to_string(m.firstPopDelayMs));
+    ::testing::Test::RecordProperty("first_pop_rpm", std::to_string(m.firstPopRpm));
+    ::testing::Test::RecordProperty("total_pops", std::to_string(m.totalPops));
+    ::testing::Test::RecordProperty("first_pop_ratio", std::to_string(firstPopRatio));
 
-    // O1 (KEY) for this variant: the first pop must wait until revs have fallen to
-    // <= kO1FirstPopFraction of peak. The displacement-driven scavenge pushes the
-    // first pop to ~88.7% of peak (was ~91% on the cut tick in the baseline), so
-    // against this variant's 0.89 bar the assertion is GREEN.
+    // O1 (KEY): the first pop must wait until revs have fallen to <= 0.85 of peak.
+    // O3 (no on-throttle pops) is asserted inside measureCrackle.
     EXPECT_LE(m.firstPopRpm, kO1FirstPopFraction * m.peakRevRpm)
-        << "O1: first pop fired at " << m.firstPopRpm << " RPM, which is "
-        << (m.firstPopRpm / m.peakRevRpm * 100.0) << "% of peak " << m.peakRevRpm
-        << " RPM — above the " << (kO1FirstPopFraction * 100.0) << "% bar. "
-        << "firstPopDelayMs=" << m.firstPopDelayMs;
+        << "[" << label << "] O1: first pop at " << m.firstPopRpm << " RPM = "
+        << (firstPopRatio * 100.0) << "% of peak " << m.peakRevRpm << " > "
+        << (kO1FirstPopFraction * 100.0) << "% bar. firstPopDelayMs="
+        << m.firstPopDelayMs;
+    EXPECT_GT(m.totalPops, 0) << "[" << label << "] no pops at all — DFCO over-"
+        "suppressed (cooling trap?) or the scenario never lit off";
+}
+
+}  // namespace
+
+// High-rev: WOT pull to ~7333, cut, coast. The first pop must land after the
+// rev-drop (<= 0.85 of peak).
+TEST(AfterfireCrackleTimingTest, HighRevWot_PopsAfterRevsDrop) {
+#ifndef ATG_ENGINE_SIM_AFTERFIRE_SPIKE
+    GTEST_SKIP() << "ATG_ENGINE_SIM_AFTERFIRE_SPIKE not compiled in";
+#else
+    runCrackleScenario(1.0, 0.0, "high-rev-WOT");
+#endif
+}
+
+// Moderate-rev: WOT to a MODERATE target (~5000) then lift early. This is the
+// user's real driving shape — the no-load engine free-revs to ~7300 at any
+// throttle >= ~0.3, so a moderate peak is reached by lifting at a target rpm,
+// not by holding a small throttle (which never afterfires at all). An absolute
+// DFCO threshold (6600) would not engage on a 5000 peak; the rev-relative cut
+// must, so the first pop still waits for the drop at this lower peak.
+TEST(AfterfireCrackleTimingTest, ModerateRevLiftAt5000_PopsAfterRevsDrop) {
+#ifndef ATG_ENGINE_SIM_AFTERFIRE_SPIKE
+    GTEST_SKIP() << "ATG_ENGINE_SIM_AFTERFIRE_SPIKE not compiled in";
+#else
+    runCrackleScenario(1.0, 6500.0, "moderate-WOT-to-6500");
 #endif
 }
