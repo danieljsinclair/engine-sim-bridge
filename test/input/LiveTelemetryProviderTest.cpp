@@ -18,6 +18,7 @@
 // spec we accept the happy path + idempotency + not-init guard as the core.
 
 #include "input/LiveTelemetryProvider.h"
+#include "input/EngineInputTarget.h"
 #include "twin/IceVehicleProfile.h"
 #include "simulator/EngineSimTypes.h"
 #include "simulator/GearConventions.h"
@@ -487,6 +488,43 @@ TEST(LiveTelemetryStreamTest, CsvBrakeLightColumn_SurfacesOnCurrentSignal) {
     // simElapsedS=5.5: row t=5 in window. -> blank -> nullopt.
     h.provider->OnUpdateSimulation(2.0);
     EXPECT_FALSE(h.provider->getCurrentSignal().brakeLight.has_value());
+}
+
+// T10c: canonical brake invariant at the provider boundary. The CSV brake_light
+// column SUPPLIES the light (display/start-stop signal) and must NOT write the
+// physics level — brakeLevel's only writer is the keyboard 'B' key. The
+// keyboard target writes only brakeLevel (its light derives downstream at the
+// SimulationLoop assembly point — proven in SimulationLoopVehicleControlsTests).
+// Rows are duplicated per state (paced reader drops the first row beyond the
+// sim clock each call — the documented ~1-row skew, same as T10b).
+TEST(LiveTelemetryStreamTest, CsvBrakeLight_SuppliesLightWithoutTouchingPhysicsLevel) {
+    StreamHarness h(
+        "time_s,throttle_pct,brake_light\n"
+        "0.0,10,1\n"
+        "1.0,10,1\n"
+        "2.0,10,0\n"
+        "3.0,10,0\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    input::EngineInputTarget keyboardTarget;
+    keyboardTarget.setBrake(1.0);
+    const input::EngineInput keyboardInput = keyboardTarget.buildInput();
+    EXPECT_DOUBLE_EQ(keyboardInput.brakeLevel, 1.0);
+    EXPECT_FALSE(keyboardInput.brakeLight.has_value())
+        << "Keyboard writes the level only — the light derives in SimulationLoop";
+
+    // simElapsedS=1.5: rows t=0,1 in window; t=2 dropped as future. -> true.
+    const input::EngineInput csvOn = h.provider->OnUpdateSimulation(1.5);
+    ASSERT_TRUE(csvOn.brakeLight.has_value());
+    EXPECT_TRUE(*csvOn.brakeLight);
+    EXPECT_DOUBLE_EQ(csvOn.brakeLevel, 0.0)
+        << "CSV brake light is an indicator — it must never write the physics level";
+
+    // simElapsedS=3.5: row t=3 in window; t=2 was the skew-dropped row. -> false.
+    const input::EngineInput csvOff = h.provider->OnUpdateSimulation(2.0);
+    ASSERT_TRUE(csvOff.brakeLight.has_value());
+    EXPECT_FALSE(*csvOff.brakeLight);
+    EXPECT_DOUBLE_EQ(csvOff.brakeLevel, 0.0);
 }
 
 // T11: LIVE stream mode (engine-sim-cli --live-telemetry stdin pipe) surfaces the

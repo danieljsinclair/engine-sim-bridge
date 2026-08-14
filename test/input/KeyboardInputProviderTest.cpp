@@ -513,13 +513,16 @@ TEST_F(EngineInputTargetTest, SetStarter_SetsMomentaryFlag) {
 }
 
 // ============================================================================
-// Test 32: setBrake sets brakeLevel
+// Test 32: setBrake sets the physics level; the brake LIGHT is NOT written
+// here — it derives from the level at the SimulationLoop assembly point.
 // ============================================================================
 
-TEST_F(EngineInputTargetTest, SetBrake_SetsLevel) {
+TEST_F(EngineInputTargetTest, SetBrake_SetsLevelNotLight) {
     target->setBrake(1.0);
     EngineInput input = target->buildInput();
     EXPECT_DOUBLE_EQ(input.brakeLevel, 1.0);
+    EXPECT_FALSE(input.brakeLight.has_value())
+        << "Keyboard target must not write brakeLight — single derivation is in SimulationLoop";
 }
 
 // ============================================================================

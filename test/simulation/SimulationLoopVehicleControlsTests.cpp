@@ -153,7 +153,11 @@ public:
     void ShowError(const std::string&) override {}
     void ShowProgress(double, double) override {}
     void Update(double) override {}
-    void ShowSimulatorStates(const presentation::EngineState&) override {}
+    void ShowSimulatorStates(const presentation::EngineState& state) override {
+        lastControls = state.controls;
+    }
+
+    presentation::EngineState::Controls lastControls;
 };
 
 class FakeLogger : public ILogging {
@@ -393,6 +397,73 @@ TEST_F(SimulationLoopVehicleControlsTest, BrakePressureForwarded) {
 
     EXPECT_EQ(calls_->setBrakePressureCount, 1);
     EXPECT_DOUBLE_EQ(calls_->lastBrake, 0.4);
+}
+
+// Brake-light assembly: with no telemetry value, the local brake level (the
+// keyboard 'B' key's only output) derives the canonical light signal that the
+// display consumes.
+TEST_F(SimulationLoopVehicleControlsTest, BrakeLevel_DerivesBrakeLightWhenTelemetryAbsent) {
+    input::EngineInput input;
+    input.ignition = true;
+    input.brakeLevel = 1.0;   // keyboard 'B' held
+    // brakeLight left nullopt — no telemetry on this path
+
+    SimulationLoop loop(*simulator_, simConfig_, buildDeps());
+    loop.step(makeStateRef(input));
+
+    EXPECT_EQ(calls_->setBrakePressureCount, 1);
+    EXPECT_DOUBLE_EQ(calls_->lastBrake, 1.0);
+    ASSERT_TRUE(presentation_->lastControls.brakeLight.has_value());
+    EXPECT_TRUE(*presentation_->lastControls.brakeLight)
+        << "Keyboard brake level must derive brakeLight=true for display";
+}
+
+// Brake-light assembly: telemetry (CSV brake_light=1) supplies the light
+// directly. It is an indicator, not a pedal — it must NOT drive brake physics.
+TEST_F(SimulationLoopVehicleControlsTest, TelemetryBrakeLight_DoesNotTouchBrakePhysics) {
+    input::EngineInput input;
+    input.ignition = true;
+    input.brakeLight = true;  // CSV brake_light=1 row
+    // brakeLevel left at default 0.0 — nothing but the 'B' key writes it
+
+    SimulationLoop loop(*simulator_, simConfig_, buildDeps());
+    loop.step(makeStateRef(input));
+
+    ASSERT_TRUE(presentation_->lastControls.brakeLight.has_value());
+    EXPECT_TRUE(*presentation_->lastControls.brakeLight)
+        << "CSV brake light must reach the display unchanged";
+    EXPECT_EQ(calls_->setBrakePressureCount, 1);
+    EXPECT_DOUBLE_EQ(calls_->lastBrake, 0.0)
+        << "CSV brake light is an indicator — it must not apply brake pressure";
+}
+
+// Equivalence on the CANONICAL signal only: a keyboard 'B' press (level 1.0,
+// no telemetry light) and a CSV brake_light=1 row (light true, level 0) must
+// be indistinguishable to the controller/display view (brakeLight) — while
+// remaining distinct at the physics input (the key applies pressure, the CSV
+// row does not).
+TEST_F(SimulationLoopVehicleControlsTest, KeyboardAndCsv_EquivalentOnCanonicalLightOnly) {
+    input::EngineInput keyboardInput;
+    keyboardInput.ignition = true;
+    keyboardInput.brakeLevel = 1.0;   // keyboard 'B' held
+
+    SimulationLoop keyboardLoop(*simulator_, simConfig_, buildDeps());
+    keyboardLoop.step(makeStateRef(keyboardInput));
+    const auto keyboardLight = presentation_->lastControls.brakeLight;
+
+    input::EngineInput csvInput;
+    csvInput.ignition = true;
+    csvInput.brakeLight = true;       // CSV brake_light=1 row
+    csvInput.brakeLevel = 0.0;        // nothing but the 'B' key writes the level
+
+    SimulationLoop csvLoop(*simulator_, simConfig_, buildDeps());
+    csvLoop.step(makeStateRef(csvInput));
+    const auto csvLight = presentation_->lastControls.brakeLight;
+
+    ASSERT_TRUE(keyboardLight.has_value());
+    ASSERT_TRUE(csvLight.has_value());
+    EXPECT_EQ(*keyboardLight, *csvLight)
+        << "Controller/display view must see the same brakeLight from both entry points";
 }
 
 // ---------------------------------------------------------------------------

@@ -221,7 +221,8 @@ void SimulationLoop::applyVehicleControls(
         simulator_.setClutchPressure(input.clutchPressure);
     }
 
-    // Brake
+    // Brake — physics consumes the analog level (keyboard 'B' only). The CSV
+    // brake light is an indicator, not a pedal: it never reaches this call.
     simulator_.setBrakePressure(input.brakeLevel);
 }
 
@@ -539,6 +540,15 @@ StepResult SimulationLoop::step(LoopState& state) {
     // Duration check: stop when currentTime reaches or exceeds duration
     if (config_.duration > 0.0 && state.currentTime >= config_.duration) {
         return StepResult::Stop;
+    }
+
+    // Brake-light assembly — the SINGLE derivation point. brakeLight is the
+    // canonical display/start-stop signal; brakeLevel is the physics control
+    // (keyboard 'B' is its only writer). Telemetry (CSV brake_light column)
+    // supplies the light directly; when no telemetry reports it, the local
+    // brake level derives it. The light never writes the level (physics).
+    if (!state.engineInput.brakeLight.has_value()) {
+        state.engineInput.brakeLight = state.engineInput.brakeLevel > 0.0;
     }
 
     // Per-tick simulation logic

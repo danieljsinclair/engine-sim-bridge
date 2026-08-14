@@ -45,7 +45,6 @@ struct EngineState {
     struct Controls {
         double throttle = 0.0;         // Effective (cranking-aware)
         bool ignition = false;
-        double brakeLevel = 0.0;
         std::optional<bool> brakeLight;  // vehicle brake light (nullopt = not reported)
         int gearSelector = 0;
         bool gearAutoMode = false;
