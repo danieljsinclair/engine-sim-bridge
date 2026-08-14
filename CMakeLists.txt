@@ -195,7 +195,6 @@ set(BRIDGE_SOURCES
     src/input/CsvTelemetryParser.cpp
     src/input/LiveTelemetryProvider.cpp
     src/input/VehicleStartController.cpp
-    src/input/StartStopInputAdapter.cpp
     # IO
     src/io/LiveTelemetryParser.cpp
 )
@@ -409,7 +408,6 @@ if(BUILD_BRIDGE_TESTS)
         test/input/DemoControlsTargetTest.cpp
         test/input/LiveTelemetryProviderTest.cpp
         test/input/VehicleStartControllerTest.cpp
-        test/input/StartStopInputAdapterTest.cpp
         test/twin/GearboxCsvLoggerTest.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE

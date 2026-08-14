@@ -28,6 +28,20 @@
 
 namespace input {
 
+// Minimal actuator the controller drives so its caller can READ the level
+// decisions. It is observer-only: nothing downstream consumes it; the caller
+// (SimulationLoop) translates the levels into EngineInput fields. This keeps
+// the real actuator (BridgeSimulator) exclusively under CrankingController's
+// authority — the start/stop decision only ever flattens into EngineInput.
+class ObserverActuator : public IEngineActuator {
+public:
+    void setIgnition(bool on) override { ignition_ = on; }
+    void setStarterMotor(bool on) override { starter_ = on; }
+
+    bool ignition_ = false;
+    bool starter_ = false;
+};
+
 class VehicleStartController {
 public:
     // Default crank delay (seconds) between starter engagement and ignition.

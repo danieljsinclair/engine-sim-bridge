@@ -26,6 +26,7 @@
 #include "strategy/IAudioBuffer.h"
 #include "common/ILogging.h"
 #include "simulation/CrankingController.h"
+#include "simulator/GearConventions.h"
 
 #include <gtest/gtest.h>
 
@@ -57,6 +58,7 @@ public:
         int setDynoTorqueScaleCount = 0;
         double lastDynoScale = -2.0;
         int setIgnitionCount = 0;
+        bool lastIgnition = true;
     };
 
     RecordingSimulator(std::unique_ptr<Simulator> sim, const std::string& name, Calls* calls)
@@ -93,6 +95,7 @@ public:
     }
     void setIgnition(bool on) override {
         calls_->setIgnitionCount++;
+        calls_->lastIgnition = on;
         BridgeSimulator::setIgnition(on);
     }
 
@@ -464,6 +467,123 @@ TEST_F(SimulationLoopVehicleControlsTest, KeyboardAndCsv_EquivalentOnCanonicalLi
     ASSERT_TRUE(csvLight.has_value());
     EXPECT_EQ(*keyboardLight, *csvLight)
         << "Controller/display view must see the same brakeLight from both entry points";
+}
+
+// ---------------------------------------------------------------------------
+// Vehicle start/stop — the single SimulationLoop decision site. The controller
+// consumes the CANONICAL brakeLight (telemetry value or keyboard-level-derived)
+// + gearSelector, so keyboard, CSV and live inputs are indistinguishable here.
+// ---------------------------------------------------------------------------
+
+// Interactive 'B' key: brakeLevel (the key's only output) derives the light,
+// which engages the controller: starter pulse on frame 1 (Stopped->Cranking),
+// ignition held off until kDefaultCrankDelayS (0.5s) of held brake accumulates.
+TEST_F(SimulationLoopVehicleControlsTest, InteractiveBrakeKey_AutoStartsWithCrankDelay) {
+    input::EngineInput brakeHeld;         // keyboard defaults: ignition true
+    brakeHeld.brakeLevel = 1.0;           // 'B' held
+    brakeHeld.gearSelector = 0;           // NEUTRAL
+
+    SimulationLoop loop(*simulator_, simConfig_, buildDeps());
+
+    loop.step(makeStateRef(brakeHeld));
+    EXPECT_EQ(simulator_->getEnginePhase(), EnginePhase::Cranking)
+        << "Brake start must fire the starter pulse on frame 1";
+    EXPECT_FALSE(calls_->lastIgnition)
+        << "Ignition must stay off during the crank delay";
+
+    // Hold the brake well past the 0.5s crank delay (dt = 1/60 per step).
+    for (int frame = 1; frame < 40; ++frame) {
+        loop.step(makeStateRef(brakeHeld));
+    }
+    EXPECT_TRUE(calls_->lastIgnition)
+        << "Ignition must fire after the crank delay while the brake is held";
+}
+
+// Interactive gear selection (D): instant start — ignition ON on the FIRST
+// frame, with the starter pulse. No crank delay on a drive-gear start.
+TEST_F(SimulationLoopVehicleControlsTest, InteractiveGearKey_StartsInstantly) {
+    input::EngineInput driveSelected;
+    driveSelected.gearSelector = static_cast<int>(bridge::GearSelector::DRIVE);
+
+    SimulationLoop loop(*simulator_, simConfig_, buildDeps());
+    loop.step(makeStateRef(driveSelected));
+
+    EXPECT_EQ(simulator_->getEnginePhase(), EnginePhase::Cranking)
+        << "Gear start must fire the starter pulse on frame 1";
+    EXPECT_TRUE(calls_->lastIgnition)
+        << "Gear start is instant — no crank delay";
+}
+
+// Brake + PARK while running stops the engine (ignition off), identically to
+// the live-telemetry path.
+TEST_F(SimulationLoopVehicleControlsTest, InteractiveBrakePlusPark_Stops) {
+    input::EngineInput driveSelected;
+    driveSelected.gearSelector = static_cast<int>(bridge::GearSelector::DRIVE);
+
+    SimulationLoop loop(*simulator_, simConfig_, buildDeps());
+    loop.step(makeStateRef(driveSelected));
+    ASSERT_TRUE(calls_->lastIgnition);
+
+    input::EngineInput brakeAndPark;
+    brakeAndPark.brakeLevel = 1.0;        // 'B' held
+    brakeAndPark.gearSelector = static_cast<int>(bridge::GearSelector::PARK);
+    loop.step(makeStateRef(brakeAndPark));
+
+    EXPECT_FALSE(calls_->lastIgnition)
+        << "Brake + PARK while running must stop the engine";
+}
+
+// No vehicle-control signal (no telemetry light, no brake level, no D/R gear):
+// the controller has NO opinion and must not touch the provider's start/stop
+// fields. This is what preserves replay autoStart and --start: their frame-0
+// starter pulse reaches the CrankingController unmodified.
+TEST_F(SimulationLoopVehicleControlsTest, NoVehicleSignal_ProviderKeepsStartStopAuthority) {
+    input::EngineInput providerStart;     // e.g. replay autoStart / --start
+    providerStart.ignition = true;
+    providerStart.starterButton = true;   // frame-0 pulse from the provider
+
+    SimulationLoop loop(*simulator_, simConfig_, buildDeps());
+    loop.step(makeStateRef(providerStart));
+
+    EXPECT_EQ(simulator_->getEnginePhase(), EnginePhase::Cranking)
+        << "Provider starter pulse must not be suppressed by the controller";
+    EXPECT_TRUE(calls_->lastIgnition)
+        << "Provider ignition must pass through when the controller has no opinion";
+}
+
+// A telemetry-REPORTED light (even false) is an opinion: the controller takes
+// authority from frame 1 and holds the engine off until a start demand — the
+// live-mode contract (OFF -> Cranking on brake -> Running), now mode-agnostic.
+TEST_F(SimulationLoopVehicleControlsTest, TelemetryLightEngages_ControllerHoldsEngineOff) {
+    input::EngineInput idleRow;           // live CSV row: brake_light=0, no gear
+    idleRow.ignition = true;              // provider default must be overridden
+    idleRow.brakeLight = false;           // REPORTED false (not absent)
+
+    SimulationLoop loop(*simulator_, simConfig_, buildDeps());
+    loop.step(makeStateRef(idleRow));
+
+    EXPECT_FALSE(calls_->lastIgnition)
+        << "A reported light hands start/stop authority to the controller";
+    EXPECT_EQ(simulator_->getEnginePhase(), EnginePhase::Stopped)
+        << "No start demand — no starter pulse";
+}
+
+// Starter-pulse contract at the loop site: a held brake keeps the controller's
+// starter LEVEL high, but the flattened pulse fires once; a second pulse would
+// toggle the CrankingController back to Stopped and abort the crank.
+TEST_F(SimulationLoopVehicleControlsTest, HeldBrakeStarterPulseIsSingleFrame) {
+    input::EngineInput brakeHeld;
+    brakeHeld.brakeLevel = 1.0;
+    brakeHeld.gearSelector = 0;           // NEUTRAL
+
+    SimulationLoop loop(*simulator_, simConfig_, buildDeps());
+    for (int frame = 0; frame < 3; ++frame) {
+        loop.step(makeStateRef(brakeHeld));
+        EXPECT_EQ(simulator_->getEnginePhase(), EnginePhase::Cranking)
+            << "A held-high starter level must not toggle the crank off";
+    }
+    EXPECT_FALSE(calls_->lastIgnition)    // 3 frames = 0.05s < 0.5s delay
+        << "Crank delay must not have elapsed yet";
 }
 
 // ---------------------------------------------------------------------------

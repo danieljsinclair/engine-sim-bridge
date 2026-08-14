@@ -41,6 +41,46 @@ constexpr double SECONDS_TO_MILLISECONDS = 1000.0;
 // SimulationLoop - Private methods (file scope, access members directly)
 // ============================================================================
 
+void SimulationLoop::applyStartStopDecision(LoopState& state, bool lightReportedByTelemetry) {
+    // Opinion = a vehicle-control signal exists this frame: telemetry reported
+    // the brake light, the keyboard brake level is non-zero, or a drive gear
+    // (D/R) is selected. With no opinion the provider keeps start/stop
+    // authority (e.g. replay autoStart's frame-0 starter pulse). Once any
+    // opinion is seen the controller keeps authority: it is a state machine
+    // (crank delay, stop latch) that must not be suspended mid-decision.
+    const auto gear = static_cast<bridge::GearSelector>(state.engineInput.gearSelector);
+    const bool driveSelected =
+        (gear == bridge::GearSelector::DRIVE || gear == bridge::GearSelector::REVERSE);
+
+    if (!startStopEngaged_ &&
+        !lightReportedByTelemetry &&
+        state.engineInput.brakeLevel <= 0.0 &&
+        !driveSelected) {
+        return;
+    }
+    startStopEngaged_ = true;
+
+    startStopController_.update(config_.updateInterval(),
+                                state.engineInput.brakeLight.value_or(false),
+                                gear);
+
+    // Flatten the decision into the input: the controller only writes these
+    // two fields; CrankingController downstream stays the ignition/starter
+    // actuator authority, exactly as the removed StartStopInputAdapter did.
+    state.engineInput.ignition = startStopObserver_.ignition_;
+    state.engineInput.starterButton = starterPulseFromLevel(startStopObserver_.starter_);
+}
+
+bool SimulationLoop::starterPulseFromLevel(bool controllerStarterLevel) {
+    // The controller can hold starter=true across many frames (e.g. a held
+    // brake crank). CrankingController::engageStarter TOGGLES on a held-high
+    // button (Stopped -> Cranking -> Stopped), which would abort the crank.
+    // Emit a single-frame pulse on the rising edge; hold low until released.
+    const bool pulse = controllerStarterLevel && !prevStarterLevel_;
+    prevStarterLevel_ = controllerStarterLevel;
+    return pulse;
+}
+
 input::EngineInput SimulationLoop::pollInput(double currentTime, double updateInterval, bool isFirstTick) {
     if (inputProvider_) {
         return inputProvider_->OnUpdateSimulation(updateInterval);
@@ -547,9 +587,17 @@ StepResult SimulationLoop::step(LoopState& state) {
     // (keyboard 'B' is its only writer). Telemetry (CSV brake_light column)
     // supplies the light directly; when no telemetry reports it, the local
     // brake level derives it. The light never writes the level (physics).
-    if (!state.engineInput.brakeLight.has_value()) {
+    // The pre-assembly presence of the value tells the start/stop decision
+    // below whether telemetry reported an opinion this frame.
+    const bool lightReportedByTelemetry = state.engineInput.brakeLight.has_value();
+    if (!lightReportedByTelemetry) {
         state.engineInput.brakeLight = state.engineInput.brakeLevel > 0.0;
     }
+
+    // Vehicle start/stop — the ONE decision site every input mode traverses
+    // (keyboard, demo, replay, live). Runs off the canonical light + gear so
+    // the consumer cannot tell the sources apart.
+    applyStartStopDecision(state, lightReportedByTelemetry);
 
     // Per-tick simulation logic
     CrankingController::State crankingState = applyCrankingDecision(state.combustionEngine, state.engineInput);
