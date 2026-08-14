@@ -129,6 +129,7 @@ void BridgeSimulator::getEngineStats(EngineSimStats& stats) const {
         // that flickered through +/-millions of cm3/s.
         stats.exhaustFlow = m_simulator->getFrameExhaustFlowRate();
         stats.processingTimeMs = m_simulator->getAverageProcessingTime() * 1000.0;
+        stats.synthOutputRms = m_simulator->getSynthesizerOutputRms();
     }
 }
 

@@ -17,6 +17,7 @@ namespace presentation::builders {
             engine.rpmRaw = stats.currentRPM;
             engine.load = stats.currentLoad;
             engine.exhaustFlow = stats.exhaustFlow;
+            engine.synthOutputRms = stats.synthOutputRms;
             engine.engineTorqueNm = stats.engineTorqueNm;
             engine.drivetrainTorqueNm = stats.drivetrainTorqueNm;
             engine.starterEngaged = cranking.starterEngaged;

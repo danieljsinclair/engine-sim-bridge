@@ -29,6 +29,10 @@ struct EngineState {
         double drivetrainTorqueNm = 0.0;
         bool starterEngaged = false;   // Starter motor physically engaged with engine
         EnginePhase phase = EnginePhase::Stopped;
+        // Synth output level of the last rendered audio block: post-leveler,
+        // pre-volume RMS in int16 output scale (what you would hear at volume
+        // 1). -1.0 = nothing rendered yet (honest-absent).
+        double synthOutputRms = -1.0;
     } engine;
 
     // Mechanical transmission state

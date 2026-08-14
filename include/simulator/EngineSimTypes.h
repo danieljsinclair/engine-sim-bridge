@@ -128,6 +128,10 @@ struct EngineSimStats {
     double manifoldPressure = 0.0;
     int32_t activeChannels = 0;
     double processingTimeMs = 0.0;
+    // Synth output level of the last rendered audio block: post-leveler,
+    // PRE-volume RMS in int16 output scale — the "what you would hear at
+    // volume 1" quantity. -1.0 = nothing rendered yet (honest-absent).
+    double synthOutputRms = -1.0;
 
     // Dyno state (0.0 when dyno disabled)
     double dynoTorque = 0.0;         // Current dyno applied torque (ft*lbs)
