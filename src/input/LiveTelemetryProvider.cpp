@@ -170,6 +170,19 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
     // Delegate to the twin for gearbox/clutch/throttle processing
     input = twinProvider_->OnUpdateSimulation(dt);
 
+    // Echo the decoded gear into engineInput.gearSelector for the start/stop
+    // decision site (SimulationLoop::applyStartStopDecision reads
+    // state.engineInput.gearSelector to compute driveSelected). The twin only
+    // echoes its `selector_` member back through VirtualIceTwin::update, and
+    // that update early-returns (leaving gearSelector == NEUTRAL) when the
+    // upstream signal carries timestampUtcMs == 0 — which is the norm on the
+    // live JSON network path (submitSignal() is called without a timestamp). So
+    // we cannot rely on the twin to surface the gear here; set it from the
+    // decoded signal directly, mirroring the CSV path's "populate these here"
+    // intent (line 127/141). This is the canonical gearSelector value the
+    // decision layer must see — every frame, regardless of telemetry state.
+    input.gearSelector = static_cast<int>(signal.gearSelector);
+
     // Echo the brake light for display (the twin does not consume it).
     input.brakeLight = signal.brakeLight;
 

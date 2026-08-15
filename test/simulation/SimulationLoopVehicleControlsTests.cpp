@@ -649,9 +649,20 @@ TEST_F(SimulationLoopVehicleControlsTest, LiveNetworkFrame_DriveGearStartsInstan
 
     // Frame 1 of a gear-only live frame: the decision site must see DRIVE and
     // start instantly (starter pulse + ignition ON), no 0.5s crank delay.
-    LoopState state = makeState(input::EngineInput{});
+    //
+    // Poll the provider exactly as the production path does. run() obtains the
+    // frame's EngineInput via pollInput() -> provider->OnUpdateSimulation() and
+    // hands THAT to step(); step() itself never polls (44 sibling tests inject
+    // EngineInput directly and rely on step() consuming state.engineInput
+    // verbatim). Injecting a default EngineInput{} here would therefore test a
+    // synthetic empty frame -- gearSelector 0 (NEUTRAL) -- and could never
+    // observe the live DRIVE gear, regardless of provider correctness. Polling
+    // first is what makes this a genuine end-to-end guard on the network path.
+    LoopState state = makeState(provider->OnUpdateSimulation(simConfig_.updateInterval()));
     loop.step(state);
 
+    EXPECT_EQ(state.engineInput.gearSelector, static_cast<int>(bridge::GearSelector::DRIVE))
+        << "The live network frame must carry DRIVE into the decision site";
     EXPECT_EQ(simulator_->getEnginePhase(), EnginePhase::Cranking)
         << "Live DRIVE frame must fire the starter pulse on frame 1";
     EXPECT_TRUE(calls_->lastIgnition)
@@ -689,9 +700,15 @@ TEST_F(SimulationLoopVehicleControlsTest, LiveNetworkFrame_NeutralDoesNotStart) 
 
     SimulationLoop loop(*simulator_, simConfig_, deps);
 
-    LoopState state = makeState(input::EngineInput{});
+    // Poll the provider the same way the DRIVE case above does (production
+    // pollInput() semantics). Using a default EngineInput{} here would pass
+    // vacuously -- its gearSelector is already 0 (NEUTRAL) -- so it would prove
+    // nothing about the provider. Polling makes NEUTRAL a genuine contrast.
+    LoopState state = makeState(provider->OnUpdateSimulation(simConfig_.updateInterval()));
     loop.step(state);
 
+    EXPECT_EQ(state.engineInput.gearSelector, static_cast<int>(bridge::GearSelector::NEUTRAL))
+        << "The live network frame must carry NEUTRAL into the decision site";
     EXPECT_EQ(simulator_->getEnginePhase(), EnginePhase::Stopped)
         << "Live NEUTRAL frame must not start the engine";
 }
