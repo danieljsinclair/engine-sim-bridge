@@ -200,6 +200,10 @@ void BridgeSimulator::setThrottle(double position) {
     // setSpeedControl(position) is correct for all throttle types; no inversion.
     const double s = position;
     engine->setSpeedControl(s);
+    // Hand the pedal to the afterfire path on the MAIN thread so the render
+    // thread consumes this value instead of racing the engine's unsynchronized
+    // throttle field (data race root cause for the pop-timing bug).
+    m_simulator->setAfterfireThrottle(s);
 }
 
 void BridgeSimulator::setIgnition(bool on) {
@@ -351,6 +355,10 @@ bool BridgeSimulator::configureDynoLoad(double loadFraction) {
     return true;
 }
 
+void BridgeSimulator::tickAfterfireOnly(double dt) {
+    m_simulator->tickAfterfireOnly(dt);
+}
+
 // ============================================================================
 // Afterfire
 //
@@ -400,6 +408,7 @@ bool BridgeSimulator::configureAfterfire(const AfterfireConfig& config) {
         parameters.minRawFuelFraction = config.minRawFuelFraction;
         parameters.minOxygenMoleFraction = config.minOxygenMoleFraction;
         parameters.energyScale = config.energyScale;
+        parameters.customGain = config.customGain;
         parameters.throttleCutoff = config.throttleCutoff;
         parameters.afterfireWavPath = config.afterfireWavPath;
         parameters.afterfireWavPaths = wavPaths;
@@ -689,6 +698,9 @@ void BridgeSimulator::advanceFixedSteps(Simulator* sim, int simulationFrequency,
         : static_cast<int>(simulationFrequency * dt);
     for (int i = 0; i < simSteps; ++i) {
         sim->simulateStep();
+        // Tick afterfire at simulation resolution (matching crackle test behavior).
+        // Called per sim step so induction progress advances at 10kHz, not 60Hz.
+        sim->tickAfterfireOnly(1.0 / simulationFrequency);
     }
     sim->endFrame();
 }

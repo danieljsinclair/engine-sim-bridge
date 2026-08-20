@@ -549,6 +549,9 @@ StepResult SimulationLoop::step(LoopState& state) {
     audioBuffer_.updateSimulation(&simulator_, config_.updateInterval() * SECONDS_TO_MILLISECONDS);
     audioBuffer_.fillBufferFromEngine(&simulator_, config_.framesPerUpdate());
 
+    // advanceFixedSteps (called from audio render) now ticks afterfire per sim step.
+    // No separate tick needed here; avoids double-ticking and cross-thread race.
+
     writeTelemetry(state.currentTime, crankingState.startingThrottle, state.engineInput.ignition, crankingState.starterEngaged);
 
     EngineSimStats stats = simulator_.getStats();

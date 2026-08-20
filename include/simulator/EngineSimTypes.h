@@ -158,7 +158,7 @@ struct AfterfireConfig {
     // Measure isolated: several values swept inside ONE process interfere (a
     // later value read 0 pops in-process but 4 on its own), so re-tune with one
     // value per run. Repeatability at 3.0: three runs, identical timings.
-    double ignitionDelayRefS = 3.0;
+    double ignitionDelayRefS = 0.3;
     double activationTempK   = 8000.0;
     double refTempK          = 1000.0;
 
@@ -171,6 +171,10 @@ struct AfterfireConfig {
 
     // Trim on released energy; 1.0 = the fuel's real energy density.
     double energyScale = 1.0;
+
+    // Custom pop mix gain. Scales the pop WAV relative to the continuing
+    // exhaust sound. Default 0.6 (engine's default pop level).
+    double customGain = 0.6;
 
     // Custom impulse response for afterfire pops.
     // Can be a single file path or a glob pattern (e.g., "es/sound-library/new/*.wav").

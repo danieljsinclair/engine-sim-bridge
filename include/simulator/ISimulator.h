@@ -34,6 +34,9 @@ public:
     virtual void stop() = 0;
     virtual int getSimulationFrequency() const = 0;
 
+    // Advance afterfire chemistry by dt (main thread only). Default no-op.
+    virtual void tickAfterfireOnly(double dt) { (void)dt; }
+
     // Read-only phase — display/telemetry. Writing via BridgeSimulator::applyTransition().
     virtual EnginePhase getEnginePhase() const { return EnginePhase::Stopped; }
 

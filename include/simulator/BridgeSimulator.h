@@ -108,6 +108,10 @@ public:
     // Returns true if configured, false if loadFraction <= 0.
     bool configureDynoLoad(double loadFraction);
 
+    // Advance afterfire chemistry by dt (main thread only). Forwards to
+    // internal simulator (PistonEngineSimulator). Default no-op.
+    void tickAfterfireOnly(double dt) override;
+
     // Set speed tracking target: configures dyno to hold engine RPM to match the
     // road speed in the current gear. rpmFloor (>=0) sets a minimum target RPM —
     // the launch/torque-converter behaviour: at standstill the engine revs to the
