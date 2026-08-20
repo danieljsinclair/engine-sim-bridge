@@ -56,6 +56,12 @@ public:
     // Enable gearbox diagnostic logging
     void setGearboxLogger(twin::IGearboxLogger* logger);
 
+    // Warm-up prime: after the RUNNING-prime, drive the twin for kWarmupFrames
+    // at a light throttle (0.20) / 10 km/h so the gearbox shift phase, clutch
+    // pressure ramp and idle-hold integrators settle into the warm cruise basin
+    // before the first real frame. One-shot; idempotent (no-op once warmed).
+    void primeWarmUp();
+
     // Bind the live BridgeSimulator so the provider can install the fluid-
     // coupling torque converter on the transmission when --coupling-model
     // torque-converter is selected. The session sets this AFTER creating the
@@ -78,6 +84,7 @@ private:
     // it is set (or re-applied on a later setCouplingModel).
     BridgeSimulator* bridgeSim_ = nullptr;
     bool pendingTorqueConverter_ = false;
+    bool warmedUp_ = false;
 };
 
 }

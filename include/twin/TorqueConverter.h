@@ -117,6 +117,12 @@ struct TorqueConverterParameters {
     // Master enable for the lockup clutch. With it off the converter stays in
     // the fluid (slip) regime at all speeds - useful for A/B tuning.
     bool lockupEnabled = true;
+
+    // Cruise slip ceiling: the maximum slip (1 - speedRatio) the converter is
+    // allowed to carry once above the cruise band. Caps the turbine lag at
+    // steady cruise so road-implied rpm stays above the ~2900 attractor floor
+    // (gear4/gear5 basin). 0.75 keeps the box in g4/g5 at cruise.
+    double cruiseSlipCeiling = 0.75;
 };
 
 // Stateful torque-converter coupling model. The lockup clutch has hysteresis

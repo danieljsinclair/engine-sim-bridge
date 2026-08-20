@@ -103,6 +103,7 @@ struct SimulationConfig {
     const char* outputWav = nullptr;
     int preFillMs = EngineSimDefaults::DEFAULT_PREFILL_MS;
     bool autoGearbox = false;    // Automatic gearbox mode (--auto), default is manual
+    bool deterministicTickLock = false;  // tick-locked integer termination + fakeClock selection; default false = legacy FP/wall-clock behavior
 
     // Optional display label for logging (e.g. ANSI-colored by CLI). Empty = auto-derive.
     std::string simulatorLabel;
@@ -186,6 +187,14 @@ private:
     // Last-frame starter state — the cranking notice logs on the engage
     // TRANSITION, not every frame the starter is held.
     bool lastStarterEngaged_ = false;
+
+    // Suppress telemetry + presentation emission during the warm-start prefix.
+    // CSV telemetry emission only (decoupled from presentation). During the
+    // warm-start prefix we keep updatePresentation() running (its audio/render
+    // path is a per-tick physics side-effect that must advance identically to
+    // the main loop) but suppress only the CSV write, so the prefix converges
+    // on the from-0 run instead of leaving the gas path cold.
+    bool emitCsv_ = true;
 };
 
 // ============================================================================

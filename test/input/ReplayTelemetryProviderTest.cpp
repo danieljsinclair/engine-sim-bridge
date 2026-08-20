@@ -452,17 +452,21 @@ TEST_F(ReplayTelemetryProviderTest, ManualClutchPctPropagates) {
     EXPECT_DOUBLE_EQ(input.clutchPressure, 0.5);
 }
 
-TEST_F(ReplayTelemetryProviderTest, TimeSlicingStartFromSkipsEarlySamples) {
-    // startFromS=0.5 => the clock starts at 0.5s, so the first sample shown is
-    // the one at t=0.5 (the floor of 0.5 in [0.0, 0.5, 1.0]).
+TEST_F(ReplayTelemetryProviderTest, TimeSlicingStartFromClockStartsAtZero) {
+    // startFromS=0.5 is owned by the loop-side warm-start prefix
+    // (SimulationLoop::run), NOT by the provider. The provider clock starts at 0
+    // and advances by dt each frame -- there is no cold-jump/teleport to
+    // startFromS. So the first OnUpdateSimulation samples the t=0 row.
     makeProvider("time_s,throttle_pct\n0.0,10.0\n0.5,50.0\n1.0,90.0\n");
     ASSERT_TRUE(provider_->Initialize());
     wireDefault();
     provider_->setStartFromS(0.5);
 
     EngineInput input = provider_->OnUpdateSimulation(0.016);
-    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 0.5);
-    EXPECT_DOUBLE_EQ(input.throttle, 0.5);
+    // Provider clock is at the t=0 sample (no cold-jump): timestamp 0.0,
+    // throttle 10% -> 0.10.
+    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 0.0);
+    EXPECT_DOUBLE_EQ(input.throttle, 0.10);
 }
 
 TEST_F(ReplayTelemetryProviderTest, TimeSlicingEndAtStopsSession) {

@@ -8,9 +8,7 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cmath>
 #include <fstream>
-#include <sstream>
 #include <cstdio>
 
 namespace input {
@@ -37,55 +35,6 @@ bridge::GearSelector parseGearSelector(const std::string& s) {
     if (ls == "r" || ls == "reverse") return bridge::GearSelector::REVERSE;
     if (ls == "n" || ls == "neutral") return bridge::GearSelector::NEUTRAL;
     return bridge::GearSelector::DRIVE;  // "d"/"drive"/unknown
-}
-
-// Two recorded samples are treated as the SAME speed level when their road
-// speeds differ by less than this. The CAN quantization step is ~0.8 km/h, so
-// 0.1 km/h cleanly separates real level changes from float jitter while never
-// splitting a genuine level.
-constexpr double kLevelStepKmh = 0.1;
-
-// Continuous (de-quantized) road speed at time t. A recorded CSV road speed is a
-// STAIRCASE: CAN-quantized (~0.8 km/h) with each level held ~0.2 s. Feeding the
-// held value makes a hard-pinned/slip-locked RPM step in lockstep (the "rpm
-// stepper"). This linearly interpolates between the START of the speed level
-// containing t and the START of the NEXT speed level, by fractional time — so the
-// feed ramps smoothly across the whole hold instead of step-holding. Dyno-off
-// sentinels (speed < 0) are passed through unchanged. Pure feed interpolation.
-double interpolateRoadSpeedKmh(const std::vector<CsvSample>& samples, double t) {
-    if (samples.empty()) return -2.0;
-    if (t <= samples.front().timeS) return samples.front().roadSpeedKmh;
-    if (t >= samples.back().timeS) return samples.back().roadSpeedKmh;
-
-    size_t i = 1;
-    for (; i < samples.size(); ++i) {
-        if (samples[i].timeS > t) break;
-    }
-    const size_t curIdx = i - 1;
-    const double curSpeed = samples[curIdx].roadSpeedKmh;
-    if (curSpeed < 0.0) return curSpeed;
-
-    size_t startIdx = curIdx;
-    while (startIdx > 0 &&
-           std::abs(samples[startIdx - 1].roadSpeedKmh - curSpeed) <= kLevelStepKmh) {
-        --startIdx;
-    }
-    size_t nextIdx = samples.size();
-    for (size_t j = curIdx + 1; j < samples.size(); ++j) {
-        if (std::abs(samples[j].roadSpeedKmh - curSpeed) > kLevelStepKmh) {
-            nextIdx = j;
-            break;
-        }
-    }
-    if (nextIdx >= samples.size()) return curSpeed;
-
-    const double startT = samples[startIdx].timeS;
-    const double nextT = samples[nextIdx].timeS;
-    if (nextT <= startT) return curSpeed;
-    double frac = (t - startT) / (nextT - startT);
-    if (frac < 0.0) frac = 0.0;
-    else if (frac > 1.0) frac = 1.0;
-    return curSpeed + frac * (samples[nextIdx].roadSpeedKmh - curSpeed);
 }
 
 } // namespace
@@ -238,13 +187,27 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
     EngineInput input;
     if (applyTimeSlicing(input, dt)) return input;
 
+    // NOTE: the warm-start prefix [0, startFromS_) is NO LONGER replayed here.
+    // It is owned by SimulationLoop::run(), which steps the FULL simulation
+    // (provider called normally per frame, engine core + twin stepped, CSV/out
+    // emission suppressed) for the prefix, then emits from startFromS_ on. The
+    // old provider-side processFrame loop advanced the TWIN but never stepped
+    // the engine CORE (chambers/runners, which compute exhaust_flow) — so the
+    // prefix left the gas path cold at a hot operating point -> 90-100% negative
+    // exhaust flow in --start-from runs. Moving the prefix to the loop side puts
+    // the core on the same update path as the twin. No-op when no offset is set
+    // (the loop's prefix block is skipped when getStartFromS() <= 0).
+
     const Sample& s = sampleAt(elapsedS_);
     currentTimestampS_ = s.timeS;
     buildBaseEngineInput(input, s);
-    // De-quantized road speed: the recorded value is a CAN staircase (levels held
-    // ~0.2 s). Feed the interpolated ramp so a pinned/slip-locked RPM does not
-    // step in lockstep with the staircase. s still supplies throttle/selector/gear.
-    const double smoothRoadSpeedKmh = interpolateRoadSpeedKmh(samples_, elapsedS_);
+    // Feed the RAW recorded road speed. The CSV road speed is a CAN staircase
+    // (levels held ~0.2 s). Interpolating it into a smooth ramp made the replay
+    // feed diverge from live's staircase, flipping a gear decision at t=118-120
+    // and producing the opposite flow sign at the same gear/rpm/clutch. Feeding
+    // raw means replay decisions == live decisions. s still supplies
+    // throttle/selector/gear.
+    const double roadSpeedKmh = s.roadSpeedKmh;
 
     if (autoGearbox_ && twinProvider_) {
         // Route the replay sample THROUGH the twin provider (the SAME twin the
@@ -252,7 +215,7 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
         // on replay. The twin owns the gearbox/clutch/coupling-model processing and
         // the cranking lifecycle. In PARK/NEUTRAL the twin disengages the clutch
         // and the engine free-revs; only in DRIVE does it couple + track road speed.
-        input = driveThroughTwin(s, dt, smoothRoadSpeedKmh);
+        input = driveThroughTwin(s, dt, roadSpeedKmh);
     } else {
         // Non-auto (e.g. rev-in-park): no gear forced, clutch disengaged, free-rev.
         handleNonAutoGearbox(input, s);
@@ -345,15 +308,14 @@ void ReplayTelemetryProvider::primeTwinToRunning() {
     for (int i = 0; i < kPrimeFrames; ++i) {
         twinProvider_->OnUpdateSimulation(kPrimeDt);
     }
+
+    // Warm-up prime: settle the twin into the WARM cruise basin (g4/g5, clutch
+    // ~0.75) before the first real frame. One-shot per twin-provider instance.
+    twinProvider_->primeWarmUp();
 }
 
 bool ReplayTelemetryProvider::applyTimeSlicing(EngineInput& input, double dt) {
     elapsedS_ += dt;
-
-    // Time slicing: skip samples before startFromS.
-    if (startFromS_ >= 0.0 && elapsedS_ < startFromS_) {
-        elapsedS_ = startFromS_;
-    }
 
     // Time slicing: stop at endAtS — emit an ignition-off frame and signal the
     // caller to return it immediately (no further processing this frame).

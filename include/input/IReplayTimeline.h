@@ -28,6 +28,10 @@ public:
 
     /// Set the stop time in seconds. -1 disables the clamp (play to end).
     virtual void setEndAtS(double s) = 0;
+
+    /// Start offset in seconds. -1 = disabled (play from 0). Read by the loop
+    // to run a suppressed warm-start prefix before the first emitted frame.
+    virtual double getStartFromS() const = 0;
 };
 
 } // namespace input

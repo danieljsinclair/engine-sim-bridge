@@ -73,6 +73,7 @@ public:
     // -1 = disabled (play full trace).
     // setEndAtS is virtual via IReplayTimeline (validator clamps it to play-to-end).
     void setStartFromS(double s) { startFromS_ = s; }
+    double getStartFromS() const override { return startFromS_; }
     void setEndAtS(double s) override { endAtS_ = s; }
 
     // Current replay timestamp (absolute, from CSV). -1 before first sample.

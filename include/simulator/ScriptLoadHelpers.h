@@ -164,7 +164,7 @@ inline const TorqueConverter::Parameters kDefaultTorqueConverterParams = {
     /* MaxInputTorque   */ 1250.0,
     /* LockupSpeedRatio */ 0.85,
     /* LockupHysteresis */ 150.0,
-    /* LockupEnabled    */ true,
+    /* LockupEnabled    */ false,
 };
 
 /**

@@ -230,3 +230,46 @@ TEST_F(CsvTelemetryParserTest, ParseRow_NegativeRegenTorqueIsPreserved) {
     ASSERT_TRUE(parser.parseRow("2.0,-960.5", 1.0, sample, error));
     EXPECT_DOUBLE_EQ(sample.motorTorqueNm, -960.5);
 }
+
+// ============================================================================
+// Regression: vehicle-sim capture schema aliases.
+//
+// vehicle-sim captures (e.g. roadtest_2026-08-17-1056.csv) use the header names
+// throttle_gas_pct / vehicle_speed_kmh / clutch_pressure. These were previously
+// unrecognised, so throttle decoded to 0 and road speed fell back to the -2.0
+// dyno-off sentinel — the sim idled forever. This must never silently regress.
+// ============================================================================
+
+TEST_F(CsvTelemetryParserTest, ParseHeader_RecognisesVehicleSimSchemaAliases) {
+    std::string error;
+    EXPECT_TRUE(parser.parseHeader(
+        "time_s,throttle_gas_pct,vehicle_speed_kmh,clutch_pressure", error));
+    EXPECT_EQ(parser.header().colThrottle, 1);
+    EXPECT_EQ(parser.header().colRoad, 2);
+    EXPECT_EQ(parser.header().colClutch, 3);
+}
+
+TEST_F(CsvTelemetryParserTest, ParseRow_VehicleSimSchemaDecodesRealValues) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader(
+        "time_s,throttle_gas_pct,vehicle_speed_kmh,clutch_pressure", error));
+
+    CsvSample sample;
+    ASSERT_TRUE(parser.parseRow("1.0,80.0,100.0,0.0", 1.0, sample, error));
+    EXPECT_DOUBLE_EQ(sample.timeS, 1.0);
+    EXPECT_DOUBLE_EQ(sample.throttle, 0.80);          // NOT the 0.0 silent default
+    EXPECT_DOUBLE_EQ(sample.roadSpeedKmh, 100.0);      // NOT the -2.0 dyno sentinel
+    EXPECT_DOUBLE_EQ(sample.clutchPct, 0.0);
+}
+
+TEST_F(CsvTelemetryParserTest, ParseRow_VehicleSimSchemaDecodesClutchPressure) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader(
+        "time_s,throttle_gas_pct,vehicle_speed_kmh,clutch_pressure", error));
+
+    CsvSample sample;
+    ASSERT_TRUE(parser.parseRow("2.0,30.0,55.0,40.0", 1.0, sample, error));
+    EXPECT_DOUBLE_EQ(sample.throttle, 0.30);
+    EXPECT_DOUBLE_EQ(sample.roadSpeedKmh, 55.0);
+    EXPECT_DOUBLE_EQ(sample.clutchPct, 0.40);         // 40% -> 0.40
+}

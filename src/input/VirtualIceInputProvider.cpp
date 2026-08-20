@@ -159,6 +159,33 @@ void VirtualIceInputProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
     }
 }
 
+void VirtualIceInputProvider::primeWarmUp() {
+    if (!isInitialized_ || !twin_) return;
+
+    // Hold a light throttle / slow speed so the twin settles into the WARM
+    // cruise basin (gear4/gear5, clutch ~0.75) rather than the cold attractor
+    // (gear3, clutch ~0.15). One-shot: guard on a flag so re-Initialize() can
+    // re-run it but a single Initialize() never double-primes.
+    if (warmedUp_) return;
+    warmedUp_ = true;
+
+    constexpr int kWarmupFrames = 300;
+    constexpr double kWarmupThrottle = 0.20;
+    constexpr double kWarmupSpeedKmh = 10.0;
+    constexpr double kWarmupDt = 0.05;
+
+    UpstreamSignal signal;
+    signal.throttleFraction = kWarmupThrottle;
+    signal.speedKmh = kWarmupSpeedKmh;
+    signal.isValid = true;
+    signal.timestampUtcMs = 1;
+    setUpstreamSignal(signal);
+
+    for (int i = 0; i < kWarmupFrames; ++i) {
+        OnUpdateSimulation(kWarmupDt);
+    }
+}
+
 void VirtualIceInputProvider::provideFeedback(const EngineSimStats& stats) {
     if (twin_) {
         twin_->setEngineRpmFeedback(stats.currentRPM);

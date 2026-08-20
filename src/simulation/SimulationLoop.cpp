@@ -14,6 +14,7 @@
 #include "simulator/ICombustionEngine.h"
 #include "simulator/BridgeSimulator.h"
 #include "input/VirtualIceInputProvider.h"
+#include "input/IReplayTimeline.h"
 #include "simulator/EngineSimTypes.h"
 #include "simulator/SimulatorFactory.h"
 
@@ -499,6 +500,47 @@ int SimulationLoop::run() {
     // Pre-loop: provide initial feedback to input provider
     if (inputProvider_) inputProvider_->provideFeedback(state.previousStats);
 
+    // Warm-start prefix [0, startFromS_): step the FULL simulation through the
+    // provider normally per frame (engine core + twin advance, identical to the
+    // from-0 run) while SUPPRESSING all output (telemetry + presentation).
+    // The prefix is a warm-up, not a recording: replaying it cold-jumps the
+    // engine into motion with no combustion history, which leaves the gas path
+    // cold at a hot operating point -> 90-100% negative exhaust flow. Stepping
+    // the full sim here means the first EMITTED frame inherits the identical
+    // from-0 engine state, so the warm-start run converges on the from-0 run.
+    // Driven by the provider's startFromS_ (a replay provider with no offset
+    // reports <= 0 and skips this entirely -> zero behavior change for from-0
+    // runs and legacy mode). Output suppression is flag-guarded; the engine is
+    // stepped exactly as in the main loop. Only IReplayTimeline providers
+    // (replay/live) carry an offset; keyboard/demo/manual providers don't, and
+    // the cast is null for them so the prefix is skipped.
+    if (inputProvider_) {
+        const auto* timeline = dynamic_cast<const input::IReplayTimeline*>(inputProvider_);
+        if (timeline && timeline->getStartFromS() > 0.0) {
+            const double prefixEnd = timeline->getStartFromS();
+            logger_->info(LogMask::BRIDGE,
+                __ilog_format("Warm-start prefix: stepping %.3fs of sim silently before first emission", prefixEnd));
+            // Warm-up prefix: step the FULL per-tick path (engine core + twin via
+            // step(), audio/render via updatePresentation()) so the prefix matches
+            // the from-0 run tick-for-tick. Suppress ONLY the CSV telemetry write
+            // (emitCsv_=false) -- NEVER the presentation, whose audio buffer /
+            // simulator render is a physics side-effect that must advance or the
+            // gas path stays cold at handoff (the bug that made --start-from runs
+            // emit ~95% negative exhaust flow). First emitted frame = startFromS_.
+            emitCsv_ = false;
+            while (state.currentTime < prefixEnd) {
+                step(state);
+                clock_->waitUntilNextTick();
+                state.engineInput = pollInput(state.currentTime, config_.updateInterval(), state.isFirstTick);
+                state.isFirstTick = false;
+                if (inputProvider_) inputProvider_->provideFeedback(state.previousStats);
+            }
+            // Prefix is a warm-up only: resume normal CSV emission for the main
+            // loop so the first emitted frame is the one at startFromS_.
+            emitCsv_ = true;
+        }
+    }
+
     // Main loop: thin wrapper calling step()
     for (;;) {
         // Execute one simulation tick
@@ -557,7 +599,14 @@ StepResult SimulationLoop::step(LoopState& state) {
     audioBuffer_.updateSimulation(&simulator_, config_.updateInterval() * SECONDS_TO_MILLISECONDS);
     audioBuffer_.fillBufferFromEngine(&simulator_, config_.framesPerUpdate());
 
-    writeTelemetry(state.currentTime, crankingState.startingThrottle, state.engineInput.ignition, crankingState.starterEngaged);
+    // CSV telemetry write is suppressed during the warm-start prefix (emitCsv_
+    // gate); the engine is stepped normally (above). The presentation / audio
+    // render path ALWAYS runs -- it is a per-tick physics side-effect that must
+    // advance identically to the main loop or the gas path stays cold at the
+    // prefix/main handoff (the bug behind sick --start-from runs).
+    if (emitCsv_) {
+        writeTelemetry(state.currentTime, crankingState.startingThrottle, state.engineInput.ignition, crankingState.starterEngaged);
+    }
 
     EngineSimStats stats = simulator_.getStats();
     state.currentTime += config_.updateInterval();

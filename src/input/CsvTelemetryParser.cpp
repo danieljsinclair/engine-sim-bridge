@@ -76,16 +76,17 @@ bool CsvTelemetryParser::parseHeader(const std::string& headerLine, std::string&
             header_.timeInMs = true;
         } else if (name == "time_s" || name == "time" || name == "t" || name == "timecode") {
             header_.colTime = static_cast<int>(i);
-        } else if (name == "throttle_pct" || name == "throttle" || name == "throttle_percent") {
+        } else if (name == "throttle_pct" || name == "throttle" || name == "throttle_percent" ||
+                   name == "throttle_gas_pct") {
             header_.colThrottle = static_cast<int>(i);
         } else if (name == "road_speed_kmh" || name == "road_speed" ||
-                   name == "speed_kmh" || name == "speed") {
+                   name == "speed_kmh" || name == "speed" || name == "vehicle_speed_kmh") {
             header_.colRoad = static_cast<int>(i);
         } else if (name == "gear") {
             header_.colGear = static_cast<int>(i);
         } else if (name == "gear_selector" || name == "gearselector") {
             header_.colGearSelector = static_cast<int>(i);
-        } else if (name == "clutch_pct" || name == "clutch") {
+        } else if (name == "clutch_pct" || name == "clutch" || name == "clutch_pressure") {
             header_.colClutch = static_cast<int>(i);
         } else if (name == "motor_torque_nm" || name == "motor_torque" || name == "torque_nm") {
             header_.colMotorTorque = static_cast<int>(i);
@@ -126,7 +127,25 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
     double v = 0.0;
     if (header_.colTime >= 0 && header_.colTime < static_cast<int>(fields.size()) &&
         parseDouble(fields[header_.colTime], v)) {
-        s.timeS = v / timeDivisor;
+        // Reject trailing rows whose timestamp is inconsistent with the parsed
+        // unit. A capture can carry a few epoch-microsecond rows at the very end
+        // (e.g. 1786961013730 = the wall-clock write time of the last CAN frame,
+        // not a trace time). Accepted as-is they normalise to ~1.79e12 s, which
+        // makes durationS() return that and the replay runs free-run to timeout
+        // instead of self-terminating at trace end (~424.2 s). 1e7 s is far above
+        // any legitimate trace span (the longest captures are ~1000 s) and far
+        // below any epoch-microsecond value, so it cleanly separates the two.
+        // The first-row heuristic in the caller (firstTs > 1e6 -> /1e6) already
+        // handles the bulk of the file; this is the backstop for the stragglers.
+        const double timeInSeconds = v / timeDivisor;
+        if (timeInSeconds > 1e7) {
+            fprintf(stderr,
+                "[CsvTelemetryParser] WARNING: rejecting row with out-of-range "
+                "timestamp %.1f s (unit mismatch / epoch-scale trailing row)\n",
+                timeInSeconds);
+            return false;
+        }
+        s.timeS = timeInSeconds;
     } else {
         return false;  // skip rows with unparseable time
     }
