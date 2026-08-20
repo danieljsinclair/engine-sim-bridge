@@ -179,3 +179,101 @@ TEST(AfterfireBridgeTest, RevsOnFullThrottleAndPopsOnCut) {
     fflush(stdout);
 #endif
 }
+
+// =============================================================================
+// Afterfire MASTER VOLUME: --afterfire-gain (customGain) must scale the PHYSICAL
+// combustion crackle, not just the WAV overlay. At customGain=0 the combustion
+// releases no energy into the exhaust runner, so even though pops FIRE (the
+// ignition event happens) the recorded physical energy is ~0 and the pop is
+// silent; at customGain=1.0 the same decel releases real energy. This is the
+// "gain 0 = no pop at all" contract end-to-end.
+// =============================================================================
+TEST(AfterfireBridgeTest, MasterVolumeScalesPhysicalCrackle) {
+#ifndef ATG_ENGINE_SIM_AFTERFIRE_SPIKE
+    GTEST_SKIP() << "ATG_ENGINE_SIM_AFTERFIRE_SPIKE not compiled in";
+#else
+    const std::string presetPath = std::string(TEST_PRESET_DIR) + "/v8_gm_ls.json";
+    ASSERT_TRUE(std::filesystem::exists(presetPath)) << "Missing preset: " << presetPath;
+
+    // Drive one decel at a given customGain and return (events, sum of recorded
+    // physical energy released across all chambers).
+    auto runDecelAtGain = [&](double gain) -> std::pair<double, double> {
+        ISimulatorConfig config;
+        config.sampleRate = 48000;
+        config.simulationFrequency = 10000;
+
+        std::filesystem::path savedCwd = std::filesystem::current_path();
+        auto sim = SimulatorFactory::create(
+            SimulatorType::PistonEngine, presetPath,
+            std::string(TEST_ENGINE_SIM_ASSETS) + "/", config);
+        std::filesystem::current_path(savedCwd);
+        auto* bridge = dynamic_cast<BridgeSimulator*>(sim.get());
+        EXPECT_NE(bridge, nullptr);
+        if (bridge == nullptr) return {0.0, 0.0};
+        const bool created = bridge->create(config, nullptr, nullptr);
+        EXPECT_TRUE(created);
+        if (!created) return {0.0, 0.0};
+
+        SimulatorInitHelpers::initializeConvolutionFilters(bridge->getInternalSimulator());
+
+        AfterfireConfig af;
+        af.enabled = true;
+        af.misfireManifoldPressurePa = 101325.0;
+        af.throttleCutoff = 0.5;
+        af.ignitionDelayRefS = 0.001;
+        af.activationTempK = 8000.0;
+        af.refTempK = 1000.0;
+        af.autoIgnitionTempK = 300.0;
+        af.minRawFuelFraction = 1e-6;
+        af.minOxygenMoleFraction = 1e-4;
+        af.energyScale = 5.0;
+        af.customGain = gain;
+        af.diagnostics = true;
+        SimulatorFactory::configureAfterfire(sim.get(), af, nullptr);
+
+        bridge->setIgnition(true);
+        bridge->setStarterMotor(true);
+        const double dt = 1.0 / 60.0;
+        for (int i = 0; i < 180; ++i) {
+            bridge->setThrottle(1.0);
+            if (i == 60) bridge->setStarterMotor(false);
+            bridge->update(dt);
+        }
+        for (int i = 0; i < 240; ++i) {
+            bridge->setThrottle(0.0);
+            bridge->update(dt);
+        }
+
+        double totalEvents = 0.0, totalEnergy = 0.0;
+        for (const auto& d : bridge->getAfterfireDiagnostics()) {
+            totalEvents += d.eventCount;
+            totalEnergy += d.lastEventEnergyReleased;
+        }
+        return {totalEvents, totalEnergy};
+    };
+
+    const auto zero = runDecelAtGain(0.0);
+    const auto full = runDecelAtGain(1.0);
+
+    // Pops must still FIRE at gain 0 (the ignition event is independent of the
+    // master volume) — this isolates "silent" from "didn't happen".
+    EXPECT_GT(zero.first, 0.0)
+        << "Pops must still fire at customGain=0 (ignition is gain-independent)";
+
+    // But the physical energy released must be ~0 at gain 0 (no energy in the
+    // pipe => no pressure spike => no audible crackle) and clearly > 0 at gain 1.
+    EXPECT_NEAR(zero.second, 0.0, 1e-9)
+        << "customGain=0 must release ~0 combustion energy (silent physical pop); got "
+        << zero.second;
+    EXPECT_GT(full.second, 0.0)
+        << "customGain=1.0 must release real combustion energy (audible physical crackle)";
+
+    RecordProperty("gain0_events", std::to_string(zero.first));
+    RecordProperty("gain0_energy", std::to_string(zero.second));
+    RecordProperty("gain1_events", std::to_string(full.first));
+    RecordProperty("gain1_energy", std::to_string(full.second));
+    printf("[master-volume] gain0 events=%.0f energy=%.3g | gain1 events=%.0f energy=%.3g\n",
+           zero.first, zero.second, full.first, full.second);
+    fflush(stdout);
+#endif
+}

@@ -172,8 +172,11 @@ struct AfterfireConfig {
     // Trim on released energy; 1.0 = the fuel's real energy density.
     double energyScale = 1.0;
 
-    // Custom pop mix gain. Scales the pop WAV relative to the continuing
-    // exhaust sound. Default 0.6 (engine's default pop level).
+    // Afterfire MASTER VOLUME (0..10). Scales the pop's loudness as a whole: it
+    // attenuates the combustion energy that enters the exhaust runner (so the
+    // physical crackle is quieter) AND the WAV overlay mixed on top. 0 = silent,
+    // 1 = full physical crackle + full WAV, higher = louder than physical.
+    // Default 0.6.
     double customGain = 0.6;
 
     // Custom impulse response for afterfire pops.
