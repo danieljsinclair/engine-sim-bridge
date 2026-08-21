@@ -592,4 +592,46 @@ TEST(LiveTelemetryStreamTest, PopulatedRowSurvivesSubsequentBlankRows) {
         << "Throttle from the latest populated row (t=3, 60%) must reach the twin";
 }
 
+// T14 (regression for the live warm-start reversion fix): warmBootToRunning()
+// brings the owned twin to RUNNING + the warm cruise basin BEFORE the first real
+// frame, so --live-telemetry --start-from no longer cold-jumps and blows massive
+// negative exhaust flow. After priming, the first real frame at a sustained road
+// speed must already expose a forward gear (the convergent attractor replay's
+// prime lands in), whereas an UN-primed twin starts OFF/CRANKING. The prime is
+// idempotent (re-calling must not double-crank or break the connection).
+TEST(LiveTelemetryStreamTest, WarmBootToRunningReachesRunningWithForwardGear) {
+    // A sustained-speed cruise trace (DRIVE). The prime seeds from a running
+    // baseline so the twin settles into the warm basin; the first real frame at
+    // 80 km/h must upshift out of 1st (matching the replay oracle's attractor).
+    const std::string csv =
+        "time_s,throttle_pct,road_speed_kmh\n"
+        "0.0,100,80\n";
+    StreamHarness h(csv);
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setGearSelector(kDrive);
+
+    // Prime BEFORE the first real frame (mirrors what CLIMain does post-Initialize,
+    // after the coupling flags are set).
+    h.provider->warmBootToRunning();
+
+    // The prime must not have disconnected the provider and must be idempotent.
+    EXPECT_TRUE(h.provider->IsConnected()) << "Prime must not break the connection";
+    EXPECT_NO_THROW(h.provider->warmBootToRunning())
+        << "Re-priming must be a safe no-op (idempotent)";
+
+    // First real frame at speed: the twin is already RUNNING with a forward gear
+    // available (no cold OFF->CRANKING transient that would reversion-blow the gas
+    // path). Pump RPM feedback so the core bump-starts, then confirm a real gear.
+    int gear = -1;
+    for (int i = 0; i < 200 && gear <= 1; ++i) {
+        EngineSimStats stats;
+        stats.currentRPM = 900.0;
+        h.provider->provideFeedback(stats);
+        gear = h.provider->OnUpdateSimulation(0.05).gearAbsolute;
+    }
+    EXPECT_GT(gear, 1)
+        << "After warmBootToRunning the twin must reach a forward gear at 80 km/h "
+           "WOT (convergent with the replay warm-start, not a cold reversion)";
+}
+
 }  // namespace

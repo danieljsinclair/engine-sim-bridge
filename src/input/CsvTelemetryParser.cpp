@@ -139,11 +139,8 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
         // handles the bulk of the file; this is the backstop for the stragglers.
         const double timeInSeconds = v / timeDivisor;
         if (timeInSeconds > 1e7) {
-            fprintf(stderr,
-                "[CsvTelemetryParser] WARNING: rejecting row with out-of-range "
-                "timestamp %.1f s (unit mismatch / epoch-scale trailing row)\n",
-                timeInSeconds);
-            return false;
+            ++rejectedOutlierRows_;  // counted; reported once at end-of-input
+            return false;            // row skipped instantly, no per-row log
         }
         s.timeS = timeInSeconds;
     } else {
@@ -187,6 +184,14 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
 
     out = s;
     return true;
+}
+
+void CsvTelemetryParser::emitRejectionSummary() const {
+    if (rejectedOutlierRows_ == 0) return;
+    fprintf(stderr,
+        "[CsvTelemetryParser] INFO: skipped %zu row(s) with "
+        "out-of-range/epoch-scale timestamps\n",
+        rejectedOutlierRows_);
 }
 
 } // namespace input

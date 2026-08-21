@@ -6,6 +6,8 @@
 #include <gtest/gtest.h>
 #include <input/CsvTelemetryParser.h>
 
+#include <cstdio>
+#include <cstring>
 #include <string>
 
 using namespace input;
@@ -155,6 +157,67 @@ TEST_F(CsvTelemetryParserTest, ParseRow_EmptyLine_ReturnsFalse) {
     CsvSample sample;
     EXPECT_FALSE(parser.parseRow("", 1.0, sample, error));
     EXPECT_FALSE(parser.parseRow("   ", 1.0, sample, error));
+}
+
+// ============================================================================
+// Out-of-range / epoch-scale timestamp rejection.
+//
+// Trailing rows whose timestamp is epoch-scale (~1.79e12 s) must be skipped
+// INSTANTLY (one row at a time, no wall-clock delay), but the formerly
+// per-row stderr WARNING must be collapsed into EXACTLY ONE summary line at
+// end-of-input. This guards the user-observed "every rejected row spams a
+// separate stderr line" regression.
+// ============================================================================
+
+TEST_F(CsvTelemetryParserTest, ParseRow_EpochScaleTimestamps_AreSkippedAndSummarisedOnce) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("time_s,throttle_pct", error));
+
+    // A few legitimate rows, then several epoch-scale trailing rows.
+    CsvSample good;
+    EXPECT_TRUE(parser.parseRow("1.5,60.0", 1.0, good, error));
+    EXPECT_DOUBLE_EQ(good.timeS, 1.5);
+
+    // 5 epoch-scale stragglers — each must be rejected immediately.
+    constexpr int kOutliers = 5;
+    for (int i = 0; i < kOutliers; ++i) {
+        CsvSample bad;
+        // 1.786961013730e12 s >> 1e7 threshold.
+        EXPECT_FALSE(parser.parseRow("1786961013730.0,0.0", 1.0, bad, error))
+            << "epoch-scale row " << i << " must be skipped";
+    }
+
+    // Capture stderr and confirm exactly ONE summary line is emitted.
+    std::fflush(stderr);
+    std::string captured;
+    testing::internal::CaptureStderr();
+    parser.emitRejectionSummary();
+    captured = testing::internal::GetCapturedStderr();
+    std::fflush(stderr);
+
+    // A single line, carrying the total count.
+    EXPECT_EQ(captured.empty(), false);
+    const size_t lines = std::count(captured.begin(), captured.end(), '\n');
+    EXPECT_EQ(lines, 1u) << "expected exactly one summary line, got:\n" << captured;
+    EXPECT_NE(captured.find("[CsvTelemetryParser] INFO: skipped 5 row(s)"), std::string::npos)
+        << "summary line missing count/format:\n" << captured;
+}
+
+TEST_F(CsvTelemetryParserTest, EmitRejectionSummary_PrintsNothingWhenNoOutliers) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("time_s,throttle_pct", error));
+
+    CsvSample good;
+    EXPECT_TRUE(parser.parseRow("1.5,60.0", 1.0, good, error));
+
+    std::fflush(stderr);
+    testing::internal::CaptureStderr();
+    parser.emitRejectionSummary();
+    const std::string captured = testing::internal::GetCapturedStderr();
+    std::fflush(stderr);
+
+    EXPECT_TRUE(captured.empty())
+        << "no summary expected when zero rows rejected, got:\n" << captured;
 }
 
 // ============================================================================

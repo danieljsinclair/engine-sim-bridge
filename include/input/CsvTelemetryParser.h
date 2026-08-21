@@ -60,8 +60,18 @@ public:
     // Access the parsed header info.
     const CsvHeader& header() const { return header_; }
 
+    // Emit a single end-of-input summary of rows rejected for out-of-range
+    // (epoch-scale) timestamps. Prints nothing when no rows were rejected.
+    // Call exactly once per input stream (replay: after the parse loop;
+    // live: once when EOF is detected).
+    void emitRejectionSummary() const;
+
 private:
     CsvHeader header_;
+    // Count of rows skipped for out-of-range/epoch-scale timestamps. Mutable so
+    // it can be incremented from the const parseRow() without changing its
+    // signature (lower blast radius than dropping const).
+    mutable size_t rejectedOutlierRows_ = 0;
 };
 
 } // namespace input

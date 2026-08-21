@@ -1,6 +1,7 @@
 // ReplayTelemetryProvider.cpp
 #include "input/ReplayTelemetryProvider.h"
 #include "input/VirtualIceInputProvider.h"
+#include "input/WarmBoot.h"
 #include "twin/IceVehicleProfile.h"
 #include "io/UpstreamSignal.h"
 #include "simulator/GearConventions.h"
@@ -153,8 +154,10 @@ bool ReplayTelemetryProvider::parseCsv() {
 
     if (samples_.empty()) {
         if (!headerParsed) lastError_ = "Empty telemetry CSV: " + csvPath_;
+        csvParser_.emitRejectionSummary();
         return true;
     }
+    csvParser_.emitRejectionSummary();
     postProcessSamples();
     return true;
 }
@@ -287,31 +290,14 @@ void ReplayTelemetryProvider::primeTwinToRunning() {
     // Either way the core phase must be Running within the first replay second;
     // the driveability gate's NO_STOPPED_LATCH check enforces the same
     // invariant on the deterministic sweep legs.
+    //
+    // DRY: the OFF->RUNNING stepping + warm basin settle is shared with the live
+    // path via warmBootTwinToRunning() so the two prime paths never diverge.
     const Sample& first = samples_.front();
     const bridge::GearSelector sel = first.gearSelector.empty()
         ? bridge::GearSelector::DRIVE : parseGearSelector(first.gearSelector);
-    twinProvider_->setGearSelector(static_cast<int>(sel));
-
-    input::UpstreamSignal signal;
-    signal.throttleFraction = first.throttle;
-    signal.speedKmh = first.roadSpeedKmh;
-    signal.motorTorqueNm = first.motorTorqueNm;
-    signal.isValid = true;
-    signal.timestampUtcMs = 1;  // non-zero -> twin treats as valid telemetry
-    twinProvider_->setUpstreamSignal(signal);
-
-    // Past the 3s CRANK_FALLBACK_DURATION_S crank budget (CRANKING -> IDLE), then
-    // a DRIVE selector promotes IDLE -> RUNNING. 100 frames @ 0.05s = 5s sim, with
-    // margin over the 3s fallback so RUNNING is guaranteed before frame 1.
-    constexpr double kPrimeDt = 0.05;
-    constexpr int kPrimeFrames = 100;
-    for (int i = 0; i < kPrimeFrames; ++i) {
-        twinProvider_->OnUpdateSimulation(kPrimeDt);
-    }
-
-    // Warm-up prime: settle the twin into the WARM cruise basin (g4/g5, clutch
-    // ~0.75) before the first real frame. One-shot per twin-provider instance.
-    twinProvider_->primeWarmUp();
+    warmBootTwinToRunning(twinProvider_.get(), first.throttle, first.roadSpeedKmh,
+                          static_cast<int>(sel));
 }
 
 bool ReplayTelemetryProvider::applyTimeSlicing(EngineInput& input, double dt) {

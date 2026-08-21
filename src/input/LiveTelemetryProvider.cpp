@@ -1,6 +1,7 @@
 // LiveTelemetryProvider.cpp - Live telemetry input provider for engine-sim
 
 #include "input/LiveTelemetryProvider.h"
+#include "input/WarmBoot.h"
 #include "common/PresetExceptions.h"
 
 #include <cctype>
@@ -117,11 +118,11 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
     // and the cranking lifecycle; the CSV sample becomes its upstream signal.
     if (stream_) {
         elapsedS_ += dt;
-        // Time slicing: jump elapsedS_ to startFromS_ so the twin's monotonic
-        // timestamp starts from the right point. Mirrors ReplayTelemetryProvider.
-        if (startFromS_ >= 0.0 && elapsedS_ < startFromS_) {
-            elapsedS_ = startFromS_;
-        }
+        // NOTE: no elapsedS_ cold-jump to startFromS_. The SimulationLoop
+        // warm-start prefix steps the FULL sim (twin + core) silently for the
+        // startFromS_ window before the first emitted frame, so elapsedS_ must
+        // advance from 0 naturally — the first emitted frame lands at
+        // elapsedS_==startFromS_ and the twin/core are already primed/running.
         tryReadNextRow(elapsedS_);
 
         if (!initialized_.load() || !twinProvider_) {
@@ -132,11 +133,14 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
         UpstreamSignal signal;
         if (hasSample_) {
             signal.throttleFraction = currentSample_.throttle;
-            // De-quantized road speed: the recorded value is a CAN staircase
-            // (levels held ~0.2 s); feed the interpolated ramp so a hard-pinned
-            // RPM does not step in lockstep. currentSample_ still owns the other
-            // fields (throttle/torque/selector) — only the speed feed is smoothed.
-            signal.speedKmh = interpolatedSpeedKmh(elapsedS_);
+            // Feed the RAW recorded road speed (CAN staircase, levels held ~0.2 s)
+            // — identical to the replay path's s.roadSpeedKmh. Interpolating it into
+            // a smooth ramp made the live feed diverge from replay's staircase,
+            // flipping clutch decisions at t=118-120 and producing the opposite
+            // exhaust-flow sign at the same gear/rpm/clutch. Feeding raw means
+            // live decisions == replay decisions. The -2.0 dyno-off sentinel passes
+            // through unchanged (it is the "not commanded" value the twin expects).
+            signal.speedKmh = currentSample_.roadSpeedKmh;
             signal.motorTorqueNm = currentSample_.motorTorqueNm;
             // The row is valid telemetry even when speed is blank (dyno off); a
             // non-zero timestamp keeps the twin's telemetry-timeout guard happy.
@@ -237,6 +241,24 @@ void LiveTelemetryProvider::setWheelCouplingMode(twin::WheelCouplingMode mode) {
 void LiveTelemetryProvider::setCouplingModel(twin::CouplingModelKind kind) {
     if (twinProvider_) {
         twinProvider_->setCouplingModel(kind);
+    }
+}
+
+void LiveTelemetryProvider::warmBootToRunning() {
+    // Bring the twin to RUNNING (then settle the warm cruise basin) BEFORE the
+    // first real frame, mirroring ReplayTelemetryProvider::primeTwinToRunning.
+    // This is the warm-boot the live path was missing: without it the twin +
+    // engine-sim core start COLD and the first emitted frame blows massive
+    // negative exhaust flow (reversion). Live has no parsed samples at
+    // Initialize() time (rows are streamed lazily), so we seed the synthetic
+    // prime from a running-baseline (light throttle / ~10 km/h, DRIVE) — the same
+    // attractor replay's first-sample seed lands in. The SimulationLoop
+    // warm-start prefix then steps the FULL sim (twin + core) silently for the
+    // startFromS_ window, so --live-telemetry --start-from now converges on the
+    // replay run rather than cold-jumping. Idempotent (primeWarmUp guards).
+    if (stream_ && twinProvider_) {
+        warmBootTwinToRunning(twinProvider_.get(), /*seedThrottle=*/0.20,
+                              /*seedSpeedKmh=*/10.0);
     }
 }
 
@@ -360,7 +382,11 @@ bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
         std::string parseError;
         if (!csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;  // malformed
         if (isSampleBlank(sample)) continue;
-        if (startFromS_ >= 0.0 && sample.timeS < startFromS_) continue;  // pre-window
+        // NOTE: no pre-window row-drop. Under the SimulationLoop-owned warm-start
+        // prefix, elapsedS_ advances 0 -> startFromS_ during the suppressed window,
+        // so prefix rows are FEED (not dropped): they populate currentSample_ and
+        // the speed levels so the twin primes. Emission is suppressed by the loop's
+        // emitCsv_=false, not by discarding the rows here.
         if (baselineTimeS_ < 0.0) baselineTimeS_ = sample.timeS;          // anchor on first kept row
         rowBuffer_.push_back(sample);
     }
@@ -393,7 +419,10 @@ bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
     // EOF only when the stream AND the lookahead buffer are fully drained (a call
     // that surfaced a row stays "connected"; EOF is confirmed on a later call that
     // surfaces nothing) — mirrors the former live/paced contract.
-    if (stream_->eof() && rowBuffer_.empty() && !found) eofSeen_ = true;
+    if (stream_->eof() && rowBuffer_.empty() && !found) {
+        if (!eofSeen_) csvParser_.emitRejectionSummary();  // once, on EOF transition
+        eofSeen_ = true;
+    }
     return found;
 }
 

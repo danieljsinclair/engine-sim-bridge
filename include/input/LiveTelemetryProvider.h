@@ -25,6 +25,7 @@
 #include "io/IInputProvider.h"
 #include "io/UpstreamSignal.h"
 #include "input/CsvTelemetryParser.h"
+#include "input/IReplayTimeline.h"
 #include "input/VirtualIceInputProvider.h"
 #include "twin/IceVehicleProfile.h"
 #include "simulator/EngineSimTypes.h"
@@ -38,7 +39,7 @@
 
 namespace input {
 
-class LiveTelemetryProvider : public IInputProvider {
+class LiveTelemetryProvider : public IInputProvider, public IReplayTimeline {
 public:
     /// Create a live telemetry provider with the given vehicle profile.
     /// The profile defines gear ratios, shift tables, and vehicle dynamics.
@@ -92,6 +93,17 @@ public:
     /// (fluid coupling), or legacy (historical slip-lock + binary relief, A/B).
     void setCouplingModel(twin::CouplingModelKind kind);
 
+    /// Bring the owned twin to RUNNING and settle the warm cruise basin BEFORE the
+    /// first real frame — the warm-boot the live path was missing. Without it the
+    /// twin + core start COLD and the first emitted frame blows massive negative
+    /// exhaust flow (reversion). Call AFTER setWheelCouplingMode/setCouplingModel
+    /// (the CLI sets them post-Initialize) so the twin primes with the chosen
+    /// coupling. Shares the replay prime path via warmBootTwinToRunning() (DRY).
+    /// Live has no parsed samples at Initialize time, so it seeds from a
+    /// running-baseline (light throttle / ~10 km/h, DRIVE). No-op when the twin is
+    /// absent or already warmed (idempotent).
+    void warmBootToRunning();
+
     /// Forward simulator RPM feedback to the twin for cranking transition.
     void provideFeedback(const EngineSimStats& stats) override;
 
@@ -112,6 +124,13 @@ public:
     /// Skip CSV rows before this time (seconds). Mirrors ReplayTelemetryProvider
     /// so --start-from works for --live-telemetry as well as --replay-telemetry.
     void setStartFromS(double s);
+
+    // IReplayTimeline — makes the live path share the replay warm-start prefix
+    // in SimulationLoop (read only getStartFromS()>0; never durationS()), so
+    // --live-telemetry --start-from primes the twin + core instead of cold-jumping.
+    double durationS() const override { return -1.0; }   // unbounded live stream
+    void setEndAtS(double s) override { endAtS_ = s; }
+    double getStartFromS() const override { return startFromS_; }
 
 private:
     // CSV stdin path helpers
@@ -187,6 +206,7 @@ private:
     bool eofSeen_ = false;
     bool headerParsed_ = false;  // header parsed once; later calls read data rows only
     double startFromS_ = -1.0;   // skip CSV rows before this time (-1 = disabled)
+    double endAtS_ = -1.0;       // stop at this time (-1 = play to end); IReplayTimeline
     double baselineTimeS_ = -1.0;  // recording-time of the first consumed row (set on first success)
 
     /// Read-ahead buffer of parsed rows NOT yet past the sim clock. The CSV stream

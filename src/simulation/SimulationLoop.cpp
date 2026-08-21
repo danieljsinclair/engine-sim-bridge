@@ -28,6 +28,7 @@
 #include "common/Verification.h"
 
 #include <cstring>
+#include <cstdio>
 
 
 namespace {
@@ -521,13 +522,14 @@ int SimulationLoop::run() {
             logger_->info(LogMask::BRIDGE,
                 __ilog_format("Warm-start prefix: stepping %.3fs of sim silently before first emission", prefixEnd));
             // Warm-up prefix: step the FULL per-tick path (engine core + twin via
-            // step(), audio/render via updatePresentation()) so the prefix matches
-            // the from-0 run tick-for-tick. Suppress ONLY the CSV telemetry write
-            // (emitCsv_=false) -- NEVER the presentation, whose audio buffer /
-            // simulator render is a physics side-effect that must advance or the
-            // gas path stays cold at handoff (the bug that made --start-from runs
-            // emit ~95% negative exhaust flow). First emitted frame = startFromS_.
+            // step(), audio simulation via audioBuffer_.updateSimulation above) so
+            // the prefix matches the from-0 run tick-for-tick. Suppress ONLY CSV
+            // telemetry write (writeTelemetry gated by emitCsv_=false) -- the
+            // audio simulation advancement (audioBuffer_.updateSimulation /
+            // fillBufferFromEngine) ALWAYS runs regardless of emitCsv_, so the gas
+            // path stays warm at handoff. First emitted frame = startFromS_.
             emitCsv_ = false;
+            if (presentation_) presentation_->setCsvEmissionEnabled(false);
             while (state.currentTime < prefixEnd) {
                 step(state);
                 clock_->waitUntilNextTick();
@@ -538,6 +540,7 @@ int SimulationLoop::run() {
             // Prefix is a warm-up only: resume normal CSV emission for the main
             // loop so the first emitted frame is the one at startFromS_.
             emitCsv_ = true;
+            if (presentation_) presentation_->setCsvEmissionEnabled(true);
         }
     }
 
@@ -600,9 +603,10 @@ StepResult SimulationLoop::step(LoopState& state) {
     audioBuffer_.fillBufferFromEngine(&simulator_, config_.framesPerUpdate());
 
     // CSV telemetry write is suppressed during the warm-start prefix (emitCsv_
-    // gate); the engine is stepped normally (above). The presentation / audio
-    // render path ALWAYS runs -- it is a per-tick physics side-effect that must
-    // advance identically to the main loop or the gas path stays cold at the
+    // gate); the engine is stepped normally (above). The audio simulation
+    // advancement (audioBuffer_.updateSimulation / fillBufferFromEngine above)
+    // ALWAYS runs -- that is the per-tick physics side-effect that must advance
+    // identically to the main loop or the gas path stays cold at the
     // prefix/main handoff (the bug behind sick --start-from runs).
     if (emitCsv_) {
         writeTelemetry(state.currentTime, crankingState.startingThrottle, state.engineInput.ignition, crankingState.starterEngaged);
