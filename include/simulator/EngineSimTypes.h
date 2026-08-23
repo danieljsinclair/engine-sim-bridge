@@ -116,13 +116,14 @@ struct ISimulatorConfig {
 // Both modes share one rule: a sounding pop is NEVER restarted or truncated.
 enum class AfterfirePopOverlap {
     // Drop the new pop while one is still sounding, so the sounding crack always
-    // completes. Default: it is what makes a frequently popping engine read as
-    // discrete cracks rather than a continuous buzz.
+    // completes. The OPT-OUT: it makes a frequently popping engine read as
+    // discrete cracks, at the cost of discarding overlapping events.
     SuppressWhilePlaying = 0,
 
     // Layer the new pop ON TOP of the sounding one, both playing to completion.
-    // Physically honest for a shared exhaust collector. Bounded by the mixer's
-    // voice count and by the inter-pop floor (minPopIntervalMs).
+    // DEFAULT: physically honest for a shared exhaust collector, where two
+    // cylinders' cracks genuinely add. Bounded by the mixer's voice count and by
+    // the inter-pop floor (minPopIntervalMs).
     SumOnTop = 1,
 };
 
@@ -214,10 +215,14 @@ struct AfterfireConfig {
 
     // --- Pop PLAYBACK behaviour (WAV overlay only, not the physics) -----------
     // A V-engine shares one exhaust channel across cylinders, so on an engine
-    // that pops constantly overlap is the normal case. SuppressWhilePlaying (the
-    // default) lets the sounding crack finish and drops the new pop; SumOnTop
-    // layers them. Neither ever restarts a sounding pop.
-    AfterfirePopOverlap popOverlapMode = AfterfirePopOverlap::SuppressWhilePlaying;
+    // that pops constantly overlap is the normal case. SumOnTop (the default)
+    // layers them; SuppressWhilePlaying is the opt-out that lets the sounding
+    // crack finish and drops the new pop. Neither ever restarts a sounding pop.
+    //
+    // Must MATCH CombustionChamber::AfterfireParameters' default: this struct is
+    // pushed unconditionally through configureAfterfire, so a stale default here
+    // would silently override the chamber's rather than defer to it.
+    AfterfirePopOverlap popOverlapMode = AfterfirePopOverlap::SumOnTop;
 
     // Minimum spacing, in audio milliseconds, between ACCEPTED pops on one
     // exhaust channel. This is what makes SumOnTop safe: without it a frequently
