@@ -106,6 +106,33 @@ struct ISimulatorConfig {
     float convolutionLevel = 0.5f; // Runtime-tunable default
 };
 
+// How a pop arriving while another is still sounding on the same exhaust channel
+// is admitted. Bridge-level MIRROR of engine-sim's PopOverlapMode: EngineSimTypes.h
+// is the header callers include INSTEAD of engine-sim's, so it cannot pull in
+// one_shot_sample_mixer.h. BridgeSimulator::configureAfterfire translates this to
+// the engine-sim enum, and a static_assert there pins the numeric values together
+// so a divergence is a compile error rather than a silently wrong mode.
+//
+// Both modes share one rule: a sounding pop is NEVER restarted or truncated.
+enum class AfterfirePopOverlap {
+    // Drop the new pop while one is still sounding, so the sounding crack always
+    // completes. Default: it is what makes a frequently popping engine read as
+    // discrete cracks rather than a continuous buzz.
+    SuppressWhilePlaying = 0,
+
+    // Layer the new pop ON TOP of the sounding one, both playing to completion.
+    // Physically honest for a shared exhaust collector. Bounded by the mixer's
+    // voice count and by the inter-pop floor (minPopIntervalMs).
+    SumOnTop = 1,
+};
+
+// Default inter-pop floor, in audio milliseconds. Mirrors
+// OneShotSampleMixer::DefaultMinPopIntervalMs, which this header cannot include
+// (see AfterfirePopOverlap above). A constant rather than a literal in the struct
+// so the static_assert in BridgeSimulator::configureAfterfire has something
+// constexpr to pin against — AfterfireConfig itself is not a literal type.
+constexpr double DEFAULT_AFTERFIRE_MIN_POP_INTERVAL_MS = 50.0;
+
 // Afterfire ("pop on overrun") tuning, expressed in bridge-level terms so callers
 // never need to include engine-sim headers. Mapped onto
 // CombustionChamber::AfterfireParameters by BridgeSimulator::configureAfterfire.
@@ -184,6 +211,20 @@ struct AfterfireConfig {
     // Resolved relative to the executable directory. If a glob, one matching file
     // is chosen randomly for each pop.
     std::string afterfireWavPath;
+
+    // --- Pop PLAYBACK behaviour (WAV overlay only, not the physics) -----------
+    // A V-engine shares one exhaust channel across cylinders, so on an engine
+    // that pops constantly overlap is the normal case. SuppressWhilePlaying (the
+    // default) lets the sounding crack finish and drops the new pop; SumOnTop
+    // layers them. Neither ever restarts a sounding pop.
+    AfterfirePopOverlap popOverlapMode = AfterfirePopOverlap::SuppressWhilePlaying;
+
+    // Minimum spacing, in audio milliseconds, between ACCEPTED pops on one
+    // exhaust channel. This is what makes SumOnTop safe: without it a frequently
+    // popping engine layers cracks faster than they decay. 0 disables the floor.
+    // Default mirrors OneShotSampleMixer::DefaultMinPopIntervalMs; the
+    // static_assert in BridgeSimulator::configureAfterfire pins them together.
+    double minPopIntervalMs = DEFAULT_AFTERFIRE_MIN_POP_INTERVAL_MS;
 
     bool diagnostics = false;
 };

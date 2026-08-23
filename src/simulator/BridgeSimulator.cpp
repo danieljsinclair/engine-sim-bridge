@@ -368,6 +368,32 @@ void BridgeSimulator::tickAfterfireOnly(double dt) {
 // no-ops so callers need no #ifdef of their own.
 // ============================================================================
 
+#ifdef ATG_ENGINE_SIM_AFTERFIRE_SPIKE
+namespace {
+
+// Translate the bridge-level overlap mode to engine-sim's. The static_asserts are
+// the point: AfterfirePopOverlap exists so EngineSimTypes.h stays free of
+// engine-sim headers, which means the two enums could otherwise drift apart
+// silently and select the WRONG playback mode. Pinning the numeric values (and
+// the default interval) here turns any divergence into a compile error at the one
+// place that maps between them.
+PopOverlapMode toEnginePopOverlapMode(AfterfirePopOverlap mode) {
+    static_assert(static_cast<int>(AfterfirePopOverlap::SuppressWhilePlaying)
+                      == static_cast<int>(PopOverlapMode::SuppressWhilePlaying),
+                  "AfterfirePopOverlap::SuppressWhilePlaying must match engine-sim's value");
+    static_assert(static_cast<int>(AfterfirePopOverlap::SumOnTop)
+                      == static_cast<int>(PopOverlapMode::SumOnTop),
+                  "AfterfirePopOverlap::SumOnTop must match engine-sim's value");
+    static_assert(DEFAULT_AFTERFIRE_MIN_POP_INTERVAL_MS
+                      == OneShotSampleMixer::DefaultMinPopIntervalMs,
+                  "AfterfireConfig::minPopIntervalMs default must match the mixer's");
+
+    return static_cast<PopOverlapMode>(mode);
+}
+
+}  // namespace
+#endif
+
 bool BridgeSimulator::configureAfterfire(const AfterfireConfig& config) {
 #ifdef ATG_ENGINE_SIM_AFTERFIRE_SPIKE
     // No engine (e.g. the sine-wave simulator): there are no chambers to tune.
@@ -412,6 +438,8 @@ bool BridgeSimulator::configureAfterfire(const AfterfireConfig& config) {
         parameters.throttleCutoff = config.throttleCutoff;
         parameters.afterfireWavPath = config.afterfireWavPath;
         parameters.afterfireWavPaths = wavPaths;
+        parameters.popOverlapMode = toEnginePopOverlapMode(config.popOverlapMode);
+        parameters.minPopIntervalMs = config.minPopIntervalMs;
         parameters.diagnostics = config.diagnostics;
 
         engine->getChamber(i)->setAfterfireParameters(parameters);
