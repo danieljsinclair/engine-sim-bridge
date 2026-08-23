@@ -20,6 +20,8 @@
 #include "strategy/IAudioBuffer.h"
 #include "io/IInputProvider.h"
 #include "io/IPresentation.h"
+#include "io/IAudioSink.h"
+#include "io/WavFileSink.h"
 #include "common/ILogging.h"
 #include "common/PresetExceptions.h"
 #include "telemetry/ITelemetryProvider.h"
@@ -85,16 +87,30 @@ void SimulationLoop::updatePresentation(
 // Named audio render callback -- bridges AudioBufferView to strategy->render().
 // Pure function (no session/globals/hardware); declared in
 // simulation/audioRenderCallback.h for direct unit testing.
-int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer) {
+int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer,
+                        io::IAudioSink* sink) {
+    // Capture whatever this callback leaves in the buffer — the zero-filled
+    // not-playing frames as well as rendered ones — so the captured timeline
+    // matches what the hardware was handed, gaps included.
+    const auto captureFrames = [sink, &buffer]() {
+        if (sink) {
+            if (const float* src = buffer.asFloat(); src) {
+                sink->writeFrames(src, buffer.frameCount, buffer.channelCount);
+            }
+        }
+    };
+
     if (!strategy->isPlaying()) {
         if (float* dst = buffer.asFloat(); dst) {
             size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
             std::memset(dst, 0, totalSamples * sizeof(float));
         }
+        captureFrames();
         return 0;
     }
 
     strategy->render(buffer);
+    captureFrames();
     return 0;
 }
 
@@ -285,10 +301,12 @@ public:
         const SimulationConfig& config,
         std::unique_ptr<ISimulator> simulator,
         const SessionDependencies& deps,
-        std::unique_ptr<IAudioHardwareProvider> hardwareProvider)
+        std::unique_ptr<IAudioHardwareProvider> hardwareProvider,
+        std::unique_ptr<io::IAudioSink> audioSink = nullptr)
         : config_(config)
         , simulator_(std::move(simulator))
         , audioBuffer_(deps.audioBuffer)
+        , audioSink_(std::move(audioSink))
         , hardwareProvider_(std::move(hardwareProvider))
         , inputProvider_(deps.inputProvider)
         , presentation_(deps.presentation)
@@ -426,6 +444,17 @@ public:
 
     void doClose() {
         cleanupSimulation(hardwareProvider_.get(), *simulator_);
+
+        // Audio hardware is stopped above, so no render callback can be writing
+        // to the sink any more — safe to patch the header and close the file.
+        if (audioSink_) {
+            if (audioSink_->finalize()) {
+                logger_->info(LogMask::AUDIO, "Audio capture written");
+            } else {
+                logger_->error(LogMask::AUDIO, "Audio capture failed to finalize");
+            }
+        }
+
         closed_ = true;
     }
 
@@ -438,6 +467,11 @@ private:
     std::unique_ptr<ISimulator> simulator_;
     std::unique_ptr<ISimulator> previousSimulator_;
     IAudioBuffer* audioBuffer_;
+    // Optional capture destination (--output). DECLARED BEFORE hardwareProvider_
+    // on purpose: the provider's render callback holds a raw pointer to this
+    // sink, and members destruct in reverse declaration order, so the provider
+    // (and its callback) is torn down while the sink is still alive.
+    std::unique_ptr<io::IAudioSink> audioSink_;
     std::unique_ptr<IAudioHardwareProvider> hardwareProvider_;
     input::IInputProvider* inputProvider_;
     presentation::IPresentation* presentation_;
@@ -616,8 +650,35 @@ std::unique_ptr<ISimulatorSession> createSession(
     strategyConfig.synthLatency = config.engineConfig.targetSynthesizerLatency;
     audioBuffer->initialize(strategyConfig, config.sampleRate());
 
-    auto callback = [audioBuffer](AudioBufferView& buffer) {
-        return audioRenderCallback(audioBuffer, buffer);
+    // --output <path>: capture the rendered frames to a WAV file. Created here,
+    // before the callback that references it, and handed to the session which
+    // owns it for the run and finalizes it once playback has stopped.
+    //
+    // The capture is taken at the render callback, so it records exactly the
+    // frames handed to the hardware — same rate (config.sampleRate()), same
+    // channel count, same content, afterfire pops included. Nothing in the
+    // audio path is altered; the sink only observes.
+    std::unique_ptr<io::IAudioSink> audioSink;
+    if (config.outputWav != nullptr && config.outputWav[0] != '\0') {
+        auto wavSink = std::make_unique<io::WavFileSink>(
+            config.outputWav, config.sampleRate(), EngineSimAudio::STEREO);
+
+        // A path that cannot be opened is a user error (bad directory, no
+        // permission). Fail fast and name it rather than running the whole
+        // simulation and reporting the loss at the end.
+        if (!wavSink->isOpen()) {
+            throw SimulatorException(
+                std::string("Failed to open --output WAV for writing: ") + config.outputWav);
+        }
+
+        logger->info(LogMask::AUDIO, __ilog_format(
+            "Audio capture -> %s (%d Hz, %d ch, 16-bit PCM)",
+            config.outputWav, config.sampleRate(), EngineSimAudio::STEREO));
+        audioSink = std::move(wavSink);
+    }
+
+    auto callback = [audioBuffer, sink = audioSink.get()](AudioBufferView& buffer) {
+        return audioRenderCallback(audioBuffer, buffer, sink);
     };
 
     // Use an injected provider when supplied (headless/testing); otherwise create
@@ -646,5 +707,6 @@ std::unique_ptr<ISimulatorSession> createSession(
         sessionConfig,
         std::move(simulator),
         sessionDeps,
-        std::move(hardwareProvider));
+        std::move(hardwareProvider),
+        std::move(audioSink));
 }// GLOBAL scope — session factory, no access to SimulationLoop members

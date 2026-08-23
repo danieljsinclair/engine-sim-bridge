@@ -205,6 +205,7 @@ set(BRIDGE_SOURCES
     src/input/LiveTelemetryProvider.cpp
     # IO
     src/io/LiveTelemetryParser.cpp
+    src/io/WavFileSink.cpp
 )
 
 # Platform-specific audio hardware and factory
@@ -422,6 +423,7 @@ if(BUILD_BRIDGE_TESTS)
         test/simulator/ISimulatorVersionTest.cpp
         test/input/DemoControlsTargetTest.cpp
         test/input/LiveTelemetryProviderTest.cpp
+        test/io/WavFileSinkTest.cpp
         test/twin/GearboxCsvLoggerTest.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE

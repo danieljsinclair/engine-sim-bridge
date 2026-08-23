@@ -13,10 +13,17 @@
 
 #include "strategy/IAudioBuffer.h"
 #include "hardware/AudioTypes.h"
+#include "io/IAudioSink.h"
 
 // Render one audio buffer via the given buffer strategy.
 // Zeroes the destination when the strategy is not playing; otherwise forwards to
 // strategy->render(buffer). Returns 0 (platform success code) for both paths.
-int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer);
+//
+// When sink is non-null, the frames the callback produced are also handed to the
+// sink — including the zeroed not-playing frames, so a capture keeps a
+// continuous timeline instead of silently compressing gaps. Passing nullptr
+// (the default) is the no-capture path and is behaviour-identical to before.
+int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer,
+                        io::IAudioSink* sink = nullptr);
 
 #endif // AUDIO_RENDER_CALLBACK_H
