@@ -292,9 +292,10 @@ TEST(AfterfireBridgeTest, MasterVolumeScalesPhysicalCrackle) {
 // cylinders, so a mapping applied to only one of them would still leave most of the
 // engine on the default.
 //
-// 0 is the value under test because it is the one that MATTERS (the "no added decay"
-// escape hatch) and the one a naive truthiness guard anywhere along the chain would
-// silently drop back to the default.
+// A NON-DEFAULT value is the one under test. The default is now 0 (no added decay —
+// a pop plays as stored), so asserting 0 would prove nothing: an unplumbed chain
+// would read back its own default of 0 and pass. The opt-in value must be observed
+// arriving, which is only meaningful for a value the chain could not have invented.
 TEST(AfterfireBridgeTest, PopDecayDivisorReachesEveryChamber) {
 #ifndef ATG_ENGINE_SIM_AFTERFIRE_SPIKE
     GTEST_SKIP() << "ATG_ENGINE_SIM_AFTERFIRE_SPIKE not compiled in";
@@ -324,28 +325,33 @@ TEST(AfterfireBridgeTest, PopDecayDivisorReachesEveryChamber) {
     ASSERT_GT(engine->getCylinderCount(), 1)
         << "a single-cylinder engine cannot detect a per-chamber loop bug";
 
+    // The shipped default must be "no added decay" on every chamber: a pop WAV plays
+    // as stored unless shaping is explicitly requested. Checked BEFORE opting in, so a
+    // default silently restored to 3 somewhere along the chain is caught here.
     AfterfireConfig af;
     af.enabled = true;
-    af.popDecayDivisor = 0.0;  // the "no added decay" escape hatch
+    ASSERT_NEAR(af.popDecayDivisor, 0.0, 1e-9)
+        << "AfterfireConfig no longer defaults to passthrough";
     SimulatorFactory::configureAfterfire(sim.get(), af, nullptr);
 
     for (int i = 0; i < engine->getCylinderCount(); ++i) {
         EXPECT_NEAR(engine->getChamber(i)->getAfterfireParameters()
                         .popDecayTimeConstantDivisor,
                     0.0, 1e-9)
-            << "chamber " << i << " did not receive the configured divisor — "
-            << "--afterfire-pop-decay-divisor is parsed but not plumbed";
+            << "chamber " << i << " has an added pop decay by default";
     }
 
-    // ...and a non-default NON-zero value arrives intact too, so the test above
-    // cannot be satisfied by a chain that simply hardcodes zero.
+    // The OPT-IN value must arrive intact — a value the chain could not have
+    // invented, so this genuinely proves the flag is plumbed rather than merely that
+    // two defaults happen to agree.
     af.popDecayDivisor = 7.5;
     SimulatorFactory::configureAfterfire(sim.get(), af, nullptr);
     for (int i = 0; i < engine->getCylinderCount(); ++i) {
         EXPECT_NEAR(engine->getChamber(i)->getAfterfireParameters()
                         .popDecayTimeConstantDivisor,
                     7.5, 1e-9)
-            << "chamber " << i << " did not receive the configured divisor";
+            << "chamber " << i << " did not receive the configured divisor — "
+            << "--afterfire-pop-decay-divisor is parsed but not plumbed";
     }
 #endif
 }

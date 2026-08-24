@@ -134,11 +134,11 @@ enum class AfterfirePopOverlap {
 // constexpr to pin against — AfterfireConfig itself is not a literal type.
 constexpr double DEFAULT_AFTERFIRE_MIN_POP_INTERVAL_MS = 50.0;
 
-// Default added-decay divisor for a pop. Mirrors
-// OneShotSampleMixer::DefaultDecayTimeConstantDivisor, which this header cannot
-// include (see AfterfirePopOverlap above); the static_assert in
+// Default added-decay divisor for a pop: 0 = OFF, so a pop plays as stored.
+// Mirrors OneShotSampleMixer::DefaultDecayTimeConstantDivisor, which this header
+// cannot include (see AfterfirePopOverlap above); the static_assert in
 // BridgeSimulator::configureAfterfire pins the two together.
-constexpr double DEFAULT_AFTERFIRE_POP_DECAY_DIVISOR = 3.0;
+constexpr double DEFAULT_AFTERFIRE_POP_DECAY_DIVISOR = 0.0;
 
 // Afterfire ("pop on overrun") tuning, expressed in bridge-level terms so callers
 // never need to include engine-sim headers. Mapped onto
@@ -238,17 +238,19 @@ struct AfterfireConfig {
     double minPopIntervalMs = DEFAULT_AFTERFIRE_MIN_POP_INTERVAL_MS;
 
     // Added exponential decay applied to a pop on playback, as a divisor of the
-    // pop's own length: tau = length / divisor. 0 = no added decay. Larger =
-    // decays faster.
+    // pop's own length: tau = length / divisor. 0 (THE DEFAULT) = no added decay;
+    // larger = decays faster.
     //
-    // ONLY AFFECTS AN UNSHAPED POP. A custom WAV that already decays by itself
-    // (any real backfire recording) never receives the added decay whatever this
-    // is set to, because decaying an already-shaped sample a second time
-    // multiplies the two envelopes and buries every crack after the first —
-    // measured on a real backfire, that collapsed the trailing/leading energy
-    // ratio from 0.226 to 0.045, roughly 14 dB. The divisor is therefore the
-    // shaping knob for the SYNTH/flat case, where the decay is what makes raw
-    // sample data read as a crack and what leaves troughs between pops.
+    // DEFAULT IS PASSTHROUGH: a pop plays exactly as stored — full duration,
+    // correct rate, its own shape intact — because a pop WAV is already a
+    // recording of a bang and does not need an envelope imposed on it. Applying
+    // one to an already-shaped sample multiplies the two envelopes and buries
+    // every crack after the first: measured on a real backfire, that collapsed
+    // the trailing/leading energy ratio from 0.226 to 0.045, roughly 14 dB.
+    //
+    // Set it (3.0 is the classic value) for a SYNTHESISED or flat pop, which has
+    // no shape of its own and needs the decay to read as a crack with audible
+    // troughs between successive pops.
     //
     // Default mirrors OneShotSampleMixer::DefaultDecayTimeConstantDivisor; the
     // static_assert in BridgeSimulator::configureAfterfire pins them together.
