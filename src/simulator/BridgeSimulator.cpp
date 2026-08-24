@@ -387,6 +387,9 @@ PopOverlapMode toEnginePopOverlapMode(AfterfirePopOverlap mode) {
     static_assert(DEFAULT_AFTERFIRE_MIN_POP_INTERVAL_MS
                       == OneShotSampleMixer::DefaultMinPopIntervalMs,
                   "AfterfireConfig::minPopIntervalMs default must match the mixer's");
+    static_assert(DEFAULT_AFTERFIRE_POP_DECAY_DIVISOR
+                      == OneShotSampleMixer::DefaultDecayTimeConstantDivisor,
+                  "AfterfireConfig::popDecayDivisor default must match the mixer's");
 
     return static_cast<PopOverlapMode>(mode);
 }
@@ -440,6 +443,7 @@ bool BridgeSimulator::configureAfterfire(const AfterfireConfig& config) {
         parameters.afterfireWavPaths = wavPaths;
         parameters.popOverlapMode = toEnginePopOverlapMode(config.popOverlapMode);
         parameters.minPopIntervalMs = config.minPopIntervalMs;
+        parameters.popDecayTimeConstantDivisor = config.popDecayDivisor;
         parameters.diagnostics = config.diagnostics;
 
         engine->getChamber(i)->setAfterfireParameters(parameters);

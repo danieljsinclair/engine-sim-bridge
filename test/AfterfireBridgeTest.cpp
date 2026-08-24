@@ -22,6 +22,7 @@
 #include "simulator/SimulatorInitHelpers.h"
 
 #include "engine.h"
+#include "combustion_chamber.h"
 #include "throttle.h"
 #include "governor.h"
 #include "direct_throttle_linkage.h"
@@ -275,5 +276,76 @@ TEST(AfterfireBridgeTest, MasterVolumeScalesPhysicalCrackle) {
     printf("[master-volume] gain0 events=%.0f energy=%.3g | gain1 events=%.0f energy=%.3g\n",
            zero.first, zero.second, full.first, full.second);
     fflush(stdout);
+#endif
+}
+
+// =============================================================================
+// The pop-decay divisor reaches the chambers.
+// =============================================================================
+// --afterfire-pop-decay-divisor binds to AfterfireConfig::popDecayDivisor, which
+// SimulatorFactory::configureAfterfire must map onto every chamber's
+// AfterfireParameters::popDecayTimeConstantDivisor. Without that mapping the flag
+// parses, prints in the banner, and silently does nothing — the chamber reads its
+// own default and the audio path never sees the requested value.
+//
+// Asserted on EVERY chamber, not just the first: configureAfterfire loops over the
+// cylinders, so a mapping applied to only one of them would still leave most of the
+// engine on the default.
+//
+// 0 is the value under test because it is the one that MATTERS (the "no added decay"
+// escape hatch) and the one a naive truthiness guard anywhere along the chain would
+// silently drop back to the default.
+TEST(AfterfireBridgeTest, PopDecayDivisorReachesEveryChamber) {
+#ifndef ATG_ENGINE_SIM_AFTERFIRE_SPIKE
+    GTEST_SKIP() << "ATG_ENGINE_SIM_AFTERFIRE_SPIKE not compiled in";
+#else
+    const std::string presetPath = std::string(TEST_PRESET_DIR) + "/v8_gm_ls.json";
+    ASSERT_TRUE(std::filesystem::exists(presetPath)) << "Missing preset: " << presetPath;
+
+    ISimulatorConfig config;
+    config.sampleRate = 48000;
+    config.simulationFrequency = 10000;
+
+    std::filesystem::path savedCwd = std::filesystem::current_path();
+    auto sim = SimulatorFactory::create(
+        SimulatorType::PistonEngine,
+        presetPath,
+        std::string(TEST_ENGINE_SIM_ASSETS) + "/",
+        config);
+    std::filesystem::current_path(savedCwd);
+    ASSERT_NE(sim, nullptr);
+
+    auto* bridge = dynamic_cast<BridgeSimulator*>(sim.get());
+    ASSERT_NE(bridge, nullptr);
+    ASSERT_TRUE(bridge->create(config, nullptr, nullptr));
+
+    Engine* engine = bridge->getInternalSimulator()->getEngine();
+    ASSERT_NE(engine, nullptr);
+    ASSERT_GT(engine->getCylinderCount(), 1)
+        << "a single-cylinder engine cannot detect a per-chamber loop bug";
+
+    AfterfireConfig af;
+    af.enabled = true;
+    af.popDecayDivisor = 0.0;  // the "no added decay" escape hatch
+    SimulatorFactory::configureAfterfire(sim.get(), af, nullptr);
+
+    for (int i = 0; i < engine->getCylinderCount(); ++i) {
+        EXPECT_NEAR(engine->getChamber(i)->getAfterfireParameters()
+                        .popDecayTimeConstantDivisor,
+                    0.0, 1e-9)
+            << "chamber " << i << " did not receive the configured divisor — "
+            << "--afterfire-pop-decay-divisor is parsed but not plumbed";
+    }
+
+    // ...and a non-default NON-zero value arrives intact too, so the test above
+    // cannot be satisfied by a chain that simply hardcodes zero.
+    af.popDecayDivisor = 7.5;
+    SimulatorFactory::configureAfterfire(sim.get(), af, nullptr);
+    for (int i = 0; i < engine->getCylinderCount(); ++i) {
+        EXPECT_NEAR(engine->getChamber(i)->getAfterfireParameters()
+                        .popDecayTimeConstantDivisor,
+                    7.5, 1e-9)
+            << "chamber " << i << " did not receive the configured divisor";
+    }
 #endif
 }

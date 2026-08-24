@@ -134,6 +134,12 @@ enum class AfterfirePopOverlap {
 // constexpr to pin against — AfterfireConfig itself is not a literal type.
 constexpr double DEFAULT_AFTERFIRE_MIN_POP_INTERVAL_MS = 50.0;
 
+// Default added-decay divisor for a pop. Mirrors
+// OneShotSampleMixer::DefaultDecayTimeConstantDivisor, which this header cannot
+// include (see AfterfirePopOverlap above); the static_assert in
+// BridgeSimulator::configureAfterfire pins the two together.
+constexpr double DEFAULT_AFTERFIRE_POP_DECAY_DIVISOR = 3.0;
+
 // Afterfire ("pop on overrun") tuning, expressed in bridge-level terms so callers
 // never need to include engine-sim headers. Mapped onto
 // CombustionChamber::AfterfireParameters by BridgeSimulator::configureAfterfire.
@@ -230,6 +236,23 @@ struct AfterfireConfig {
     // Default mirrors OneShotSampleMixer::DefaultMinPopIntervalMs; the
     // static_assert in BridgeSimulator::configureAfterfire pins them together.
     double minPopIntervalMs = DEFAULT_AFTERFIRE_MIN_POP_INTERVAL_MS;
+
+    // Added exponential decay applied to a pop on playback, as a divisor of the
+    // pop's own length: tau = length / divisor. 0 = no added decay. Larger =
+    // decays faster.
+    //
+    // ONLY AFFECTS AN UNSHAPED POP. A custom WAV that already decays by itself
+    // (any real backfire recording) never receives the added decay whatever this
+    // is set to, because decaying an already-shaped sample a second time
+    // multiplies the two envelopes and buries every crack after the first —
+    // measured on a real backfire, that collapsed the trailing/leading energy
+    // ratio from 0.226 to 0.045, roughly 14 dB. The divisor is therefore the
+    // shaping knob for the SYNTH/flat case, where the decay is what makes raw
+    // sample data read as a crack and what leaves troughs between pops.
+    //
+    // Default mirrors OneShotSampleMixer::DefaultDecayTimeConstantDivisor; the
+    // static_assert in BridgeSimulator::configureAfterfire pins them together.
+    double popDecayDivisor = DEFAULT_AFTERFIRE_POP_DECAY_DIVISOR;
 
     bool diagnostics = false;
 };
