@@ -531,6 +531,13 @@ int SimulationLoop::run() {
             emitCsv_ = false;
             if (presentation_) presentation_->setCsvEmissionEnabled(false);
             while (state.currentTime < prefixEnd) {
+                // Honour a stop request (CTRL+C / SIGTERM) during the warm-start
+                // prefix too: the prefix can be tens of seconds long (start-from
+                // 01:30 => 90s), and without this check a signal arriving in that
+                // window is silently swallowed until the prefix completes. Breaking
+                // here drops straight into the main loop, whose stop-request check
+                // returns immediately, so the run terminates cleanly.
+                if (stopRequested_->load(std::memory_order_seq_cst)) break;
                 step(state);
                 clock_->waitUntilNextTick();
                 state.engineInput = pollInput(state.currentTime, config_.updateInterval(), state.isFirstTick);

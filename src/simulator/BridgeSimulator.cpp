@@ -83,6 +83,27 @@ bool BridgeSimulator::renderOnDemand(float* buffer, int32_t frames, int32_t* wri
     return true;
 }
 
+bool BridgeSimulator::renderDrainedAudio(float* buffer, int32_t frames, int32_t* written) {
+    if (!buffer) throw SimulatorException("BridgeSimulator::renderDrainedAudio() called with null buffer");
+    if (frames <= 0) throw SimulatorException("BridgeSimulator::renderDrainedAudio() called with invalid frame count");
+
+    // Drain already-synthesized audio only — the core is advanced on the loop
+    // thread (SyncPullStrategy::updateSimulation), so we must NOT call
+    // advanceFixedSteps here. Synthesize whatever engine-audio input the loop
+    // thread produced, then read it out. Mirrors the tail of renderOnDemand.
+    m_simulator->synthesizer().renderAudioOnDemand();
+
+    int16_t* conversionBuffer = ensureAudioConversionBufferSize(frames);
+    int samplesRead = m_simulator->readAudioOutput(frames, conversionBuffer);
+    EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, samplesRead, buffer, engineConfig_.volume, engineConfig_.convolutionLevel);
+
+    if (samplesRead < frames) {
+        EngineSimAudio::fillSilence(buffer + samplesRead * 2, frames - samplesRead);
+    }
+    if (written) *written = samplesRead;
+    return true;
+}
+
 bool BridgeSimulator::readAudioBuffer(float* buffer, int32_t framesToRead, int32_t* read) {
     ASSERT(buffer, "BridgeSimulator::readAudioBuffer() called with null buffer");
     ASSERT(read, "BridgeSimulator::readAudioBuffer() called with null *read pointer");

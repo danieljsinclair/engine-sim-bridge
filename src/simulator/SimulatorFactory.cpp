@@ -202,6 +202,7 @@ static void initSimulator(Simulator* sim, const ISimulatorConfig& config) {
     sim->setSimulationFrequency(config.simulationFrequency);
     sim->setFluidSimulationSteps(config.fluidSimulationSteps);
     sim->setTargetSynthesizerLatency(config.targetSynthesizerLatency);
+    sim->setPacedReplay(config.pacedReplay);
 }
 
 static bool endsWith(std::string_view str, std::string_view suffix) {

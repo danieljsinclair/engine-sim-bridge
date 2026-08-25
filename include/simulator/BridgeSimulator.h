@@ -44,6 +44,11 @@ public:
     // ISimulator audio pipeline
     void update(double deltaTime) override;
     bool renderOnDemand(float* buffer, int32_t frames, int32_t* written) override;
+    // Drain-only render: synthesize + read audio WITHOUT advancing the core.
+    // Used by SyncPull when the loop thread owns core advancement (see
+    // SyncPullStrategy::updateSimulation), so the audio callback only pulls
+    // already-synthesized audio instead of stepping the engine itself.
+    bool renderDrainedAudio(float* buffer, int32_t frames, int32_t* written) override;
     bool readAudioBuffer(float* buffer, int32_t frames, int32_t* read) override;
     bool start() override;
     void stop() override;

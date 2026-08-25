@@ -117,6 +117,14 @@ struct ISimulatorConfig {
     double targetSynthesizerLatency = EngineSimDefaults::TARGET_SYNTH_LATENCY;
     float volume = 0.5f;           // Runtime-tunable default
     float convolutionLevel = 0.5f; // Runtime-tunable default
+    // When true the simulation is paced to a recording (deterministic replay or
+    // live/replay telemetry with a warm-start prefix) rather than free-running
+    // real-time audio. In paced mode the loop thread owns core advancement at a
+    // fixed timestep, so the audio-latency self-adjustment of m_steps in
+    // Simulator::startFrame must be DISABLED: it reads a timing-dependent buffer
+    // size and would make the per-frame substep count (and thus the whole run)
+    // nondeterministic, tipping the warm-start into the reversion attractor.
+    bool pacedReplay = false;
 };
 
 // Runtime statistics
