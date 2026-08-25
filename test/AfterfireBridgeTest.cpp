@@ -355,3 +355,85 @@ TEST(AfterfireBridgeTest, PopDecayDivisorReachesEveryChamber) {
     }
 #endif
 }
+
+// =============================================================================
+// The wav-only isolation flag reaches the chambers.
+// =============================================================================
+// --afterfire-wav-only binds to AfterfireConfig::wavOnly, which
+// SimulatorFactory::configureAfterfire must map onto every chamber's
+// AfterfireParameters::wavOnly. Without that mapping the flag parses, prints in
+// the banner, and silently does nothing: the chamber reads its own default, the
+// physical crackle is never suppressed, and the user's whole diagnostic — "is the
+// nasty crackle the physics or the sample?" — returns the wrong answer.
+//
+// Asserted on EVERY chamber, not just the first: configureAfterfire loops over
+// the cylinders, and a shared exhaust channel means ONE unsuppressed chamber is
+// enough to keep the physical crackle audible and defeat the isolation entirely.
+//
+// What the flag DOES to the audio is pinned by the engine-sim AfterfireWavOnly
+// tests (runner pressure suppressed, WAV overlay still published); this test pins
+// only that the requested value arrives.
+TEST(AfterfireBridgeTest, WavOnlyReachesEveryChamber) {
+#ifndef ATG_ENGINE_SIM_AFTERFIRE_SPIKE
+    GTEST_SKIP() << "ATG_ENGINE_SIM_AFTERFIRE_SPIKE not compiled in";
+#else
+    const std::string presetPath = std::string(TEST_PRESET_DIR) + "/v8_gm_ls.json";
+    ASSERT_TRUE(std::filesystem::exists(presetPath)) << "Missing preset: " << presetPath;
+
+    ISimulatorConfig config;
+    config.sampleRate = 48000;
+    config.simulationFrequency = 10000;
+
+    std::filesystem::path savedCwd = std::filesystem::current_path();
+    auto sim = SimulatorFactory::create(
+        SimulatorType::PistonEngine,
+        presetPath,
+        std::string(TEST_ENGINE_SIM_ASSETS) + "/",
+        config);
+    std::filesystem::current_path(savedCwd);
+    ASSERT_NE(sim, nullptr);
+
+    auto* bridge = dynamic_cast<BridgeSimulator*>(sim.get());
+    ASSERT_NE(bridge, nullptr);
+    ASSERT_TRUE(bridge->create(config, nullptr, nullptr));
+
+    Engine* engine = bridge->getInternalSimulator()->getEngine();
+    ASSERT_NE(engine, nullptr);
+    ASSERT_GT(engine->getCylinderCount(), 1)
+        << "a single-cylinder engine cannot detect a per-chamber loop bug";
+
+    // The shipped default must keep the PHYSICAL crackle: a real backfire is the
+    // pipe reacting to a pressure spike, so suppressing it is opt-in. Checked
+    // BEFORE opting in, so a default silently flipped anywhere along the chain is
+    // caught here rather than surfacing as a mysteriously quiet engine.
+    AfterfireConfig af;
+    af.enabled = true;
+    ASSERT_FALSE(af.wavOnly)
+        << "AfterfireConfig no longer defaults to the physical crackle being on";
+    SimulatorFactory::configureAfterfire(sim.get(), af, nullptr);
+
+    for (int i = 0; i < engine->getCylinderCount(); ++i) {
+        EXPECT_FALSE(engine->getChamber(i)->getAfterfireParameters().wavOnly)
+            << "chamber " << i << " suppresses the physical crackle by default";
+    }
+
+    // The OPT-IN value must arrive intact on every chamber.
+    af.wavOnly = true;
+    SimulatorFactory::configureAfterfire(sim.get(), af, nullptr);
+    for (int i = 0; i < engine->getCylinderCount(); ++i) {
+        EXPECT_TRUE(engine->getChamber(i)->getAfterfireParameters().wavOnly)
+            << "chamber " << i << " did not receive wavOnly — "
+            << "--afterfire-wav-only is parsed but not plumbed, so this chamber "
+            << "still cracks physically onto the shared exhaust channel";
+    }
+
+    // And it must be reversible: a flag that latched on would leave the physical
+    // crackle suppressed for the rest of the session after one diagnostic run.
+    af.wavOnly = false;
+    SimulatorFactory::configureAfterfire(sim.get(), af, nullptr);
+    for (int i = 0; i < engine->getCylinderCount(); ++i) {
+        EXPECT_FALSE(engine->getChamber(i)->getAfterfireParameters().wavOnly)
+            << "chamber " << i << " kept wavOnly latched on after it was cleared";
+    }
+#endif
+}

@@ -438,6 +438,7 @@ bool BridgeSimulator::configureAfterfire(const AfterfireConfig& config) {
         parameters.minOxygenMoleFraction = config.minOxygenMoleFraction;
         parameters.energyScale = config.energyScale;
         parameters.customGain = config.customGain;
+        parameters.wavOnly = config.wavOnly;
         parameters.throttleCutoff = config.throttleCutoff;
         parameters.afterfireWavPath = config.afterfireWavPath;
         parameters.afterfireWavPaths = wavPaths;

@@ -213,6 +213,25 @@ struct AfterfireConfig {
     // Default 0.6.
     double customGain = 0.6;
 
+    // ISOLATION SWITCH: play ONLY the WAV overlay, with no physical pop.
+    //
+    // The audible afterfire has two independent components: the PHYSICAL crackle
+    // (the exhaust-runner pressure spike the synthesizer reads out of the gas
+    // state) and the WAV overlay mixed onto the same channel. When this is true
+    // the combustion energy is withheld from the runner, so no pressure spike
+    // forms and the physical crackle is silent, while the WAV still plays.
+    //
+    // The event itself is unchanged: it fires on the same physics at the same
+    // instant, consumes the same fuel and increments the same counters, so the
+    // event stream matches the ungated build exactly. That is what makes it a
+    // DIAGNOSTIC — if a pop still sounds wrong with this on, the WAV is the
+    // culprit, not the physics.
+    //
+    // Must MATCH CombustionChamber::AfterfireParameters::wavOnly's default: this
+    // struct is pushed unconditionally through configureAfterfire, so a stale
+    // default here would silently override the chamber's rather than defer to it.
+    bool wavOnly = false;
+
     // Custom impulse response for afterfire pops.
     // Can be a single file path or a glob pattern (e.g., "es/sound-library/new/*.wav").
     // Resolved relative to the executable directory. If a glob, one matching file
