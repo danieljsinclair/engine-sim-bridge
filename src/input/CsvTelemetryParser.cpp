@@ -68,6 +68,8 @@ bool CsvTelemetryParser::parseHeader(const std::string& headerLine, std::string&
 
     auto fields = split(trimmed, ',');
     header_ = CsvHeader{};
+    firstRawTimestampMs_ = -1.0;
+    rejectedOutlierRows_ = 0;
 
     for (size_t i = 0; i < fields.size(); ++i) {
         const std::string name = lower(trim(fields[i]));
@@ -127,22 +129,35 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
     double v = 0.0;
     if (header_.colTime >= 0 && header_.colTime < static_cast<int>(fields.size()) &&
         parseDouble(fields[header_.colTime], v)) {
-        // Reject trailing rows whose timestamp is inconsistent with the parsed
-        // unit. A capture can carry a few epoch-microsecond rows at the very end
-        // (e.g. 1786961013730 = the wall-clock write time of the last CAN frame,
-        // not a trace time). Accepted as-is they normalise to ~1.79e12 s, which
-        // makes durationS() return that and the replay runs free-run to timeout
-        // instead of self-terminating at trace end (~424.2 s). 1e7 s is far above
-        // any legitimate trace span (the longest captures are ~1000 s) and far
-        // below any epoch-microsecond value, so it cleanly separates the two.
-        // The first-row heuristic in the caller (firstTs > 1e6 -> /1e6) already
-        // handles the bulk of the file; this is the backstop for the stragglers.
-        const double timeInSeconds = v / timeDivisor;
-        if (timeInSeconds > 1e7) {
-            ++rejectedOutlierRows_;  // counted; reported once at end-of-input
-            return false;            // row skipped instantly, no per-row log
+        // Epoch-scale timestamp_ms (e.g. vehicle-sim emits Unix epoch
+        // milliseconds: 1786538088200). Dividing bare by timeDivisor yields
+        // ~1.79e9 s, which the legacy >1e7 backstop below would reject as an
+        // outlier — silently dropping the ENTIRE stream (vehicle-sim's output is
+        // 100% epoch-scale, so every row is "out of range"). Detect epoch-scale
+        // and rebase to 0-based seconds using the first row's timestamp as t=0,
+        // so the trace plays from the start exactly as a 0-based time_s capture
+        // does. The header doc already promises "epoch ms -> auto-converted".
+        if (header_.timeInMs && v >= kEpochMsThreshold) {
+            if (firstRawTimestampMs_ < 0.0) {
+                firstRawTimestampMs_ = v;  // anchor t=0 on the first kept row
+            }
+            s.timeS = (v - firstRawTimestampMs_) / 1000.0;
+        } else {
+            // Relative timestamps (time_s, or relative ms). Reject trailing rows
+            // whose timestamp is inconsistent with the parsed unit — a capture
+            // can carry a few epoch-microsecond rows at the very end (e.g.
+            // 1786961013730 = the wall-clock write time of the last CAN frame,
+            // not a trace time). 1e7 s is far above any legitimate trace span
+            // (the longest captures are ~1000 s) and far below any epoch value,
+            // so it cleanly separates the two. This is the backstop for the
+            // stragglers that escape the caller's first-row heuristic.
+            const double timeInSeconds = v / timeDivisor;
+            if (timeInSeconds > 1e7) {
+                ++rejectedOutlierRows_;  // counted; reported once at end-of-input
+                return false;            // row skipped instantly, no per-row log
+            }
+            s.timeS = timeInSeconds;
         }
-        s.timeS = timeInSeconds;
     } else {
         return false;  // skip rows with unparseable time
     }

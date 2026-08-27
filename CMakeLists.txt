@@ -197,6 +197,7 @@ set(BRIDGE_SOURCES
     src/input/ReplayTelemetryProvider.cpp
     src/input/CsvTelemetryParser.cpp
     src/input/LiveTelemetryProvider.cpp
+    src/input/OverlayInputProvider.cpp
     # IO
     src/io/LiveTelemetryParser.cpp
 )

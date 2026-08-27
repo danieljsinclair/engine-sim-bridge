@@ -621,7 +621,12 @@ StepResult SimulationLoop::step(LoopState& state) {
 
     EngineSimStats stats = simulator_.getStats();
     state.currentTime += config_.updateInterval();
-    updatePresentation(stats, crankingState, state.engineInput, state.currentTime);
+    // Presentation suppressed during warm-start prefix (emitCsv_ false) so
+    // console progress lines don't print during the silent warm-up; the audio
+    // simulation advancement above keeps running regardless.
+    if (emitCsv_) {
+        updatePresentation(stats, crankingState, state.engineInput, state.currentTime);
+    }
 
     // Update cross-tick state
     state.previousStats = stats;

@@ -220,6 +220,50 @@ TEST_F(CsvTelemetryParserTest, EmitRejectionSummary_PrintsNothingWhenNoOutliers)
         << "no summary expected when zero rows rejected, got:\n" << captured;
 }
 
+// Epoch-scale timestamp_ms (e.g. vehicle-sim emits Unix epoch milliseconds such
+// as 1786538088200) must be REBASED to 0-based seconds, NOT rejected. A bare
+// epoch value would normalise to ~1.79e9 s and trip the >1e7 outlier guard,
+// silently dropping the ENTIRE stream — which is exactly the "live telemetry
+// doesn't track the CSV" bug when piping vehicle-sim's --stdout-csv into
+// --live-telemetry. The first row anchors t=0; subsequent rows are relative.
+TEST_F(CsvTelemetryParserTest, ParseRow_EpochMillisecondTimestamps_AreRebasedToZero) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("timestamp_ms,throttle_pct,road_speed_kmh", error));
+    EXPECT_TRUE(parser.header().timeInMs);
+
+    // First row anchors t=0 at the epoch value 1786538088200.
+    CsvSample first;
+    ASSERT_TRUE(parser.parseRow("1786538088200,55.0,0.0", 1000.0, first, error));
+    EXPECT_DOUBLE_EQ(first.timeS, 0.0);
+
+    // A later row 1000 ms later must be t=1.0 s, not rejected.
+    CsvSample later;
+    ASSERT_TRUE(parser.parseRow("1786538089200,60.0,30.0", 1000.0, later, error));
+    EXPECT_DOUBLE_EQ(later.timeS, 1.0);
+    EXPECT_DOUBLE_EQ(later.roadSpeedKmh, 30.0);
+
+    // No rows rejected -> rejection summary prints nothing.
+    std::fflush(stderr);
+    testing::internal::CaptureStderr();
+    parser.emitRejectionSummary();
+    const std::string captured = testing::internal::GetCapturedStderr();
+    std::fflush(stderr);
+    EXPECT_TRUE(captured.empty())
+        << "no summary expected for rebaseable epoch-ms stream, got:\n" << captured;
+}
+
+// A relative (non-epoch) timestamp_ms column must still parse normally via the
+// timeDivisor path (not be mistaken for epoch-scale).
+TEST_F(CsvTelemetryParserTest, ParseRow_RelativeMillisecondTimestamps_ParsedViaDivisor) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("timestamp_ms,throttle_pct", error));
+    EXPECT_TRUE(parser.header().timeInMs);
+
+    CsvSample s;
+    ASSERT_TRUE(parser.parseRow("1500.0,75.0", 1000.0, s, error));
+    EXPECT_DOUBLE_EQ(s.timeS, 1.5);
+}
+
 // ============================================================================
 // Motor-torque column (MATCH mode) — the recorded motor/engine torque that the
 // torque-feedback drivetrain injects at the transmission input. Surfacing it

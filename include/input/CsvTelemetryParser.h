@@ -72,6 +72,17 @@ private:
     // it can be incremented from the const parseRow() without changing its
     // signature (lower blast radius than dropping const).
     mutable size_t rejectedOutlierRows_ = 0;
+
+    // First raw timestamp value seen (ms) for the current stream. Used to
+    // rebase epoch-scale timestamp_ms columns to 0-based seconds. -1 means
+    // "not yet seen". Reset in parseHeader() so each stream starts fresh.
+    mutable double firstRawTimestampMs_ = -1.0;
+
+    // timestamp_ms values at/above this are epoch-scale (e.g. vehicle-sim emits
+    // Unix epoch milliseconds such as 1786538088200). 1e12 ms ~= 1e9 s ~= year
+    // 2001, far beyond any relative-trace duration, so it cleanly separates
+    // epoch timestamps from relative ones.
+    static constexpr double kEpochMsThreshold = 1e12;
 };
 
 } // namespace input
