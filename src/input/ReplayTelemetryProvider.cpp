@@ -219,6 +219,10 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
         // the cranking lifecycle. In PARK/NEUTRAL the twin disengages the clutch
         // and the engine free-revs; only in DRIVE does it couple + track road speed.
         input = driveThroughTwin(s, dt, roadSpeedKmh);
+        // driveThroughTwin rebuilds `input` from the twin's fresh EngineInput,
+        // whose replayTimestampS is the -1 default — re-stamp the CSV-relative
+        // time set above or the presentation layer's [mm:ss.ms] clock vanishes.
+        input.replayTimestampS = currentTimestampS_;
     } else {
         // Non-auto (e.g. rev-in-park): no gear forced, clutch disengaged, free-rev.
         handleNonAutoGearbox(input, s);
