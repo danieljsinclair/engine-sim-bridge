@@ -3,6 +3,7 @@
 #include "input/OverlayInputProvider.h"
 #include "input/ReplayTelemetryProvider.h"
 #include "input/LiveTelemetryProvider.h"
+#include "input/EngineInputTarget.h"
 #include "session/ISimulatorSession.h"
 
 namespace input {
@@ -149,7 +150,15 @@ EngineInput OverlayInputProvider::OnUpdateSimulation(double dt) {
             // since the user wants keyboard to win.
             input.ignition = keyboardInput.ignition;
         }
-        input.throttle = keyboardInput.throttle;
+        // Only override CSV throttle when the keyboard actually touched it this
+        // frame. Otherwise EngineInputTarget outputs throttle=0 by default, which
+        // would clobber the CSV/replay throttle and starve the engine (Gas 0%).
+        // target_ is an EngineInputTarget in practice; query its touch flag.
+        if (auto* tgt = dynamic_cast<EngineInputTarget*>(target_)) {
+            if (tgt->wasThrottleTouched()) {
+                input.throttle = keyboardInput.throttle;
+            }
+        }
         input.starterButton = keyboardInput.starterButton ? keyboardInput.starterButton : input.starterButton;
         input.gearDelta = keyboardInput.gearDelta ? keyboardInput.gearDelta : input.gearDelta;
         input.dynoTorqueScale = keyboardInput.dynoTorqueScale >= 0.0 ? keyboardInput.dynoTorqueScale : input.dynoTorqueScale;
