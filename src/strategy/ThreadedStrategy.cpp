@@ -218,6 +218,20 @@ void ThreadedStrategy::swapSimulator(ISimulator* newSimulator) {
 }
 
 void ThreadedStrategy::resetBufferAfterWarmup() {
+    // Discard audio the simulator rendered during a silent warm-start prefix
+    // (nobody read it while the ring was not being filled), so playback resumes
+    // at the handoff point instead of replaying the warm-up window. Bounded:
+    // the synth thread may still be producing; the cap guarantees termination.
+    if (simulator_) {
+        constexpr int kMaxDrainReads = 4096;  // 4096 * MAX_AUDIO_CHUNK_FRAMES safety bound
+        std::vector<float> drain(EngineSimDefaults::MAX_AUDIO_CHUNK_FRAMES * 2);
+        int32_t read = 0;
+        for (int i = 0; i < kMaxDrainReads; ++i) {
+            if (!simulator_->readAudioBuffer(drain.data(), EngineSimDefaults::MAX_AUDIO_CHUNK_FRAMES, &read) || read <= 0) {
+                break;
+            }
+        }
+    }
     circularBuffer_.reset();
     // Reset tracking counters to start fresh after warmup
     totalFramesWritten_ = 0;

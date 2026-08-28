@@ -195,6 +195,14 @@ private:
     // the main loop) but suppress only the CSV write, so the prefix converges
     // on the from-0 run instead of leaving the gas path cold.
     bool emitCsv_ = true;
+
+    // Suppress audio queueing during the warm-start prefix. The physics tick
+    // (audioBuffer_.updateSimulation -> simulator->update) ALWAYS runs; only
+    // fillBufferFromEngine (rendered-sample queueing into the playback ring)
+    // is gated, so the silent warm-up queues no audio. The ring is drained and
+    // reset at the prefix handoff (resetBufferAfterWarmup), so playback starts
+    // clean at the --start-from offset instead of replaying warm-up audio.
+    bool emitAudio_ = true;
 };
 
 // ============================================================================

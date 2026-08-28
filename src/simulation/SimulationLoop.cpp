@@ -519,17 +519,25 @@ int SimulationLoop::run() {
         const auto* timeline = dynamic_cast<const input::IReplayTimeline*>(inputProvider_);
         if (timeline && timeline->getStartFromS() > 0.0) {
             const double prefixEnd = timeline->getStartFromS();
+            // File traces (durationS() > 0) are fully parsed up front: the prefix
+            // fast-forwards without real-time pacing. Live streams (durationS() < 0,
+            // e.g. stdin) deliver rows in real time: the prefix must pace so the
+            // sim clock stays lockstep with arriving data (1s sim == 1s recording)
+            // — a live stream cannot be seeked, only consumed.
+            const bool pacedPrefix = timeline->durationS() < 0.0;
             logger_->info(LogMask::BRIDGE,
-                __ilog_format("Warm-start prefix: stepping %.3fs of sim silently before first emission", prefixEnd));
+                __ilog_format("Warm-start prefix: stepping %.3fs of sim silently before first emission (%s)",
+                    prefixEnd, pacedPrefix ? "real-time, following the live stream" : "fast-forward"));
             // Warm-up prefix: step the FULL per-tick path (engine core + twin via
-            // step(), audio simulation via audioBuffer_.updateSimulation above) so
-            // the prefix matches the from-0 run tick-for-tick. Suppress ONLY CSV
-            // telemetry write (writeTelemetry gated by emitCsv_=false) -- the
-            // audio simulation advancement (audioBuffer_.updateSimulation /
-            // fillBufferFromEngine) ALWAYS runs regardless of emitCsv_, so the gas
-            // path stays warm at handoff. First emitted frame = startFromS_.
+            // step(), physics tick via audioBuffer_.updateSimulation) so the prefix
+            // matches the from-0 run tick-for-tick. Suppress ALL output: CSV write
+            // (emitCsv_=false), presentation, and audio queueing (emitAudio_=false
+            // — the physics tick still runs, only the playback ring stops being
+            // filled), so the warm-up is silent and queues no stale audio.
             emitCsv_ = false;
+            emitAudio_ = false;
             if (presentation_) presentation_->setCsvEmissionEnabled(false);
+            double lastProgressS = 0.0;
             while (state.currentTime < prefixEnd) {
                 // Honour a stop request (CTRL+C / SIGTERM) during the warm-start
                 // prefix too: the prefix can be tens of seconds long (start-from
@@ -538,15 +546,30 @@ int SimulationLoop::run() {
                 // here drops straight into the main loop, whose stop-request check
                 // returns immediately, so the run terminates cleanly.
                 if (stopRequested_->load(std::memory_order_seq_cst)) break;
+                // Stream EOF mid-prefix (live stdin closed early / short trace):
+                // stop warming — the main loop's IsConnected check exits cleanly.
+                if (!inputProvider_->IsConnected()) break;
                 step(state);
-                clock_->waitUntilNextTick();
+                if (pacedPrefix) clock_->waitUntilNextTick();
                 state.engineInput = pollInput(state.currentTime, config_.updateInterval(), state.isFirstTick);
                 state.isFirstTick = false;
                 if (inputProvider_) inputProvider_->provideFeedback(state.previousStats);
+                // Progress heartbeat (paced prefix only): a 90s silent window with
+                // no output is indistinguishable from a hang. 1 line / 5s.
+                if (pacedPrefix && state.currentTime - lastProgressS >= 5.0) {
+                    lastProgressS = state.currentTime;
+                    logger_->info(LogMask::BRIDGE,
+                        __ilog_format("Warm-start prefix: %.1fs / %.1fs", state.currentTime, prefixEnd));
+                }
             }
-            // Prefix is a warm-up only: resume normal CSV emission for the main
-            // loop so the first emitted frame is the one at startFromS_.
+            // Handoff: resume emission and start audio CLEAN at the offset. The
+            // ring is reset (drop the pre-fill and any residue) and the synth's
+            // warm-up output is drained, so playback begins at the --start-from
+            // point rather than replaying the warm-up window.
             emitCsv_ = true;
+            emitAudio_ = true;
+            audioBuffer_.resetBufferAfterWarmup();
+            clock_->resync();  // un-paced prefix left the schedule in the past
             if (presentation_) presentation_->setCsvEmissionEnabled(true);
         }
     }
@@ -607,14 +630,17 @@ StepResult SimulationLoop::step(LoopState& state) {
     applyVehicleControls(state.combustionEngine, state.engineInput, crankingState, state.lastDynoTorqueScale);
 
     audioBuffer_.updateSimulation(&simulator_, config_.updateInterval() * SECONDS_TO_MILLISECONDS);
-    audioBuffer_.fillBufferFromEngine(&simulator_, config_.framesPerUpdate());
+    // Physics tick (updateSimulation -> simulator->update) ALWAYS runs — it must
+    // advance identically in prefix and main loop or the gas path stays cold at
+    // the handoff (the bug behind sick --start-from runs). Audio QUEUEING is
+    // gated: during the warm-start prefix no rendered samples enter the
+    // playback ring (silent warm-up; the ring is drained/reset at handoff).
+    if (emitAudio_) {
+        audioBuffer_.fillBufferFromEngine(&simulator_, config_.framesPerUpdate());
+    }
 
     // CSV telemetry write is suppressed during the warm-start prefix (emitCsv_
-    // gate); the engine is stepped normally (above). The audio simulation
-    // advancement (audioBuffer_.updateSimulation / fillBufferFromEngine above)
-    // ALWAYS runs -- that is the per-tick physics side-effect that must advance
-    // identically to the main loop or the gas path stays cold at the
-    // prefix/main handoff (the bug behind sick --start-from runs).
+    // gate); the engine is stepped normally (above).
     if (emitCsv_) {
         writeTelemetry(state.currentTime, crankingState.startingThrottle, state.engineInput.ignition, crankingState.starterEngaged);
     }
