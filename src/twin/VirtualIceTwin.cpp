@@ -272,6 +272,15 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             // false-trigger RUNNING.
             output.throttle = std::max(throttleSmoother_.getCurrentValue(),
                                        EngineSimDefaults::IDLE_SUSTAIN_THROTTLE);
+            // PARK-start: the prime/warm-boot advances only the TWIN's state
+            // machine — the engine core starts Stopped, and a capture can sit
+            // in PARK for seconds (UpLeckHill: ~8 s parked) before the driver
+            // selects D. With no starter path in IDLE the engine sat dead for
+            // that whole window; a real car cranks and idles in PARK. Same
+            // restart-on-stall guard RUNNING uses (one-tick edge + retry
+            // cooldown); when stalled it also raises the throttle floor above
+            // to cranking level.
+            restartIfStalled(output, dt);
             output.ignition = true;
             output.gear = static_cast<int>(bridge::BridgeGear::NEUTRAL);
             clutchPressure_ = 0.0;
@@ -343,51 +352,13 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             // the retry cooldown then blanks the starter for its full 3 s past
             // the moment the phase does latch. The feedback signal is one step
             // in arrears of the latch, which keeps the ordering safe by one tick.
-            const double kStallRpm = CrankingController::STOPPED_RPM;
-            // Re-crank period: a crank attempt gets the same 3s budget as the
-            // initial OFF->CRANK crank (CRANK_FALLBACK_DURATION_S). The bridge's
-            // CrankingController::engageStarter is a momentary TOGGLE -- calling
-            // it with starterButton=true while already Cranking forces the phase
-            // BACK to Stopped (CrankingController.cpp:27-31) -- so the twin must
-            // pulse the starter for ONE tick to ENGAGE, then NOT re-toggle while
-            // the bridge cranks. The bridge's step() owns the crank: it keeps
-            // starterMotor=true in Cranking until the engine catches. This period
-            // bounds RETRY: if the engine is still stalled this long after the
-            // last edge (the crank failed to raise rpm above kStallRpm), fire one
-            // fresh edge for a new clean attempt. Normal cranks catch in well
-            // under this, so the cooldown never re-fires in the happy path; it is
-            // the safety net the old held-starter gave crudely (every tick) and
-            // which a single edge alone does not.
-            constexpr double kRecrankPeriodS = 3.0;
-            const bool engineStalled = engineRpmFeedback_ <= kStallRpm;
-            reCrankCooldownS_ = std::max(0.0, reCrankCooldownS_ - dt);
-            if (engineStalled) {
-                // Pulse the starter for ONE tick, then wait kRecrankPeriodS before
-                // retrying -- never every frame. A held starter re-toggles
-                // engageStarter each tick and drives a Stopped<->Cranking limit
-                // cycle (starter 1/0/1/0 for hundreds of frames -- the very
-                // anti-pattern documented in the CRANKING case above). One edge
-                // engages; the cooldown gives the bridge a clean crank window and
-                // retries only on failure.
-                if (reCrankCooldownS_ <= 0.0) {
-                    output.starterMotor = true;  // one-tick edge
-                    reCrankCooldownS_ = kRecrankPeriodS;
-                }
-                // Starter/crank handoff = the one place the idle-hold
-                // integral is hard-flushed: a wound-up term re-engaging on a
-                // fresh catch is the classic idle-flare source. Everywhere
-                // else the integral decays (tau ~2s), not flushes.
-                idleHoldIntegralPct_ = 0.0;
-                idleHoldOutputPct_ = 0.0;
-                idleHoldActive_ = false;
-                output.throttle = std::max(
-                    std::max(throttleSmoother_.getCurrentValue(),
-                             EngineSimDefaults::CRANKING_THROTTLE),
-                    EngineSimDefaults::IDLE_SUSTAIN_THROTTLE);
+            if (restartIfStalled(output, dt)) {
+                // Stalled: the guard pulsed the starter edge, flushed the
+                // idle-hold controller and floored the throttle at cranking
+                // level (see restartIfStalled for the edge/cooldown contract).
             } else {
-                // Engine recovered above kStallRpm: re-arm the cooldown so the
+                // Engine recovered above STOPPED_RPM: re-arm the cooldown so the
                 // next genuine stall fires a fresh edge promptly.
-                reCrankCooldownS_ = 0.0;
 
                 // Idle-hold controller (guard (a), upgraded — see
                 // idleHoldFloor()): engine alive but sagging below idle. The
@@ -621,6 +592,53 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
         (couplingModelKind_ == twin::CouplingModelKind::TorqueConverter);
     output.gearSelector = selector_;
     return output;
+}
+
+bool VirtualIceTwin::restartIfStalled(TwinOutput& output, double dt) {
+    // Re-crank period: a crank attempt gets the same 3s budget as the
+    // initial OFF->CRANK crank (CRANK_FALLBACK_DURATION_S). The bridge's
+    // CrankingController::engageStarter is a momentary TOGGLE -- calling
+    // it with starterButton=true while already Cranking forces the phase
+    // BACK to Stopped (CrankingController.cpp:27-31) -- so the twin must
+    // pulse the starter for ONE tick to ENGAGE, then NOT re-toggle while
+    // the bridge cranks. The bridge's step() owns the crank: it keeps
+    // starterMotor=true in Cranking until the engine catches. This period
+    // bounds RETRY: if the engine is still stalled this long after the
+    // last edge (the crank failed to raise rpm above the stall bar), fire
+    // one fresh edge for a new clean attempt. Normal cranks catch in well
+    // under this, so the cooldown never re-fires in the happy path; it is
+    // the safety net the old held-starter gave crudely (every tick) and
+    // which a single edge alone does not.
+    constexpr double kRecrankPeriodS = 3.0;
+    reCrankCooldownS_ = std::max(0.0, reCrankCooldownS_ - dt);
+    if (engineRpmFeedback_ > CrankingController::STOPPED_RPM) {
+        // Engine alive: re-arm the cooldown so the next genuine stall
+        // fires a fresh edge promptly.
+        reCrankCooldownS_ = 0.0;
+        return false;
+    }
+    // Pulse the starter for ONE tick, then wait kRecrankPeriodS before
+    // retrying -- never every frame. A held starter re-toggles
+    // engageStarter each tick and drives a Stopped<->Cranking limit
+    // cycle (starter 1/0/1/0 for hundreds of frames -- the very
+    // anti-pattern documented in the CRANKING case). One edge engages;
+    // the cooldown gives the bridge a clean crank window and retries
+    // only on failure.
+    if (reCrankCooldownS_ <= 0.0) {
+        output.starterMotor = true;  // one-tick edge
+        reCrankCooldownS_ = kRecrankPeriodS;
+    }
+    // Starter/crank handoff = the one place the idle-hold integral is
+    // hard-flushed: a wound-up term re-engaging on a fresh catch is the
+    // classic idle-flare source. Everywhere else the integral decays
+    // (tau ~2s), not flushes.
+    idleHoldIntegralPct_ = 0.0;
+    idleHoldOutputPct_ = 0.0;
+    idleHoldActive_ = false;
+    output.throttle = std::max(
+        std::max(output.throttle, EngineSimDefaults::CRANKING_THROTTLE),
+        EngineSimDefaults::IDLE_SUSTAIN_THROTTLE);
+    return true;
 }
 
 double VirtualIceTwin::idleHoldFloor(double dt, double feedbackRpm) {

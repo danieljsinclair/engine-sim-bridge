@@ -32,6 +32,12 @@ public:
 
     void setEngineRpmFeedback(double rpm) { engineRpmFeedback_ = rpm; }
     void setVehicleSpeedFeedback(double kmh) { vehicleSpeedFeedbackKmh_ = kmh; }
+
+    // Prime seam: warm-boot/warm-up synthetic frames can pass through IDLE
+    // while the engine core is Stopped, firing re-crank edges whose output is
+    // discarded but which still consume reCrankCooldownS_. Arm a fresh crank
+    // budget so the first REAL frame can engage the starter immediately.
+    void armFreshCrankBudget() { reCrankCooldownS_ = 0.0; }
     // Drivetrain torque feedback (Nm) feeds the torque-driven shift logic.
     void setDrivetrainTorqueFeedback(double nm) { drivetrainTorqueNm_ = nm; }
     void setGearboxLogger(IGearboxLogger* logger);
@@ -135,6 +141,16 @@ private:
     // member block above for the design contract and the implementation
     // (VirtualIceTwin.cpp) for the constants and their evidence.
     double idleHoldFloor(double dt, double feedbackRpm);
+
+    // Restart-on-stall guard, shared by the IDLE and RUNNING states: with
+    // ignition on and feedback RPM at/below CrankingController::STOPPED_RPM,
+    // pulse a ONE-TICK starter edge (retry-bounded by reCrankCooldownS_), flush
+    // the idle-hold controller and floor the throttle at cranking level.
+    // Returns true when stalled (the caller may skip its own idle handling).
+    // A real car cranks and idles in PARK too, so IDLE needs the same guard
+    // RUNNING has — without it a PARK-start trace (engine core Stopped, twin
+    // primed to IDLE) sat dead until the driver selected D.
+    bool restartIfStalled(TwinOutput& output, double dt);
 
     void updateShiftExecution(double dt);
 };
