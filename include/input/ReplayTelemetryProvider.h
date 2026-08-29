@@ -9,11 +9,18 @@
 //   throttle_pct / throttle_percent / throttle  0..100 -> normalised to 0..1
 //   road_speed_kmh / speed_kmh   km/h. Blank/negative = dyno OFF (RPM emergent)
 //   gear            blank/-1 = unchanged; 0 = neutral; 1..8 = forward (set directly)
-//   gear_selector   PRNDL string (P/R/N/D) — followed by the auto gearbox
+//   gear_selector   PRNDL string (P/R/N/D) — followed by the auto gearbox; in
+//                   manual mode it drives engineInput.gearSelector (authoritative
+//                   over the numeric gear column when both are present)
 //   clutch_pct      0..100 -> clutch pressure 0..1. Blank/-1 = unchanged
+//   brake_light     1 = brake light on, 0 = off, blank = absent (tri-state);
+//                   surfaces on engineInput.brakeLight every frame
 //
 // autoStart fires starterButton once on the first frame so the CrankingController
-// cranks the engine. autoGearbox owns an AutomaticGearbox that decides gears from
+// cranks the engine — EXCEPT for traces carrying start/stop opinion columns
+// (brake_light / gear_selector): there VehicleStartController owns every start
+// (it engages in SimulationLoop as soon as the opinion is seen), so the frame-0
+// pulse is suppressed. autoGearbox owns an AutomaticGearbox that decides gears from
 // the CSV road speed. Q (quit) + P (preset cycle) work during replay if a keyboard
 // + session are wired via setKeyboardInput / setSession.
 
@@ -105,6 +112,10 @@ private:
     std::vector<Sample> samples_;
     double elapsedS_ = 0.0;
     bool startFired_ = false;
+    // True when the CSV header carries brake_light / gear_selector: the trace
+    // expresses start/stop opinions, so the autoStart frame-0 pulse is
+    // suppressed (VehicleStartController owns every start for such traces).
+    bool traceCarriesStartStopOpinion_ = false;
     twin::IceVehicleProfile gearboxProfile_;  // OWNED: the gearbox holds a reference to this
     std::unique_ptr<twin::AutomaticGearbox> gearbox_;
 
