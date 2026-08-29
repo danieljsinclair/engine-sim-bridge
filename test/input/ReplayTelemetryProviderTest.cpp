@@ -598,3 +598,150 @@ TEST_F(ReplayTelemetryProviderTest, ReconfigureProfileValidRatiosGeneratesShiftT
     EXPECT_TRUE(input.gearAutoMode);
     EXPECT_GT(input.gearAbsolute, 0);
 }
+
+// ===========================================================================
+// Group 6: Start/stop opinion wiring (brake_light + gear_selector)
+//
+// Mirrors the live provider's CsvBrakeLightColumn_* tests
+// (LiveTelemetryProviderTest.cpp): replay must surface the same telemetry
+// opinions so SimulationLoop::applyStartStopDecision cannot tell the sources
+// apart and VehicleStartController runs in replay exactly as it does live.
+// ===========================================================================
+
+TEST_F(ReplayTelemetryProviderTest, BrakeLightColumn_PopulatesEngineInput) {
+    // The brake_light column reaches EngineInput.brakeLight with its tri-state
+    // intact (1 -> true, 0 -> false, blank -> nullopt) and never writes the
+    // physics level. SimulationLoop reads the PRESENCE of the value as
+    // "telemetry reported an opinion", which is what hands start/stop
+    // authority to VehicleStartController in replay.
+    makeProvider(
+        "time_s,throttle_pct,brake_light\n"
+        "0.0,10,1\n"
+        "1.0,10,1\n"
+        "2.0,20,0\n"
+        "3.0,20,0\n"
+        "4.0,30,\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    // t~0.5 (floor sample t=0.0): brake_light=1 -> true.
+    const EngineInput on = advanceSeconds(0.5);
+    ASSERT_TRUE(on.brakeLight.has_value());
+    EXPECT_TRUE(*on.brakeLight);
+    EXPECT_DOUBLE_EQ(on.brakeLevel, 0.0)
+        << "CSV brake light is an indicator — it must never write the physics level";
+
+    // t~2.5 (floor sample t=2.0): brake_light=0 -> false.
+    const EngineInput off = advanceSeconds(2.0);
+    ASSERT_TRUE(off.brakeLight.has_value());
+    EXPECT_FALSE(*off.brakeLight);
+    EXPECT_DOUBLE_EQ(off.brakeLevel, 0.0);
+
+    // t~4.5 (floor sample t=4.0): blank cell -> nullopt (opinion withdrawn).
+    const EngineInput absent = advanceSeconds(2.0);
+    EXPECT_FALSE(absent.brakeLight.has_value());
+}
+
+TEST_F(ReplayTelemetryProviderTest, BrakeLightColumnAbsent_LeavesNullopt) {
+    // Old-schema regression guard: no brake_light column => the provider emits
+    // NO brake opinion (nullopt) on every frame, exactly as before the wiring.
+    // nullopt is what keeps SimulationLoop's assembly point deriving the light
+    // from the keyboard brake level instead of telemetry.
+    makeProvider("time_s,throttle_pct\n0.0,50\n1.0,50\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    const EngineInput input = advanceSeconds(0.5);
+    EXPECT_FALSE(input.brakeLight.has_value());
+    EXPECT_DOUBLE_EQ(input.brakeLevel, 0.0);
+}
+
+TEST_F(ReplayTelemetryProviderTest, BrakeLightPopulatedInAutoGearboxModeToo) {
+    // The brake light is gearbox-agnostic: it flows through the base input on
+    // the auto-gearbox path exactly as on the manual path.
+    makeProvider("time_s,brake_light,speed_kmh,gear_selector\n0.0,1,0.0,P\n",
+                 /*autoStart=*/true, /*autoGearbox=*/true);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    ASSERT_TRUE(input.brakeLight.has_value());
+    EXPECT_TRUE(*input.brakeLight);
+}
+
+TEST_F(ReplayTelemetryProviderTest, GearSelectorColumn_MapsPRNDLInManualMode) {
+    // vehicle-sim's decoded schema carries gear_selector (PRNDL) and NO numeric
+    // gear column. In manual mode the selector must drive
+    // EngineInput.gearSelector — the field applyStartStopDecision reads to
+    // compute driveSelected — through the full P/R/N/D alphabet. Blank cells
+    // (the capture's bus-wakeup preamble) fall back to NEUTRAL.
+    makeProvider(
+        "time_s,gear_selector\n"
+        "0.0,\n"
+        "1.0,P\n"
+        "2.0,R\n"
+        "3.0,N\n"
+        "4.0,D\n",
+        /*autoStart=*/true, /*autoGearbox=*/false);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EXPECT_EQ(advanceSeconds(0.5).gearSelector, static_cast<int>(GearSelector::NEUTRAL));
+    EXPECT_EQ(advanceSeconds(1.0).gearSelector, static_cast<int>(GearSelector::PARK));
+    EXPECT_EQ(advanceSeconds(1.0).gearSelector, static_cast<int>(GearSelector::REVERSE));
+    EXPECT_EQ(advanceSeconds(1.0).gearSelector, static_cast<int>(GearSelector::NEUTRAL));
+
+    const EngineInput drive = advanceSeconds(1.0);
+    EXPECT_EQ(drive.gearSelector, static_cast<int>(GearSelector::DRIVE));
+    EXPECT_EQ(drive.gearAbsolute, -1);  // numeric gear column absent: unchanged sentinel
+    EXPECT_FALSE(drive.gearAutoMode);   // manual mode stays manual
+}
+
+TEST_F(ReplayTelemetryProviderTest, GearSelectorColumnAbsent_GearColumnStillDrivesSelector) {
+    // Old-schema regression guard: with no gear_selector column the numeric
+    // gear column keeps driving engineInput.gearSelector exactly as before
+    // (1..8 -> that gear, 0 -> NEUTRAL, blank/absent -> NEUTRAL).
+    makeProvider("time_s,gear\n0.0,3\n1.0,0\n2.0,\n", true, false);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EXPECT_EQ(advanceSeconds(0.5).gearSelector, 3);
+    EXPECT_EQ(advanceSeconds(1.0).gearSelector, static_cast<int>(GearSelector::NEUTRAL));
+    EXPECT_EQ(advanceSeconds(1.0).gearSelector, static_cast<int>(GearSelector::NEUTRAL));
+}
+
+TEST_F(ReplayTelemetryProviderTest, GearSelectorBeatsNumericGearWhenBothPresent) {
+    // When both columns exist the PRNDL selector is authoritative for
+    // gearSelector (it is the driver's command; the numeric column is the
+    // gearbox's output). The numeric column still drives gearAbsolute.
+    makeProvider("time_s,gear,gear_selector\n0.0,2,D\n", true, false);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_EQ(input.gearSelector, static_cast<int>(GearSelector::DRIVE));
+    EXPECT_EQ(input.gearAbsolute, 2);
+}
+
+TEST_F(ReplayTelemetryProviderTest, AutoStartSuppressedWhenTraceCarriesBrakeLight) {
+    // A capture with start/stop opinion columns describes the full vehicle
+    // lifecycle: VehicleStartController owns every start (it engages in
+    // SimulationLoop as soon as the opinion is seen), so the frame-0 autoStart
+    // pulse must NOT fire — it would crank before the first real brake/gear
+    // event and then be cut mid-run when the controller takes authority.
+    makeProvider("time_s,brake_light\n0.0,0\n1.0,0\n", /*autoStart=*/true, false);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EXPECT_FALSE(provider_->OnUpdateSimulation(0.016).starterButton);
+    EXPECT_FALSE(provider_->OnUpdateSimulation(0.016).starterButton);
+}
+
+TEST_F(ReplayTelemetryProviderTest, AutoStartSuppressedWhenTraceCarriesGearSelector) {
+    // Same suppression when the opinion column is gear_selector.
+    makeProvider("time_s,gear_selector\n0.0,P\n1.0,P\n", /*autoStart=*/true, false);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EXPECT_FALSE(provider_->OnUpdateSimulation(0.016).starterButton);
+}
