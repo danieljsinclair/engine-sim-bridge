@@ -63,6 +63,12 @@ struct EngineInput {
     bool creepReliefFired = false;
     bool couplingIsTorqueConverter = false;
 
+    // One-tick request from the twin (VirtualIceTwin IDLE->RUNNING handoff):
+    // reset the engine core's gas standing state (full induction->exhaust
+    // path back to ambient). Consumed by SimulationLoop -> BridgeSimulator::
+    // resetGasState; false (the default) is a no-op.
+    bool requestGasStateReset = false;
+
     // Simulator auto-disengages starter when RPM > threshold
     // Preset cycling
     bool presetCycle = false;       // true = cycle to next preset engine configuration

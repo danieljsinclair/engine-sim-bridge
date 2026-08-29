@@ -351,6 +351,10 @@ void BridgeSimulator::setDrivetrainInputTorque(double nm) {
     }
 }
 
+void BridgeSimulator::resetGasState() {
+    m_simulator->resetGasState();
+}
+
 void BridgeSimulator::setBrakePressure(double pressure) {
     m_brakeConstraint.setBrakeLevel(pressure);
 }

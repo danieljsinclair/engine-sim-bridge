@@ -35,6 +35,15 @@ struct TwinOutput {
     // legacy (friction-clutch pressure). Drives the display label so the
     // readout says what the number actually is.
     bool couplingIsTorqueConverter = false;
+    // One-tick request: reset the engine core's gas standing state (intake
+    // plenums, chamber-local runners and charges, exhaust systems back to
+    // ambient). Set on the IDLE->RUNNING (P/N -> D/R) transition — the
+    // handoff where the drive's exhaust-flow basin is set. Any running before
+    // D (PARK idle after an immediate crank) leaves the gas path in a state
+    // that flips the drive's flow negative under PIN coupling; neither a
+    // stop/restart nor a collector-only reset clears it (measured) — the
+    // whole chamber-local path must go. Consumed by SimulationLoop each frame.
+    bool requestGasStateReset = false;
 };
 
 }

@@ -272,23 +272,20 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             // false-trigger RUNNING.
             output.throttle = std::max(throttleSmoother_.getCurrentValue(),
                                        EngineSimDefaults::IDLE_SUSTAIN_THROTTLE);
-            // PARK-start: NO restart-on-stall in IDLE, deliberately. A
-            // capture can sit in PARK for seconds (UpLeckHill: ~8 s parked)
-            // before the driver selects D; the prime/warm-boot advances only
-            // the TWIN's state machine, so the engine core starts Stopped and
-            // stays dead through PARK. Cranking it in PARK (299bec2) sounded
-            // right — a real car idles in Park — but the 2026-08-29 A/B on
-            // UpLeckHill live (PIN coupling) showed ANY pre-D running flips
-            // the exhaust flow basin for the whole drive: 61.5% vs 3.4%
-            // negative-flow rows, with identical rpm/throttle/mph at the
-            // divergence frame and opposite flow sign. Even a deliberate
-            // stop-and-fresh-catch in gear at the D handoff does not restore
-            // the clean basin (64.5% negative) — the engine-core history from
-            // the PARK idle persists through the stop. Trade-off, for the
-            // owner: PARK-start captures have no engine sound until D (~8 s
-            // on UpLeckHill); the alternatives are accepting the reversion,
-            // or an engine-core exhaust/thermal reset seam. The D-time crank
-            // itself is unaffected: the RUNNING case's restart guard fires it.
+            // PARK-start: restart-on-stall in IDLE, as a real car idles in
+            // Park. A capture can sit in PARK for seconds (UpLeckHill: ~8 s
+            // parked) before the driver selects D; the prime/warm-boot
+            // advances only the TWIN's state machine, so the engine core
+            // starts Stopped and without this guard stays dead through PARK
+            // (the ~9 s of dead air 299bec2 fixed). The basin poisoning that
+            // made 8573068 remove this call is now handled at the SOURCE:
+            // any pre-D running leaves the exhaust runners in a standing gas
+            // state that flips the whole drive's flow negative under PIN
+            // coupling (2026-08-29 A/B: 61.5% vs 3.4% negative rows), so the
+            // IDLE->RUNNING transition below requests an exhaust-basin reset
+            // (ExhaustSystem::resetGasState) and the drive starts from a
+            // clean runner state regardless of the PARK idle.
+            restartIfStalled(output, dt);
             output.ignition = true;
             output.gear = static_cast<int>(bridge::BridgeGear::NEUTRAL);
             clutchPressure_ = 0.0;
@@ -305,6 +302,18 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             if (selector_ == bridge::GearSelector::DRIVE ||
                 selector_ == bridge::GearSelector::REVERSE) {
                 state_ = TwinState::RUNNING;
+                // The P->D handoff is where the drive's exhaust basin is set.
+                // Running before D (PARK idle above, or a warm-boot prime)
+                // leaves the gas path in a standing state that flips the
+                // drive's flow negative under PIN coupling; a stop/restart
+                // does NOT clear it, and neither does a collector-only reset
+                // (measured) — request the full gas-state reset on the one
+                // tick that starts the drive. Mid-drive P->D re-engagements
+                // fire this too — rare, and the same clean-handoff logic
+                // applies. Warm-booted starts (RUNNING from frame 1,
+                // DRIVE-start captures) never pass through here, so their
+                // basin is left exactly as the prime set it.
+                output.requestGasStateReset = true;
             }
             break;
 

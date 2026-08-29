@@ -137,6 +137,14 @@ public:
     // the constraint was enabled.
     bool setVehicleSpeedTarget(double speedKmh);
 
+    // Reset the engine core's gas standing state (full induction->exhaust
+    // path back to the ambient 1 atm / 25 C initialize() condition). Called
+    // at the twin's IDLE->RUNNING (P->D) handoff: any running before D leaves
+    // the gas path in a state that flips the drive's exhaust-flow basin
+    // negative under PIN coupling, and neither a stop/restart nor a
+    // collector-only reset clears it (measured).
+    void resetGasState();
+
     // Set display name directly
     void setName(const std::string& name) { name_ = name; }
 

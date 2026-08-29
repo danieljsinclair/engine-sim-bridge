@@ -211,6 +211,15 @@ void SimulationLoop::applyVehicleControls(
         // it (engine RPM emerges via the clutch). 0.0 in FREE/PIN is a true
         // no-op on the rotating mass, so this is unconditional — no mode gate.
         bridgeSim->setDrivetrainInputTorque(input.drivetrainInputTorqueNm);
+
+        // Twin's IDLE->RUNNING (P->D) handoff: purge the engine core's gas
+        // standing state (full induction->exhaust path) so the drive starts
+        // from the ambient basin, not whatever the PARK idle (or warm-boot
+        // prime) left behind. One-tick request — the twin sets it only on the
+        // transition frame.
+        if (input.requestGasStateReset) {
+            bridgeSim->resetGasState();
+        }
     } else if (!crankingState.starterEngaged) {
         // Non-bridge path: dyno only when starter not engaged (legacy).
         applyDynoControl(simulator_, input.dynoTorqueScale, lastDynoTorqueScale);

@@ -94,6 +94,10 @@ EngineInput VirtualIceInputProvider::OnUpdateSimulation(double dt) {
     input.creepReliefFired = output.creepReliefFired;
     input.couplingIsTorqueConverter = output.couplingIsTorqueConverter;
 
+    // One-tick gas-state-reset request from the twin's IDLE->RUNNING
+    // handoff — unconditional copy; SimulationLoop consumes it the same frame.
+    input.requestGasStateReset = output.requestGasStateReset;
+
     return input;
 }
 
@@ -166,7 +170,13 @@ void VirtualIceInputProvider::primeWarmUp() {
     // cruise basin (gear4/gear5, clutch ~0.75) rather than the cold attractor
     // (gear3, clutch ~0.15). One-shot: guard on a flag so re-Initialize() can
     // re-run it but a single Initialize() never double-primes.
-    if (warmedUp_) return;
+    if (warmedUp_) {
+        // Already primed (re-Initialize path): no synthetic frames ran here,
+        // but the earlier prime's tail debt must still not bleed into the
+        // real run.
+        twin_->armFreshCrankBudget();
+        return;
+    }
     warmedUp_ = true;
 
     constexpr int kWarmupFrames = 300;
@@ -184,6 +194,16 @@ void VirtualIceInputProvider::primeWarmUp() {
     for (int i = 0; i < kWarmupFrames; ++i) {
         OnUpdateSimulation(kWarmupDt);
     }
+
+    // LAST act of the prime: the synthetic frames above can pass through IDLE
+    // with a Stopped core, firing re-crank edges whose output is discarded but
+    // which consume reCrankCooldownS_. The REAL run starts right after this
+    // with a Stopped core needing its first genuine edge — arm a fresh crank
+    // budget so it fires immediately instead of waiting out synthetic debt.
+    // (The PARK idle this enables poisons the exhaust basin; the twin's
+    // IDLE->RUNNING handoff resets it — see TwinOutput::
+    // requestGasStateReset.)
+    twin_->armFreshCrankBudget();
 }
 
 void VirtualIceInputProvider::provideFeedback(const EngineSimStats& stats) {
