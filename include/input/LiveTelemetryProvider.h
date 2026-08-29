@@ -155,6 +155,21 @@ private:
     /// header is found (or EOF).
     bool ensureHeaderParsed();
 
+    /// Consume a "#vs-start-from <seconds>" hint line (vehicle-sim's stdout-csv
+    /// replay emits exactly one, before the header, when IT skipped a prefix).
+    /// True when the line was a well-formed hint (sets sourceSkipHintS_); false
+    /// when it is not a hint line (caller falls through to header parsing). A
+    /// malformed hint is treated as absent — the stream degrades to the legacy
+    /// local timecode rather than failing.
+    bool tryParseSourceSkipHint(std::string_view line);
+
+    /// Total recording-relative offset the first KEPT row sits at: whatever the
+    /// source already skipped (#vs-start-from) plus this side's own start-from
+    /// window. Stacked skips are ADDITIVE by design (owner decision, §14b
+    /// option b): source --start-from 45 piped into cli --start-from 45 starts
+    /// the display at [01:30], the true recording timecode.
+    double effectiveStartFromS() const;
+
     /// True if a line is all whitespace.
     static bool isBlankLine(std::string_view s);
 
@@ -220,14 +235,22 @@ private:
     bool headerParsed_ = false;  // header parsed once; later calls read data rows only
     double startFromS_ = -1.0;   // skip CSV rows before this time (-1 = disabled)
     double endAtS_ = -1.0;       // stop at this time (-1 = play to end); IReplayTimeline
-    bool liveOffsetAnchored_ = false;  // elapsedS_ has cold-jumped to startFromS_ (once)
+    bool liveOffsetAnchored_ = false;  // elapsedS_ has cold-jumped to the effective offset (once)
+    // In-band skip hint: seconds the SOURCE already dropped before the first
+    // delivered row (0 = no hint). baselineTimeS_ anchors at first-row-epoch
+    // minus this, so display/--end-at stay true-recording-relative.
+    double sourceSkipHintS_ = 0.0;
+    // Epoch of the first DELIVERED row (the stream's own t0). The own
+    // start-from window is measured from HERE, not from the true recording
+    // t0 — that is what makes a stacked skip additive instead of a max().
+    double streamAnchorTimeS_ = -1.0;
     // Warm-boot seed (recorded by warmBootToRunning so OnUpdateSimulation can
     // synthesise a VALID hold signal until the first post-offset row arrives —
     // see setStartFromS's contract).
     double primeSeedThrottle_ = 0.0;
     double primeSeedSpeedKmh_ = 0.0;
     bool primed_ = false;
-    double baselineTimeS_ = -1.0;  // recording-time of the first consumed row (set on first success)
+    double baselineTimeS_ = -1.0;  // TRUE recording t0: first parsed row's epoch minus sourceSkipHintS_ (set on first success)
 
     /// Read-ahead buffer of parsed rows NOT yet past the sim clock. The CSV stream
     /// is forward-only and getline is destructive, so to interpolate the road

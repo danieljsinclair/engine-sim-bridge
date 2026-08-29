@@ -538,6 +538,101 @@ TEST(LiveTelemetryStreamTest, EndAtBoundsLiveRunWithCleanDisconnect) {
            "play the whole 5s stream.";
 }
 
+// ----------------------------------------------------------------------------
+// #vs-start-from hint (in-band source-skip protocol). vehicle-sim's stdout-csv
+// replay emits "#vs-start-from <s>" before the header when IT skipped a
+// --start-from prefix; the provider consumes it so the display timecode stays
+// TRUE-recording-relative. Stacked skips are ADDITIVE by owner decision (§14b
+// option b): source skip + own skip, display at the sum.
+// ----------------------------------------------------------------------------
+
+// T15: hint-only — the source skipped [0, 40), so the first delivered row sits
+// at TRUE relT 40. The display must read [00:40.x] on frame 1, not restart at
+// [00:00] (the pre-hint behavior for a skipping source).
+TEST(LiveTelemetryStreamTest, SourceSkipHintAnchorsTrueRecordingTimecode) {
+    StreamHarness h("#vs-start-from 40.000\n"
+                    "time_s,throttle_pct,road_speed_kmh\n"
+                    "100.0,20,30\n"    // delivered t0; TRUE recording t0 = 60
+                    "100.5,20,32\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_NEAR(in.replayTimestampS, 40.05, 1e-9)
+        << "Cold-jump must include the source skip: display [00:40], not [00:00].";
+    EXPECT_DOUBLE_EQ(in.roadSpeedKmh, 30.0)
+        << "The first delivered row must still feed frame 1 (no own window).";
+}
+
+// T16: stacked skips are ADDITIVE — the own --start-from window is measured
+// from the first DELIVERED row (stream anchor), ON TOP of the source skip, not
+// from the TRUE t0 (which would collapse the two windows into a max). Source
+// skipped [0,45); own window skips delivered-relT [0,45); first kept row is at
+// delivered-relT 45.5 = TRUE relT 90.5 → display [01:30.x] (owner's rule). The
+// row at delivered-relT 44 (TRUE 89, 88 km/h) is the discriminator: it must be
+// DISCARDED, and it would surface FIRST under the max() interpretation.
+TEST(LiveTelemetryStreamTest, StackedSourceAndOwnSkipAreAdditive) {
+    StreamHarness h("#vs-start-from 45.000\n"
+                    "time_s,throttle_pct,road_speed_kmh\n"
+                    "45.0,20,10\n"    // delivered t0; local relT 0          -> own discard
+                    "89.0,20,88\n"    // local relT 44 (< 45)                -> own discard
+                    "90.5,20,90\n"    // local relT 45.5 (>= 45)             -> first KEPT
+                    "91.0,20,91\n");
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setStartFromS(45.0);
+
+    // Frame 1: display already reads [01:30.x] (cold-jump to 45+45), before the
+    // first kept row surfaces (prime-seed hold in between).
+    EXPECT_NEAR(h.provider->OnUpdateSimulation(0.05).replayTimestampS, 90.05, 1e-9)
+        << "Stacked skips are additive: display cold-jumps to 45+45 = 90s.";
+
+    double firstSpeedKmh = -99.0;
+    double firstTimecodeS = -99.0;
+    for (int i = 0; i < 15 && firstSpeedKmh < 0.0; ++i) {
+        input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+        if (in.roadSpeedKmh > 20.0) {   // >20 filters the warm-boot seed hold (10 km/h)
+            firstSpeedKmh = in.roadSpeedKmh;
+            firstTimecodeS = in.replayTimestampS;
+        }
+    }
+    ASSERT_GT(firstSpeedKmh, 20.0) << "first kept row must surface within 15 ticks";
+    EXPECT_DOUBLE_EQ(firstSpeedKmh, 90.0)
+        << "The TRUE-89 row (88 km/h, delivered-relT 44 < 45) must be discarded — "
+           "surfacing it first means the own window collapsed to max() semantics.";
+    EXPECT_NEAR(firstTimecodeS, 90.5, 0.06)
+        << "First kept row surfaces at TRUE relT 90.5 ([01:30.5]).";
+}
+
+// T17: no hint — legacy behavior is unchanged: the first delivered row IS the
+// recording t0, display relative from 0.
+TEST(LiveTelemetryStreamTest, NoHintStreamKeepsLocalTimecode) {
+    StreamHarness h("time_s,throttle_pct,road_speed_kmh\n5.0,20,30\n5.5,20,31\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_NEAR(in.replayTimestampS, 0.05, 1e-9)
+        << "No hint + no own skip: display stays relative to the first delivered row.";
+    EXPECT_DOUBLE_EQ(in.roadSpeedKmh, 30.0);
+}
+
+// T18: --end-at is TRUE-recording-relative under a hint — the bound 41s with a
+// 40s source skip disconnects ~1s after the stream starts, not 41s in.
+TEST(LiveTelemetryStreamTest, SourceSkipHintMakesEndAtTrueRelative) {
+    StreamHarness h("#vs-start-from 40.000\n"
+                    "time_s,throttle_pct,road_speed_kmh\n"
+                    "100.0,20,30\n100.5,20,30\n101.0,20,30\n");
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setEndAtS(41.0);
+
+    int ticks = 0;
+    while (h.provider->IsConnected() && ticks < 100) {
+        h.provider->OnUpdateSimulation(0.05);
+        ++ticks;
+    }
+    EXPECT_FALSE(h.provider->IsConnected()) << "bound must be reached and disconnect.";
+    EXPECT_NEAR(ticks * 0.05, 1.0, 0.15)
+        << "Disconnect ~1s after stream start (elapsed 40 -> 41), not 41s.";
+}
+
 // T11: LIVE stream mode (engine-sim-cli --live-telemetry stdin pipe) surfaces the
 // LATEST row available in the stream on the FIRST frame — no consumption pacing
 // by recording timestamp. This is the latency fix: under timestamp pacing a

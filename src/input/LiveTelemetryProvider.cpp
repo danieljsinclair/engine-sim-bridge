@@ -4,8 +4,10 @@
 #include "input/WarmBoot.h"
 #include "common/PresetExceptions.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <string_view>
 
 namespace input {
@@ -62,6 +64,9 @@ bool LiveTelemetryProvider::Initialize() {
         eofSeen_ = false;
         headerParsed_ = false;
         elapsedS_ = 0.0;
+        liveOffsetAnchored_ = false;
+        sourceSkipHintS_ = 0.0;
+        streamAnchorTimeS_ = -1.0;
         rowBuffer_.clear();
         hasCurSpeedLevel_ = false;
         hasNextSpeedLevel_ = false;
@@ -117,13 +122,22 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
     // JSON network path below). The twin owns gearbox/clutch/throttle processing
     // and the cranking lifecycle; the CSV sample becomes its upstream signal.
     if (stream_) {
+        // Consume any #vs-start-from hint + the header BEFORE anchoring the
+        // clock: the hint is only knowable from the stream, and the cold-jump
+        // below must include it on the FIRST tick. Idempotent (headerParsed_
+        // guard); the getline here is the same blocking read tryReadNextRow
+        // would do later in this very tick, just earlier.
+        (void)ensureHeaderParsed();
         // Instant start-from anchor: the display/replay clock cold-jumps to the
-        // offset on the first tick so the first emitted row already reads
-        // [start-from] (display is ALWAYS relative from the recording's real
-        // start). The pre-window rows are discarded by tryReadNextRow (unpaced,
-        // no sim stepping) — live never waits on prefix data.
-        if (!liveOffsetAnchored_ && startFromS_ > 0.0) {
-            elapsedS_ = startFromS_;
+        // EFFECTIVE offset on the first tick so the first emitted row already
+        // reads the TRUE recording-relative timecode. The offset is additive
+        // with any source-side skip (#vs-start-from): vehicle-sim
+        // --start-from 45 piped into cli --start-from 45 displays [01:30] —
+        // the double-skipped position, per the owner's display rule. The
+        // pre-window rows are discarded by tryReadNextRow (unpaced, no sim
+        // stepping) — live never waits on prefix data.
+        if (!liveOffsetAnchored_ && effectiveStartFromS() > 0.0) {
+            elapsedS_ = effectiveStartFromS();
             liveOffsetAnchored_ = true;
         }
         elapsedS_ += dt;
@@ -323,21 +337,53 @@ UpstreamSignal LiveTelemetryProvider::getCurrentSignal() const {
 // ============================================================================
 
 bool LiveTelemetryProvider::ensureHeaderParsed() {
-    // Parse the header once (the first non-blank line). Re-running a data row
-    // through parseHeader resets the header and returns false — which (in an
-    // older form) froze currentSample_ at row #1 for the whole run.
+    // Parse the header once (the first non-blank line, after any hint lines).
+    // Re-running a data row through parseHeader resets the header and returns
+    // false — which (in an older form) froze currentSample_ at row #1 for the
+    // whole run.
     if (headerParsed_) return true;
     std::string line;
     while (std::getline(*stream_, line)) {
         if (isBlankLine(line)) continue;
+        if (tryParseSourceSkipHint(line)) continue;
         if (csvParser_.parseHeader(line, lastError_)) {
             headerParsed_ = true;
             return true;
         }
-        return false;  // first non-blank line was not a usable header
+        return false;  // first non-hint non-blank line was not a usable header
     }
     eofSeen_ = true;  // no header before EOF
     return false;
+}
+
+bool LiveTelemetryProvider::tryParseSourceSkipHint(std::string_view line) {
+    // In-band protocol from vehicle-sim's stdout-csv replay: when the SOURCE
+    // skipped a --start-from prefix it emits "#vs-start-from <s>" once, before
+    // the CSV header, declaring how much of the recording never reaches this
+    // consumer. Without the hint the first delivered row looks like the
+    // recording's t0 and the display timecode silently restarts at [00:00].
+    constexpr std::string_view kPrefix = "#vs-start-from ";
+    if (line.size() < kPrefix.size() || line.substr(0, kPrefix.size()) != kPrefix) {
+        return false;
+    }
+    const std::string value(line.substr(kPrefix.size()));
+    char* end = nullptr;
+    const double seconds = std::strtod(value.c_str(), &end);
+    const std::string_view rest(end);
+    const auto* trailingJunk = std::find_if_not(rest.begin(), rest.end(),
+                                                [](unsigned char c) { return std::isspace(c) != 0; });
+    if (end == value.c_str() || trailingJunk != rest.end() || seconds < 0.0) {
+        // Malformed hint: consume nothing further, treat as absent (the line
+        // then fails header parsing; the retry loop steps past it and the run
+        // degrades to the legacy local timecode rather than aborting).
+        return false;
+    }
+    if (sourceSkipHintS_ == 0.0) sourceSkipHintS_ = seconds;  // first hint wins
+    return true;
+}
+
+double LiveTelemetryProvider::effectiveStartFromS() const {
+    return sourceSkipHintS_ + (startFromS_ > 0.0 ? startFromS_ : 0.0);
 }
 
 bool LiveTelemetryProvider::isBlankLine(std::string_view s) {
@@ -412,16 +458,23 @@ bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
         std::string parseError;
         if (!csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;  // malformed
         if (isSampleBlank(sample)) continue;
-        // Anchor the recording clock on the FIRST parsed row (the recording's
-        // real start), NOT on the first post-offset row — relative offsets
-        // (--start-from/--end-at and the display [mm:ss]) are measured from
-        // here regardless of any windowing.
-        if (baselineTimeS_ < 0.0) baselineTimeS_ = sample.timeS;
+        // Anchor the recording clock on the FIRST parsed row. With a source
+        // skip hint the recording's TRUE t0 is that row's epoch minus the
+        // skipped prefix, so every relative time (display [mm:ss], --end-at,
+        // row pacing) stays TRUE-recording-relative. streamAnchorTimeS_
+        // separately keeps the first DELIVERED row's epoch: the own
+        // --start-from window is measured from it, which is what makes a
+        // stacked skip additive (source skip + own skip) rather than a max().
+        if (streamAnchorTimeS_ < 0.0) {
+            streamAnchorTimeS_ = sample.timeS;
+            baselineTimeS_ = sample.timeS - sourceSkipHintS_;
+        }
         // Instant start-from: discard pre-window rows UNPACED (pure I/O, no sim
         // stepping, no clock waits — the owner-mandated "no wall-clock waiting").
-        // The twin is primed synthetically (warmBootToRunning) and the engine
-        // bump-starts at the offset state; prefix data is never simulated.
-        if (startFromS_ > 0.0 && (sample.timeS - baselineTimeS_) < startFromS_) {
+        // Measured from the first DELIVERED row, i.e. ON TOP of any source-side
+        // skip. The twin is primed synthetically (warmBootToRunning) and the
+        // engine bump-starts at the offset state; prefix data is never simulated.
+        if (startFromS_ > 0.0 && (sample.timeS - streamAnchorTimeS_) < startFromS_) {
             continue;
         }
         rowBuffer_.push_back(sample);
