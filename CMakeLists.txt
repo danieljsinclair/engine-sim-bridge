@@ -500,6 +500,7 @@ if(BUILD_BRIDGE_TESTS)
     # SyncPullStrategy, IAudioBuffer, CircularBuffer telemetry).
     add_executable(strategy_tests
         test/strategy/ThreadedStrategyIntegrationTest.cpp
+        test/strategy/ThreadedStrategyOverflowWarningTest.cpp
         test/strategy/StrategyPipelineTest.cpp
         test/strategy/BufferContextEradicationTest.cpp
         test/strategy/IAudioBufferTest.cpp
