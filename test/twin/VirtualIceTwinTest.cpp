@@ -16,6 +16,10 @@ protected:
     void SetUp() override {
         profile_ = IceVehicleProfile::zf8hp45();
         twin_ = std::make_unique<VirtualIceTwin>(profile_);
+        // Twin ignition defaults OFF: it must never self-start without a start
+        // decision (see NoSelfStartWithoutIgnitionCommand below). These tests
+        // exercise a commanded-on twin.
+        twin_->setIgnition(true);
     }
 
     IceVehicleProfile profile_;
@@ -52,6 +56,35 @@ TEST_F(VirtualIceTwinTest, OffToCrankingOnFirstValidTelemetry_AC11_1) {
     EXPECT_TRUE(output.starterMotor);
     EXPECT_TRUE(output.ignition);
     EXPECT_EQ(output.gear, static_cast<int>(bridge::BridgeGear::NEUTRAL));
+}
+
+// Gap 2 (twin self-start): a twin with NO ignition command must never start on
+// its own, no matter how long valid telemetry flows. Before the default was
+// flipped to OFF, the twin ran OFF->CRANKING->Running purely from telemetry —
+// UpLeckHill's engine was running at t=0.62s with the first brake frame only
+// at t=10.04s. On live paths VehicleStartController owns every start; the
+// twin's ignition is commanded through IVehicleControlSink.
+TEST_F(VirtualIceTwinTest, NoSelfStartWithoutIgnitionCommand) {
+    auto freshTwin = std::make_unique<VirtualIceTwin>(profile_);  // default ignition OFF
+    auto sig = makeValidSignal(0.6, 0.0);
+
+    // Far past the cranking fallback (3s) AND the telemetry timeout (5s): with
+    // valid telemetry the whole time, an uncommanded twin must stay OFF.
+    for (int i = 0; i < 10 * 60; ++i) {
+        auto output = freshTwin->update(1.0 / 60.0, sig);
+        ASSERT_EQ(freshTwin->getState(), TwinState::OFF)
+            << "uncommanded twin self-started at tick " << i;
+        EXPECT_FALSE(output.ignition);
+        EXPECT_FALSE(output.starterMotor);
+        EXPECT_DOUBLE_EQ(output.throttle, 0.0);
+    }
+
+    // The first ignition command is what starts it: OFF -> CRANKING.
+    freshTwin->setIgnition(true);
+    auto output = freshTwin->update(1.0 / 60.0, sig);
+    EXPECT_EQ(freshTwin->getState(), TwinState::CRANKING);
+    EXPECT_TRUE(output.starterMotor);
+    EXPECT_TRUE(output.ignition);
 }
 
 TEST_F(VirtualIceTwinTest, CrankingToIdleWhenRpmExceedsThreshold_AC11_2) {
@@ -535,6 +568,7 @@ TEST_F(VirtualIceTwinTest, EngineStartIsDeterministicAcrossRuns_AC15) {
     auto runOnce = [this](int budgetTicks) {
         // Fresh twin per run (mirrors a clean process/bench invocation).
         twin_ = std::make_unique<VirtualIceTwin>(profile_);
+        twin_->setIgnition(true);  // commanded-on twin (default is OFF — no self-start)
         twin_->setGearSelector(bridge::GearSelector::DRIVE);
 
         UpstreamSignal sig = makeValidSignal(0.5, 0.0);  // throttle > idle threshold
@@ -904,6 +938,7 @@ TEST_F(VirtualIceTwinTest, FreeModeSlipLockUsesActualWheelSpeedNotCsv) {
 
     // --- PIN under the SAME values: uses csv 5 -> low creep pressure.
     twin_ = std::make_unique<VirtualIceTwin>(profile_);
+    twin_->setIgnition(true);  // commanded-on twin (default is OFF — no self-start)
     twin_->setWheelCouplingMode(WheelCouplingMode::Pin);
     advanceThroughCranking();
     sig = makeValidSignal(0.5, 5.0);

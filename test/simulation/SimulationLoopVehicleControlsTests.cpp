@@ -28,6 +28,7 @@
 #include "simulation/CrankingController.h"
 #include "simulator/GearConventions.h"
 #include "input/LiveTelemetryProvider.h"
+#include "input/IVehicleControlSink.h"
 #include "twin/IceVehicleProfile.h"
 
 #include <gtest/gtest.h>
@@ -36,6 +37,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -711,6 +713,111 @@ TEST_F(SimulationLoopVehicleControlsTest, LiveNetworkFrame_NeutralDoesNotStart) 
         << "The live network frame must carry NEUTRAL into the decision site";
     EXPECT_EQ(simulator_->getEnginePhase(), EnginePhase::Stopped)
         << "Live NEUTRAL frame must not start the engine";
+}
+
+// ---------------------------------------------------------------------------
+// IVehicleControlSink (gap 2): the loop commands a twin-based provider's
+// ignition with the VehicleStartController level — and NOTHING is commanded
+// before the first vehicle-control opinion, so a twin that defaults its
+// ignition OFF can never self-start (UpLeckHill ran its engine from t=0.44s
+// with no driver input). After the opinion the level follows the decision:
+// false through the brake-initiated crank, true at ignition, false again on a
+// latched brake+PARK stop (after drive-since-start).
+// ---------------------------------------------------------------------------
+
+// IInputProvider that IS also a vehicle-control sink and records every
+// commanded ignition level. Returns a settable template EngineInput so each
+// frame's brake-light / gear can be scripted deterministically.
+class SinkRecordingProvider : public IInputProvider,
+                              public IVehicleControlSink {
+public:
+    explicit SinkRecordingProvider(input::EngineInput templateInput)
+        : templateInput_(templateInput) {}
+
+    EngineInput OnUpdateSimulation(double) override { return templateInput_; }
+    void provideFeedback(const EngineSimStats&) override {}
+    bool Initialize() override { return true; }
+    void Shutdown() override {}
+    bool IsConnected() const override { return true; }
+    std::string GetProviderName() const override { return "SinkRecordingProvider"; }
+    std::string GetLastError() const override { return ""; }
+
+    void setIgnition(bool on) override { ignitionLevels.push_back(on); }
+
+    input::EngineInput templateInput_;
+    std::vector<bool> ignitionLevels;
+};
+
+TEST_F(SimulationLoopVehicleControlsTest, TwinIgnitionCommandedThroughSink_NothingBeforeOpinion) {
+    // Short crank so the whole start -> stop cycle fits in a handful of frames.
+    simConfig_.startStopCrankDelayS = 3.0 * simConfig_.updateInterval();
+
+    auto provider = std::make_unique<SinkRecordingProvider>(input::EngineInput{});
+    SessionDependencies deps{
+        audioBuffer_.get(),
+        crankingController_.get(),
+        stopRequested_.get(),
+        provider.get(),
+        presentation_.get(),
+        telemetryWriter_.get(),
+        telemetryReader_.get(),
+        logger_.get()
+    };
+    SimulationLoop loop(*simulator_, simConfig_, deps);
+
+    // Pre-opinion frames: no reported brake light, no brake level, NEUTRAL —
+    // the provider keeps start authority, so NOTHING may be commanded (an
+    // uncommanded twin stays OFF: no self-start).
+    for (int i = 0; i < 5; ++i) {
+        loop.step(makeStateRef(provider->OnUpdateSimulation(simConfig_.updateInterval())));
+    }
+    EXPECT_TRUE(provider->ignitionLevels.empty())
+        << "ignition was commanded before any vehicle-control opinion";
+
+    // First opinion: brake light REPORTED (value false is still an opinion
+    // carrier only once pressed — use a pressed brake in PARK, the real trigger).
+    provider->templateInput_.brakeLight = true;
+    provider->templateInput_.gearSelector = static_cast<int>(bridge::GearSelector::PARK);
+
+    // Brake-initiated start: level stays false through the 3-frame crank, then
+    // fires true — the held brake in PARK must NOT stop it (drive-since-start).
+    loop.step(makeStateRef(provider->OnUpdateSimulation(simConfig_.updateInterval())));
+    loop.step(makeStateRef(provider->OnUpdateSimulation(simConfig_.updateInterval())));
+    ASSERT_EQ(provider->ignitionLevels.size(), 2u);
+    EXPECT_FALSE(provider->ignitionLevels[0]);
+    EXPECT_FALSE(provider->ignitionLevels[1]);
+
+    loop.step(makeStateRef(provider->OnUpdateSimulation(simConfig_.updateInterval())));
+    ASSERT_EQ(provider->ignitionLevels.size(), 3u);
+    EXPECT_TRUE(provider->ignitionLevels[2]) << "ignition level must fire after the crank delay";
+
+    // Brake still held in PARK: running continues (drive-since-start gate).
+    loop.step(makeStateRef(provider->OnUpdateSimulation(simConfig_.updateInterval())));
+    ASSERT_EQ(provider->ignitionLevels.size(), 4u);
+    EXPECT_TRUE(provider->ignitionLevels[3])
+        << "held brake+PARK after the start must not stop the engine";
+
+    // Drive selected (arms the stop gate), then brake+PARK stops same frame and
+    // the commanded level drops to false and STAYS false while latched.
+    provider->templateInput_.brakeLight = std::nullopt;
+    provider->templateInput_.gearSelector = static_cast<int>(bridge::GearSelector::DRIVE);
+    loop.step(makeStateRef(provider->OnUpdateSimulation(simConfig_.updateInterval())));
+
+    provider->templateInput_.brakeLight = true;
+    provider->templateInput_.gearSelector = static_cast<int>(bridge::GearSelector::PARK);
+    loop.step(makeStateRef(provider->OnUpdateSimulation(simConfig_.updateInterval())));
+    ASSERT_GE(provider->ignitionLevels.size(), 6u);
+    EXPECT_FALSE(provider->ignitionLevels.back())
+        << "brake+PARK after drive must command ignition OFF";
+
+    const auto sizeAtStop = provider->ignitionLevels.size();
+    for (int i = 0; i < 5; ++i) {
+        loop.step(makeStateRef(provider->OnUpdateSimulation(simConfig_.updateInterval())));
+        EXPECT_FALSE(provider->ignitionLevels.back())
+            << "latched stop must keep ignition commanded OFF";
+    }
+    EXPECT_EQ(provider->ignitionLevels.size(), sizeAtStop + 5u)
+        << "the level is commanded every engaged frame";
 }
 
 // ---------------------------------------------------------------------------

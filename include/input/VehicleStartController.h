@@ -19,9 +19,18 @@
 //               immediately and cancels the timer (safety: the engine must not
 //               finish cranking after the car is already moving).
 //   STOP   (only while RUNNING, i.e. after the crank has completed):
-//            brake pressed AND gear == PARK -> ignition off, stopLatch set.
-//   LATCH  blocks START while set; clears on the first tick with no start
-//            demand (brake released AND not in a drive gear).
+//            brake pressed AND gear == PARK AND a drive gear (D/R) has been
+//            selected at least once since the current engine run started
+//            (drive-since-start gate — the plan's deferred PARK-after-motion
+//            item resolved via gear history). Without the gate, the still-held
+//            brake that just performed a brake-initiated start (still in PARK)
+//            stops the engine on its own ignition frame: every brake touch in
+//            PARK would end latched-off.
+//   LATCH  blocks START while set; releases on brake release ALONE (plan:
+//            `stopLatch && !brake`). While a drive gear is selected, the tick
+//            that releases the latch also satisfies START (gear trigger) and
+//            restarts the engine — releasing the brake in DRIVE is a drive-off,
+//            not a stay-off.
 
 #include "input/IEngineActuator.h"
 #include "simulator/GearConventions.h"
@@ -73,6 +82,7 @@ private:
     bool crankPending_ = false;      // starter engaged, ignition not yet fired
     bool crankFromBrakeOnly_ = false; // crank was initiated without a drive gear
     double crankAccumS_ = 0.0;       // accumulated dt while crank delay is pending
+    bool driveSelectedSinceStart_ = false; // a D/R gear was seen in the current run
 };
 
 } // namespace input

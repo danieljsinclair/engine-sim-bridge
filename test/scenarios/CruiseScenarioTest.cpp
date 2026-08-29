@@ -13,6 +13,9 @@ protected:
     void SetUp() override {
         profile_ = IceVehicleProfile::zf8hp45();
         twin_ = std::make_unique<VirtualIceTwin>(profile_);
+        // Twin ignition defaults OFF (no self-start without a start decision);
+        // these scenario tests exercise a commanded-on twin.
+        twin_->setIgnition(true);
         twin_->setGearSelector(bridge::GearSelector::DRIVE);
         dt_ = 1.0 / 60.0;
     }

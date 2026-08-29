@@ -245,6 +245,7 @@ TEST(LiveTelemetryStreamTest, TwinInLoopSetsGearAutoMode) {
 TEST(LiveTelemetryStreamTest, GearboxUpshiftsAtSustainedHighSpeed) {
     StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,100,80\n");
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
     h.provider->setGearSelector(kDrive);
 
     int gear = runUntilGearAbove(*h.provider, /*target*/ 1, /*ticks*/ 200);
@@ -260,6 +261,7 @@ TEST(LiveTelemetryStreamTest, GearboxUpshiftsAtSustainedHighSpeed) {
 TEST(LiveTelemetryStreamTest, FeedbackWiredReleasesStarterOnCatch) {
     StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,30,5\n", /*autoStart=*/false);
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
     h.provider->setGearSelector(kDrive);
 
     bool starterFired = false;
@@ -282,6 +284,7 @@ TEST(LiveTelemetryStreamTest, FeedbackWiredReleasesStarterOnCatch) {
 TEST(LiveTelemetryStreamTest, DefaultSelectorIsDriveReachesRunning) {
     StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,100,80\n");
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
     // Intentionally NO setGearSelector — the default selector is under test.
 
     int gear = runUntilGearAbove(*h.provider, /*target*/ 1, /*ticks*/ 200);
@@ -334,6 +337,7 @@ TEST(LiveTelemetryStreamTest, LiveModeConsumesIncrementallyNotPinnedToLastRow) {
          << "4.0,100,1.76\n"; // parked tail
     LiveStreamHarness h(csv.str());
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
     h.provider->setGearSelector(kDrive);
 
     // Pump RPM feedback so the twin cranks/catches (OFF->CRANKING->IDLE->RUNNING)
@@ -359,6 +363,7 @@ TEST(LiveTelemetryStreamTest, LiveModeConsumesIncrementallyNotPinnedToLastRow) {
 TEST(LiveTelemetryStreamTest, ValidityTimestampGuardKeepsTwinAlive) {
     StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,50,\n", /*autoStart=*/false);
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
 
     bool cranked = false;
     for (int i = 0; i < 5 && !cranked; ++i) {
@@ -396,6 +401,7 @@ TEST(LiveTelemetryStreamTest, GearSelectorColumnForwardedAndDelegatesSafe) {
 TEST(LiveTelemetryStreamTest, EngineStartsFromCsvWhenRpmPlateausBelowThreshold) {
     StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,50,5\n");
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
     h.provider->setGearSelector(kDrive);
 
     // Sub-threshold RPM feedback every tick — the closed loop never crosses the
@@ -470,6 +476,7 @@ TEST(LiveTelemetryStreamTest, ReconfigureProfileForwardsRatiosToTwin) {
     {
         StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,100,80\n");
         ASSERT_TRUE(h.provider->Initialize());
+        h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
         h.provider->setGearSelector(kDrive);
         ASSERT_GT(runUntilGearAbove(*h.provider, /*target*/ 1, /*ticks*/ 200), 1)
             << "baseline: default zf8hp45 must upshift at 80 km/h WOT";
@@ -478,6 +485,7 @@ TEST(LiveTelemetryStreamTest, ReconfigureProfileForwardsRatiosToTwin) {
     {
         StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,100,80\n");
         ASSERT_TRUE(h.provider->Initialize());
+        h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
         h.provider->setGearSelector(kDrive);
         h.provider->reconfigureProfile({3.5}, 3.15, 0.32);
         EXPECT_EQ(runUntilGearAbove(*h.provider, /*target*/ 1, /*ticks*/ 200), 1)
@@ -667,6 +675,7 @@ TEST(LiveTelemetryStreamTest, BlankInitialRowsSkippedEngineCranksWhenDataArrives
         "10.0,50,5\n";
     StreamHarness h(csv, /*autoStart=*/false);
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
 
     // Call 1: consume the whole stream. Blank rows (t=0..9) are skipped; the
     // populated row (t=10) is the first non-blank → hasSample_=true, but the
@@ -701,6 +710,7 @@ TEST(LiveTelemetryStreamTest, PopulatedRowSurvivesSubsequentBlankRows) {
         "3.0,60,10\n"; // another populated (updates sample)
     StreamHarness h(csv, /*autoStart=*/false);
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
 
     // Call 1: consumes all rows. Non-blank rows at t=0 (throttle=50) and t=3
     // (throttle=60). The latest non-blank is t=3 → currentSample_.throttle=0.6.

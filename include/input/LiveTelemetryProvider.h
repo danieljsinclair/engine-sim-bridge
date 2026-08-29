@@ -25,6 +25,7 @@
 #include "io/IInputProvider.h"
 #include "io/UpstreamSignal.h"
 #include "input/CsvTelemetryParser.h"
+#include "input/IVehicleControlSink.h"
 #include "input/VirtualIceInputProvider.h"
 #include "twin/IceVehicleProfile.h"
 #include "simulator/EngineSimTypes.h"
@@ -37,7 +38,11 @@
 
 namespace input {
 
-class LiveTelemetryProvider : public IInputProvider {
+// IVehicleControlSink: the live provider's twin takes its ignition LEVEL from
+// the vehicle start/stop decision layer (VehicleStartController via
+// SimulationLoop) — it never assumes ignition on its own, so no start happens
+// before a real brake-light / drive-gear input.
+class LiveTelemetryProvider : public IInputProvider, public IVehicleControlSink {
 public:
     /// Create a live telemetry provider with the given vehicle profile.
     /// The profile defines gear ratios, shift tables, and vehicle dynamics.
@@ -80,8 +85,10 @@ public:
     /// Forward gear selector changes to the twin (e.g., from UI).
     void setGearSelector(int selector);
 
-    /// Forward ignition state to the twin.
-    void setIgnition(bool on);
+    /// Forward ignition state to the twin. IVehicleControlSink: called every
+    /// frame by SimulationLoop::applyStartStopDecision with the controller's
+    /// ignition level (also usable directly, e.g. from a UI).
+    void setIgnition(bool on) override;
 
     /// Select the live clutch wheel-coupling strategy (FREE/PIN).
     void setWheelCouplingMode(twin::WheelCouplingMode mode);

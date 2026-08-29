@@ -19,20 +19,30 @@ void VehicleStartController::update(double dt,
         (gear == bridge::GearSelector::DRIVE ||
          gear == bridge::GearSelector::REVERSE);
 
+    // Drive-since-start history for the stop gate below. A gear-initiated start
+    // seeds the flag in beginStart; any D/R seen later in the run sets it too.
+    if (engineOn_ && driveSelected) {
+        driveSelectedSinceStart_ = true;
+    }
+
     // STOP (only while RUNNING, i.e. after the crank has completed): brake + PARK
     // turns the engine off and latches the stop so a held brake cannot restart it.
-    // Gated on !crankPending_ so a brake-held PARK during the crank delay stays a
-    // normal start rather than a stop.
+    // Two gates: !crankPending_ so a brake-held PARK during the crank delay stays
+    // a normal start rather than a stop; driveSelectedSinceStart_ so the brake
+    // that PERFORMED a brake-initiated start (still held, still in PARK) cannot
+    // stop the engine it just cranked — brake+PARK stops only after a drive gear
+    // has been selected in the current run (the plan's PARK-after-motion item).
     if (engineOn_ && !crankPending_ && brakePressed &&
-        gear == bridge::GearSelector::PARK) {
+        gear == bridge::GearSelector::PARK && driveSelectedSinceStart_) {
         stopEngine();
         return; // stop takes precedence over any simultaneous start trigger
     }
 
-    // Latch release: clears on the first tick with NO start demand. Releasing the
-    // brake is necessary, but simply being out of a drive gear is also required so
-    // a held brake + drive-gear selection does not unlock a start.
-    if (stopLatch_ && !brakePressed && !driveSelected) {
+    // Latch release: clears on the first tick with the brake NOT pressed — brake
+    // release alone (plan: `stopLatch && !brake`). If a drive gear is selected,
+    // the same tick also satisfies START below (gear trigger) and restarts the
+    // engine: releasing the brake in DRIVE is a drive-off, not a stay-off.
+    if (stopLatch_ && !brakePressed) {
         stopLatch_ = false;
     }
 
@@ -59,6 +69,10 @@ void VehicleStartController::update(double dt,
 void VehicleStartController::beginStart(bool driveSelected) {
     if (!engineOn_) {
         actuator_.setStarterMotor(true);
+        // New engine run: drive history restarts with it. A gear-initiated start
+        // counts as drive-since-start immediately (the selector IS in D/R), so
+        // brake+PARK after shifting back out of gear stops the engine as expected.
+        driveSelectedSinceStart_ = driveSelected;
     }
     engineOn_ = true;
     if (driveSelected) {
@@ -107,6 +121,7 @@ void VehicleStartController::stopEngine() {
     crankPending_ = false;
     crankFromBrakeOnly_ = false;
     crankAccumS_ = 0.0;
+    driveSelectedSinceStart_ = false; // run over: the next start re-arms the gate
 }
 
 } // namespace input

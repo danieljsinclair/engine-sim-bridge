@@ -94,6 +94,7 @@ TEST_F(VirtualIceInputProviderTest, ClutchPressureMapsFromTwin) {
 // at the -1 sentinel, which SimulationLoop treats as "don't change".
 TEST_F(VirtualIceInputProviderTest, PinModeSurfacesVehicleSpeedTarget) {
     ASSERT_TRUE(provider_->Initialize());
+    provider_->setIgnition(true);  // twin ignition defaults OFF; commanded here
 
     // DRIVE selector + a real throttle so the twin reaches RUNNING.
     const int drive = 99;  // bridge::GearSelector::DRIVE
@@ -117,6 +118,7 @@ TEST_F(VirtualIceInputProviderTest, PinModeSurfacesVehicleSpeedTarget) {
     // FREE (default) must NOT pin: leave the -1 sentinel.
     auto freeProvider = std::make_unique<VirtualIceInputProvider>(profile_);
     ASSERT_TRUE(freeProvider->Initialize());
+    freeProvider->setIgnition(true);  // twin ignition defaults OFF; commanded here
     freeProvider->setGearSelector(drive);
     freeProvider->setUpstreamSignal(signal);
     for (int i = 0; i < 250; ++i) freeProvider->OnUpdateSimulation(0.016);
@@ -127,6 +129,7 @@ TEST_F(VirtualIceInputProviderTest, PinModeSurfacesVehicleSpeedTarget) {
 
 TEST_F(VirtualIceInputProviderTest, CrankingStateActivatesStarterAndIgnition) {
     ASSERT_TRUE(provider_->Initialize());
+    provider_->setIgnition(true);  // twin ignition defaults OFF; commanded here
 
     UpstreamSignal signal;
     signal.throttleFraction = 0.0;

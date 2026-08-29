@@ -9,6 +9,7 @@
 #include "simulation/CrankingController.h"
 #include "simulation/PresentationStateBuilders.h"
 #include "session/ISimulatorSession.h"
+#include "input/IVehicleControlSink.h"
 
 #include "simulator/ISimulator.h"
 #include "simulator/ICombustionEngine.h"
@@ -69,6 +70,16 @@ void SimulationLoop::applyStartStopDecision(LoopState& state, bool lightReported
     // actuator authority, exactly as the removed StartStopInputAdapter did.
     state.engineInput.ignition = startStopObserver_.ignition_;
     state.engineInput.starterButton = starterPulseFromLevel(startStopObserver_.starter_);
+
+    // Command twin-based live providers with the same level. The twin gates all
+    // of its processing (throttle/gearbox/cranking) on ignition and defaults
+    // OFF, so without this push the live path could never process throttle even
+    // after a legal start — and conversely the twin can never self-start before
+    // the controller's first decision, which now only happens on a real input.
+    // Providers without the seam (keyboard, demo, replay) are unaffected.
+    if (auto* ignitionSink = dynamic_cast<input::IVehicleControlSink*>(inputProvider_)) {
+        ignitionSink->setIgnition(startStopObserver_.ignition_);
+    }
 }
 
 bool SimulationLoop::starterPulseFromLevel(bool controllerStarterLevel) {
