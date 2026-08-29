@@ -399,6 +399,7 @@ if(BUILD_BRIDGE_TESTS)
         test/InMemoryTelemetryResetTests.cpp
         test/SimulatorFactoryBoundaryTests.cpp
         test/ScriptLoadHelpersResolveAssetBasePathTests.cpp
+        test/ScriptLoadHelpersLoadImpulseResponsesTests.cpp
         test/simulation/SimulationLoopStepTests.cpp
         test/simulation/SimulationLoopRunTests.cpp
         test/simulation/SimulationLoopVehicleControlsTests.cpp

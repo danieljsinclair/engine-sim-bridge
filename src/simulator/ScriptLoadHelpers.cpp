@@ -40,6 +40,116 @@ std::string soundLibraryAnchored(const std::string& filename) {
     return found ? anchored.generic_string() : filename;
 }
 
+// Resolve an impulse response's runtime filename to the form probed by
+// audioFileCandidates. For ABSOLUTE baked temp paths (e.g.
+// /var/folders/.../T/sound-library/...), normalizeImpulseResponsePath anchors
+// on "sound-library/" and strips the temp prefix, yielding the portable
+// "sound-library/..." form. RELATIVE paths (e.g.
+// "../../es/sound-library/X.wav" or "es/sound-library/X.wav") pass through
+// as written. normalize is NOT applied to relative paths because it would
+// collapse the leading "../.." and strip "es/", regressing legitimate
+// relative IR paths. Returns "" when the reference carries no filename.
+std::string impulseFilename(const ImpulseResponse* impulse) {
+    const std::string rawFilename = impulse->getFilename();
+    if (rawFilename.empty()) {
+        return rawFilename;
+    }
+    return isAbsolutePath(rawFilename)
+        ? PathNormalizer::normalizeImpulseResponsePath(rawFilename)
+        : rawFilename;
+}
+
+// Probe candidates in priority order and return the first that loads as a
+// WAV ("" when none does). outResult always holds the last load attempt, so
+// a miss leaves it invalid — mirroring the plain scan this replaces.
+std::string firstLoadableCandidate(
+    const std::vector<std::string>& candidates,
+    WavLoader::Result& outResult)
+{
+    for (const std::string& candidate : candidates) {
+        outResult = WavLoader::load(candidate);
+        if (outResult.valid) {
+            return candidate;
+        }
+    }
+    return "";
+}
+
+// " | "-joined candidate list for the diagnostics line.
+std::string joinCandidates(const std::vector<std::string>& candidates) {
+    std::string joined;
+    for (const std::string& candidate : candidates) {
+        if (!joined.empty()) joined += " | ";
+        joined += candidate;
+    }
+    return joined;
+}
+
+// Fail-fast diagnostics for an unloadable impulse response: the primary
+// candidate, the asset base with the reference as written, and every
+// candidate tried.
+void logImpulseLoadFailure(
+    ILogging* logger,
+    const std::vector<std::string>& candidates,
+    const std::string& assetBasePath,
+    const std::string& filename)
+{
+    if (logger == nullptr) {
+        return;
+    }
+
+    const std::string& primary = candidates.empty() ? filename : candidates.front();
+    logger->error(LogMask::ASSET, __ilog_format("Failed to load required audio file: %s", primary.c_str()));
+    logger->error(LogMask::ASSET, __ilog_format("(asset base: %s, from script: %s)", assetBasePath.c_str(), filename.c_str()));
+    logger->error(LogMask::ASSET, __ilog_format("Candidates tried: %s", joinCandidates(candidates).c_str()));
+}
+
+// Load one exhaust system's impulse response into its synthesizer channel.
+// Exhaust systems without an impulse response (or without a filename) are
+// skips, not failures.
+bool loadExhaustImpulseResponse(
+    Simulator* simulator,
+    const ExhaustSystem* exhaust,
+    int channel,
+    const std::string& assetBasePath,
+    ILogging* logger)
+{
+    const ImpulseResponse* impulse = exhaust->getImpulseResponse();
+    if (impulse == nullptr) {
+        return true;
+    }
+
+    const std::string filename = impulseFilename(impulse);
+    if (filename.empty()) {
+        return true;
+    }
+
+    // Full-path resolution probes candidates in priority order: anchored
+    // against the script family's asset base first, then the exe-aware root
+    // chain (exe dir -> repo root -> cwd) — never CWD-only.
+    const std::vector<std::string> candidates = audioFileCandidates(assetBasePath, filename);
+
+    WavLoader::Result wavResult;
+    const std::string loadedPath = firstLoadableCandidate(candidates, wavResult);
+
+    if (!wavResult.valid) {
+        logImpulseLoadFailure(logger, candidates, assetBasePath, filename);
+        return false;
+    }
+
+    if (logger != nullptr) {
+        logger->info(LogMask::ASSET, __ilog_format("Loaded impulse response: %s (%zu samples)", loadedPath.c_str(), wavResult.getSampleCount()));
+    }
+
+    simulator->synthesizer().initializeImpulseResponse(
+        wavResult.getData(),
+        static_cast<unsigned int>(wavResult.getSampleCount()),
+        static_cast<float>(impulse->getVolume()),
+        channel
+    );
+    return true;
+}
+
 } // namespace
 
 std::vector<std::string> audioFileCandidates(
@@ -90,72 +200,19 @@ bool loadImpulseResponses(
     const std::string& assetBasePath,
     ILogging* logger)
 {
-    if (!engine) {
+    if (engine == nullptr) {
         return false;
     }
 
     const int exhaustCount = engine->getExhaustSystemCount();
     for (int i = 0; i < exhaustCount; ++i) {
         const ExhaustSystem* exhaust = engine->getExhaustSystem(i);
-        if (!exhaust) continue;
-
-        const ImpulseResponse* impulse = exhaust->getImpulseResponse();
-        if (!impulse) continue;
-
-        std::string rawFn = impulse->getFilename();
-        bool isAbsolute = (!rawFn.empty() && (rawFn[0] == '/' || (rawFn.length() > 1 && rawFn[1] == ':')));
-        std::string filename = isAbsolute ? PathNormalizer::normalizeImpulseResponsePath(rawFn) : rawFn;
-        if (filename.empty()) {
+        if (exhaust == nullptr) {
             continue;
         }
-
-        // Construct the full path by probing candidates in priority order.
-        // For ABSOLUTE baked temp paths (e.g. /var/folders/.../T/sound-library/...),
-        // normalizeImpulseResponsePath anchors on "sound-library/" and strips the temp
-        // prefix, yielding the portable "sound-library/..." form. RELATIVE paths
-        // (e.g. "../../es/sound-library/X.wav" or "es/sound-library/X.wav") are
-        // resolved by audioFileCandidates: anchored against the script family's
-        // asset base first, then the exe-aware root chain (exe dir -> repo root
-        // -> cwd) — never CWD-only.
-        // normalize is NOT applied unconditionally because it would collapse the leading
-        // "../.." and strip "es/", regressing legitimate relative IR paths.
-        const std::vector<std::string> candidates = audioFileCandidates(assetBasePath, filename);
-
-        WavLoader::Result wavResult;
-        std::string loadedPath;
-        for (const std::string& candidate : candidates) {
-            wavResult = WavLoader::load(candidate);
-            if (wavResult.valid) {
-                loadedPath = candidate;
-                break;
-            }
-        }
-
-        if (!wavResult.valid) {
-            if (logger) {
-                const std::string& primary = candidates.empty() ? filename : candidates.front();
-                logger->error(LogMask::ASSET, __ilog_format("Failed to load required audio file: %s", primary.c_str()));
-                logger->error(LogMask::ASSET, __ilog_format("(asset base: %s, from script: %s)", assetBasePath.c_str(), filename.c_str()));
-                std::string tried;
-                for (const auto& candidate : candidates) {
-                    if (!tried.empty()) tried += " | ";
-                    tried += candidate;
-                }
-                logger->error(LogMask::ASSET, __ilog_format("Candidates tried: %s", tried.c_str()));
-            }
+        if (!loadExhaustImpulseResponse(simulator, exhaust, i, assetBasePath, logger)) {
             return false;
         }
-
-        if (logger) {
-            logger->info(LogMask::ASSET, __ilog_format("Loaded impulse response: %s (%zu samples)", loadedPath.c_str(), wavResult.getSampleCount()));
-        }
-
-        simulator->synthesizer().initializeImpulseResponse(
-            wavResult.getData(),
-            static_cast<unsigned int>(wavResult.getSampleCount()),
-            static_cast<float>(impulse->getVolume()),
-            i
-        );
     }
 
     return true;
