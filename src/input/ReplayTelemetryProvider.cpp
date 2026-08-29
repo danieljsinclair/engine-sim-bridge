@@ -60,6 +60,11 @@ bool ReplayTelemetryProvider::Initialize() {
     if (!parseCsv()) return false;
     connected_ = !samples_.empty();
     if (!connected_) lastError_ = "No telemetry rows parsed from " + csvPath_;
+    // A trace carrying start/stop opinion columns (brake_light / gear_selector)
+    // describes the full vehicle lifecycle, so the VehicleStartController must
+    // own every start; see the autoStart pulse in OnUpdateSimulation.
+    traceCarriesStartStopOpinion_ =
+        csvParser_.header().colBrakeLight >= 0 || csvParser_.header().colGearSelector >= 0;
     return connected_;
 }
 
@@ -204,7 +209,15 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
     }
 
     // One-shot starter pulse on the first frame so the CrankingController cranks.
-    if (autoStart_ && !startFired_) {
+    // Suppressed for traces that carry start/stop opinion columns (brake_light /
+    // gear_selector): those captures describe the full vehicle lifecycle, and
+    // VehicleStartController — which engages in SimulationLoop as soon as the
+    // opinion is seen — owns every start. A frame-0 pulse on such a trace would
+    // crank before the first real brake/gear event and then be cut mid-run when
+    // the controller takes authority (start-then-die blip). Traces WITHOUT those
+    // columns keep the pulse: the documented autoStart behavior for
+    // hand-authored / old-schema CSVs, byte-for-byte unchanged.
+    if (autoStart_ && !startFired_ && !traceCarriesStartStopOpinion_) {
         input.starterButton = true;
         startFired_ = true;
     }
@@ -235,6 +248,13 @@ void ReplayTelemetryProvider::buildBaseEngineInput(EngineInput& input, const Sam
     input.replayTimestampS = currentTimestampS_;
     input.throttle = s.throttle;
     input.ignition = ignitionOn_;
+    // Tri-state brake light, straight from the CSV (1/0/blank). Mirrors the
+    // live provider's echo (LiveTelemetryProvider.cpp: input.brakeLight =
+    // signal.brakeLight): SimulationLoop treats a PRESENT value as "telemetry
+    // reported an opinion", which hands start/stop authority to
+    // VehicleStartController. Absent column => nullopt propagates => the
+    // old-schema behavior (no telemetry opinion) is unchanged.
+    input.brakeLight = s.brakeLight;
 }
 
 void ReplayTelemetryProvider::handleAutoGearboxDrive(EngineInput& input, const Sample& s,
@@ -299,7 +319,18 @@ void ReplayTelemetryProvider::handleAutoGearboxNonDrive(EngineInput& input) cons
 void ReplayTelemetryProvider::handleNonAutoGearbox(EngineInput& input, const Sample& s) const {
     input.roadSpeedKmh = s.roadSpeedKmh;
     input.gearAbsolute = s.gear;
-    input.gearSelector = (s.gear >= 0) ? s.gear : 0;
+    // gear_selector (PRNDL string) is the authoritative driver command when the
+    // capture carries it — vehicle-sim's decoded schema has NO numeric `gear`
+    // column, so without this mapping engineInput.gearSelector (what
+    // SimulationLoop::applyStartStopDecision reads) would stay NEUTRAL forever.
+    // Mirrors LiveTelemetryProvider::csvGearSelector. CSVs without the column
+    // (or with a blank cell) keep the numeric-gear behavior: 0 -> NEUTRAL,
+    // 1..8 -> that gear, absent (-1) -> NEUTRAL — exactly the old behavior.
+    if (!s.gearSelector.empty()) {
+        input.gearSelector = static_cast<int>(parseGearSelector(s.gearSelector));
+    } else {
+        input.gearSelector = (s.gear >= 0) ? s.gear : 0;
+    }
     input.clutchPressure = s.clutchPct;
     input.gearAutoMode = false;
 }
