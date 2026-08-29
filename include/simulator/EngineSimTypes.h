@@ -59,6 +59,7 @@ namespace EngineSimDefaults {
     // Simulation defaults
     constexpr double  DEFAULT_DURATION_SECONDS   = 3.0;  // Default non-interactive simulation duration
     constexpr float   DEFAULT_HARDWARE_VOLUME    = 1.0f; // Default hardware output volume (0.0 to 1.0)
+    constexpr float   DEFAULT_ENGINE_VOLUME      = 1.0f; // Default engine-TERM volume (0.0 to 1.0) — scales only the synthesizer's engine exhaust; afterfire pops bypass it
     constexpr int32_t DEFAULT_PREFILL_MS         = 50;   // Default pre-fill buffer duration in ms for sync-pull mode
     constexpr double  DYNO_MAX_TORQUE_FT_LBS     = 500.0; // Base dyno brake torque — ~1.5x typical V8 peak, gives usable range
 
@@ -94,8 +95,15 @@ namespace EngineSimDefaults {
 //   - Canonical source is ISimulatorConfig.sampleRate (set from EngineSimDefaults::SAMPLE_RATE)
 // - simulationFrequency, fluidSimulationSteps, synthLatency: ISimulator-only (factory sets on Simulator subclass)
 // - maxChunkFrames, volume, convolutionLevel: ISimulator-only (runtime use by BridgeSimulator)
+// - engineVolume: ISimulator-only — applied by BridgeSimulator::initAudioConfig to
+//   Synthesizer::AudioParameters.volume, the ENGINE-TERM gain (synthesizer.cpp
+//   multiplies the leveled engine exhaust by it BEFORE the afterfire pop is
+//   summed). Deliberately separate from `volume`: `volume` is the final
+//   int16->float conversion gain applied to the ALREADY-SUMMED engine+pop mix
+//   (BridgeSimulator::convertInt16ToStereoFloat), so scaling it to 0 would mute
+//   the pops too. --engine-volume drives engineVolume; --silent drives both.
 //
-// Note: volume and convolutionLevel are runtime-tunable defaults, not constants
+// Note: volume, convolutionLevel and engineVolume are runtime-tunable defaults, not constants
 struct ISimulatorConfig {
     int32_t sampleRate = EngineSimDefaults::SAMPLE_RATE;
     int32_t simulationFrequency = 0;  // 0 = use engine's actual frequency; >0 = explicit override
@@ -104,6 +112,7 @@ struct ISimulatorConfig {
     double targetSynthesizerLatency = EngineSimDefaults::TARGET_SYNTH_LATENCY;
     float volume = 0.5f;           // Runtime-tunable default
     float convolutionLevel = 0.5f; // Runtime-tunable default
+    float engineVolume = EngineSimDefaults::DEFAULT_ENGINE_VOLUME; // Engine-term (synthesizer) volume; pops unaffected
 };
 
 // How a pop arriving while another is still sounding on the same exhaust channel

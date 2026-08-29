@@ -22,6 +22,7 @@
 #include "simulator/SineVehicle.h"
 #include "simulator/SineTransmission.h"
 #include "simulator/EngineSimTypes.h"
+#include "synthesizer.h"
 #include "simulation/EnginePhase.h"
 #include "common/PresetExceptions.h"
 
@@ -34,8 +35,10 @@
 namespace {
 
 // Build a fully-created BridgeSimulator around a SineSimulator (the established
-// light path). Returns nullptr-equivalent via ASSERT inside the helper caller.
-std::unique_ptr<BridgeSimulator> makeReadyBridgeSimulator() {
+// light path), applying the caller's ISimulatorConfig through create() — the
+// same path SimulatorFactory uses. Returns nullptr-equivalent via ASSERT inside
+// the helper caller.
+std::unique_ptr<BridgeSimulator> makeReadyBridgeSimulator(const ISimulatorConfig& config) {
     auto sineSim = std::make_unique<SineSimulator>();
     Simulator::Parameters simParams;
     simParams.systemType = Simulator::SystemType::NsvOptimized;
@@ -46,13 +49,18 @@ std::unique_ptr<BridgeSimulator> makeReadyBridgeSimulator() {
     sineSim->loadSimulation(new SineEngine(), new SineVehicle(), new SineTransmission());
 
     auto bridge = std::make_unique<BridgeSimulator>(std::move(sineSim), "TestBridge");
+    [[maybe_unused]] const bool created = bridge->create(config, nullptr, nullptr);
+    return bridge;
+}
+
+// Default-config convenience overload used by most tests.
+std::unique_ptr<BridgeSimulator> makeReadyBridgeSimulator() {
     ISimulatorConfig config;
     config.sampleRate = EngineSimDefaults::SAMPLE_RATE;
     config.simulationFrequency = EngineSimDefaults::SIMULATION_FREQUENCY;
     config.fluidSimulationSteps = EngineSimDefaults::FLUID_SIMULATION_STEPS;
     config.targetSynthesizerLatency = EngineSimDefaults::TARGET_SYNTH_LATENCY;
-    [[maybe_unused]] const bool created = bridge->create(config, nullptr, nullptr);
-    return bridge;
+    return makeReadyBridgeSimulator(config);
 }
 
 // Build a transition decision targeting a phase (isTransition=true by default).
@@ -389,5 +397,43 @@ TEST(BridgeSimulatorContractTest, SetSpeedTrackingTargetDynoRpmHonorsFloorAndSca
     ASSERT_TRUE(sim->setSpeedTrackingTarget(/*speedKmh*/ 120.0, /*rpmFloor*/ 0.0));
     const double highSpeedRpm = sim->getStats().dynoTargetRPM;
     EXPECT_GT(highSpeedRpm, lowSpeedRpm);   // 4x road speed -> higher target RPM
+}
+
+// --- engineVolume: the engine-TERM volume reaches the synthesizer -------------
+
+// ISimulatorConfig::engineVolume must land on Synthesizer::AudioParameters
+// .volume — the gain synthesizer.cpp applies to the leveled ENGINE exhaust
+// BEFORE the afterfire pop is summed. That is what lets --engine-volume 0 mute
+// the engine while the pops keep sounding. The synthesizer's other parameters
+// (set by SineSimulator before create()) must survive the write.
+TEST(BridgeSimulatorContractTest, EngineVolumeReachesSynthesizerParameters) {
+    ISimulatorConfig config;
+    config.sampleRate = EngineSimDefaults::SAMPLE_RATE;
+    config.simulationFrequency = EngineSimDefaults::SIMULATION_FREQUENCY;
+    config.fluidSimulationSteps = EngineSimDefaults::FLUID_SIMULATION_STEPS;
+    config.targetSynthesizerLatency = EngineSimDefaults::TARGET_SYNTH_LATENCY;
+    config.engineVolume = 0.25f;
+    auto sim = makeReadyBridgeSimulator(config);
+    ASSERT_NE(sim, nullptr);
+
+    Simulator* raw = sim->getInternalSimulator();
+    ASSERT_NE(raw, nullptr);
+    const Synthesizer::AudioParameters params = raw->synthesizer().getAudioParameters();
+    EXPECT_FLOAT_EQ(params.volume, 0.25f);
+    // Read-modify-write: the simulator's own setup must not be clobbered.
+    EXPECT_FLOAT_EQ(params.airNoise, 0.0f);          // SineSimulator silences air noise
+    EXPECT_FLOAT_EQ(params.inputSampleNoise, 0.0f);  // ...and input-sample noise
+}
+
+// Default config -> the engine term runs at full volume (behaviour-neutral when
+// --engine-volume is absent).
+TEST(BridgeSimulatorContractTest, EngineVolumeDefaultsToFull) {
+    auto sim = makeReadyBridgeSimulator();
+    ASSERT_NE(sim, nullptr);
+
+    Simulator* raw = sim->getInternalSimulator();
+    ASSERT_NE(raw, nullptr);
+    EXPECT_FLOAT_EQ(raw->synthesizer().getAudioParameters().volume,
+                    EngineSimDefaults::DEFAULT_ENGINE_VOLUME);
 }
 

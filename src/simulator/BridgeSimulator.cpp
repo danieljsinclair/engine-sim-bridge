@@ -703,6 +703,19 @@ void BridgeSimulator::initAudioConfig(const ISimulatorConfig& config) {
         } else {
             engineConfig_.simulationFrequency = m_simulator->getSimulationFrequency();
         }
+
+        // Engine-TERM volume: land config.engineVolume on the synthesizer's
+        // AudioParameters.volume, the gain synthesizer.cpp applies to the leveled
+        // ENGINE exhaust BEFORE the afterfire pop is summed into the same sample.
+        // This is the only knob that can mute the engine while the pops keep
+        // sounding. It must stay separate from engineConfig_.volume, which is the
+        // final int16->float conversion gain applied to the ALREADY-SUMMED
+        // engine+pop mix in renderOnDemand()/readAudioBuffer() — scaling that to
+        // 0 mutes everything. Read-modify-write so the simulator's own parameter
+        // setup (noise, convolution, latency) set before this call is preserved.
+        Synthesizer::AudioParameters audioParams = m_simulator->synthesizer().getAudioParameters();
+        audioParams.volume = config.engineVolume;
+        m_simulator->synthesizer().setAudioParameters(audioParams);
     }
     ensureAudioConversionBufferSize(engineConfig_.maxChunkFrames);
 }
