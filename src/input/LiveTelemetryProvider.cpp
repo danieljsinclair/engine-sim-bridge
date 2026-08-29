@@ -117,13 +117,25 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
     // JSON network path below). The twin owns gearbox/clutch/throttle processing
     // and the cranking lifecycle; the CSV sample becomes its upstream signal.
     if (stream_) {
+        // Instant start-from anchor: the display/replay clock cold-jumps to the
+        // offset on the first tick so the first emitted row already reads
+        // [start-from] (display is ALWAYS relative from the recording's real
+        // start). The pre-window rows are discarded by tryReadNextRow (unpaced,
+        // no sim stepping) — live never waits on prefix data.
+        if (!liveOffsetAnchored_ && startFromS_ > 0.0) {
+            elapsedS_ = startFromS_;
+            liveOffsetAnchored_ = true;
+        }
         elapsedS_ += dt;
-        // NOTE: no elapsedS_ cold-jump to startFromS_. The SimulationLoop
-        // warm-start prefix steps the FULL sim (twin + core) silently for the
-        // startFromS_ window before the first emitted frame, so elapsedS_ must
-        // advance from 0 naturally — the first emitted frame lands at
-        // elapsedS_==startFromS_ and the twin/core are already primed/running.
         tryReadNextRow(elapsedS_);
+
+        // --end-at bounds the live run the same way it bounds replay: once the
+        // relative clock crosses the bound the stream is finished — report EOF
+        // so the loop's IsConnected check exits cleanly ("stop at that
+        // relative timecode or input end, whichever first").
+        if (endAtS_ >= 0.0 && elapsedS_ >= endAtS_) {
+            eofSeen_ = true;
+        }
 
         if (!initialized_.load() || !twinProvider_) {
             lastError_ = "Provider not initialized";
@@ -131,6 +143,17 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
         }
 
         UpstreamSignal signal;
+        if (!hasSample_ && primed_ && startFromS_ > 0.0) {
+            // Post-offset rows have not arrived yet (pipe still draining the
+            // discarded prefix, or a paced source catching up). An invalid
+            // empty signal would time the twin out to OFF and un-prime it, so
+            // hold the warm-boot seed (a valid running-baseline signal) until
+            // the first real row crosses the offset.
+            signal.throttleFraction = primeSeedThrottle_;
+            signal.speedKmh = primeSeedSpeedKmh_;
+            signal.isValid = true;
+            signal.timestampUtcMs = streamTimestampUtcMs();
+        }
         if (hasSample_) {
             signal.throttleFraction = currentSample_.throttle;
             // Feed the RAW recorded road speed (CAN staircase, levels held ~0.2 s)
@@ -257,8 +280,15 @@ void LiveTelemetryProvider::warmBootToRunning() {
     // startFromS_ window, so --live-telemetry --start-from now converges on the
     // replay run rather than cold-jumping. Idempotent (primeWarmUp guards).
     if (stream_ && twinProvider_) {
-        warmBootTwinToRunning(twinProvider_.get(), /*seedThrottle=*/0.20,
-                              /*seedSpeedKmh=*/10.0);
+        constexpr double kSeedThrottle = 0.20;
+        constexpr double kSeedSpeedKmh = 10.0;
+        warmBootTwinToRunning(twinProvider_.get(), kSeedThrottle, kSeedSpeedKmh);
+        // Record the seed so OnUpdateSimulation can synthesise a valid hold
+        // signal between the instant start-from anchor and the first real
+        // post-offset row (see OnUpdateSimulation's stream branch).
+        primeSeedThrottle_ = kSeedThrottle;
+        primeSeedSpeedKmh_ = kSeedSpeedKmh;
+        primed_ = true;
     }
 }
 
@@ -382,12 +412,18 @@ bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
         std::string parseError;
         if (!csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;  // malformed
         if (isSampleBlank(sample)) continue;
-        // NOTE: no pre-window row-drop. Under the SimulationLoop-owned warm-start
-        // prefix, elapsedS_ advances 0 -> startFromS_ during the suppressed window,
-        // so prefix rows are FEED (not dropped): they populate currentSample_ and
-        // the speed levels so the twin primes. Emission is suppressed by the loop's
-        // emitCsv_=false, not by discarding the rows here.
-        if (baselineTimeS_ < 0.0) baselineTimeS_ = sample.timeS;          // anchor on first kept row
+        // Anchor the recording clock on the FIRST parsed row (the recording's
+        // real start), NOT on the first post-offset row — relative offsets
+        // (--start-from/--end-at and the display [mm:ss]) are measured from
+        // here regardless of any windowing.
+        if (baselineTimeS_ < 0.0) baselineTimeS_ = sample.timeS;
+        // Instant start-from: discard pre-window rows UNPACED (pure I/O, no sim
+        // stepping, no clock waits — the owner-mandated "no wall-clock waiting").
+        // The twin is primed synthetically (warmBootToRunning) and the engine
+        // bump-starts at the offset state; prefix data is never simulated.
+        if (startFromS_ > 0.0 && (sample.timeS - baselineTimeS_) < startFromS_) {
+            continue;
+        }
         rowBuffer_.push_back(sample);
     }
 

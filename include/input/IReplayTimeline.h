@@ -29,8 +29,11 @@ public:
     /// Set the stop time in seconds. -1 disables the clamp (play to end).
     virtual void setEndAtS(double s) = 0;
 
-    /// Start offset in seconds. -1 = disabled (play from 0). Read by the loop
-    // to run a suppressed warm-start prefix before the first emitted frame.
+    /// Start offset in seconds. -1 = disabled (play from 0). For FILE traces
+    // (durationS() >= 0) the loop runs a suppressed fast-forward warm-start
+    // prefix before the first emitted frame; live streams (durationS() < 0)
+    // implement the instant contract inside their provider instead (prime +
+    // display offset, unpaced prefix discard — see LiveTelemetryProvider).
     virtual double getStartFromS() const = 0;
 };
 

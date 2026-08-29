@@ -501,33 +501,37 @@ int SimulationLoop::run() {
     // Pre-loop: provide initial feedback to input provider
     if (inputProvider_) inputProvider_->provideFeedback(state.previousStats);
 
-    // Warm-start prefix [0, startFromS_): step the FULL simulation through the
-    // provider normally per frame (engine core + twin advance, identical to the
-    // from-0 run) while SUPPRESSING all output (telemetry + presentation).
+    // Warm-start prefix [0, startFromS_) — FILE TRACES ONLY (durationS() >= 0):
+    // step the FULL simulation through the provider normally per frame (engine
+    // core + twin advance, identical to the from-0 run) while SUPPRESSING all
+    // output (telemetry + presentation), fast-forwarding at CPU speed (the
+    // trace is fully parsed up front, so this costs parse+step time only).
     // The prefix is a warm-up, not a recording: replaying it cold-jumps the
     // engine into motion with no combustion history, which leaves the gas path
     // cold at a hot operating point -> 90-100% negative exhaust flow. Stepping
     // the full sim here means the first EMITTED frame inherits the identical
     // from-0 engine state, so the warm-start run converges on the from-0 run.
-    // Driven by the provider's startFromS_ (a replay provider with no offset
-    // reports <= 0 and skips this entirely -> zero behavior change for from-0
-    // runs and legacy mode). Output suppression is flag-guarded; the engine is
-    // stepped exactly as in the main loop. Only IReplayTimeline providers
-    // (replay/live) carry an offset; keyboard/demo/manual providers don't, and
-    // the cast is null for them so the prefix is skipped.
+    //
+    // LIVE streams (durationS() < 0, e.g. stdin) deliberately SKIP this block:
+    // a live stream cannot be seeked, only consumed, and the owner rejected
+    // data-paced prefixing (wall-clock waiting on pre-offset rows). The live
+    // provider implements the instant contract instead: pre-window rows are
+    // discarded unpaced, the display clock cold-jumps to the offset, and the
+    // twin runs on its warm-boot prime until the first post-offset row
+    // arrives (see LiveTelemetryProvider::setStartFromS).
+    //
+    // A provider with no offset (startFromS_ <= 0) skips this entirely -> zero
+    // behavior change for from-0 runs and legacy mode. Only IReplayTimeline
+    // providers (replay/live) carry an offset; keyboard/demo/manual providers
+    // don't, and the cast is null for them so the prefix is skipped.
     if (inputProvider_) {
         const auto* timeline = dynamic_cast<const input::IReplayTimeline*>(inputProvider_);
-        if (timeline && timeline->getStartFromS() > 0.0) {
+        if (timeline && timeline->getStartFromS() > 0.0
+                && timeline->durationS() >= 0.0) {
             const double prefixEnd = timeline->getStartFromS();
-            // File traces (durationS() > 0) are fully parsed up front: the prefix
-            // fast-forwards without real-time pacing. Live streams (durationS() < 0,
-            // e.g. stdin) deliver rows in real time: the prefix must pace so the
-            // sim clock stays lockstep with arriving data (1s sim == 1s recording)
-            // — a live stream cannot be seeked, only consumed.
-            const bool pacedPrefix = timeline->durationS() < 0.0;
             logger_->info(LogMask::BRIDGE,
-                __ilog_format("Warm-start prefix: stepping %.3fs of sim silently before first emission (%s)",
-                    prefixEnd, pacedPrefix ? "real-time, following the live stream" : "fast-forward"));
+                __ilog_format("Warm-start prefix: stepping %.3fs of sim silently before first emission (fast-forward)",
+                    prefixEnd));
             // Warm-up prefix: step the FULL per-tick path (engine core + twin via
             // step(), physics tick via audioBuffer_.updateSimulation) so the prefix
             // matches the from-0 run tick-for-tick. Suppress ALL output: CSV write
@@ -540,23 +544,22 @@ int SimulationLoop::run() {
             double lastProgressS = 0.0;
             while (state.currentTime < prefixEnd) {
                 // Honour a stop request (CTRL+C / SIGTERM) during the warm-start
-                // prefix too: the prefix can be tens of seconds long (start-from
-                // 01:30 => 90s), and without this check a signal arriving in that
-                // window is silently swallowed until the prefix completes. Breaking
-                // here drops straight into the main loop, whose stop-request check
-                // returns immediately, so the run terminates cleanly.
+                // prefix too: the prefix can be tens of seconds of CPU stepping,
+                // and without this check a signal arriving in that window is
+                // swallowed until the prefix completes. Breaking here drops
+                // straight into the main loop, whose stop-request check returns
+                // immediately, so the run terminates cleanly.
                 if (stopRequested_->load(std::memory_order_seq_cst)) break;
-                // Stream EOF mid-prefix (live stdin closed early / short trace):
-                // stop warming — the main loop's IsConnected check exits cleanly.
+                // Short trace / EOF mid-prefix: stop warming — the main loop's
+                // IsConnected check exits cleanly.
                 if (!inputProvider_->IsConnected()) break;
                 step(state);
-                if (pacedPrefix) clock_->waitUntilNextTick();
                 state.engineInput = pollInput(state.currentTime, config_.updateInterval(), state.isFirstTick);
                 state.isFirstTick = false;
                 if (inputProvider_) inputProvider_->provideFeedback(state.previousStats);
-                // Progress heartbeat (paced prefix only): a 90s silent window with
-                // no output is indistinguishable from a hang. 1 line / 5s.
-                if (pacedPrefix && state.currentTime - lastProgressS >= 5.0) {
+                // Progress heartbeat: a long silent CPU warm-up with no output is
+                // indistinguishable from a hang. 1 line / 5s of sim time.
+                if (state.currentTime - lastProgressS >= 5.0) {
                     lastProgressS = state.currentTime;
                     logger_->info(LogMask::BRIDGE,
                         __ilog_format("Warm-start prefix: %.1fs / %.1fs", state.currentTime, prefixEnd));

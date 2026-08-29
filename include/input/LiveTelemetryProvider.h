@@ -121,13 +121,26 @@ public:
     /// Get the current upstream signal (for diagnostics/debugging).
     UpstreamSignal getCurrentSignal() const;
 
-    /// Skip CSV rows before this time (seconds). Mirrors ReplayTelemetryProvider
-    /// so --start-from works for --live-telemetry as well as --replay-telemetry.
+    /// Instant start-from for the live stream (seconds, relative to the first
+    /// parsed recording row). A live stdin stream cannot be seeked, so unlike
+    /// the replay path (file fast-forward in SimulationLoop) this NEVER waits
+    /// on pre-window data: pre-window rows are discarded unpaced as they
+    /// arrive, elapsedS_ (the [mm:ss] display clock) cold-jumps to the offset
+    /// on the first tick, and until the first post-offset row arrives the
+    /// twin keeps being fed the warm-boot seed signal (an invalid empty
+    /// signal would time it out to OFF and un-prime it). The engine starts
+    /// Stopped and bump-starts via the coupled driveline — the mid-drive
+    /// at-speed catch path.
     void setStartFromS(double s);
 
-    // IReplayTimeline — makes the live path share the replay warm-start prefix
-    // in SimulationLoop (read only getStartFromS()>0; never durationS()), so
-    // --live-telemetry --start-from primes the twin + core instead of cold-jumping.
+    // IReplayTimeline — the live path's instant start-from contract:
+    //   - getStartFromS() is informational (SimulationLoop runs its stepped
+    //     warm-start prefix ONLY for file traces, durationS() >= 0; live skips
+    //     it — see the header comment on setStartFromS).
+    //   - durationS() < 0 marks an unbounded/forward-only stream.
+    //   - setEndAtS bounds the run: once elapsedS_ crosses the bound the
+    //     provider reports EOF (IsConnected false) so the loop exits cleanly —
+    //     "--stop at that relative timecode or input end, whichever first".
     double durationS() const override { return -1.0; }   // unbounded live stream
     void setEndAtS(double s) override { endAtS_ = s; }
     double getStartFromS() const override { return startFromS_; }
@@ -207,6 +220,13 @@ private:
     bool headerParsed_ = false;  // header parsed once; later calls read data rows only
     double startFromS_ = -1.0;   // skip CSV rows before this time (-1 = disabled)
     double endAtS_ = -1.0;       // stop at this time (-1 = play to end); IReplayTimeline
+    bool liveOffsetAnchored_ = false;  // elapsedS_ has cold-jumped to startFromS_ (once)
+    // Warm-boot seed (recorded by warmBootToRunning so OnUpdateSimulation can
+    // synthesise a VALID hold signal until the first post-offset row arrives —
+    // see setStartFromS's contract).
+    double primeSeedThrottle_ = 0.0;
+    double primeSeedSpeedKmh_ = 0.0;
+    bool primed_ = false;
     double baselineTimeS_ = -1.0;  // recording-time of the first consumed row (set on first success)
 
     /// Read-ahead buffer of parsed rows NOT yet past the sim clock. The CSV stream

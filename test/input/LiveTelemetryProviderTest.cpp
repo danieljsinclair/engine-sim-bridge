@@ -470,6 +470,86 @@ TEST(LiveTelemetryStreamTest, CsvRoadSpeedIsSurfacedOnEngineInput) {
 // below the first row at t=2.0) must surface the LAST row (t=8, throttle=100),
 // NOT be gated behind the clock. The gear_selector column is the clean row-varying
 // observable (echoed in EngineInput.gearSelector, not masked by CRANKING throttle).
+// T12: instant --start-from (live contract): pre-window rows are discarded, the
+// display clock COLD-JUMPS to the offset on the first tick (display is relative
+// to the recording's real start), and the first post-offset row feeds
+// immediately. No prefix row may ever surface: road speed on frame 1 is the
+// post-offset row's speed, and the replay timestamp reads the offset (+dt), not 0.
+TEST(LiveTelemetryStreamTest, InstantStartFromDiscardsPrefixAndAnchorsDisplayClock) {
+    std::ostringstream csv;
+    csv << "time_s,throttle_pct,road_speed_kmh\n";
+    for (double t = 0.0; t <= 1.0; t += 0.5) csv << t << ",10," << (10 + 2 * t) << "\n";   // prefix
+    csv << "10.0,25,40\n10.5,25,42\n11.0,25,44\n";                                        // post-offset
+    StreamHarness h(csv.str());
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setStartFromS(10.0);
+
+    input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_NEAR(in.replayTimestampS, 10.05, 1e-9)
+        << "Display clock must cold-jump to the start-from offset (+ one tick), not "
+           "advance from 0 — display is relative to the recording's real start.";
+    EXPECT_DOUBLE_EQ(in.roadSpeedKmh, 40.0)
+        << "The first post-offset row (t=10, 40 km/h) must feed on frame 1; prefix "
+           "rows must be discarded, never surfaced.";
+}
+
+// T13: the discard window is measured from the FIRST PARSED recording row (the
+// recording's real start), not from the first KEPT row. A capture whose epoch
+// starts at t=100s with --start-from 10 must keep the row at t=110 — had the
+// baseline anchored on the first kept row, relT would restart and the window
+// would discard EVERYTHING (no sample ever, twin stuck on the prime seed).
+TEST(LiveTelemetryStreamTest, InstantStartFromAnchorsBaselineOnFirstRecordingRow) {
+    std::ostringstream csv;
+    csv << "timestamp_ms,speed_kmh,throttle_percent\n";
+    csv << "100000,5,10\n100500,6,10\n101000,7,10\n";   // prefix (relT 0..1s)
+    csv << "110000,50,20\n110500,52,20\n";              // post-offset (relT 10, 10.5)
+    StreamHarness h(csv.str());
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setStartFromS(10.0);
+
+    input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_DOUBLE_EQ(in.roadSpeedKmh, 50.0)
+        << "Window is relT < 10 from the FIRST row (epoch t=100): the t=110 row "
+           "(relT=10) must be kept and feed frame 1.";
+    EXPECT_NEAR(in.replayTimestampS, 10.05, 1e-9);
+}
+
+// T14: --end-at bounds the LIVE run at the relative timecode — the provider
+// reports EOF once elapsed crosses the bound, even though stream rows remain
+// (rows to t=5 here). "Stop at that relative timecode or input end, whichever
+// first."
+TEST(LiveTelemetryStreamTest, EndAtBoundsLiveRunWithCleanDisconnect) {
+    std::ostringstream csv;
+    csv << "time_s,throttle_pct,road_speed_kmh\n";
+    for (int i = 0; i <= 50; ++i) csv << (i * 0.1) << ",20,30\n";   // rows to t=5
+    StreamHarness h(csv.str());
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setEndAtS(1.0);
+
+    int ticks = 0;
+    while (h.provider->IsConnected() && ticks < 200) {
+        h.provider->OnUpdateSimulation(0.05);
+        ++ticks;
+    }
+    EXPECT_FALSE(h.provider->IsConnected())
+        << "end-at must disconnect the provider at the bound (clean loop exit).";
+    EXPECT_LE(ticks * 0.05, 1.5)
+        << "The run must stop at ~1.0s of sim time (1.0/0.05 + margin ticks), not "
+           "play the whole 5s stream.";
+}
+
+// T11: LIVE stream mode (engine-sim-cli --live-telemetry stdin pipe) surfaces the
+// LATEST row available in the stream on the FIRST frame — no consumption pacing
+// by recording timestamp. This is the latency fix: under timestamp pacing a
+// sparse recording (rows at t=2,3.5,4,...) holds an old row until the sim clock
+// "catches up" to each row's timestamp, adding ~0.5s+ of input-to-audio lag on a
+// live pipe. The live ctor (liveStream=true) must surface the freshest sample
+// immediately, so the engine response tracks the pipe like keyboard input does.
+//
+// Observable: a single OnUpdateSimulation with dt=0.05 (simElapsedS~0.05, far
+// below the first row at t=2.0) must surface the LAST row (t=8, throttle=100),
+// NOT be gated behind the clock. The gear_selector column is the clean row-varying
+// observable (echoed in EngineInput.gearSelector, not masked by CRANKING throttle).
 TEST(LiveTelemetryStreamTest, LiveStreamAdvancesThroughCaptureNotPinnedToLastRow) {
     // Dense rows (every 0.1s). Early rows are PARK; only the final 5 rows are DRIVE.
     // Dense so the ~1-row/call future-skew doesn't skip transitions; the clock sweep
