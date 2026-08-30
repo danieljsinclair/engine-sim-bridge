@@ -2,8 +2,10 @@
 #include "input/CsvTelemetryParser.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <sstream>
+#include <string_view>
 
 namespace input {
 namespace {
@@ -72,7 +74,9 @@ struct ColumnAlias {
     const char* aliases;
 };
 
-constexpr ColumnAlias kColumnAliases[] = {
+// Fixed size mirrors the row count below; std::array (not a C-style array)
+// keeps the registry a constexpr value with STL ergonomics.
+constexpr std::array<ColumnAlias, 9> kColumnAliases = {{
     {&CsvHeader::colTime,         &CsvHeader::timeInMs, "timestamp_utc_ms timestamp_ms ts_ms"},
     {&CsvHeader::colTime,         nullptr,              "time_s time t timecode"},
     {&CsvHeader::colThrottle,     nullptr,              "throttle_pct throttle_percent throttle"},
@@ -82,13 +86,13 @@ constexpr ColumnAlias kColumnAliases[] = {
     {&CsvHeader::colClutch,       nullptr,              "clutch_pct clutch"},
     {&CsvHeader::colMotorTorque,  nullptr,              "motor_torque_nm motor_torque torque_nm"},
     {&CsvHeader::colBrakeLight,   nullptr,              "brake_light brakelight"},
-};
+}};
 
-bool matchesAlias(const std::string& name, const std::string& aliases) {
-    for (const auto& alias : split(aliases, ' ')) {
-        if (alias == name) return true;
-    }
-    return false;
+bool matchesAlias(std::string_view name, std::string_view aliases) {
+    const std::string list(aliases);
+    const auto spellings = split(list, ' ');
+    return std::any_of(spellings.cbegin(), spellings.cend(),
+                       [name](const std::string& spelling) { return spelling == name; });
 }
 
 // Map every recognised header field onto its CsvHeader column index. Unknown
