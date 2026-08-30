@@ -19,13 +19,15 @@
 //               immediately and cancels the timer (safety: the engine must not
 //               finish cranking after the car is already moving).
 //   STOP   (only while RUNNING, i.e. after the crank has completed):
-//            brake pressed AND gear == PARK AND a drive gear (D/R) has been
-//            selected at least once since the current engine run started
-//            (drive-since-start gate — the plan's deferred PARK-after-motion
-//            item resolved via gear history). Without the gate, the still-held
-//            brake that just performed a brake-initiated start (still in PARK)
-//            stops the engine on its own ignition frame: every brake touch in
-//            PARK would end latched-off.
+//            brake RELEASED (light ON->OFF edge) while gear == PARK AND a drive
+//            gear (D/R) has been selected at least once since the current
+//            engine run started (drive-since-start gate — the plan's deferred
+//            PARK-after-motion item resolved via gear history). A brake PRESS
+//            in PARK never cuts ignition (the driver may be about to select a
+//            gear); shifting out of PARK before the release is a drive-off and
+//            no stop occurs. Without the drive gate, the brake that performed
+//            a brake-initiated start in PARK would stop the engine it just
+//            cranked the moment the pedal is released.
 //   LATCH  blocks START while set; releases on brake release ALONE (plan:
 //            `stopLatch && !brake`). While a drive gear is selected, the tick
 //            that releases the latch also satisfies START (gear trigger) and
@@ -78,11 +80,12 @@ private:
     const double crankDelayS_;
 
     bool engineOn_ = false;          // sim has been started (starter engaged onward)
-    bool stopLatch_ = false;         // P+B stop fired; blocks restart until released
+    bool stopLatch_ = false;         // park release-edge stop fired; blocks restart until released
     bool crankPending_ = false;      // starter engaged, ignition not yet fired
     bool crankFromBrakeOnly_ = false; // crank was initiated without a drive gear
     double crankAccumS_ = 0.0;       // accumulated dt while crank delay is pending
     bool driveSelectedSinceStart_ = false; // a D/R gear was seen in the current run
+    bool brakeWasPressed_ = false;   // previous frame's brake light (release-edge detection)
 };
 
 } // namespace input

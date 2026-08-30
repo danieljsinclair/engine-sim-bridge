@@ -518,9 +518,10 @@ TEST_F(SimulationLoopVehicleControlsTest, InteractiveGearKey_StartsInstantly) {
         << "Gear start is instant — no crank delay";
 }
 
-// Brake + PARK while running stops the engine (ignition off), identically to
-// the live-telemetry path.
-TEST_F(SimulationLoopVehicleControlsTest, InteractiveBrakePlusPark_Stops) {
+// Brake press in PARK while running must NOT stop the engine (the driver may
+// be reaching for a gear); the cut fires on the brake RELEASE in PARK —
+// identically to the live-telemetry path.
+TEST_F(SimulationLoopVehicleControlsTest, InteractiveBrakeInParkThenRelease_Stops) {
     input::EngineInput driveSelected;
     driveSelected.gearSelector = static_cast<int>(bridge::GearSelector::DRIVE);
 
@@ -529,12 +530,19 @@ TEST_F(SimulationLoopVehicleControlsTest, InteractiveBrakePlusPark_Stops) {
     ASSERT_TRUE(calls_->lastIgnition);
 
     input::EngineInput brakeAndPark;
-    brakeAndPark.brakeLevel = 1.0;        // 'B' held
+    brakeAndPark.brakeLevel = 1.0;        // 'B' held in PARK
     brakeAndPark.gearSelector = static_cast<int>(bridge::GearSelector::PARK);
     loop.step(makeStateRef(brakeAndPark));
 
+    EXPECT_TRUE(calls_->lastIgnition)
+        << "Brake press in PARK while running must not stop the engine";
+
+    input::EngineInput parkNoBrake;       // brake released, still in PARK
+    parkNoBrake.gearSelector = static_cast<int>(bridge::GearSelector::PARK);
+    loop.step(makeStateRef(parkNoBrake));
+
     EXPECT_FALSE(calls_->lastIgnition)
-        << "Brake + PARK while running must stop the engine";
+        << "Brake released in PARK while running must stop the engine";
 }
 
 // No vehicle-control signal (no telemetry light, no brake level, no D/R gear):
@@ -721,8 +729,9 @@ TEST_F(SimulationLoopVehicleControlsTest, LiveNetworkFrame_NeutralDoesNotStart) 
 // before the first vehicle-control opinion, so a twin that defaults its
 // ignition OFF can never self-start (UpLeckHill ran its engine from t=0.44s
 // with no driver input). After the opinion the level follows the decision:
-// false through the brake-initiated crank, true at ignition, false again on a
-// latched brake+PARK stop (after drive-since-start).
+// false through the brake-initiated crank, true at ignition, still true while
+// the brake is pressed in PARK (after drive-since-start), false again on the
+// brake RELEASE in PARK (the edge-triggered stop).
 // ---------------------------------------------------------------------------
 
 // IInputProvider that IS also a vehicle-control sink and records every
@@ -797,8 +806,9 @@ TEST_F(SimulationLoopVehicleControlsTest, TwinIgnitionCommandedThroughSink_Nothi
     EXPECT_TRUE(provider->ignitionLevels[3])
         << "held brake+PARK after the start must not stop the engine";
 
-    // Drive selected (arms the stop gate), then brake+PARK stops same frame and
-    // the commanded level drops to false and STAYS false while latched.
+    // Drive selected (arms the stop gate), then brake pressed in PARK: the
+    // level must STAY true — the cut is edge-triggered on the brake RELEASE in
+    // park, not on the press.
     provider->templateInput_.brakeLight = std::nullopt;
     provider->templateInput_.gearSelector = static_cast<int>(bridge::GearSelector::DRIVE);
     loop.step(makeStateRef(provider->OnUpdateSimulation(simConfig_.updateInterval())));
@@ -807,14 +817,20 @@ TEST_F(SimulationLoopVehicleControlsTest, TwinIgnitionCommandedThroughSink_Nothi
     provider->templateInput_.gearSelector = static_cast<int>(bridge::GearSelector::PARK);
     loop.step(makeStateRef(provider->OnUpdateSimulation(simConfig_.updateInterval())));
     ASSERT_GE(provider->ignitionLevels.size(), 6u);
+    EXPECT_TRUE(provider->ignitionLevels.back())
+        << "brake press in PARK after drive must NOT command ignition OFF";
+
+    // Brake released while still in PARK: the release edge cuts the ignition.
+    provider->templateInput_.brakeLight = false;
+    loop.step(makeStateRef(provider->OnUpdateSimulation(simConfig_.updateInterval())));
     EXPECT_FALSE(provider->ignitionLevels.back())
-        << "brake+PARK after drive must command ignition OFF";
+        << "brake release in PARK after drive must command ignition OFF";
 
     const auto sizeAtStop = provider->ignitionLevels.size();
     for (int i = 0; i < 5; ++i) {
         loop.step(makeStateRef(provider->OnUpdateSimulation(simConfig_.updateInterval())));
         EXPECT_FALSE(provider->ignitionLevels.back())
-            << "latched stop must keep ignition commanded OFF";
+            << "a stopped engine must keep ignition commanded OFF";
     }
     EXPECT_EQ(provider->ignitionLevels.size(), sizeAtStop + 5u)
         << "the level is commanded every engaged frame";
