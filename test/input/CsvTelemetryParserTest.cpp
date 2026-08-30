@@ -139,6 +139,78 @@ TEST_F(CsvTelemetryParserTest, ParseHeader_CaseInsensitive) {
     EXPECT_EQ(parser.header().colRoad, 2);
 }
 
+// Every accepted millisecond-timestamp spelling maps the time column AND sets
+// the ms unit flag (callers then divide by 1000 via timeDivisor).
+TEST_F(CsvTelemetryParserTest, ParseHeader_MillisecondTimeAliases_SetUnitFlag) {
+    for (const char* alias : {"timestamp_utc_ms", "timestamp_ms", "ts_ms"}) {
+        CsvTelemetryParser msParser;
+        std::string error;
+        ASSERT_TRUE(msParser.parseHeader(std::string(alias) + ",throttle_pct", error)) << alias;
+        EXPECT_EQ(msParser.header().colTime, 0) << alias;
+        EXPECT_TRUE(msParser.header().timeInMs) << alias;
+    }
+}
+
+// The seconds-family spellings map the time column without the ms flag.
+TEST_F(CsvTelemetryParserTest, ParseHeader_SecondsTimeAliases_KeepSecondUnits) {
+    for (const char* alias : {"time_s", "time", "t", "timecode"}) {
+        CsvTelemetryParser sParser;
+        std::string error;
+        ASSERT_TRUE(sParser.parseHeader(std::string(alias) + ",throttle_pct", error)) << alias;
+        EXPECT_EQ(sParser.header().colTime, 0) << alias;
+        EXPECT_FALSE(sParser.header().timeInMs) << alias;
+    }
+}
+
+// Compact spellings from hand-written capture dialects map to the same
+// decoded columns as their long forms.
+TEST_F(CsvTelemetryParserTest, ParseHeader_CompactSignalAliases) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader(
+        "time_s,throttle,road_speed,clutch,gearselector,brakelight", error));
+    EXPECT_EQ(parser.header().colThrottle, 1);
+    EXPECT_EQ(parser.header().colRoad, 2);
+    EXPECT_EQ(parser.header().colClutch, 3);
+    EXPECT_EQ(parser.header().colGearSelector, 4);
+    EXPECT_EQ(parser.header().colBrakeLight, 5);
+}
+
+// Two time columns: the LAST one wins the index and the ms flag is sticky
+// (an ms spelling anywhere in the header keeps the capture on ms units).
+TEST_F(CsvTelemetryParserTest, ParseHeader_DuplicateTimeColumn_LastWinsMsFlagSticky) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("time_s,timestamp_ms", error));
+    EXPECT_EQ(parser.header().colTime, 1);
+    EXPECT_TRUE(parser.header().timeInMs);
+
+    CsvTelemetryParser reversed;
+    ASSERT_TRUE(reversed.parseHeader("timestamp_ms,time_s", error));
+    EXPECT_EQ(reversed.header().colTime, 1);
+    EXPECT_TRUE(reversed.header().timeInMs);
+}
+
+// Column names tolerate surrounding whitespace (tabs and spaces) — the
+// capture dialects pad-align their headers.
+TEST_F(CsvTelemetryParserTest, ParseHeader_TrimsWhitespaceAroundColumnNames) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("  Time_S ,\tThrottle_PCT\t, speed_kmh  ", error));
+    EXPECT_EQ(parser.header().colTime, 0);
+    EXPECT_EQ(parser.header().colThrottle, 1);
+    EXPECT_EQ(parser.header().colRoad, 2);
+}
+
+// Raw-CAN rejection needs BOTH markers: a capture that merely mentions can_id
+// (or data_hex) alongside decoded columns is not a raw capture.
+TEST_F(CsvTelemetryParserTest, ParseHeader_SingleCanMarker_IsNotRawCan) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("can_id,time_s", error));
+    EXPECT_EQ(parser.header().colTime, 1);
+
+    CsvTelemetryParser hexOnly;
+    ASSERT_TRUE(hexOnly.parseHeader("data_hex,time_s", error));
+    EXPECT_EQ(hexOnly.header().colTime, 1);
+}
+
 // ============================================================================
 // Row parsing
 // ============================================================================

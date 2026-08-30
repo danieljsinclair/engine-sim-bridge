@@ -944,4 +944,84 @@ TEST(LiveTelemetryStreamTest, WarmBootToRunningReachesRunningWithForwardGear) {
            "WOT (convergent with the replay warm-start, not a cold reversion)";
 }
 
+// T14: blank-row semantics — a row is blank only when NO expected column
+// carries a decoded value. During CAN bus wake-up the vehicle decodes brake_light
+// first while throttle and road speed are still blank; the old two-field test
+// (throttle==0 && speed==-2) silently dropped those rows, so real brake presses
+// never reached the start/stop decision layer (measured on gt-coldstart.csv:
+// brake decodable from +2.24s but the first surviving row was +5.95s). A
+// brake-only row must surface its opinion (brakeLight on the current signal,
+// valid telemetry for the twin).
+TEST(LiveTelemetryStreamTest, BrakeOnlyRowIsNotBlankAndSurfaces) {
+    // Rows carry ONLY a decoded brake_light=1; throttle and speed stay blank.
+    // Duplicated rows because the paced reader drops the first row beyond the
+    // sim clock each call (the documented ~1-row skew, same as T10b).
+    StreamHarness h(
+        "time_s,throttle_pct,road_speed_kmh,brake_light\n"
+        "0.0,,,1\n"
+        "1.0,,,1\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    h.provider->OnUpdateSimulation(1.5);  // rows t=0,1 in window; t>1 future
+    const input::UpstreamSignal signal = h.provider->getCurrentSignal();
+    EXPECT_TRUE(signal.isValid)
+        << "A brake-only row is real telemetry: it must reach the twin, not be "
+           "dropped as a blank wake-up frame";
+    ASSERT_TRUE(signal.brakeLight.has_value());
+    EXPECT_TRUE(*signal.brakeLight)
+        << "brake_light=1 decoded on an otherwise-blank row must surface";
+}
+
+// T14b: the all-blank row (every expected column at its not-decoded default)
+// is still dropped. That skip is load-bearing: it keeps hasSample_ false
+// through the bus wake-up frames and anchors the live clock baseline at the
+// first row with real data (see T12 for the twin-level consequence).
+TEST(LiveTelemetryStreamTest, FullyBlankRowIsStillSkipped) {
+    // brake_light column exists but the field is blank on every row: nothing
+    // is decoded at all, so all rows are blank wake-up frames.
+    StreamHarness h(
+        "time_s,throttle_pct,road_speed_kmh,brake_light\n"
+        "0.0,,,\n"
+        "1.0,,,\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    h.provider->OnUpdateSimulation(1.5);
+    const input::UpstreamSignal signal = h.provider->getCurrentSignal();
+    EXPECT_FALSE(signal.isValid)
+        << "A row with no decoded column must stay dropped so the twin waits "
+           "in OFF for real data";
+    EXPECT_FALSE(signal.brakeLight.has_value());
+}
+
+// T14c: a decoded gear column alone (numeric gear present, everything else
+// blank) also makes the row non-blank — the rule is "any expected column
+// carries a decoded value", not a brake special case.
+TEST(LiveTelemetryStreamTest, GearOnlyRowIsNotBlankAndSurfaces) {
+    // gear=0 (neutral) decoded; throttle/speed/selector blank.
+    StreamHarness h(
+        "time_s,throttle_pct,road_speed_kmh,gear\n"
+        "0.0,,,0\n"
+        "1.0,,,0\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    h.provider->OnUpdateSimulation(1.5);
+    EXPECT_TRUE(h.provider->getCurrentSignal().isValid)
+        << "A gear-only row carries a decoded signal and must not be skipped";
+}
+
+// T14d: a decoded gear_selector string alone (PRNDL present, everything else
+// blank) likewise makes the row non-blank.
+TEST(LiveTelemetryStreamTest, GearSelectorOnlyRowIsNotBlankAndSurfaces) {
+    StreamHarness h(
+        "time_s,throttle_pct,road_speed_kmh,gear_selector\n"
+        "0.0,,,P\n"
+        "1.0,,,P\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    h.provider->OnUpdateSimulation(1.5);
+    EXPECT_TRUE(h.provider->getCurrentSignal().isValid)
+        << "A gear_selector-only row carries a decoded signal and must not be "
+           "skipped";
+}
+
 }  // namespace

@@ -9,17 +9,25 @@
 //   throttle_pct / throttle_percent / throttle  0..100 -> normalised to 0..1
 //   road_speed_kmh / speed_kmh   km/h. Blank/negative = dyno OFF (RPM emergent)
 //   gear            blank/-1 = unchanged; 0 = neutral; 1..8 = forward (set directly)
-//   gear_selector   PRNDL string (P/R/N/D) — followed by the auto gearbox
+//   gear_selector   PRNDL string (P/R/N/D) — followed by the auto gearbox; in
+//                   manual mode it drives engineInput.gearSelector (authoritative
+//                   over the numeric gear column when both are present)
 //   clutch_pct      0..100 -> clutch pressure 0..1. Blank/-1 = unchanged
+//   brake_light     1 = brake light on, 0 = off, blank = absent (tri-state);
+//                   surfaces on engineInput.brakeLight every frame
 //
-// autoStart fires the starter on the first frame so the CrankingController
-// cranks the engine. autoGearbox routes the CSV through a VirtualIceTwin (via
-// VirtualIceInputProvider — the SAME twin the live / --live-telemetry path uses)
-// that decides gears + the clutch coupling (--coupling-model / --wheel-coupling)
-// from the CSV road speed. This mirrors the live path so the replay path
-// exercises the SAME coupling code (the slider/coupling toggle is no longer a
-// no-op on replay). Q (quit) + P (preset cycle) work during replay if a
-// keyboard + session are wired via setKeyboardInput / setSession.
+// autoStart fires starterButton once on the first frame so the CrankingController
+// cranks the engine — EXCEPT for traces carrying start/stop opinion columns
+// (brake_light / gear_selector): there VehicleStartController owns every start
+// (it engages in SimulationLoop as soon as the opinion is seen), so the frame-0
+// pulse is suppressed (non-auto path only; see OnUpdateSimulation). autoGearbox
+// routes the CSV through a VirtualIceTwin (via VirtualIceInputProvider — the
+// SAME twin the live / --live-telemetry path uses) that decides gears + the
+// clutch coupling (--coupling-model / --wheel-coupling) from the CSV road
+// speed. This mirrors the live path so the replay path exercises the SAME
+// coupling code (the slider/coupling toggle is no longer a no-op on replay).
+// Q (quit) + P (preset cycle) work during replay if a keyboard + session are
+// wired via setKeyboardInput / setSession.
 
 #ifndef INPUT_REPLAY_TELEMETRY_PROVIDER_H
 #define INPUT_REPLAY_TELEMETRY_PROVIDER_H
@@ -148,6 +156,12 @@ private:
     double elapsedS_ = 0.0;
     bool startFired_ = false;
     twin::IceVehicleProfile gearboxProfile_;  // OWNED SEED for the twin (twin copies it)
+
+    // True when the CSV header carries brake_light / gear_selector: the trace
+    // expresses start/stop opinions, so the autoStart frame-0 pulse is
+    // suppressed (VehicleStartController owns every start for such traces).
+    bool traceCarriesStartStopOpinion_ = false;
+
     // The replay DRIVE branch routes through VirtualIceInputProvider ->
     // VirtualIceTwin (the SAME twin the live/Demo paths use) so --coupling-model /
     // --wheel-coupling take effect on replay. The provider owns the gearbox +

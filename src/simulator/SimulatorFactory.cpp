@@ -93,9 +93,13 @@ std::unique_ptr<Simulator> buildPistonEngineSimulator(
 }
 
 LoadedSimulation loadPresetSimulation(const std::string& scriptPath, const std::string& assetBasePath, bool useTorqueConverter) {
-    PresetLoadResult result = PresetEngineFactory::loadFromFile(scriptPath);
+    // Normalize once (exe-aware) so both the file open and the asset base use
+    // the same resolved path regardless of the launch directory.
+    const std::string normalizedPath = ScriptLoadHelpers::normalizeScriptPath(scriptPath);
+
+    PresetLoadResult result = PresetEngineFactory::loadFromFile(normalizedPath);
     if (!result.success()) {
-        throw SimulatorException("Failed to load preset: " + scriptPath + " — " + result.error);
+        throw SimulatorException("Failed to load preset: " + normalizedPath + " — " + result.error);
     }
 
     LoadedSimulation loaded;
@@ -103,8 +107,7 @@ LoadedSimulation loadPresetSimulation(const std::string& scriptPath, const std::
     loaded.vehicle = result.vehicle;
     loaded.transmission = result.transmission;
     loaded.initialGear = result.initialGear;
-    loaded.resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(
-        ScriptLoadHelpers::normalizeScriptPath(scriptPath), assetBasePath);
+    loaded.resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath, assetBasePath);
     // Install the fluid-coupling torque converter on the (preset-built)
     // transmission BEFORE the simulator wires it into the system, so addToSystem
     // adds the constraint at the safe wiring time (never to a live system).

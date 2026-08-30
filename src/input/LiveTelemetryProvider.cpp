@@ -441,11 +441,25 @@ bool LiveTelemetryProvider::isBlankLine(std::string_view s) {
 }
 
 bool LiveTelemetryProvider::isSampleBlank(const CsvSample& s) {
-    // Both throttle=0 AND roadSpeedKmh at the dyno-off sentinel (-2) means no
-    // CAN signals were decoded for this row. This is the signature of the blank
-    // initial frames emitted while the bus wakes up. Such rows must be skipped
-    // so hasSample_ stays false and the twin remains in OFF waiting for real data.
-    return s.throttle == 0.0 && s.roadSpeedKmh == -2.0;
+    // A row is real telemetry when ANY expected column carries a decoded value:
+    // brake_light (0 or 1 — both are decoded), a PRNDL gear_selector string, a
+    // gear number, a clutch value, a road speed off the dyno-off sentinel, a
+    // non-zero throttle, or a non-zero motor torque. During CAN bus wake-up the
+    // vehicle decodes brake_light first while throttle/speed are still blank, so
+    // the old two-field test silently dropped those rows — and any brake presses
+    // they carried — until throttle or speed finally decoded (measured on
+    // gt-coldstart.csv: brake decodable from +2.24s, first row surviving the old
+    // filter +5.95s). A row where NO column decoded (every field still at its
+    // not-decoded default) is a blank wake-up frame and must still be skipped:
+    // that skip is what anchors the live clock baseline at the first row with
+    // real data, keeping the twin in OFF until telemetry exists.
+    return !s.brakeLight.has_value()
+        && s.gearSelector.empty()
+        && s.gear < 0
+        && s.clutchPct < 0.0
+        && s.throttle == 0.0
+        && s.roadSpeedKmh == -2.0
+        && s.motorTorqueNm == 0.0;
 }
 
 void LiveTelemetryProvider::updateCurrentSpeedLevel(double relT, double speedKmh) {

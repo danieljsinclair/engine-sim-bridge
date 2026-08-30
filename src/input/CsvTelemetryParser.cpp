@@ -2,8 +2,10 @@
 #include "input/CsvTelemetryParser.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <sstream>
+#include <string_view>
 
 namespace input {
 namespace {
@@ -57,6 +59,73 @@ bool parseInt(const std::string& s, int& out) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Header column-alias registry
+//
+// One row per decoded CSV column, listing every header spelling that feeds it
+// (space-separated; no alias contains a space). Supporting a new capture
+// dialect is a table row, not a new parser branch. `timeUnitsFlag` is set only
+// by the millisecond-timestamp family so callers can divide the raw time by
+// 1000. Order preserves the previous if/else chain: first matching row wins.
+// ---------------------------------------------------------------------------
+struct ColumnAlias {
+    int CsvHeader::*column;
+    bool CsvHeader::*timeUnitsFlag;  // nullptr except ms timestamps
+    const char* aliases;
+};
+
+// Fixed size mirrors the row count below; std::array (not a C-style array)
+// keeps the registry a constexpr value with STL ergonomics.
+constexpr std::array<ColumnAlias, 9> kColumnAliases = {{
+    {&CsvHeader::colTime,         &CsvHeader::timeInMs, "timestamp_utc_ms timestamp_ms ts_ms"},
+    {&CsvHeader::colTime,         nullptr,              "time_s time t timecode"},
+    {&CsvHeader::colThrottle,     nullptr,              "throttle_pct throttle_percent throttle throttle_gas_pct"},
+    {&CsvHeader::colRoad,         nullptr,              "road_speed_kmh road_speed speed_kmh speed vehicle_speed_kmh"},
+    {&CsvHeader::colGear,         nullptr,              "gear"},
+    {&CsvHeader::colGearSelector, nullptr,              "gear_selector gearselector"},
+    {&CsvHeader::colClutch,       nullptr,              "clutch_pct clutch clutch_pressure"},
+    {&CsvHeader::colMotorTorque,  nullptr,              "motor_torque_nm motor_torque torque_nm"},
+    {&CsvHeader::colBrakeLight,   nullptr,              "brake_light brakelight"},
+}};
+
+bool matchesAlias(std::string_view name, std::string_view aliases) {
+    const std::string list(aliases);
+    const auto spellings = split(list, ' ');
+    return std::any_of(spellings.cbegin(), spellings.cend(),
+                       [name](const std::string& spelling) { return spelling == name; });
+}
+
+// Map every recognised header field onto its CsvHeader column index. Unknown
+// columns match no row and are ignored (old captures keep their column
+// alignment); a later duplicate of the same column overwrites an earlier one.
+void assignColumns(CsvHeader& header, const std::vector<std::string>& fields) {
+    for (size_t i = 0; i < fields.size(); ++i) {
+        const std::string name = lower(trim(fields[i]));
+        for (const auto& entry : kColumnAliases) {
+            if (!matchesAlias(name, entry.aliases)) continue;
+            header.*(entry.column) = static_cast<int>(i);
+            if (entry.timeUnitsFlag != nullptr) {
+                header.*(entry.timeUnitsFlag) = true;
+            }
+            break;
+        }
+    }
+}
+
+// Raw (undecoded) CAN captures are replay-hostile: they carry can_id +
+// data_hex instead of decoded signal columns. Both markers must be present —
+// a capture that merely mentions one of them is not necessarily raw CAN.
+bool isRawCanCapture(const std::vector<std::string>& fields) {
+    bool hasCanId = false;
+    bool hasDataHex = false;
+    for (const auto& field : fields) {
+        const std::string name = lower(trim(field));
+        if (name == "can_id") hasCanId = true;
+        if (name == "data_hex") hasDataHex = true;
+    }
+    return hasCanId && hasDataHex;
+}
+
 } // namespace
 
 bool CsvTelemetryParser::parseHeader(const std::string& headerLine, std::string& errorMsg) {
@@ -71,46 +140,14 @@ bool CsvTelemetryParser::parseHeader(const std::string& headerLine, std::string&
     firstRawTimestampMs_ = -1.0;
     rejectedOutlierRows_ = 0;
 
-    for (size_t i = 0; i < fields.size(); ++i) {
-        const std::string name = lower(trim(fields[i]));
-        if (name == "timestamp_utc_ms" || name == "timestamp_ms" || name == "ts_ms") {
-            header_.colTime = static_cast<int>(i);
-            header_.timeInMs = true;
-        } else if (name == "time_s" || name == "time" || name == "t" || name == "timecode") {
-            header_.colTime = static_cast<int>(i);
-        } else if (name == "throttle_pct" || name == "throttle" || name == "throttle_percent" ||
-                   name == "throttle_gas_pct") {
-            header_.colThrottle = static_cast<int>(i);
-        } else if (name == "road_speed_kmh" || name == "road_speed" ||
-                   name == "speed_kmh" || name == "speed" || name == "vehicle_speed_kmh") {
-            header_.colRoad = static_cast<int>(i);
-        } else if (name == "gear") {
-            header_.colGear = static_cast<int>(i);
-        } else if (name == "gear_selector" || name == "gearselector") {
-            header_.colGearSelector = static_cast<int>(i);
-        } else if (name == "clutch_pct" || name == "clutch" || name == "clutch_pressure") {
-            header_.colClutch = static_cast<int>(i);
-        } else if (name == "motor_torque_nm" || name == "motor_torque" || name == "torque_nm") {
-            header_.colMotorTorque = static_cast<int>(i);
-        } else if (name == "brake_light" || name == "brakelight") {
-            header_.colBrakeLight = static_cast<int>(i);
-        }
-    }
+    assignColumns(header_, fields);
 
     if (header_.colTime < 0) {
         errorMsg = "Telemetry CSV missing time column (time_s)";
         return false;
     }
 
-    // Detect raw CAN format (undecoded).
-    bool hasCanId = false;
-    bool hasDataHex = false;
-    for (const auto& field : fields) {
-        const std::string name = lower(trim(field));
-        if (name == "can_id") hasCanId = true;
-        if (name == "data_hex") hasDataHex = true;
-    }
-    if (hasCanId && hasDataHex) {
+    if (isRawCanCapture(fields)) {
         errorMsg = "This is a RAW CAN capture (can_id + data_hex columns). "
                    "Decode it first before replay.";
         return false;

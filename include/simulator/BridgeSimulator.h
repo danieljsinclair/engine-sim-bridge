@@ -149,10 +149,12 @@ private:
     // Single source of truth for engine phase — written via applyTransition()
     EnginePhase enginePhase_ = EnginePhase::Stopped;
 
-    // Cached transmission state — written on setGear/setClutchPressure so
-    // mutations are visible to static analysis without requiring const on a
-    // pointee-only mutation path.
+    // Cached transmission state — written on setGear/setDrivetrainInputTorque
+    // so mutations are visible to static analysis without requiring const on a
+    // pointee-only mutation path (S5817 false positive: the adapter mutates
+    // the Simulator owned by m_simulator, not this object's members directly).
     int lastSetGear_ = 0;
+    double lastDrivetrainInputTorqueNm_ = 0.0;
 
     static void advanceFixedSteps(Simulator* sim, int simulationFrequency, double dt, bool ceil);
     void drainSynthesizerBuffer(Simulator* sim) const;

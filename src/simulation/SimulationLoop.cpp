@@ -53,10 +53,9 @@ void SimulationLoop::applyStartStopDecision(LoopState& state, bool lightReported
     // opinion is seen the controller keeps authority: it is a state machine
     // (crank delay, stop latch) that must not be suspended mid-decision.
     const auto gear = static_cast<bridge::GearSelector>(state.engineInput.gearSelector);
-    const bool driveSelected =
-        (gear == bridge::GearSelector::DRIVE || gear == bridge::GearSelector::REVERSE);
-
-    if (!startStopEngaged_ &&
+    if (const bool driveSelected =
+            gear == bridge::GearSelector::DRIVE || gear == bridge::GearSelector::REVERSE;
+        !startStopEngaged_ &&
         !lightReportedByTelemetry &&
         state.engineInput.brakeLevel <= 0.0 &&
         !driveSelected) {

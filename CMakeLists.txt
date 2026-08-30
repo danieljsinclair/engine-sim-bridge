@@ -394,6 +394,7 @@ if(BUILD_BRIDGE_TESTS)
         test/twin/C63TeslaYTuneTest.cpp
         test/simulation/CommandedSpeedDisplayTest.cpp
         test/PathNormalizerTests.cpp
+        test/AssetResolverTests.cpp
         test/JsonParserTests.cpp
         test/SimulatorFactoryPresetDiscoveryTests.cpp
         test/IntakeDeserializerTests.cpp
@@ -405,6 +406,7 @@ if(BUILD_BRIDGE_TESTS)
         test/InMemoryTelemetryResetTests.cpp
         test/SimulatorFactoryBoundaryTests.cpp
         test/ScriptLoadHelpersResolveAssetBasePathTests.cpp
+        test/ScriptLoadHelpersLoadImpulseResponsesTests.cpp
         test/simulation/SimulationLoopStepTests.cpp
         test/simulation/SimulationLoopRunTests.cpp
         test/simulation/SimulationLoopVehicleControlsTests.cpp

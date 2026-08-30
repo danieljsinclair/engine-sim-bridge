@@ -11,9 +11,11 @@
 #include "transmission.h"
 #include "torque_converter.h"
 #include "units.h"
+#include "common/AssetResolver.h"
 #include "common/ILogging.h"
 
 #include <string>
+#include <vector>
 #include <filesystem>
 
 // Forward declarations (avoids pulling in WavLoader in every TU)
@@ -23,13 +25,21 @@ namespace ScriptLoadHelpers {
 
 /**
  * Normalize script path to absolute path.
+ *
+ * Absolute paths pass through unchanged. Relative paths resolve exe-aware
+ * (executable directory -> repository root -> cwd) so `--script es/foo.mr`
+ * works no matter which directory the binary was launched from.
  */
 inline std::string normalizeScriptPath(const std::string& scriptPath) {
     if (scriptPath.empty()) {
         return "";
     }
 
-    return std::filesystem::absolute(scriptPath).lexically_normal().string();
+    const std::filesystem::path given(scriptPath);
+    if (given.is_absolute()) {
+        return given.lexically_normal().string();
+    }
+    return asset_resolver::resolve(given).lexically_normal().string();
 }
 
 /**
@@ -194,6 +204,16 @@ inline Transmission* createDefaultTransmission(
     transmission->initialize(tParams);
     return transmission;
 }
+
+/**
+ * Candidate paths (priority order) for a runtime audio reference against the
+ * asset base: the script family's own library first (asset base + anchored
+ * reference), then the exe-aware root chain (exe dir -> repo root -> cwd).
+ * Implementation in ScriptLoadHelpers.cpp. Exposed for unit tests.
+ */
+std::vector<std::string> audioFileCandidates(
+    const std::string& assetBasePath,
+    const std::string& filename);
 
 /**
  * Load impulse responses for all exhaust systems in the engine.
