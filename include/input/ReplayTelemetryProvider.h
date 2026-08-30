@@ -12,10 +12,14 @@
 //   gear_selector   PRNDL string (P/R/N/D) — followed by the auto gearbox
 //   clutch_pct      0..100 -> clutch pressure 0..1. Blank/-1 = unchanged
 //
-// autoStart fires starterButton once on the first frame so the CrankingController
-// cranks the engine. autoGearbox owns an AutomaticGearbox that decides gears from
-// the CSV road speed. Q (quit) + P (preset cycle) work during replay if a keyboard
-// + session are wired via setKeyboardInput / setSession.
+// autoStart fires the starter on the first frame so the CrankingController
+// cranks the engine. autoGearbox routes the CSV through a VirtualIceTwin (via
+// VirtualIceInputProvider — the SAME twin the live / --live-telemetry path uses)
+// that decides gears + the clutch coupling (--coupling-model / --wheel-coupling)
+// from the CSV road speed. This mirrors the live path so the replay path
+// exercises the SAME coupling code (the slider/coupling toggle is no longer a
+// no-op on replay). Q (quit) + P (preset cycle) work during replay if a
+// keyboard + session are wired via setKeyboardInput / setSession.
 
 #ifndef INPUT_REPLAY_TELEMETRY_PROVIDER_H
 #define INPUT_REPLAY_TELEMETRY_PROVIDER_H
@@ -23,8 +27,13 @@
 #include "io/IInputProvider.h"
 #include "simulator/EngineSimTypes.h"
 #include "twin/IceVehicleProfile.h"
+#include "twin/IGearboxLogger.h"
+#include "twin/WheelCoupling.h"
+#include "twin/CouplingModelSelector.h"
+#include "twin/VirtualIceTwin.h"
 #include "input/IKeyboardInput.h"
 #include "input/CsvTelemetryParser.h"
+#include "input/VirtualIceInputProvider.h"
 #include "session/ISimulatorSession.h"
 
 // IReplayTimeline — satisfied by this provider so the CLI's
@@ -35,8 +44,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-
-namespace twin { class AutomaticGearbox; }
 
 namespace input {
 
@@ -66,16 +73,40 @@ public:
     // -1 = disabled (play full trace).
     // setEndAtS is virtual via IReplayTimeline (validator clamps it to play-to-end).
     void setStartFromS(double s) { startFromS_ = s; }
+    double getStartFromS() const override { return startFromS_; }
     void setEndAtS(double s) override { endAtS_ = s; }
 
     // Current replay timestamp (absolute, from CSV). -1 before first sample.
     double currentTimestampS() const { return currentTimestampS_; }
 
     // Reconfigure the gearbox profile to match the ACTUAL engine preset's ratios.
-    // Auto-generates a shift table from the ratios + redline so shift points are
-    // correct regardless of the transmission (7-speed AMG, 8-speed ZF, etc.).
+    // Forwards to the owned VirtualIceTwin (auto-gearbox only) so the replay box
+    // shifts against the real engine (e.g. a C63) instead of the default ZF
+    // profile. Mirrors LiveTelemetryProvider.
     void reconfigureProfile(const std::vector<double>& gearRatios,
-                             double diffRatio, double tireRadiusM);
+                            double diffRatio, double tireRadiusM);
+
+    // Attach a gearbox-decision logger so the oracle (section D: parse per-frame
+    // gear/rpm/mph) can validate the automatic box during replay. Forwards to the
+    // owned VirtualIceTwin (no-op when auto-gearbox is disabled / twin null).
+    void setGearboxLogger(twin::IGearboxLogger* logger);
+
+    // Select the live clutch wheel-coupling strategy (FREE/PIN/TORQUE). Mirrors
+    // LiveTelemetryProvider: forwarded to the twin so --wheel-coupling takes
+    // effect in the replay DRIVE branch.
+    void setWheelCouplingMode(twin::WheelCouplingMode mode);
+
+    // PIN-coupling compliance tau in ms (--pin-tau-ms): 0 = rigid pin. Like
+    // setWheelCouplingMode this is stored and re-forwarded when the owned
+    // twin provider is created in Initialize() (the CLI sets it before).
+    void setPinTauMs(double tauMs);
+
+    // Select the coupling MODEL (how the clutch pressure is derived):
+    // clutch-map (declarative smooth governor), torque-converter (fluid
+    // coupling), or legacy (historical slip-lock + binary relief, A/B). Mirrors
+    // LiveTelemetryProvider: forwarded to the twin so --coupling-model takes
+    // effect in the replay DRIVE branch.
+    void setCouplingModel(twin::CouplingModelKind kind);
 
 private:
     using Sample = CsvSample;
@@ -88,11 +119,22 @@ private:
     // nesting under the sonar thresholds).
     bool applyTimeSlicing(EngineInput& input, double dt);
     void buildBaseEngineInput(EngineInput& input, const Sample& s) const;
-    void handleAutoGearboxDrive(EngineInput& input, const Sample& s, double dt, double speedForBox) const;
-    void handleAutoGearboxNonDrive(EngineInput& input) const;
+    // Route a DRIVE sample through the twin provider (VirtualIceInputProvider ->
+    // VirtualIceTwin) — mirrors the live path. The twin owns gearbox/clutch/
+    // coupling-model processing; the returned EngineInput carries throttle, gear,
+    // clutchPressure, ignition, starter, selector, auto-mode, road-speed pin,
+    // injected torque and diagnostics.
+    EngineInput driveThroughTwin(const Sample& s, double dt, double roadSpeedKmh);
+    // Feed the twin through its OFF->CRANKING->IDLE->RUNNING lifecycle once, so
+    // the first replayed frame is already RUNNING with a forward gear available
+    // (replay reproduces a running engine, not the cranking transient). The
+    // selector comes from the first sample (default DRIVE) so a PARK/NEUTRAL
+    // trace never reaches RUNNING. No-op when the twin is absent / no samples.
+    void primeTwinToRunning();
     void handleNonAutoGearbox(EngineInput& input, const Sample& s) const;
 
     const Sample& sampleAt(double t) const;
+
     void processKeyboardInput(EngineInput& input);
     void processReplayKey(int key, EngineInput& input);
 
@@ -105,13 +147,28 @@ private:
     std::vector<Sample> samples_;
     double elapsedS_ = 0.0;
     bool startFired_ = false;
-    twin::IceVehicleProfile gearboxProfile_;  // OWNED: the gearbox holds a reference to this
-    std::unique_ptr<twin::AutomaticGearbox> gearbox_;
+    twin::IceVehicleProfile gearboxProfile_;  // OWNED SEED for the twin (twin copies it)
+    // The replay DRIVE branch routes through VirtualIceInputProvider ->
+    // VirtualIceTwin (the SAME twin the live/Demo paths use) so --coupling-model /
+    // --wheel-coupling take effect on replay. The provider owns the gearbox +
+    // coupling strategy/model. Null when autoGearbox_ is false (manual replay has
+    // no gearbox/clutch to drive; the CSV drives throttle/gear/clutch directly).
+    // Created in Initialize().
+    std::unique_ptr<VirtualIceInputProvider> twinProvider_;
+
+    // Coupling selection forwarded from the CLI (--coupling-model / --wheel-coupling).
+    // Seeded into the twin so the replay path exercises the SAME coupling code as
+    // the live path. Defaults mirror the CLI defaults (pin + torque-converter).
+    twin::WheelCouplingMode wheelCouplingMode_ = twin::WheelCouplingMode::Pin;
+    twin::CouplingModelKind couplingModelKind_ = twin::CouplingModelKind::TorqueConverter;
+
+    // PIN-coupling compliance tau in ms (--pin-tau-ms; 0 = rigid, the CLI
+    // default). Stored so a pre-Initialize() set survives twin creation.
+    double pinTauMs_ = 0.0;
 
     // Keyboard input support for Q/P during replay
     IKeyboardInput* keyboard_ = nullptr;
     ISimulatorSession* session_ = nullptr;
-    double engineRpmFeedback_ = 0.0;  // last engine RPM from the physics (for slip calc)
     bool ignitionOn_ = true;          // toggled by 'I' key during replay
     double startFromS_ = -1.0;        // skip samples before this time (-1 = disabled)
     double endAtS_ = -1.0;            // stop replay at this time (-1 = disabled)

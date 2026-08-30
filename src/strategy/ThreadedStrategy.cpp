@@ -98,6 +98,10 @@ void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFr
     framesToWrite = std::min(framesToWrite, bufferSize);
 
     if (framesToWrite > 0) {
+        // A fill decision breaks any skip streak (the sustained-overflow
+        // discriminator below counts CONSECUTIVE skipped updates).
+        consecutiveSkipUpdates_ = 0;
+
         // Read from simulator and write to buffer
         std::vector<float> buffer(framesToWrite * 2);
         int32_t totalRead = 0;
@@ -109,7 +113,25 @@ void ThreadedStrategy::fillBufferFromEngine(ISimulator* simulator, int defaultFr
         }
     }
     else {
-        logger_->warning(LogMask::AUDIO, __ilog_format("ThreadedStrategy: Skipping buffer fill to prevent overflow (lead=%.0fms > target=%.0fms)", static_cast<double>(leadFrames) * 1000.0 / sampleRate, static_cast<double>(targetLeadFrames) * 1000.0 / sampleRate));
+        // Lead over max: the fill is skipped. With the producer and consumer
+        // both realtime-paced, lead sawtooths through the max threshold with
+        // the two clocks' beat (measured: 40-54ms vs a 40ms threshold, ~1/s,
+        // zero drift-resets), so crossings are chatter — log the FIRST skip
+        // of a run at warning, demote the rest to debug, and re-warn at
+        // warning only when the skip state SUSTAINS (~1s of consecutive
+        // skipped updates = producer genuinely outpacing playback, e.g. a
+        // stalled audio thread). The >4x-target drift reset above remains
+        // the corrective signal for fully stuck leads.
+        constexpr int kSustainedSkipUpdates = 20;  // ~1s at the 50ms sim tick
+        ++consecutiveSkipUpdates_;
+        if (!overflowSkipWarned_) {
+            overflowSkipWarned_ = true;
+            logger_->warning(LogMask::AUDIO, __ilog_format("ThreadedStrategy: Skipping buffer fill to prevent overflow (lead=%.0fms > target=%.0fms)", static_cast<double>(leadFrames) * 1000.0 / sampleRate, static_cast<double>(targetLeadFrames) * 1000.0 / sampleRate));
+        } else if (consecutiveSkipUpdates_ % kSustainedSkipUpdates == 0) {
+            logger_->warning(LogMask::AUDIO, __ilog_format("ThreadedStrategy: SUSTAINED buffer-overflow skip (%d consecutive updates, lead=%.0fms > target=%.0fms) - producer persistently outpacing playback", consecutiveSkipUpdates_, static_cast<double>(leadFrames) * 1000.0 / sampleRate, static_cast<double>(targetLeadFrames) * 1000.0 / sampleRate));
+        } else {
+            logger_->debug(LogMask::AUDIO, __ilog_format("ThreadedStrategy: Skipping buffer fill to prevent overflow (lead=%.0fms > target=%.0fms)", static_cast<double>(leadFrames) * 1000.0 / sampleRate, static_cast<double>(targetLeadFrames) * 1000.0 / sampleRate));
+        }
     }
 }
 
@@ -147,6 +169,8 @@ void ThreadedStrategy::prepareBuffer() {
     // Reset tracking counters
     totalFramesWritten_ = 0;
     totalFramesRead_ = 0;
+    consecutiveSkipUpdates_ = 0;
+    overflowSkipWarned_ = false;
 
     // Pre-fill circular buffer with silence for smooth playback start
     auto preFillFrames = static_cast<int>(audioState_.sampleRate * synthLatency_);
@@ -218,6 +242,20 @@ void ThreadedStrategy::swapSimulator(ISimulator* newSimulator) {
 }
 
 void ThreadedStrategy::resetBufferAfterWarmup() {
+    // Discard audio the simulator rendered during a silent warm-start prefix
+    // (nobody read it while the ring was not being filled), so playback resumes
+    // at the handoff point instead of replaying the warm-up window. Bounded:
+    // the synth thread may still be producing; the cap guarantees termination.
+    if (simulator_) {
+        constexpr int kMaxDrainReads = 4096;  // 4096 * MAX_AUDIO_CHUNK_FRAMES safety bound
+        std::vector<float> drain(EngineSimDefaults::MAX_AUDIO_CHUNK_FRAMES * 2);
+        int32_t read = 0;
+        for (int i = 0; i < kMaxDrainReads; ++i) {
+            if (!simulator_->readAudioBuffer(drain.data(), EngineSimDefaults::MAX_AUDIO_CHUNK_FRAMES, &read) || read <= 0) {
+                break;
+            }
+        }
+    }
     circularBuffer_.reset();
     // Reset tracking counters to start fresh after warmup
     totalFramesWritten_ = 0;

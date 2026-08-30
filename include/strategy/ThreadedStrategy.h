@@ -89,6 +89,14 @@ private:
     int64_t totalFramesWritten_ = 0;
     int64_t totalFramesRead_ = 0;
 
+    // Overflow-skip logging state. Lead sawtooths through the max threshold
+    // with the beat of the two realtime clocks (sim tick vs audio device
+    // drain — both produce/consume at 1x), so threshold crossings are
+    // expected chatter, not faults: only the first skip of a run and
+    // SUSTAINED skipping surface at warning level (see fillBufferFromEngine).
+    int consecutiveSkipUpdates_ = 0;
+    bool overflowSkipWarned_ = false;
+
     double synthLatency_ = 0.0;
 
     int getAvailableFrames() const;

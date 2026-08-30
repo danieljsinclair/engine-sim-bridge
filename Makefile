@@ -3,6 +3,7 @@
 		check test test-core test-isomorphism test-deep test-reset \
 		presets clean-presets \
 		sonar-clean coverage-clean coverage-run coverage-summary sonar-summary test-nosonar \
+	sonar-scan-soft \
 		summary
 
 BUILD_DIR ?= build
@@ -139,7 +140,14 @@ clean-test-fixtures:
 # --label "[engine-sim-bridge]", sonar-summary prints its own === headers), so
 # no procedural echo/banner wrapper is needed under test: itself. `summary`
 # (the end-of-make headline) is the LAST prereq so it is the final output.
-test: test-core test-deep sonar-scan coverage-summary sonar-summary summary
+test: test-core test-deep sonar-scan-soft coverage-summary sonar-summary summary
+
+# Sonar inside the test gate is best-effort reporting: a SonarCloud CE failure
+# is an external-service hiccup and must not fail the unit-test gate. The
+# standalone `sonar-scan` target (used by the hard `gate`) stays fatal.
+sonar-scan-soft:
+	+@$(MAKE) --no-print-directory sonar-scan || \
+		echo "=== [engine-sim-bridge] sonar-scan FAILED — non-fatal in make test (unit tests are the gate; 'make sonar-scan' for the hard check) ==="
 
 # Order-only reset of the combined ctest summary log. Both ctest tiers depend
 # on this so the log is empty at the start of a `make test` regardless of

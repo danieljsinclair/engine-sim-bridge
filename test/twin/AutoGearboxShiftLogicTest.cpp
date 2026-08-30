@@ -511,3 +511,110 @@ TEST_F(AutoGearboxShiftLogicTest, AC7_GearStaysInRangeAndHoldsConvention) {
         ASSERT_LE(gb.getCurrentGear(), topGear);
     }
 }
+
+// ============================================================================
+// DOWNSHIFT-LUG-GUARD (downshift-fix task). A too-tall gear at low road speed
+// lugs the engine (RPM falls below the idle region). The lug guard must
+// downshift whenever engine RPM in the CURRENT gear drops below
+// profile_.downshiftRpmFloor, independent of the speed-based downshift table,
+// so the box keeps the engine above idle under load at low speed.
+//
+// These tests build a profile with a populated shift table (zf8hp45) and a
+// non-zero downshiftRpmFloor, then drive the box into a tall gear and slow to
+// a low road speed, asserting it cascades down to keep RPM above the floor.
+// ============================================================================
+
+// Helper: drive the box to a target gear via a speed sweep, clearing dwell.
+static int sweepToGear(AutomaticGearbox& gb, double throttle, double speedKmh) {
+    for (int i = 0; i < 300; ++i) {
+        gb.setTwinContext(3, 1.0, speedKmh, 3000.0);
+        gb.update(0.1, speedKmh, throttle, 100.0);
+        if (gb.getCurrentGear() >= 4) break;
+    }
+    for (int i = 0; i < 60; ++i) {
+        gb.setTwinContext(3, 1.0, speedKmh, 3000.0);
+        gb.update(0.1, speedKmh, throttle, 100.0);
+    }
+    return gb.getCurrentGear();
+}
+
+// LUGGUARD-1: at ~10 mph (16 km/h) the box must NOT be stuck in a tall gear.
+// With the lug guard, a too-tall gear drags RPM below the floor, forcing a
+// downshift cascade so the gear ends in 1-2 with RPM above idle.
+TEST_F(AutoGearboxShiftLogicTest, LugGuard_DownshiftsToLowGearAt10Mph) {
+    IceVehicleProfile p = IceVehicleProfile::zf8hp45();
+    p.downshiftRpmFloor = 1500.0;   // guard floor ~1500 RPM
+    p.idleRpm = 750.0;
+
+    AutomaticGearbox gb(p);
+    gb.setGearSelector(bridge::GearSelector::DRIVE);
+
+    // Climb into a tall gear at cruise speed/throttle.
+    int tall = sweepToGear(gb, /*throttle*/ 0.30, /*speedKmh*/ 80.0);
+    ASSERT_GE(tall, 4) << "Box should have climbed into a tall gear at 80 km/h";
+
+    // Now crawl at ~10 mph (16 km/h) under load. The speed-based downshift
+    // table alone would hold a tall gear here (lugging); the lug guard must
+    // cascade it down to 1-2.
+    double rpm = 0.0;
+    int gear = 0;
+    for (int i = 0; i < 400; ++i) {
+        gb.setTwinContext(3, 1.0, /*speedFb*/ 16.0, rpm);
+        gb.update(0.1, /*speedKmh*/ 16.0, /*throttle*/ 0.20, /*torque*/ 80.0);
+        gear = gb.getCurrentGear();
+        rpm = engineRpmAt(16.0, gear, p);
+    }
+
+    EXPECT_LE(gear, 2) << "At ~10 mph the box must be in gear 1-2, not lugging in a tall gear";
+    EXPECT_GE(gear, 1) << "Must stay within valid forward range";
+    EXPECT_GE(rpm, p.idleRpm)
+        << "Engine RPM at low speed must stay at/above idle under the lug guard";
+}
+
+// LUGGUARD-2: the lug guard must not fight a valid high-speed cruise. At 40
+// mph (64 km/h) in top gearing the implied RPM stays well above the floor, so
+// the guard must NOT force a downshift there.
+TEST_F(AutoGearboxShiftLogicTest, LugGuard_HoldsGearAt40MphWhenRpmAboveFloor) {
+    IceVehicleProfile p = IceVehicleProfile::zf8hp45();
+    p.downshiftRpmFloor = 1500.0;
+    p.idleRpm = 750.0;
+
+    AutomaticGearbox gb(p);
+    gb.setGearSelector(bridge::GearSelector::DRIVE);
+
+    int cruise = sweepToGear(gb, /*throttle*/ 0.30, /*speedKmh*/ 64.0);
+    ASSERT_GE(cruise, 3);
+
+    // Hold 40 mph (64 km/h). RPM in a mid gear is above the floor, so no forced
+    // downshift.
+    int gear = cruise;
+    for (int i = 0; i < 200; ++i) {
+        gb.setTwinContext(3, 1.0, /*speedFb*/ 64.0, engineRpmAt(64.0, gear, p));
+        gb.update(0.1, /*speedKmh*/ 64.0, /*throttle*/ 0.30, /*torque*/ 100.0);
+        gear = gb.getCurrentGear();
+    }
+    EXPECT_GE(gear, 3) << "At 40 mph the lug guard must not drag the box to 1-2";
+}
+
+// LUGGUARD-3: without the guard (floor == 0) the legacy behaviour is unchanged
+// — a tall gear held at low speed under load is permitted (regression guard so
+// the new field is inert by default in untouched profiles).
+TEST_F(AutoGearboxShiftLogicTest, LugGuard_DisabledWhenFloorZero) {
+    IceVehicleProfile p = IceVehicleProfile::zf8hp45();
+    p.downshiftRpmFloor = 0.0;   // guard disabled
+
+    AutomaticGearbox gb(p);
+    gb.setGearSelector(bridge::GearSelector::DRIVE);
+
+    int tall = sweepToGear(gb, /*throttle*/ 0.30, /*speedKmh*/ 80.0);
+    ASSERT_GE(tall, 4);
+
+    // Crawl at 16 km/h. The box is free to hold a tall gear (legacy behaviour);
+    // the test only asserts the box remains valid and does not crash.
+    for (int i = 0; i < 200; ++i) {
+        gb.setTwinContext(3, 1.0, /*speedFb*/ 16.0, 400.0);
+        gb.update(0.1, /*speedKmh*/ 16.0, /*throttle*/ 0.20, /*torque*/ 80.0);
+    }
+    EXPECT_GE(gb.getCurrentGear(), 1);
+    EXPECT_LE(gb.getCurrentGear(), static_cast<int>(p.gearRatios.size()));
+}

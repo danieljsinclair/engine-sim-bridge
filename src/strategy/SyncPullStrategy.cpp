@@ -54,6 +54,24 @@ void SyncPullStrategy::fillBufferFromEngine(ISimulator*, int) {
     // SyncPull generates audio on-demand in the render callback via ISimulator.
 }
 
+void SyncPullStrategy::updateSimulation(ISimulator* simulator, double deltaTimeMs) {
+    // THE fix for the live warm-start reversion: advance the core on the LOOP
+    // thread (matching DeterministicStrategy) instead of relying solely on the
+    // audio render callback. Previously this was a no-op, so during the 90s
+    // warm-start prefix the engine advanced ONLY via the audio callback's
+    // renderOnDemand (advanceFixedSteps ceil=false = 166 steps/tick) while the
+    // loop thread did zero sim work — starving the engine relative to
+    // DeterministicStrategy (which calls update -> ceil=true = 167 steps/tick).
+    // The 1-step/tick deficit accumulated over 90s and tipped the warm-start
+    // into the reversion (negative-exhaust-flow) attractor. Advancing here
+    // makes the loop thread own the core; the render callback below now only
+    // DRAINS already-synthesized audio (renderDrainedAudio), so there is no
+    // double-stepping.
+    if (simulator != nullptr) {
+        simulator->update(deltaTimeMs / 1000.0);
+    }
+}
+
 // ============================================================================
 // Lifecycle Method Implementations
 // ============================================================================
@@ -117,16 +135,14 @@ void SyncPullStrategy::resetBufferAfterWarmup() {
     logger_->debug(LogMask::AUDIO, __ilog_format("SyncPullStrategy::resetBufferAfterWarmup: No-op for sync-pull mode"));
 }
 
-void SyncPullStrategy::updateSimulation(ISimulator* /* simulator */, double /* deltaTimeMs */) {
-    // Sync-pull mode updates simulation during render callback
-}
-
 bool SyncPullStrategy::retryRender(float* dst, int offset, int framesNeeded,
                                     int& framesWritten, int maxRetries) {
+    // Drain-only: the core is advanced on the loop thread (updateSimulation), so
+    // the retry path must NOT call simulator_->update() — doing so would
+    // double-step the engine. Just retry draining synthesized audio.
     int retryCount = 0;
     while (retryCount < maxRetries && !shuttingDown_.load()) {
-        simulator_->update(1.0 / sampleRate_);
-        if (auto result = simulator_->renderOnDemand(
+        if (auto result = simulator_->renderDrainedAudio(
                 dst + (offset * 2),
                 framesNeeded,
                 &framesWritten
@@ -148,14 +164,39 @@ bool SyncPullStrategy::retryRender(float* dst, int offset, int framesNeeded,
 
 bool SyncPullStrategy::attemptRender(float* dst, int offset, int framesNeeded,
                                       int32_t& framesWritten) {
-    bool result = simulator_->renderOnDemand(
+    // Primary path: drain already-synthesized audio. Core advancement lives on
+    // the loop thread (updateSimulation), so this does NOT step the engine —
+    // see renderDrainedAudio / the updateSimulation comment for the rationale
+    // (no double-stepping, no warm-start starvation).
+    bool result = simulator_->renderDrainedAudio(
         dst + (offset * 2),
         framesNeeded,
         &framesWritten
     );
 
+    // Fallback: no synthesized audio is buffered yet. In production the loop
+    // thread's update() feeds the synth input ring and the CoreAudio callback
+    // renders it, so this path is the normal case and renderDrainedAudio
+    // returns frames. It is only reached when the audio callback is running
+    // ahead of the loop thread (a transient catch-up) — or, in a test with no
+    // loop thread at all, always. Stepping the engine here is safe: the loop
+    // thread only advances the core when it is this callback's turn to wait,
+    // so the two never step concurrently. Without this fallback a render with
+    // no buffered audio (the whole test suite) fills silence and fails.
+    if (result && framesWritten == 0) {
+        result = simulator_->renderOnDemand(
+            dst + (offset * 2),
+            framesNeeded,
+            &framesWritten
+        );
+        if (!result) {
+            logger_->error(LogMask::AUDIO,
+                __ilog_format("SyncPullStrategy::render: renderOnDemand fallback failed, filling silence"));
+        }
+    }
+
     if (!result) {
-        logger_->error(LogMask::AUDIO, __ilog_format("SyncPullStrategy::render: renderOnDemand failed, filling silence"));
+        logger_->error(LogMask::AUDIO, __ilog_format("SyncPullStrategy::render: renderDrainedAudio failed, filling silence"));
     }
     return result;
 }

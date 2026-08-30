@@ -1,4 +1,5 @@
 #include "input/VirtualIceInputProvider.h"
+#include "simulator/BridgeSimulator.h"
 #include "common/PresetExceptions.h"
 
 namespace input {
@@ -87,6 +88,12 @@ EngineInput VirtualIceInputProvider::OnUpdateSimulation(double dt) {
     // motor_torque_nm so the solver integrates road speed from it.
     input.drivetrainInputTorqueNm = output.drivetrainInputTorqueNm;
 
+    // Thread live clutch diagnostics through to presentation (inline clutch
+    // readout + CSV-out spelunking).
+    input.roadImpliedRpm = output.roadImpliedRpm;
+    input.creepReliefFired = output.creepReliefFired;
+    input.couplingIsTorqueConverter = output.couplingIsTorqueConverter;
+
     return input;
 }
 
@@ -120,6 +127,32 @@ void VirtualIceInputProvider::setWheelCouplingMode(twin::WheelCouplingMode mode)
     }
 }
 
+void VirtualIceInputProvider::setPinTauMs(double tauMs) {
+    if (twin_) {
+        twin_->setPinTauMs(tauMs);
+    }
+}
+
+void VirtualIceInputProvider::setCouplingModel(twin::CouplingModelKind kind) {
+    if (twin_) {
+        twin_->setCouplingModel(kind);
+    }
+    // The proper torque converter is an SCS direct-torque constraint installed
+    // on the live transmission. Remember the request and apply it to the bridge
+    // sim (which may not exist yet when this is called from CLI setup).
+    pendingTorqueConverter_ = (kind == twin::CouplingModelKind::TorqueConverter);
+    if (bridgeSim_ != nullptr) {
+        bridgeSim_->setUseTorqueConverter(pendingTorqueConverter_);
+    }
+}
+
+void VirtualIceInputProvider::setBridgeSimulator(BridgeSimulator* sim) {
+    bridgeSim_ = sim;
+    if (sim != nullptr && pendingTorqueConverter_) {
+        sim->setUseTorqueConverter(true);
+    }
+}
+
 void VirtualIceInputProvider::reconfigureProfile(const std::vector<double>& gearRatios,
                                                   double diffRatio, double tireRadiusM) {
     if (twin_) twin_->reconfigureProfile(gearRatios, diffRatio, tireRadiusM);
@@ -130,6 +163,46 @@ void VirtualIceInputProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
     if (twin_) {
         twin_->setGearboxLogger(logger);
     }
+}
+
+void VirtualIceInputProvider::primeWarmUp() {
+    if (!isInitialized_ || !twin_) return;
+
+    // Hold a light throttle / slow speed so the twin settles into the WARM
+    // cruise basin (gear4/gear5, clutch ~0.75) rather than the cold attractor
+    // (gear3, clutch ~0.15). One-shot: guard on a flag so re-Initialize() can
+    // re-run it but a single Initialize() never double-primes.
+    if (warmedUp_) {
+        // Already primed (re-Initialize path): no synthetic frames ran here,
+        // but the earlier prime's tail debt must still not bleed into the
+        // real run.
+        twin_->armFreshCrankBudget();
+        return;
+    }
+    warmedUp_ = true;
+
+    constexpr int kWarmupFrames = 300;
+    constexpr double kWarmupThrottle = 0.20;
+    constexpr double kWarmupSpeedKmh = 10.0;
+    constexpr double kWarmupDt = 0.05;
+
+    UpstreamSignal signal;
+    signal.throttleFraction = kWarmupThrottle;
+    signal.speedKmh = kWarmupSpeedKmh;
+    signal.isValid = true;
+    signal.timestampUtcMs = 1;
+    setUpstreamSignal(signal);
+
+    for (int i = 0; i < kWarmupFrames; ++i) {
+        OnUpdateSimulation(kWarmupDt);
+    }
+
+    // LAST act of the prime: the synthetic frames above can pass through IDLE
+    // with a Stopped core, firing re-crank edges whose output is discarded but
+    // which consume reCrankCooldownS_. The REAL run starts right after this
+    // with a Stopped core needing its first genuine edge — arm a fresh crank
+    // budget so it fires immediately instead of waiting out synthetic debt.
+    twin_->armFreshCrankBudget();
 }
 
 void VirtualIceInputProvider::provideFeedback(const EngineSimStats& stats) {

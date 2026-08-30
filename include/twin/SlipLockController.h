@@ -6,14 +6,19 @@
 // redline at any throttle. This function computes a clutch pressure that
 // resolves that circle:
 //
-//   - At standstill (road-implied < idle):    pressure == 0   (engine free to idle)
-//   - At launch under throttle (high slip):   partial pressure (TC slip in power band)
+//   - At standstill (road-implied < idle):    floor pressure (engine loaded, no stall)
+//   - At launch under throttle (high slip):   partial pressure (slip, engine can rev)
 //   - As road catches up (slip -> 0):         pressure -> 1.0 (locked, direct coupling)
 //   - On decel (engine slower than road):     pressure == 1.0 (locked, engine braking)
 //
-// Hard rule from the stall circle: the clutch MUST be open whenever
-// roadSpeedImpliedRpm < idleRpm. Coupling below that floor drags the engine
-// under idle and stalls it. The TC characteristic only applies above the floor.
+// HARD RULE: the clutch pressure is NEVER fully open (0). A pressure floor
+// (kSlipLockPressureFloor, ~0.05-0.15) is applied in every branch because a
+// fully-open clutch decouples the engine from the road and lets it free-rev to
+// the redline. The floor keeps the clutch transmitting torque at all times while
+// still allowing slip (the engine revs on launch via partial pressure instead of
+// being rigidly locked, and never fully opens). Below idle the clutch is kept at
+// the floor (or creep pressure, itself floored) so the engine is loaded, not
+// free. The TC characteristic only applies above the idle floor.
 //
 // This is a pure function with no dependency on engine-sim physics.
 
@@ -37,16 +42,64 @@ struct SlipLockOutput {
     bool locked;            // true when effectively locked (for display / state).
 };
 
+// Minimum clutch pressure floor (see kSlipLockPressureFloor in the .cpp). The
+// clutch MUST NEVER be fully open (0): a zero pressure decouples the engine from
+// the road and lets it free-rev to redline. Exposed so callers/tests can assert
+// the floor without re-deriving the magic constant.
+//
+// iter2: lowered from 0.10 to 0.05. 0.10 over-loaded the engine at standstill
+// (zero throttle) and dragged RPM below idle (the ~328-488 "over-quiet" lug in
+// the PIN replay). 0.05 still keeps the clutch transmitting torque (never fully
+// open, so no free-rev) but stops over-loading the engine at idle, letting RPM
+// settle at/above idle. The ratio fix (C63 diff 2.82) also cut the reflected
+// wheel load, so 0.05 is ample to prevent free-rev.
+constexpr double kSlipLockPressureFloor = 0.05;
+
+// Lock-engage point, as a MULTIPLE OF IDLE. Once the road-implied RPM (the RPM
+// the engine WOULD be at if locked to the wheels in the current gear) reaches
+// idle × kLockEngageIdleFactor the clutch LOCKS (pressure -> 1.0): the engine is
+// coupled to and forced to track road×gear×diff. Below it (standstill + the
+// narrow launch slip band just above idle) the clutch ramps from the floor so
+// the engine can still rev into its power band on launch.
+//
+// DRIVING THE LOCK OFF ROAD SPEED (not slip) IS THE FIX for the free-rev bug:
+// the old model set pressure from (engine - road) slip, which deadlocks — a
+// high engine RPM produces a large slip, which produces a LOW pressure, which
+// lets the engine rev HIGHER, producing even more slip. At cruise the engine
+// therefore free-revved uncoupled (the redline/free-rev symptom) with no engine
+// braking. Keying the lock off road-implied RPM breaks the circle.
+//
+// IDLE-RELATIVE (not redline-relative) IS THE FIX for the droop/silence bug:
+// the prior redline-fraction threshold (0.18 × redline ≈ 1170-1305 rpm) left a
+// wide low-speed slip band [idle..1170] in which the clutch sat at low pressure
+// (~0.25 at 4 mph / road-implied ~657) so the engine idled/drooped decoupled
+// instead of tracking the road (the "silent at 4-5 mph" symptom). Coupling
+// depends on IDLE, not redline — the engine must be locked to the wheels as
+// soon as the wheels can sustain idle (road-implied > idle), which the
+// acceptance spec (A0.1) marks at ~3 mph in 1st. 1.5× a ~500 rpm idle = 750 rpm
+// ≈ 4.6 mph in DA1, so the engine is firmly coupled by ~5 mph and fully locked
+// above it, while a narrow [idle..1.5×idle] ramp preserves launch slip. Two
+// engines with the same idle but different redlines now lock at the same road
+// speed, which is correct.
+constexpr double kLockEngageIdleFactor = 1.5;
+
 // Compute clutch pressure from slip. Algorithm:
 //   1. If roadSpeedImpliedRpm < idleRpm:
 //        - creepPressure = throttleFraction * maxCreepPressure  (TC fluid coupling at stall)
-//        - If creepPressure > 0: return {creepPressure, false}  (partial coupling, engine loaded)
-//        - Otherwise:            return {0.0, false}            (true neutral, no creep)
-//   2. slip      = max(0, engineRpm - roadSpeedImpliedRpm)
-//      stallBand = redlineRpm * (0.10 + 0.40 * throttleFraction)  (wider at WOT)
-//      slipRatio = clamp(slip / stallBand, 0, 1)
-//      pressure  = 1 - sqrt(slipRatio)                            (non-linear K-factor)
-//      locked    = (slipRatio < 0.1)
+//        - If creepPressure > 0: return {max(creepPressure, floor), false}  (floored creep)
+//        - Otherwise:            return {floor, false}            (floored, engine loaded)
+//   2. Rolling band (roadSpeedImpliedRpm >= idleRpm): the wheels are turning.
+//      Drive the lock off ROAD SPEED, not slip, so a high engine RPM cannot
+//      deadlock the pressure to the floor (the old free-rev bug). Pressure ramps
+//      from the floor (at idle) up to 1.0 as road-implied rises to the lock-engage
+//      point (kLockEngageIdleFactor * idle), then locks hard:
+//        lockRpm   = idleRpm * kLockEngageIdleFactor
+//        t         = clamp((roadSpeedImpliedRpm - idleRpm) / (lockRpm - idleRpm), 0, 1)
+//        pressure  = floor + (1 - floor) * t
+//        locked    = (roadSpeedImpliedRpm >= lockRpm)
+//      Once locked, the engine is coupled and tracks road×gear×diff (no free-rev,
+//      no droop, engine braking restored). The engage point is idle-relative so
+//      the engine couples as soon as the wheels can sustain idle (~3 mph in 1st).
 //
 // The creep mode (step 1) mimics a real torque converter's fluid coupling:
 // even at zero road speed, some torque is transmitted proportional to throttle.

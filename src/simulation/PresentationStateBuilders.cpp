@@ -10,9 +10,14 @@ namespace presentation::builders {
 
         EngineState::Engine buildEngineState(const EngineSimStats& stats, const CrankingController::State& cranking) {
             EngineState::Engine engine;
-            engine.rpm = stats.currentRPM;
+            // The tach reads the FILTERED sensor (same as the gate CSV's rpm
+            // column); the raw crank speed rides along as rpmRaw so evidence
+            // is never destroyed by the measurement model.
+            engine.rpm = stats.filteredRPM;
+            engine.rpmRaw = stats.currentRPM;
             engine.load = stats.currentLoad;
             engine.exhaustFlow = stats.exhaustFlow;
+            engine.synthOutputRms = stats.synthOutputRms;
             engine.engineTorqueNm = stats.engineTorqueNm;
             engine.drivetrainTorqueNm = stats.drivetrainTorqueNm;
             engine.starterEngaged = cranking.starterEngaged;
@@ -29,6 +34,10 @@ namespace presentation::builders {
             drivetrain.dynoTorque = stats.dynoTorque;
             drivetrain.dynoTargetRPM = stats.dynoTargetRPM;
             drivetrain.replayTimestampS = input.replayTimestampS;
+            drivetrain.clutchPressure = input.clutchPressure;
+            drivetrain.roadImpliedRpm = input.roadImpliedRpm;
+            drivetrain.creepReliefFired = input.creepReliefFired;
+            drivetrain.couplingIsTorqueConverter = input.couplingIsTorqueConverter;
             return drivetrain;
         }
 
@@ -37,7 +46,7 @@ namespace presentation::builders {
             EngineState::Controls controls;
             controls.throttle = cranking.startingThrottle;
             controls.ignition = input.ignition;
-            controls.brakeLevel = input.brakeLevel;
+            controls.brakeLight = input.brakeLight;
             controls.gearSelector = input.gearSelector;
             controls.gearAutoMode = input.gearAutoMode;
             // Surface the commanded road-speed target so it is visible even in

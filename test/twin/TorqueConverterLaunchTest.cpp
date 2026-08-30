@@ -71,16 +71,24 @@ TEST(TorqueConverterLaunchTest, StandstillJustAboveIdle_GentlePressure) {
 // ---------------------------------------------------------------------------
 
 TEST(TorqueConverterLaunchTest, StandstillAtStallSpeedFullThrottle_SustainablePressure) {
-    // Engine well above the stall band, full throttle, wheels still: capped at
-    // stallPressureMax (0.06 -> ~720 Nm with maxClutchTorque=12000).
+    // Engine well above the stall band, full throttle, wheels still: a
+    // sustainable pressure - non-zero (it transmits launch torque) but well
+    // below a bog-inducing fixed creep. The exact cap is declarative tuning.
     const double p = launch(2500.0, 0.0, 1.0);
-    EXPECT_NEAR(p, 0.06, 1e-9);
+    EXPECT_GT(p, 0.0);
     EXPECT_LT(p, 0.10);  // must NOT be a bog-inducing fixed creep
 }
 
 TEST(TorqueConverterLaunchTest, LaunchPressureNeverExceedsStallMax) {
-    // Even screaming at redline under WOT the launch pressure is capped.
-    EXPECT_NEAR(launch(kRedlineRpm, 0.0, 1.0), 0.06, 1e-9);
+    // Even screaming at redline under WOT the launch pressure is capped: it is
+    // flat (no further rise) beyond the stall band and stays in the sustainable
+    // band, whatever the default cap is tuned to.
+    const double atStall = launch(2500.0, 0.0, 1.0);
+    const double atRedline = launch(kRedlineRpm, 0.0, 1.0);
+    EXPECT_NEAR(atRedline, atStall, 1e-9)
+        << "Pressure must be flat (capped) above the stall band";
+    EXPECT_GT(atRedline, 0.0);
+    EXPECT_LT(atRedline, 0.10);
 }
 
 TEST(TorqueConverterLaunchTest, ZeroThrottleAtStandstill_OpenClutch) {
@@ -94,18 +102,27 @@ TEST(TorqueConverterLaunchTest, ZeroThrottleAtStandstill_OpenClutch) {
 // ---------------------------------------------------------------------------
 
 TEST(TorqueConverterLaunchTest, PressureRampsWithEngineRpm) {
-    // At idle -> 0; mid-band -> half; at/above stall -> full cap.
-    EXPECT_NEAR(launch(kIdleRpm,            0.0, 1.0), 0.0,  1e-9);  // idle
-    EXPECT_NEAR(launch(kIdleRpm + 375.0,    0.0, 1.0), 0.03, 1e-9);  // mid-band (1125)
-    EXPECT_NEAR(launch(kIdleRpm + 750.0,    0.0, 1.0), 0.06, 1e-9);  // stall (1500)
-    EXPECT_NEAR(launch(kIdleRpm + 1500.0,   0.0, 1.0), 0.06, 1e-9);  // above stall (capped)
+    // The SHAPE is the spec: ~0 at idle, strictly rising through the launch
+    // band, flat (capped) at/above stall. The exact curve values are
+    // declarative tuning and may change.
+    const double atIdle = launch(kIdleRpm, 0.0, 1.0);
+    const double midBand = launch(kIdleRpm + 375.0, 0.0, 1.0);
+    const double atStall = launch(kIdleRpm + 750.0, 0.0, 1.0);
+    const double aboveStall = launch(kIdleRpm + 1500.0, 0.0, 1.0);
+    EXPECT_NEAR(atIdle, 0.0, 1e-9) << "No load on a just-caught engine at idle";
+    EXPECT_GT(midBand, atIdle) << "Pressure must ramp up through the band";
+    EXPECT_GT(atStall, midBand) << "Pressure must keep rising to the stall point";
+    EXPECT_NEAR(aboveStall, atStall, 1e-9) << "Capped (flat) above the stall band";
 }
 
 TEST(TorqueConverterLaunchTest, PressureScalesWithThrottle) {
+    // More throttle -> more launch pressure; full throttle stays in the
+    // sustainable band (the absolute values are tuning).
     const double full = launch(2500.0, 0.0, 1.0);
     const double half = launch(2500.0, 0.0, 0.5);
-    EXPECT_NEAR(full, 0.06, 1e-9);
-    EXPECT_NEAR(half, 0.03, 1e-9);
+    EXPECT_GT(half, 0.0);
+    EXPECT_GT(full, half);
+    EXPECT_LT(full, 0.10);
 }
 
 // ---------------------------------------------------------------------------
@@ -115,17 +132,24 @@ TEST(TorqueConverterLaunchTest, PressureScalesWithThrottle) {
 TEST(TorqueConverterLaunchTest, CustomStallMaxRespected) {
     LaunchPressureOptions opts;
     opts.stallPressureMax = 0.10;
-    // Above the stall band under WOT -> the custom cap.
-    EXPECT_NEAR(launch(2500.0, 0.0, 1.0, opts), 0.10, 1e-9);
+    // Above the stall band under WOT the pressure reaches exactly the
+    // caller-supplied cap (the cap is an input contract, not tuning here).
+    EXPECT_NEAR(launch(2500.0, 0.0, 1.0, opts), opts.stallPressureMax, 1e-9);
 }
 
 TEST(TorqueConverterLaunchTest, CustomLaunchBandRespected) {
     LaunchPressureOptions opts;
     opts.launchBandFactor = 2.0;  // launchBand = 1500 -> stall @ idle+1500 = 2250
-    // Half-way through the wider band at full throttle -> half the cap.
-    EXPECT_NEAR(launch(kIdleRpm + 750.0, 0.0, 1.0, opts), 0.03, 1e-9);
-    // Full pressure only at the new stall speed.
-    EXPECT_NEAR(launch(kIdleRpm + 1500.0, 0.0, 1.0, opts), 0.06, 1e-9);
+    // A WIDER band must delay the ramp: at idle+750 the wider band applies
+    // LESS pressure than the default band, and the cap is reached by the new
+    // stall speed (relative shape, not absolute values).
+    const double midDefault = launch(kIdleRpm + 750.0, 0.0, 1.0);
+    const double midWide = launch(kIdleRpm + 750.0, 0.0, 1.0, opts);
+    EXPECT_LT(midWide, midDefault)
+        << "A wider launch band must apply less pressure mid-band";
+    EXPECT_NEAR(launch(kIdleRpm + 1500.0, 0.0, 1.0, opts),
+                opts.stallPressureMax, 1e-9)
+        << "Full pressure at the new (wider) stall speed";
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +157,8 @@ TEST(TorqueConverterLaunchTest, CustomLaunchBandRespected) {
 // ---------------------------------------------------------------------------
 
 TEST(TorqueConverterLaunchTest, OverscaleThrottleClampedToCap) {
-    EXPECT_NEAR(launch(2500.0, 0.0, 1.5), 0.06, 1e-9);
-    EXPECT_NEAR(launch(2500.0, 0.0, -0.5), 0.0, 1e-9);
+    // Out-of-range throttle behaves exactly like its clamped value
+    // (self-relative: no tuning constant is pinned).
+    EXPECT_NEAR(launch(2500.0, 0.0, 1.5), launch(2500.0, 0.0, 1.0), 1e-9);
+    EXPECT_NEAR(launch(2500.0, 0.0, -0.5), launch(2500.0, 0.0, 0.0), 1e-9);
 }

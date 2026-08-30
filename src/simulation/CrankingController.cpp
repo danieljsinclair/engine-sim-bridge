@@ -111,6 +111,21 @@ TransitionDecision CrankingController::step(
             break;
 
         case EnginePhase::Stopped:
+            // Bump-start (push-start): a latched-Stopped engine with ignition
+            // ON that is still spinning above the catch threshold is being
+            // dragged by the drivetrain (wheels/road through the clutch) — a
+            // real engine in that state fires WITHOUT the starter. Without
+            // this the phase latch strands a spinning engine forever: the
+            // replay prime walks the TWIN to RUNNING while the core stays
+            // Stopped, and no rpm-based restart path fires above STOPPED_RPM.
+            // Same catch bar as the Rollover path (MIN_CATCH_RPM + ignition).
+            // The starter path remains for true standstill (below the bar).
+            if (engineCanCatch(stats, inputIgnition)) {
+                decision.targetPhase = EnginePhase::Running;
+                decision.isTransition = true;
+            }
+            break;
+
         default:
             break;
     }

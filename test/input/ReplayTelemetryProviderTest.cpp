@@ -452,17 +452,21 @@ TEST_F(ReplayTelemetryProviderTest, ManualClutchPctPropagates) {
     EXPECT_DOUBLE_EQ(input.clutchPressure, 0.5);
 }
 
-TEST_F(ReplayTelemetryProviderTest, TimeSlicingStartFromSkipsEarlySamples) {
-    // startFromS=0.5 => the clock starts at 0.5s, so the first sample shown is
-    // the one at t=0.5 (the floor of 0.5 in [0.0, 0.5, 1.0]).
+TEST_F(ReplayTelemetryProviderTest, TimeSlicingStartFromClockStartsAtZero) {
+    // startFromS=0.5 is owned by the loop-side warm-start prefix
+    // (SimulationLoop::run), NOT by the provider. The provider clock starts at 0
+    // and advances by dt each frame -- there is no cold-jump/teleport to
+    // startFromS. So the first OnUpdateSimulation samples the t=0 row.
     makeProvider("time_s,throttle_pct\n0.0,10.0\n0.5,50.0\n1.0,90.0\n");
     ASSERT_TRUE(provider_->Initialize());
     wireDefault();
     provider_->setStartFromS(0.5);
 
     EngineInput input = provider_->OnUpdateSimulation(0.016);
-    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 0.5);
-    EXPECT_DOUBLE_EQ(input.throttle, 0.5);
+    // Provider clock is at the t=0 sample (no cold-jump): timestamp 0.0,
+    // throttle 10% -> 0.10.
+    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 0.0);
+    EXPECT_DOUBLE_EQ(input.throttle, 0.10);
 }
 
 TEST_F(ReplayTelemetryProviderTest, TimeSlicingEndAtStopsSession) {
@@ -597,4 +601,71 @@ TEST_F(ReplayTelemetryProviderTest, ReconfigureProfileValidRatiosGeneratesShiftT
     EngineInput input = provider_->OnUpdateSimulation(0.016);
     EXPECT_TRUE(input.gearAutoMode);
     EXPECT_GT(input.gearAbsolute, 0);
+}
+
+// ===========================================================================
+// Group N: PIN-coupling compliance (--pin-tau-ms) on the replay path
+// ===========================================================================
+namespace {
+
+// A road-speed staircase at the measured CAN cadence: a new held level every
+// 0.181 s, +0.9 km/h per level (the "piano keys" signal the chase smooths).
+std::string staircaseCsv(int levels) {
+    std::string csv = "time_s,speed_kmh,gear_selector\n";
+    for (int level = 0; level <= levels; ++level) {
+        csv += std::to_string(level * 0.181) + "," +
+               std::to_string(level * 0.9) + ",D\n";
+    }
+    return csv;
+}
+
+}  // namespace
+
+TEST_F(ReplayTelemetryProviderTest, PinTauSetBeforeInitializeChasesCsvStaircase) {
+    // The CLI sets --pin-tau-ms BEFORE Initialize() (the twin provider is
+    // created inside Initialize), so the value must be STORED and applied to
+    // the twin then. PIN mode + tau=150: the surfaced vehicleSpeedTargetKmh
+    // glides between held levels instead of stepping the full 0.9 km/h.
+    makeProvider(staircaseCsv(25), true, true);
+    provider_->setWheelCouplingMode(twin::WheelCouplingMode::Pin);
+    provider_->setPinTauMs(150.0);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    double maxJump = 0.0;
+    double prev = -1.0;
+    for (int i = 0; i < 300; ++i) {
+        const EngineInput in = provider_->OnUpdateSimulation(0.016);
+        if (in.vehicleSpeedTargetKmh >= 0.0 && prev >= 0.0) {
+            maxJump = std::max(maxJump, std::abs(in.vehicleSpeedTargetKmh - prev));
+        }
+        if (in.vehicleSpeedTargetKmh >= 0.0) prev = in.vehicleSpeedTargetKmh;
+    }
+    // Sanity: the pin engaged at all.
+    ASSERT_GE(prev, 0.0) << "PIN mode must surface a pin target during the drive";
+    EXPECT_LT(maxJump, 0.45)
+        << "per-frame pin jumps must stay well under the 0.9 km/h CSV step";
+}
+
+TEST_F(ReplayTelemetryProviderTest, PinTauZeroReplayIsRigid) {
+    makeProvider(staircaseCsv(8), true, true);
+    provider_->setWheelCouplingMode(twin::WheelCouplingMode::Pin);
+    provider_->setPinTauMs(0.0);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    // tau=0: every surfaced pin target equals a held CSV level EXACTLY (the
+    // rigid pin). Collect the distinct levels seen and verify each matches
+    // n*0.9 to the digit (never an in-between chase value).
+    bool sawPin = false;
+    for (int i = 0; i < 150; ++i) {
+        const EngineInput in = provider_->OnUpdateSimulation(0.016);
+        if (in.vehicleSpeedTargetKmh < 0.0) continue;
+        sawPin = true;
+        const double level = in.vehicleSpeedTargetKmh / 0.9;
+        EXPECT_NEAR(level, std::round(level), 1e-9)
+            << "tau=0 must surface only exact held CSV levels, got "
+            << in.vehicleSpeedTargetKmh;
+    }
+    ASSERT_TRUE(sawPin);
 }

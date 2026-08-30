@@ -7,6 +7,7 @@
 #ifndef I_INPUT_PROVIDER_H
 #define I_INPUT_PROVIDER_H
 
+#include <optional>
 #include <string>
 
 struct EngineSimStats;
@@ -29,8 +30,16 @@ struct EngineInput {
     // Dyno control
     double dynoTorqueScale = -1.0;  // -1 = unchanged, 0.0-1.0 = fraction of max torque
 
-    // Brake control (HACK: engine braking via dyno, not wheel braking)
+    // Brake control — the PHYSICS input (dyno/BrakeConstraint pressure).
+    // The keyboard 'B' key is its only writer.
     double brakeLevel = 0.0;        // 0.0 = no brake, 1.0 = full brake
+
+    // Vehicle brake LIGHT — the canonical display/start-stop signal. Supplied
+    // directly by telemetry (CSV brake_light column / network signal), or
+    // derived from brakeLevel at the single assembly point in
+    // SimulationLoop::step() when no telemetry reports it. Never drives
+    // physics. nullopt = not reported (pre-assembly).
+    std::optional<bool> brakeLight;
 
     // Twin control
     int gearAbsolute = -1;          // -1 = use gearDelta logic, 0+ = set this gear directly
@@ -53,6 +62,15 @@ struct EngineInput {
     // transmission input each frame. 0.0 = no injection (FREE/PIN leave this at
     // 0; applying 0.0 Nm is a true no-op on the rotating mass).
     double drivetrainInputTorqueNm = 0.0;
+
+    // Live twin diagnostics threaded through to presentation (inline clutch
+    // readout + CSV-out). roadImpliedRpm = RPM if locked to wheels in current
+    // gear; creepReliefFired = the creep-drag relief opened the clutch (the
+    // #24 slow-speed stall protection) this frame; couplingIsTorqueConverter
+    // selects the display label for clutchPressure ('TC' vs 'Cl').
+    double roadImpliedRpm = 0.0;
+    bool creepReliefFired = false;
+    bool couplingIsTorqueConverter = false;
 
     // Simulator auto-disengages starter when RPM > threshold
     // Preset cycling

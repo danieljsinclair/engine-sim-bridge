@@ -5,6 +5,7 @@
 
 #include "simulator/BridgeSimulator.h"
 #include "simulator/GearConventions.h"
+#include "simulator/ScriptLoadHelpers.h"
 #include "twin/SpeedRpmConversion.h"
 
 #include <vector>
@@ -82,6 +83,27 @@ bool BridgeSimulator::renderOnDemand(float* buffer, int32_t frames, int32_t* wri
     return true;
 }
 
+bool BridgeSimulator::renderDrainedAudio(float* buffer, int32_t frames, int32_t* written) {
+    if (!buffer) throw SimulatorException("BridgeSimulator::renderDrainedAudio() called with null buffer");
+    if (frames <= 0) throw SimulatorException("BridgeSimulator::renderDrainedAudio() called with invalid frame count");
+
+    // Drain already-synthesized audio only — the core is advanced on the loop
+    // thread (SyncPullStrategy::updateSimulation), so we must NOT call
+    // advanceFixedSteps here. Synthesize whatever engine-audio input the loop
+    // thread produced, then read it out. Mirrors the tail of renderOnDemand.
+    m_simulator->synthesizer().renderAudioOnDemand();
+
+    int16_t* conversionBuffer = ensureAudioConversionBufferSize(frames);
+    int samplesRead = m_simulator->readAudioOutput(frames, conversionBuffer);
+    EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, samplesRead, buffer, engineConfig_.volume, engineConfig_.convolutionLevel);
+
+    if (samplesRead < frames) {
+        EngineSimAudio::fillSilence(buffer + samplesRead * 2, frames - samplesRead);
+    }
+    if (written) *written = samplesRead;
+    return true;
+}
+
 bool BridgeSimulator::readAudioBuffer(float* buffer, int32_t framesToRead, int32_t* read) {
     ASSERT(buffer, "BridgeSimulator::readAudioBuffer() called with null buffer");
     ASSERT(read, "BridgeSimulator::readAudioBuffer() called with null *read pointer");
@@ -115,8 +137,20 @@ void BridgeSimulator::getEngineStats(EngineSimStats& stats) const {
     ASSERT(m_simulator, "BridgeSimulator::getStats() called but m_simulator is null");
     if (m_simulator->getEngine()) {
         stats.currentRPM = m_simulator->getEngine()->getSpeed() * EngineSimDefaults::RAD_PER_SEC_TO_RPM;
-        stats.exhaustFlow = m_simulator->getTotalExhaustFlow();
+        // Filtered rpm = the realistic tach sensor (first-order, tau=0.1s —
+        // see Simulator::updateFilteredEngineSpeed). Display and the gate CSV
+        // read THIS value, exactly like a driver's tachometer; currentRPM
+        // above stays raw for rpm_raw.
+        stats.filteredRPM = m_simulator->filteredEngineSpeed();
+        // True volumetric exhaust rate (m^3/s): the FRAME-MEAN volume flow,
+        // integrated across every 10 kHz substep of the frame (see
+        // Simulator::getFrameExhaustFlowRate). The previous readout sampled
+        // the last substep's accumulator once per frame and divided by the
+        // SUBSTEP timestep — a 60x-overstated, firing-ripple-aliased value
+        // that flickered through +/-millions of cm3/s.
+        stats.exhaustFlow = m_simulator->getFrameExhaustFlowRate();
         stats.processingTimeMs = m_simulator->getAverageProcessingTime() * 1000.0;
+        stats.synthOutputRms = m_simulator->getSynthesizerOutputRms();
     }
 }
 
@@ -144,26 +178,34 @@ void BridgeSimulator::getTransmissionStats(EngineSimStats& stats) const {
         int rawGear = m_simulator->getTransmission()->getGear();
         stats.gear = static_cast<int>(bridge::toBridge(rawGear));
 
-        // Real torque from clutch constraint (populated by solver after each step)
+        // Real torque from the ACTIVE coupling constraint, FRAME-INTEGRATED:
+        // the mean of the solved constraint reactions across every substep of
+        // the frame (Simulator::getFrameCouplingTorque/TurbineTorque). The
+        // previous readout sampled F_t of the LAST 10 kHz substep once per
+        // frame, aliasing the firing ripple into a ~30 Hz torque flicker with
+        // spurious sign flips at steady state. In torque-converter mode the
+        // friction clutch is held open (its limits are zeroed), so its
+        // reaction reads ~0 — the transmitted torque lives in the converter
+        // constraint. TorqueConverter row 0 mirrors ClutchConstraint's
+        // [-1, +1] pairing with the torque ratio folded into the turbine
+        // column: J = [0 0 -1 | 0 0 TR], so the engine side is the impeller
+        // torque and the turbine side is TR x impeller — at stall slip this
+        // shows multiplication, at lockup the plain engine torque. Sign
+        // convention: engine producing power = positive, engine braking =
+        // negative.
         if (!m_simulator->m_dyno.m_enabled) {
-            const auto& clutch = m_simulator->getTransmission()->getClutchConstraint();
-            // ClutchConstraint J = [-1, +1] on angular velocity of body 0 (crankshaft),
-            // body 1 (drivetrain virtual mass). The solver stores F_t[i][k] = J * lambda/dt.
-            // Engine crankshaft spins CW (v_theta < 0). During acceleration, lambda < 0
-            // so F_t[0][0] > 0 (clutch reaction opposing engine) and F_t[0][1] < 0
-            // (clutch driving the drivetrain in its negative/CW direction).
-            // For user display: engine producing power = positive, engine braking = negative.
-            stats.engineTorqueNm = clutch.F_t[0][0];
-            stats.drivetrainTorqueNm = -clutch.F_t[0][1];
+            stats.engineTorqueNm = m_simulator->getFrameCouplingTorque();
+            stats.drivetrainTorqueNm = m_simulator->getFrameTurbineTorque();
 
-            // Wheel-side torque: clutch torque * gear_ratio * diff_ratio.
-            // A friction clutch transmits equal-and-opposite torque (Newton's 3rd law),
-            // so both sides show the same magnitude. Gear multiplication gives different
-            // values -- engine side = raw clutch torque, wheel side = multiplied torque.
+            // Wheel-side torque: coupling torque * gear_ratio * diff_ratio.
+            // Both coupling types transmit equal-and-opposite torque (Newton's 3rd
+            // law), so the coupling-side value is the same magnitude on both
+            // ends; gear multiplication makes the wheel side differ from the
+            // engine side.
             const double gearRatio = m_simulator->getTransmission()->getGearRatio();
             if (m_simulator->getVehicle() && gearRatio > 0.0) {
                 const double diffRatio = m_simulator->getVehicle()->getDiffRatio();
-                stats.drivetrainTorqueNm = -clutch.F_t[0][1] * gearRatio * diffRatio;
+                stats.drivetrainTorqueNm *= gearRatio * diffRatio;
             }
         }
     }
@@ -311,6 +353,20 @@ void BridgeSimulator::setDrivetrainInputTorque(double nm) {
 
 void BridgeSimulator::setBrakePressure(double pressure) {
     m_brakeConstraint.setBrakeLevel(pressure);
+}
+
+void BridgeSimulator::setUseTorqueConverter(bool enabled) {
+    if (!enabled) {
+        usesTorqueConverter_ = false;
+        return;  // disabling is a no-op: the converter is only ever added, never removed
+    }
+    // The converter is installed on the transmission at factory wiring time
+    // (SimulatorFactory::createDefaultTransmission / ensureTorqueConverter, both
+    // before addToSystem runs) — adding a constraint to an already-initialized
+    // live rigid-body system corrupts the solver's pre-sized buffers. So here we
+    // only record the flag and confirm the transmission already carries one.
+    auto* trans = m_simulator->getTransmission();
+    usesTorqueConverter_ = (trans != nullptr && trans->hasTorqueConverter());
 }
 
 double BridgeSimulator::getEngineRpm() const {

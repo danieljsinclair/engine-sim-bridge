@@ -67,7 +67,7 @@ protected:
     }
 };
 
-// PROVE: brake key propagates through chain to brakeLevel
+// PROVE: brake key propagates through chain to brakeLevel (physics control)
 TEST_F(DemoChainIntegrationTest, BrakeKey_PropagatesThroughChain) {
     EngineInput input = pressAndTick('b');
     EXPECT_DOUBLE_EQ(input.brakeLevel, 1.0);
