@@ -194,22 +194,33 @@ const ReplayTelemetryProvider::Sample& ReplayTelemetryProvider::sampleAt(double 
     return samples_.back();
 }
 
+const ReplayTelemetryProvider::Sample&
+ReplayTelemetryProvider::firstSampleAtOrAfter(double t) const {
+    static const Sample kNeutral{};
+    if (samples_.empty()) return kNeutral;
+    const auto it = std::lower_bound(samples_.begin(), samples_.end(), t,
+                                     [](const Sample& a, double value) {
+                                         return a.timeS < value;
+                                     });
+    return it == samples_.end() ? samples_.back() : *it;
+}
+
 EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
     EngineInput input;
     if (applyTimeSlicing(input, dt)) return input;
 
-    // NOTE: the warm-start prefix [0, startFromS_) is NO LONGER replayed here.
-    // It is owned by SimulationLoop::run(), which steps the FULL simulation
-    // (provider called normally per frame, engine core + twin stepped, CSV/out
-    // emission suppressed) for the prefix, then emits from startFromS_ on. The
-    // old provider-side processFrame loop advanced the TWIN but never stepped
-    // the engine CORE (chambers/runners, which compute exhaust_flow) — so the
-    // prefix left the gas path cold at a hot operating point -> 90-100% negative
-    // exhaust flow in --start-from runs. Moving the prefix to the loop side puts
-    // the core on the same update path as the twin. No-op when no offset is set
-    // (the loop's prefix block is skipped when getStartFromS() <= 0).
+    // NOTE: --start-from is owned by SimulationLoop::run(): for file traces it
+    // asks this provider (IArrivalStatePrimer) to PRIME the arrival state from
+    // the first row at/after the offset and HOLD that row while the loop
+    // settles the engine core at the constant arrival operating point; after
+    // releaseArrivalHold() the rows emit from the arrival row onward. Rows
+    // before the offset are NEVER sampled or simulated (the owner contract).
+    // While the hold is active the arrival row is served directly (the frozen
+    // clock would otherwise floor to the PRE-offset row when the offset falls
+    // between rows).
 
-    const Sample& s = sampleAt(elapsedS_);
+    const Sample& s = arrivalHoldActive_ ? firstSampleAtOrAfter(startFromS_)
+                                         : sampleAt(elapsedS_);
     currentTimestampS_ = s.timeS;
     buildBaseEngineInput(input, s);
     // Feed the RAW recorded road speed. The CSV road speed is a CAN staircase
@@ -325,7 +336,13 @@ void ReplayTelemetryProvider::primeTwinToRunning() {
 }
 
 bool ReplayTelemetryProvider::applyTimeSlicing(EngineInput& input, double dt) {
-    elapsedS_ += dt;
+    // Instant --start-from hold: while the arrival hold is active the replay
+    // clock is FROZEN on the arrival row (the loop settles the engine core at
+    // this constant operating point — advancing here would replay later rows
+    // during the settle, breaking the constant-input contract).
+    if (!arrivalHoldActive_) {
+        elapsedS_ += dt;
+    }
 
     // Time slicing: stop at endAtS — emit an ignition-off frame and signal the
     // caller to return it immediately (no further processing this frame).
@@ -335,6 +352,60 @@ bool ReplayTelemetryProvider::applyTimeSlicing(EngineInput& input, double dt) {
         return true;
     }
     return false;
+}
+
+void ReplayTelemetryProvider::primeArrivalState() {
+    // Instant --start-from: synthesize the provider-side arrival state from
+    // the FIRST row at/after the offset — no pre-offset row is ever sampled.
+    // No-op without an offset (from-0 runs keep the Initialize()-time prime
+    // and byte-identical behavior).
+    if (startFromS_ <= 0.0 || samples_.empty()) return;
+
+    const Sample& arrival = firstSampleAtOrAfter(startFromS_);
+    arrivalHoldActive_ = true;
+    // Clock cold-jump onto the arrival row's TRUE timecode (mirrors the live
+    // path's instant anchor): the first emitted frame reads [mm:ss] at the
+    // offset, and the post-release clock advances from here.
+    elapsedS_ = arrival.timeS;
+
+    if (twinProvider_) {
+        const auto sel = arrival.gearSelector.empty()
+            ? bridge::GearSelector::DRIVE : parseGearSelector(arrival.gearSelector);
+        // Shared OFF->RUNNING warm boot (DRY with the live path), seeded with
+        // the ARRIVAL row's operating point rather than the trace's first row.
+        warmBootTwinToRunning(twinProvider_.get(), arrival.throttle,
+                              arrival.roadSpeedKmh, static_cast<int>(sel));
+
+        // Arrival-seed settle: the shared warm boot settles the GENERIC cruise
+        // basin (its fixed light-throttle/low-speed prime); hold the twin at
+        // the ARRIVAL operating point instead so the gearbox/clutch/coupling
+        // state converges on THAT point (e.g. arrives in g5/g6 at highway
+        // speed, not the g4/g5 cruise basin). Twin-only stepping — no engine
+        // core, no rows — so this costs microseconds; the core warms in the
+        // loop's settle window (see SimulationLoop). Ends with a fresh crank
+        // budget so the synthetic frames' discarded starter edges leave no
+        // re-crank cooldown debt on the real run (same contract as
+        // primeWarmUp).
+        input::UpstreamSignal signal;
+        signal.throttleFraction = arrival.throttle;
+        signal.speedKmh = arrival.roadSpeedKmh;
+        signal.isValid = true;
+        signal.timestampUtcMs = std::max<uint64_t>(
+            1, static_cast<uint64_t>(startFromS_ * 1000.0));
+        twinProvider_->setGearSelector(static_cast<int>(sel));
+        twinProvider_->setIgnition(true);
+        twinProvider_->setUpstreamSignal(signal);
+        constexpr double kArrivalSeedDt = 0.05;
+        constexpr int kArrivalSeedFrames = 200;  // 10s of twin time
+        for (int i = 0; i < kArrivalSeedFrames; ++i) {
+            twinProvider_->OnUpdateSimulation(kArrivalSeedDt);
+        }
+        twinProvider_->armFreshCrankBudget();
+    }
+}
+
+void ReplayTelemetryProvider::releaseArrivalHold() {
+    arrivalHoldActive_ = false;
 }
 
 void ReplayTelemetryProvider::buildBaseEngineInput(EngineInput& input, const Sample& s) const {

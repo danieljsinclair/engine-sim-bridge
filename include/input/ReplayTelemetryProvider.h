@@ -40,6 +40,11 @@
 // validateReplayTimeSlicing() can depend on the narrow interface, not this
 // whole class. Only durationS()/setEndAtS() are promoted to virtual here.
 #include "input/IReplayTimeline.h"
+// IArrivalStatePrimer — instant --start-from seam: the loop asks the provider
+// to synthesize the arrival state (twin warm-boot from the arrival row + clock
+// anchor) and hold that row as the synthetic input while it settles the engine
+// core at the arrival operating point. No pre-offset row is ever simulated.
+#include "input/IArrivalStatePrimer.h"
 
 #include <memory>
 #include <string>
@@ -47,7 +52,9 @@
 
 namespace input {
 
-class ReplayTelemetryProvider : public IInputProvider, public IReplayTimeline {
+class ReplayTelemetryProvider : public IInputProvider,
+                                public IReplayTimeline,
+                                public IArrivalStatePrimer {
 public:
     explicit ReplayTelemetryProvider(std::string csvPath, bool autoStart = true,
                                      bool autoGearbox = false);
@@ -75,6 +82,15 @@ public:
     void setStartFromS(double s) { startFromS_ = s; }
     double getStartFromS() const override { return startFromS_; }
     void setEndAtS(double s) override { endAtS_ = s; }
+
+    // IArrivalStatePrimer — instant --start-from (see the interface header).
+    // Prime: twin warm-boot seeded from the ARRIVAL row (first row at/after
+    // the offset), replay clock anchored on that row, and the row HELD as the
+    // constant synthetic input. Release: the clock resumes from the arrival
+    // row and the trace plays from there. No-op when no offset is set.
+    void primeArrivalState() override;
+    void releaseArrivalHold() override;
+    bool arrivalHoldActive() const { return arrivalHoldActive_; }
 
     // Current replay timestamp (absolute, from CSV). -1 before first sample.
     double currentTimestampS() const { return currentTimestampS_; }
@@ -134,6 +150,11 @@ private:
     void handleNonAutoGearbox(EngineInput& input, const Sample& s) const;
 
     const Sample& sampleAt(double t) const;
+    // First sample with timeS >= t (the ARRIVAL row for --start-from t).
+    // sampleAt() floors (last row <= t); this ceils — the instant-skip
+    // contract replays from the first row AT or AFTER the offset, never a
+    // pre-offset one. Clamps to the last row when t is past the trace end.
+    const Sample& firstSampleAtOrAfter(double t) const;
 
     void processKeyboardInput(EngineInput& input);
     void processReplayKey(int key, EngineInput& input);
@@ -173,6 +194,11 @@ private:
     double startFromS_ = -1.0;        // skip samples before this time (-1 = disabled)
     double endAtS_ = -1.0;            // stop replay at this time (-1 = disabled)
     double currentTimestampS_ = -1.0; // current absolute timestamp from CSV
+    // Instant --start-from hold: while true, OnUpdateSimulation returns the
+    // ARRIVAL row unchanged and the replay clock does not advance — the loop
+    // settles the engine core at this constant operating point before the
+    // first emitted frame (see IArrivalStatePrimer).
+    bool arrivalHoldActive_ = false;
 };
 
 } // namespace input

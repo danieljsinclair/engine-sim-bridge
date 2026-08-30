@@ -25,6 +25,7 @@ class ISimulatorSession;
 
 // Forward declarations for injectable interfaces
 namespace presentation { class IPresentation; }
+namespace input { class IArrivalStatePrimer; }
 class ILogging;
 namespace telemetry { class ITelemetryWriter; class ITelemetryReader; }
 
@@ -184,6 +185,21 @@ private:
     // Poll input provider or generate timed input for non-interactive mode
     input::EngineInput pollInput(double currentTime, double updateInterval, bool isFirstTick);
 
+    // Instant --start-from (file traces): prime the provider's arrival state
+    // (twin warm-boot from the arrival row + clock anchor + arrival hold),
+    // settle the engine core for a bounded window at that HELD operating
+    // point with all emission suppressed, then hand off at the offset —
+    // rows before --start-from are never simulated. See run()'s block
+    // comment for the full contract.
+    void settleAtArrivalPoint(LoopState& state,
+                              input::IArrivalStatePrimer& primer,
+                              double offsetS);
+
+    // One suppressed settle tick (used by settleAtArrivalPoint). Returns
+    // false when settling must stop: stop request, disconnected source, or a
+    // terminal step() result (Stop/PresetCycle).
+    bool settleTick(LoopState& state);
+
     // Injected dependencies — set once, read-only during run()
     ISimulator& simulator_;
     const SimulationConfig& config_;
@@ -205,20 +221,21 @@ private:
     // TRANSITION, not every frame the starter is held.
     bool lastStarterEngaged_ = false;
 
-    // Suppress telemetry + presentation emission during the warm-start prefix.
-    // CSV telemetry emission only (decoupled from presentation). During the
-    // warm-start prefix we keep updatePresentation() running (its audio/render
-    // path is a per-tick physics side-effect that must advance identically to
-    // the main loop) but suppress only the CSV write, so the prefix converges
-    // on the from-0 run instead of leaving the gas path cold.
+    // Suppress OUTPUT emission during the suppressed settle (instant
+    // --start-from arrival settle): CSV telemetry write AND presentation are
+    // both tied to this gate. The per-tick PHYSICS (start/stop decision,
+    // cranking, vehicle controls, audioBuffer_.updateSimulation core tick)
+    // always runs in step() regardless — only outputs are suppressed, so the
+    // settle advances the gas path exactly like the main loop while emitting
+    // nothing.
     bool emitCsv_ = true;
 
-    // Suppress audio queueing during the warm-start prefix. The physics tick
+    // Suppress audio queueing during the suppressed settle. The physics tick
     // (audioBuffer_.updateSimulation -> simulator->update) ALWAYS runs; only
     // fillBufferFromEngine (rendered-sample queueing into the playback ring)
-    // is gated, so the silent warm-up queues no audio. The ring is drained and
-    // reset at the prefix handoff (resetBufferAfterWarmup), so playback starts
-    // clean at the --start-from offset instead of replaying warm-up audio.
+    // is gated, so the silent settle queues no audio. The ring is drained and
+    // reset at the settle handoff (resetBufferAfterWarmup), so playback starts
+    // clean at the --start-from offset instead of replaying settle audio.
     bool emitAudio_ = true;
 
     // Vehicle start/stop decision layer + the observer it drives. The loop

@@ -65,6 +65,15 @@ public:
     // before the first real frame. One-shot; idempotent (no-op once warmed).
     void primeWarmUp();
 
+    // Arm a fresh re-crank budget on the twin: any synthetic prime frames
+    // (warm-up or an instant --start-from arrival settle) can pass through a
+    // Stopped core and fire discarded starter edges that consume the re-crank
+    // cooldown. Arming clears that debt so the FIRST real crank attempt fires
+    // immediately (same tail act as primeWarmUp performs).
+    void armFreshCrankBudget() {
+        if (twin_) twin_->armFreshCrankBudget();
+    }
+
     // Bind the live BridgeSimulator so the provider can install the fluid-
     // coupling torque converter on the transmission when --coupling-model
     // torque-converter is selected. The session sets this AFTER creating the

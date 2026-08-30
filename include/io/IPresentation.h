@@ -142,9 +142,10 @@ public:
     virtual void ShowError(const std::string& error) = 0;
     virtual void ShowProgress(double currentTime, double duration) = 0;
 
-    // Suppress file-backed CSV row emission (e.g. during the warm-start prefix).
-    // Default no-op: console-only presentations ignore it (no file artifact to
-    // corrupt). CsvPresentation overrides it to close/suppress its writer.
+    // Suppress file-backed CSV row emission (e.g. during the suppressed
+    // --start-from arrival settle). Default no-op: console-only presentations
+    // ignore it (no file artifact to corrupt). CsvPresentation overrides it to
+    // close/suppress its writer.
     virtual void setCsvEmissionEnabled(bool /*enabled*/) {}
 
     virtual void Update(double dt) = 0;
