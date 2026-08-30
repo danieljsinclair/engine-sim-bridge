@@ -179,11 +179,24 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
             // through unchanged (it is the "not commanded" value the twin expects).
             signal.speedKmh = currentSample_.roadSpeedKmh;
             signal.motorTorqueNm = currentSample_.motorTorqueNm;
+            // The start/stop decision layer (VehicleStartController, read by
+            // StartStopInputAdapter via getCurrentSignal()) needs the brake
+            // light and the resolved gear. The CSV path is the documented
+            // vehicle-sim --stdout-csv pipe, so it must populate these here —
+            // the JSON network path does the equivalent via submitSignal().
+            signal.brakeLight = currentSample_.brakeLight;
+            signal.gearSelector = csvGearSelector();
             // The row is valid telemetry even when speed is blank (dyno off); a
             // non-zero timestamp keeps the twin's telemetry-timeout guard happy.
             signal.isValid = true;
             signal.timestampUtcMs = streamTimestampUtcMs();
         }
+
+        // Mirror the JSON network path: publish the assembled signal so the
+        // decision layer (which polls getCurrentSignal()) observes the same
+        // brake/gear the twin processes. submitSignal() is the single seam for
+        // feeding currentSignal_ on every input path.
+        submitSignal(signal);
 
         twinProvider_->setUpstreamSignal(signal);
         // Reverse coercion: an 'R' stalk command is only honoured while the
@@ -217,6 +230,8 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
         // it, so --live-telemetry output had no timecode. elapsedS_ already
         // accounts for --start-from, so the timecode matches the seek origin.
         input.replayTimestampS = elapsedS_;
+        // Echo the brake light for display (the twin does not consume it).
+        input.brakeLight = signal.brakeLight;
         return input;
     }
 
@@ -232,8 +247,34 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
     UpstreamSignal signal = currentSignal_.load();
     twinProvider_->setUpstreamSignal(signal);
 
+    // Relay the decoded gear to the twin. The twin learns the selector ONLY via
+    // setGearSelector (its `selector_` member) — it does NOT read
+    // signal.gearSelector — so without this the network path leaves selector_ at
+    // its NEUTRAL default and emits engineInput.gearSelector == 0 every frame.
+    // That kills gear-initiated instant starts (driveSelected stays false) on the
+    // live JSON path, unlike the CSV path (line 141) which relays the gear. The
+    // twin remains the single owner of the selector; we only feed it the signal
+    // that submitSignal() already published above.
+    twinProvider_->setGearSelector(static_cast<int>(signal.gearSelector));
+
     // Delegate to the twin for gearbox/clutch/throttle processing
     input = twinProvider_->OnUpdateSimulation(dt);
+
+    // Echo the decoded gear into engineInput.gearSelector for the start/stop
+    // decision site (SimulationLoop::applyStartStopDecision reads
+    // state.engineInput.gearSelector to compute driveSelected). The twin only
+    // echoes its `selector_` member back through VirtualIceTwin::update, and
+    // that update early-returns (leaving gearSelector == NEUTRAL) when the
+    // upstream signal carries timestampUtcMs == 0 — which is the norm on the
+    // live JSON network path (submitSignal() is called without a timestamp). So
+    // we cannot rely on the twin to surface the gear here; set it from the
+    // decoded signal directly, mirroring the CSV path's "populate these here"
+    // intent (line 127/141). This is the canonical gearSelector value the
+    // decision layer must see — every frame, regardless of telemetry state.
+    input.gearSelector = static_cast<int>(signal.gearSelector);
+
+    // Echo the brake light for display (the twin does not consume it).
+    input.brakeLight = signal.brakeLight;
 
     return input;
 }
@@ -516,7 +557,13 @@ bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
     // EOF only when the stream AND the lookahead buffer are fully drained (a call
     // that surfaced a row stays "connected"; EOF is confirmed on a later call that
     // surfaces nothing) — mirrors the former live/paced contract.
-    if (stream_->eof() && rowBuffer_.empty() && !found) {
+    // The LIVE path (engine-sim-cli --live-telemetry, a finite/buffered pipe such
+    // as `vehicle-sim --stdout-csv | cli`) must NOT disconnect at EOF (startStop
+    // lineage): the start/stop decision layer needs wall-clock time AFTER the
+    // last row to complete its crank delay and pending transitions. Disconnecting
+    // here would halt SimulationLoop (run() returns on !IsConnected) before
+    // ignition ever fires. The --duration guard bounds the run instead.
+    if (!liveStream_ && stream_->eof() && rowBuffer_.empty() && !found) {
         if (!eofSeen_) csvParser_.emitRejectionSummary();  // once, on EOF transition
         eofSeen_ = true;
     }

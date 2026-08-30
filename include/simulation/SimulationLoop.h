@@ -10,6 +10,7 @@
 #include "simulator/EngineSimTypes.h"
 #include "simulation/CrankingController.h"
 #include "simulation/ILoopClock.h"
+#include "input/VehicleStartController.h"
 #include "io/IInputProvider.h"
 #include "io/IPresentation.h"  // DiagnosticOutputFilter (carried via SimulationConfig)
 #include "hardware/IAudioHardwareProvider.h"  // IAudioHardwareProvider (complete type: named in createSession signature)
@@ -105,6 +106,11 @@ struct SimulationConfig {
     bool autoGearbox = false;    // Automatic gearbox mode (--auto), default is manual
     bool deterministicTickLock = false;  // tick-locked integer termination + fakeClock selection; default false = legacy FP/wall-clock behavior
 
+    // Vehicle start/stop: crank delay (seconds) between starter engagement and
+    // ignition on a brake-initiated start. Owned here so the loop constructs
+    // its VehicleStartController from config — no per-provider wiring.
+    double startStopCrankDelayS = input::VehicleStartController::kDefaultCrankDelayS;
+
     // Optional display label for logging (e.g. ANSI-colored by CLI). Empty = auto-derive.
     std::string simulatorLabel;
 
@@ -142,6 +148,17 @@ public:
     StepResult step(LoopState& state);
 
 private:
+    // Vehicle start/stop decision — the ONE invocation site every mode
+    // (keyboard, demo, replay, live) traverses. Runs from the canonical
+    // brakeLight + gearSelector; flattens the controller's ignition/starter
+    // levels into EngineInput. No-ops while no vehicle-control signal has
+    // been seen, so provider-owned starts (e.g. replay autoStart) survive.
+    void applyStartStopDecision(LoopState& state, bool lightReportedByTelemetry);
+
+    // Convert the controller's held starter LEVEL into a single-frame pulse
+    // (CrankingController::engageStarter toggles on a held-high button).
+    bool starterPulseFromLevel(bool controllerStarterLevel);
+
     // Cranking decision — single entry point for combustion/sine-mode fork
     CrankingController::State applyCrankingDecision(
         ICombustionEngine* combustionEngine,
@@ -203,6 +220,17 @@ private:
     // reset at the prefix handoff (resetBufferAfterWarmup), so playback starts
     // clean at the --start-from offset instead of replaying warm-up audio.
     bool emitAudio_ = true;
+
+    // Vehicle start/stop decision layer + the observer it drives. The loop
+    // owns both: the controller's ignition/starter LEVEL decisions are read
+    // off the observer and flattened into EngineInput.ignition/starterButton;
+    // CrankingController stays the single actuator authority downstream.
+    input::ObserverActuator startStopObserver_;
+    input::VehicleStartController startStopController_{startStopObserver_,
+                                                        config_.startStopCrankDelayS};
+    bool startStopEngaged_ = false;   // authority latch: once a vehicle-control
+                                      // signal is seen, the controller keeps it
+    bool prevStarterLevel_ = false;   // edge detection for the starter pulse
 };
 
 // ============================================================================

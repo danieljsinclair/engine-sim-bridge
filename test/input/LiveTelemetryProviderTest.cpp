@@ -18,6 +18,7 @@
 // spec we accept the happy path + idempotency + not-init guard as the core.
 
 #include "input/LiveTelemetryProvider.h"
+#include "input/EngineInputTarget.h"
 #include "twin/IceVehicleProfile.h"
 #include "simulator/EngineSimTypes.h"
 #include "simulator/GearConventions.h"
@@ -130,6 +131,60 @@ TEST_F(LiveTelemetryProviderTest, DelegatesForwardToTwin) {
     EXPECT_TRUE(provider_->IsConnected());
 }
 
+// Regression: the JSON network path must populate engineInput.gearSelector from
+// the decoded gear in the submitted signal. The inner twin learns the selector
+// ONLY via setGearSelector (it does NOT read signal.gearSelector); the network
+// path relays it. Without this, engineInput.gearSelector stays NEUTRAL(0) and
+// gear-initiated instant starts (driveSelected) are dead on the live path.
+TEST_F(LiveTelemetryProviderTest, NetworkPath_PopulatesGearSelectorFromSignal) {
+    ASSERT_TRUE(provider_->Initialize());
+
+    // Network path: a DRIVE-gear, valid telemetry frame (the master live feed).
+    input::UpstreamSignal signal;
+    signal.gearSelector = bridge::GearSelector::DRIVE;
+    signal.isValid = true;
+    signal.throttleFraction = 0.5;
+    signal.speedKmh = 30.0;
+    provider_->submitSignal(signal);
+
+    // Pump RPM feedback so the twin leaves CRANKING/IDLE quickly and the box
+    // reaches RUNNING; gearSelector is echoed on every frame regardless of state.
+    EngineSimStats stats;
+    stats.currentRPM = 900.0;
+
+    input::EngineInput input;
+    for (int i = 0; i < 5; ++i) {
+        provider_->provideFeedback(stats);
+        input = provider_->OnUpdateSimulation(0.05);
+    }
+
+    EXPECT_EQ(input.gearSelector, static_cast<int>(bridge::GearSelector::DRIVE))
+        << "Network live frame must report the decoded gear via engineInput.gearSelector";
+}
+
+// Contrast: a NEUTRAL-gear network frame must surface NEUTRAL, proving the field
+// is genuinely driven by the signal (not hardcoded to DRIVE).
+TEST_F(LiveTelemetryProviderTest, NetworkPath_NeutralGearSurfacesNeutral) {
+    ASSERT_TRUE(provider_->Initialize());
+
+    input::UpstreamSignal signal;
+    signal.gearSelector = bridge::GearSelector::NEUTRAL;
+    signal.isValid = true;
+    signal.throttleFraction = 0.5;
+    signal.speedKmh = 30.0;
+    provider_->submitSignal(signal);
+
+    EngineSimStats stats;
+    stats.currentRPM = 900.0;
+    input::EngineInput input;
+    for (int i = 0; i < 5; ++i) {
+        provider_->provideFeedback(stats);
+        input = provider_->OnUpdateSimulation(0.05);
+    }
+
+    EXPECT_EQ(input.gearSelector, static_cast<int>(bridge::GearSelector::NEUTRAL));
+}
+
 }  // namespace
 
 // ============================================================================
@@ -189,6 +244,7 @@ TEST(LiveTelemetryStreamTest, TwinInLoopSetsGearAutoMode) {
 TEST(LiveTelemetryStreamTest, GearboxUpshiftsAtSustainedHighSpeed) {
     StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,100,80\n");
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
     h.provider->setGearSelector(kDrive);
 
     int gear = runUntilGearAbove(*h.provider, /*target*/ 1, /*ticks*/ 200);
@@ -204,6 +260,7 @@ TEST(LiveTelemetryStreamTest, GearboxUpshiftsAtSustainedHighSpeed) {
 TEST(LiveTelemetryStreamTest, FeedbackWiredReleasesStarterOnCatch) {
     StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,30,5\n", /*autoStart=*/false);
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
     h.provider->setGearSelector(kDrive);
 
     bool starterFired = false;
@@ -226,6 +283,7 @@ TEST(LiveTelemetryStreamTest, FeedbackWiredReleasesStarterOnCatch) {
 TEST(LiveTelemetryStreamTest, DefaultSelectorIsDriveReachesRunning) {
     StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,100,80\n");
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
     // Intentionally NO setGearSelector — the default selector is under test.
 
     int gear = runUntilGearAbove(*h.provider, /*target*/ 1, /*ticks*/ 200);
@@ -278,6 +336,7 @@ TEST(LiveTelemetryStreamTest, LiveModeConsumesIncrementallyNotPinnedToLastRow) {
          << "4.0,100,1.76\n"; // parked tail
     LiveStreamHarness h(csv.str());
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
     h.provider->setGearSelector(kDrive);
 
     // Pump RPM feedback so the twin cranks/catches (OFF->CRANKING->IDLE->RUNNING)
@@ -303,6 +362,7 @@ TEST(LiveTelemetryStreamTest, LiveModeConsumesIncrementallyNotPinnedToLastRow) {
 TEST(LiveTelemetryStreamTest, ValidityTimestampGuardKeepsTwinAlive) {
     StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,50,\n", /*autoStart=*/false);
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
 
     bool cranked = false;
     for (int i = 0; i < 5 && !cranked; ++i) {
@@ -343,6 +403,7 @@ TEST(LiveTelemetryStreamTest, GearSelectorColumnForwardedAndDelegatesSafe) {
 TEST(LiveTelemetryStreamTest, EngineStartsFromCsvWhenRpmPlateausBelowThreshold) {
     StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,50,5\n");
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
     h.provider->setGearSelector(kDrive);
 
     // Sub-threshold RPM feedback every tick — the closed loop never crosses the
@@ -417,6 +478,7 @@ TEST(LiveTelemetryStreamTest, ReconfigureProfileForwardsRatiosToTwin) {
     {
         StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,100,80\n");
         ASSERT_TRUE(h.provider->Initialize());
+        h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
         h.provider->setGearSelector(kDrive);
         ASSERT_GT(runUntilGearAbove(*h.provider, /*target*/ 1, /*ticks*/ 200), 1)
             << "baseline: default zf8hp45 must upshift at 80 km/h WOT";
@@ -425,6 +487,7 @@ TEST(LiveTelemetryStreamTest, ReconfigureProfileForwardsRatiosToTwin) {
     {
         StreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,100,80\n");
         ASSERT_TRUE(h.provider->Initialize());
+        h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
         h.provider->setGearSelector(kDrive);
         h.provider->reconfigureProfile({3.5}, 3.15, 0.32);
         EXPECT_EQ(runUntilGearAbove(*h.provider, /*target*/ 1, /*ticks*/ 200), 1)
@@ -456,6 +519,76 @@ TEST(LiveTelemetryStreamTest, CsvRoadSpeedIsSurfacedOnEngineInput) {
     input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
     EXPECT_DOUBLE_EQ(in.roadSpeedKmh, 100.0)
         << "CSV speed_kmh=100 must surface on EngineInput.roadSpeedKmh (was dropped)";
+}
+
+// T10b: the brake_light column surfaces end-to-end on the provider's current
+// signal (the seam StartStopInputAdapter polls via getCurrentSignal()). The
+// tri-state must survive: 1 -> true, 0 -> false, blank -> nullopt.
+//
+// Rows are duplicated per state: the paced reader drops the FIRST row beyond
+// the sim clock each call (the documented ~1-row skew), so each asserted state
+// needs a second row inside the window to surface.
+TEST(LiveTelemetryStreamTest, CsvBrakeLightColumn_SurfacesOnCurrentSignal) {
+    StreamHarness h(
+        "time_s,throttle_pct,brake_light\n"
+        "0.0,10,1\n"
+        "1.0,10,1\n"
+        "2.0,20,0\n"
+        "3.0,20,0\n"
+        "4.0,30,\n"
+        "5.0,30,\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    // simElapsedS=1.5: rows t=0,1 in window; t=2 dropped as future. -> true.
+    h.provider->OnUpdateSimulation(1.5);
+    EXPECT_TRUE(h.provider->getCurrentSignal().brakeLight.has_value());
+    EXPECT_TRUE(*h.provider->getCurrentSignal().brakeLight);
+
+    // simElapsedS=3.5: row t=3 in window; t=4 dropped. -> false.
+    h.provider->OnUpdateSimulation(2.0);
+    EXPECT_TRUE(h.provider->getCurrentSignal().brakeLight.has_value());
+    EXPECT_FALSE(*h.provider->getCurrentSignal().brakeLight);
+
+    // simElapsedS=5.5: row t=5 in window. -> blank -> nullopt.
+    h.provider->OnUpdateSimulation(2.0);
+    EXPECT_FALSE(h.provider->getCurrentSignal().brakeLight.has_value());
+}
+
+// T10c: canonical brake invariant at the provider boundary. The CSV brake_light
+// column SUPPLIES the light (display/start-stop signal) and must NOT write the
+// physics level — brakeLevel's only writer is the keyboard 'B' key. The
+// keyboard target writes only brakeLevel (its light derives downstream at the
+// SimulationLoop assembly point — proven in SimulationLoopVehicleControlsTests).
+// Rows are duplicated per state (paced reader drops the first row beyond the
+// sim clock each call — the documented ~1-row skew, same as T10b).
+TEST(LiveTelemetryStreamTest, CsvBrakeLight_SuppliesLightWithoutTouchingPhysicsLevel) {
+    StreamHarness h(
+        "time_s,throttle_pct,brake_light\n"
+        "0.0,10,1\n"
+        "1.0,10,1\n"
+        "2.0,10,0\n"
+        "3.0,10,0\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    input::EngineInputTarget keyboardTarget;
+    keyboardTarget.setBrake(1.0);
+    const input::EngineInput keyboardInput = keyboardTarget.buildInput();
+    EXPECT_DOUBLE_EQ(keyboardInput.brakeLevel, 1.0);
+    EXPECT_FALSE(keyboardInput.brakeLight.has_value())
+        << "Keyboard writes the level only — the light derives in SimulationLoop";
+
+    // simElapsedS=1.5: rows t=0,1 in window; t=2 dropped as future. -> true.
+    const input::EngineInput csvOn = h.provider->OnUpdateSimulation(1.5);
+    ASSERT_TRUE(csvOn.brakeLight.has_value());
+    EXPECT_TRUE(*csvOn.brakeLight);
+    EXPECT_DOUBLE_EQ(csvOn.brakeLevel, 0.0)
+        << "CSV brake light is an indicator — it must never write the physics level";
+
+    // simElapsedS=3.5: row t=3 in window; t=2 was the skew-dropped row. -> false.
+    const input::EngineInput csvOff = h.provider->OnUpdateSimulation(2.0);
+    ASSERT_TRUE(csvOff.brakeLight.has_value());
+    EXPECT_FALSE(*csvOff.brakeLight);
+    EXPECT_DOUBLE_EQ(csvOff.brakeLevel, 0.0);
 }
 
 // T11: LIVE stream mode (engine-sim-cli --live-telemetry stdin pipe) surfaces the
@@ -719,6 +852,7 @@ TEST(LiveTelemetryStreamTest, BlankInitialRowsSkippedEngineCranksWhenDataArrives
         "10.0,50,5\n";
     StreamHarness h(csv, /*autoStart=*/false);
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
 
     // Call 1: consume the whole stream. Blank rows (t=0..9) are skipped; the
     // populated row (t=10) is the first non-blank → hasSample_=true, but the
@@ -753,6 +887,7 @@ TEST(LiveTelemetryStreamTest, PopulatedRowSurvivesSubsequentBlankRows) {
         "3.0,60,10\n"; // another populated (updates sample)
     StreamHarness h(csv, /*autoStart=*/false);
     ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);  // twin ignition defaults OFF; commanded here
 
     // Call 1: consumes all rows. Non-blank rows at t=0 (throttle=50) and t=3
     // (throttle=60). The latest non-blank is t=3 → currentSample_.throttle=0.6.

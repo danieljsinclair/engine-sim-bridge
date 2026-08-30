@@ -92,6 +92,8 @@ bool CsvTelemetryParser::parseHeader(const std::string& headerLine, std::string&
             header_.colClutch = static_cast<int>(i);
         } else if (name == "motor_torque_nm" || name == "motor_torque" || name == "torque_nm") {
             header_.colMotorTorque = static_cast<int>(i);
+        } else if (name == "brake_light" || name == "brakelight") {
+            header_.colBrakeLight = static_cast<int>(i);
         }
     }
 
@@ -195,6 +197,17 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
     if (header_.colMotorTorque >= 0 && header_.colMotorTorque < static_cast<int>(fields.size()) &&
         parseDouble(fields[header_.colMotorTorque], v)) {
         s.motorTorqueNm = v;
+    }
+
+    // brake_light: a binary column. "1" = on, "0" = off; blank/unparseable/
+    // out-of-domain values leave the field absent (nullopt) — never a guess.
+    if (header_.colBrakeLight >= 0 &&
+        header_.colBrakeLight < static_cast<int>(fields.size())) {
+        int brakeLight = 0;
+        if (parseInt(fields[header_.colBrakeLight], brakeLight)) {
+            if (brakeLight == 1)      s.brakeLight = true;
+            else if (brakeLight == 0) s.brakeLight = false;
+        }
     }
 
     out = s;

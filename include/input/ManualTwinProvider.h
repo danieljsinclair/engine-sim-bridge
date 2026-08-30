@@ -28,6 +28,13 @@ public:
     void setIgnitionRequested(bool requested);
     void setStarterRequested(bool requested);
 
+    // Inspection getters for the SEPARATE manual path. VehicleStartController has
+    // no reference to ManualTwinProvider (it depends only on IEngineActuator), so
+    // these exist purely so tests can observe that the manual demanded state is
+    // never perturbed by the vehicle-driven start/stop layer.
+    bool isIgnitionRequested() const { return ignitionRequested_; }
+    bool isStarterRequested() const { return starterRequested_; }
+
 private:
     void doShutdown();
     std::unique_ptr<IThrottleSource> throttleSource_;

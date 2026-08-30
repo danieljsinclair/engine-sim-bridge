@@ -45,6 +45,74 @@ TEST_F(CsvTelemetryParserTest, ParseHeader_RecognisesGearSelector) {
     EXPECT_EQ(parser.header().colGearSelector, 2);
 }
 
+// ============================================================================
+// Brake-light column (binary pedal proxy from the vehicle-sim --stdout-csv
+// pipe): recognised in the header, decoded tri-state (1/0/absent), and the
+// retired brake_percent / brake_pedal_state aliases are NOT consumed.
+// ============================================================================
+
+TEST_F(CsvTelemetryParserTest, ParseHeader_RecognisesBrakeLightColumn) {
+    std::string error;
+    EXPECT_TRUE(parser.parseHeader("time_s,throttle_pct,brake_light", error));
+    EXPECT_EQ(parser.header().colBrakeLight, 2);
+}
+
+TEST_F(CsvTelemetryParserTest, ParseRow_BrakeLightOnOffBlank) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("time_s,brake_light", error));
+
+    CsvSample on;
+    EXPECT_TRUE(parser.parseRow("1.0,1", 1.0, on, error));
+    EXPECT_TRUE(on.brakeLight.has_value() && *on.brakeLight);
+
+    CsvSample off;
+    EXPECT_TRUE(parser.parseRow("2.0,0", 1.0, off, error));
+    EXPECT_TRUE(off.brakeLight.has_value() && !*off.brakeLight);
+
+    CsvSample blank;
+    EXPECT_TRUE(parser.parseRow("3.0,", 1.0, blank, error));
+    EXPECT_FALSE(blank.brakeLight.has_value());  // blank keeps the nullopt default
+}
+
+TEST_F(CsvTelemetryParserTest, ParseRow_BrakeLightGarbageValue_IsAbsent) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("time_s,brake_light", error));
+
+    CsvSample sample;
+    EXPECT_TRUE(parser.parseRow("1.0,x", 1.0, sample, error));
+    EXPECT_FALSE(sample.brakeLight.has_value());  // unparseable => absent, never a guess
+}
+
+// Regression (owner decision 2): captures recorded with the OLD 13-column
+// vehicle-sim schema (brake_percent) must still parse — the retired column is
+// ignored via the unknown-column path and column-index alignment holds.
+TEST_F(CsvTelemetryParserTest, OldSchemaWithBrakePercentColumn_StillParses) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader(
+        "timestamp_ms,vehicle_id,speed_kmh,throttle_percent,brake_percent,"
+        "acceleration_g,steering_angle_deg,motor_rpm,motor_hv_voltage,"
+        "motor_hv_current,motor_torque_nm,gear_selector,dbc_signal_count",
+        error));
+
+    CsvSample sample;
+    EXPECT_TRUE(parser.parseRow(
+        "1000,tesla,50.00,30.00,25.00,0.15,2.50,3000.00,400.00,60.00,450.00,D,10",
+        1000.0, sample, error));
+    EXPECT_FALSE(sample.brakeLight.has_value());  // nothing consumed the old column
+    EXPECT_DOUBLE_EQ(sample.timeS, 1.0);          // column alignment did not shift
+    EXPECT_DOUBLE_EQ(sample.throttle, 0.30);
+}
+
+TEST_F(CsvTelemetryParserTest, ParseHeader_BrakePercentNoLongerConsumed) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("time_s,brake_percent", error));
+    EXPECT_EQ(parser.header().colBrakeLight, -1);  // old alias dropped, not kept
+
+    CsvSample sample;
+    EXPECT_TRUE(parser.parseRow("1.0,100", 1.0, sample, error));
+    EXPECT_FALSE(sample.brakeLight.has_value());   // populated cell ignored
+}
+
 TEST_F(CsvTelemetryParserTest, ParseHeader_MissingTimeColumn_Fails) {
     std::string error;
     EXPECT_FALSE(parser.parseHeader("throttle_pct,road_speed_kmh", error));

@@ -46,7 +46,7 @@ namespace presentation::builders {
             EngineState::Controls controls;
             controls.throttle = cranking.startingThrottle;
             controls.ignition = input.ignition;
-            controls.brakeLevel = input.brakeLevel;
+            controls.brakeLight = input.brakeLight;
             controls.gearSelector = input.gearSelector;
             controls.gearAutoMode = input.gearAutoMode;
             // Surface the commanded road-speed target so it is visible even in

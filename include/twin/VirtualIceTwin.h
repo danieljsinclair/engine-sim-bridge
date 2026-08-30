@@ -129,7 +129,14 @@ private:
     double drivetrainTorqueNm_ = 0.0;
     double clutchPressure_ = 1.0;
     bridge::GearSelector selector_ = bridge::GearSelector::NEUTRAL;
-    bool ignitionOn_ = true;
+    // Ignition is OFF until a start decision commands it on (setIgnition). The
+    // twin must never assume a running engine: on live paths
+    // VehicleStartController (via SimulationLoop) owns every start, so a
+    // default-on here self-started the engine at the first valid telemetry
+    // frame — before any driver input (UpLeckHill: running at t=0.62s, first
+    // brake frame only at t=10.04s). Owners that legitimately start on their
+    // own (keyboard demo, manual twin) command ignition explicitly.
+    bool ignitionOn_ = false;
 
     WheelCouplingMode wheelCouplingMode_ = WheelCouplingMode::Free;
     std::unique_ptr<IWheelCoupling> coupling_ = makeWheelCoupling(WheelCouplingMode::Free);
