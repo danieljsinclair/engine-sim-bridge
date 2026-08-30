@@ -344,6 +344,9 @@ bool ReplayTelemetryProvider::applyTimeSlicing(EngineInput& input, double dt) {
     // caller to return it immediately (no further processing this frame).
     if (endAtS_ >= 0.0 && elapsedS_ >= endAtS_) {
         if (session_) session_->stop();
+        // The BOUND ended the run (not trace exhaustion): record it so the CLI
+        // can print the honest stop reason instead of the full trace length.
+        endAtReached_ = true;
         input.ignition = false;
         return true;
     }

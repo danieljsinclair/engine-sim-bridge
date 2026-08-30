@@ -292,7 +292,7 @@ TEST(LiveTelemetryStreamTest, DefaultSelectorIsDriveReachesRunning) {
 }
 
 // ----------------------------------------------------------------------------
-// LIVE stream mode (liveStream_ = true): the low-latency path used by
+// LIVE stream mode: the low-latency path used by
 // --live-telemetry < file. MUST still consume the capture INCREMENTALLY (one
 // row per frame), not drain the whole stream and pin currentSample_ to the LAST
 // row. Regressed in a321e1f ("surface latest stdin row immediately") when the
@@ -306,8 +306,8 @@ struct LiveStreamHarness {
     std::unique_ptr<input::LiveTelemetryProvider> provider;
     explicit LiveStreamHarness(const std::string& csv, bool autoStart = true)
         : stream(csv) {
-        // liveStream = true — the exact path CLIMain uses for --live-telemetry.
-        provider = std::make_unique<input::LiveTelemetryProvider>(stream, autoStart, /*liveStream=*/ true);
+        // The exact construction CLIMain uses for --live-telemetry.
+        provider = std::make_unique<input::LiveTelemetryProvider>(stream, autoStart);
     }
 };
 
@@ -596,7 +596,7 @@ TEST(LiveTelemetryStreamTest, CsvBrakeLight_SuppliesLightWithoutTouchingPhysicsL
 // by recording timestamp. This is the latency fix: under timestamp pacing a
 // sparse recording (rows at t=2,3.5,4,...) holds an old row until the sim clock
 // "catches up" to each row's timestamp, adding ~0.5s+ of input-to-audio lag on a
-// live pipe. The live ctor (liveStream=true) must surface the freshest sample
+// live pipe. The stream ctor must surface the freshest sample
 // immediately, so the engine response tracks the pipe like keyboard input does.
 //
 // Observable: a single OnUpdateSimulation with dt=0.05 (simElapsedS~0.05, far
@@ -669,6 +669,38 @@ TEST(LiveTelemetryStreamTest, EndAtBoundsLiveRunWithCleanDisconnect) {
     EXPECT_LE(ticks * 0.05, 1.5)
         << "The run must stop at ~1.0s of sim time (1.0/0.05 + margin ticks), not "
            "play the whole 5s stream.";
+    EXPECT_TRUE(h.provider->endAtReached())
+        << "The --end-at bound that disconnected the provider must be reported so "
+           "the CLI can print the honest stop reason (not the trace length).";
+}
+
+// Owner 2026-08-30 ("EOF = immediate termination"): a live pipe whose data ends
+// must disconnect as soon as the stream AND the lookahead buffer are drained —
+// SimulationLoop::run() exits on !IsConnected() and the whole CLI stops at
+// capture end. No grace window: a start that is still mid-crank in the last
+// ~0.5s of a capture is consciously cut short (KISS chosen over crank
+// audibility at the tail). The live pipe construction (the --live-telemetry
+// path) is the one that used to hold the last sample and run forever.
+TEST(LiveTelemetryStreamTest, LiveStreamEof_DisconnectsWhenDrained_NoGrace) {
+    std::ostringstream csv;
+    csv << "time_s,throttle_pct,road_speed_kmh\n";
+    for (int i = 0; i <= 20; ++i) csv << (i * 0.05) << ",20,30\n";   // rows to t=1.0
+    LiveStreamHarness h(csv.str());
+    ASSERT_TRUE(h.provider->Initialize());
+
+    int ticks = 0;
+    while (h.provider->IsConnected() && ticks < 400) {   // 400*0.05 = 20s cap
+        h.provider->OnUpdateSimulation(0.05);
+        ++ticks;
+    }
+    EXPECT_FALSE(h.provider->IsConnected())
+        << "live EOF must disconnect the provider once the capture drains — the "
+           "whole CLI stops at capture end (owner 2026-08-30: no grace window).";
+    EXPECT_LE(ticks * 0.05, 2.0)
+        << "disconnect must land just after the 1s capture drains, not keep "
+           "simulating the last sample indefinitely.";
+    EXPECT_FALSE(h.provider->endAtReached())
+        << "a plain stream EOF is not an --end-at bound stop.";
 }
 
 // ----------------------------------------------------------------------------
@@ -771,7 +803,7 @@ TEST(LiveTelemetryStreamTest, SourceSkipHintMakesEndAtTrueRelative) {
 // by recording timestamp. This is the latency fix: under timestamp pacing a
 // sparse recording (rows at t=2,3.5,4,...) holds an old row until the sim clock
 // "catches up" to each row's timestamp, adding ~0.5s+ of input-to-audio lag on a
-// live pipe. The live ctor (liveStream=true) must surface the freshest sample
+// live pipe. The stream ctor must surface the freshest sample
 // immediately, so the engine response tracks the pipe like keyboard input does.
 //
 // Observable: a single OnUpdateSimulation with dt=0.05 (simElapsedS~0.05, far
@@ -791,7 +823,7 @@ TEST(LiveTelemetryStreamTest, LiveStreamAdvancesThroughCaptureNotPinnedToLastRow
         csv << t << ",100," << (10 + i * 5) << "," << sel << "\n";
     }
     std::istringstream stream(csv.str());
-    auto live = std::make_unique<input::LiveTelemetryProvider>(stream, /*autoStart=*/true, /*liveStream=*/true);
+    auto live = std::make_unique<input::LiveTelemetryProvider>(stream, /*autoStart=*/true);
     ASSERT_TRUE(live->Initialize());
 
     const int kP = static_cast<int>(bridge::GearSelector::PARK);

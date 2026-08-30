@@ -476,12 +476,17 @@ TEST_F(ReplayTelemetryProviderTest, TimeSlicingEndAtStopsSession) {
     wireDefault();
     provider_->setEndAtS(0.25);
 
-    // Advance to ~0.2s (before the cutoff): no stop yet.
+    // Advance to ~0.2s (before the cutoff): no stop yet, no --end-at claim.
     advanceSeconds(0.2);
     const int stopsBefore = session_.stopCount();
+    EXPECT_FALSE(provider_->endAtReached())
+        << "Before the bound the provider must not claim an --end-at stop.";
     // Advance past 0.25s: stop should now fire.
     advanceSeconds(0.1);
     EXPECT_GT(session_.stopCount(), stopsBefore);
+    EXPECT_TRUE(provider_->endAtReached())
+        << "The bound that stopped the session must be reported so the CLI can "
+           "print the honest stop reason (not the full trace length).";
 }
 
 // ===========================================================================

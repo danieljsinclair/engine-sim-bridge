@@ -64,6 +64,7 @@ public:
     bool Initialize() override;
     void Shutdown() override {}
     bool IsConnected() const override { return connected_; }
+    bool endAtReached() const override { return endAtReached_; }
     EngineInput OnUpdateSimulation(double dt) override;
     void provideFeedback(const EngineSimStats& stats) override;
     std::string GetProviderName() const override { return "ReplayTelemetry"; }
@@ -186,6 +187,7 @@ private:
     bool ignitionOn_ = true;          // toggled by 'I' key during replay
     double startFromS_ = -1.0;        // skip samples before this time (-1 = disabled)
     double endAtS_ = -1.0;            // stop replay at this time (-1 = disabled)
+    bool endAtReached_ = false;       // the --end-at bound fired (honest stop reason)
     double currentTimestampS_ = -1.0; // current absolute timestamp from CSV
 };
 
