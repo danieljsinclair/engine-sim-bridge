@@ -153,7 +153,7 @@ AutomaticGearbox::decideGear(double speedKmh) const {
     //    increase (or WOT) forces one RPM-safe downshift, even inside the dwell
     //    window: a legitimate power demand cannot wait.
     if (currentGear_ > 1 && kickdownActive_) {
-        const int depth = static_cast<int>(profile_.kickdownDownshiftGears);
+        const auto depth = static_cast<int>(profile_.kickdownDownshiftGears);
         const int safeGear = findSafeGear(speedKmh, depth);
         if (safeGear < currentGear_) {
             return {safeGear, -1, true};

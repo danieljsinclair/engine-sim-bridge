@@ -306,6 +306,7 @@ void BridgeSimulator::setClutchPressure(double pressure) {
 void BridgeSimulator::setDrivetrainInputTorque(double nm) {
     if (m_simulator->getTransmission()) {
         m_simulator->getTransmission()->setInputTorque(nm);
+        lastDrivetrainInputTorqueNm_ = nm;
     }
 }
 
