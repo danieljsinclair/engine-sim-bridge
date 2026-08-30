@@ -439,6 +439,14 @@ bool BridgeSimulator::configureAfterfire(const AfterfireConfig& config) {
         parameters.energyScale = config.energyScale;
         parameters.customGain = config.customGain;
         parameters.wavOnly = config.wavOnly;
+        // The pop WAVs must be stored at THIS pipeline's audio rate: playout
+        // emits one stored sample per output sample, so a pop left at its
+        // recording rate (e.g. 48 kHz) plays detuned through a 44.1 kHz output.
+        // engineConfig_.sampleRate is the rate initAudioConfig captured from
+        // the simulator config — the same rate the audio buffer, hardware, and
+        // WAV sink are initialized at — so the conversion target can never
+        // drift from the actual output rate.
+        parameters.afterfireTargetSampleRate = engineConfig_.sampleRate;
         parameters.throttleCutoff = config.throttleCutoff;
         parameters.afterfireWavPath = config.afterfireWavPath;
         parameters.afterfireWavPaths = wavPaths;
