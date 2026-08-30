@@ -96,6 +96,11 @@ public:
     // effect in the replay DRIVE branch.
     void setWheelCouplingMode(twin::WheelCouplingMode mode);
 
+    // PIN-coupling compliance tau in ms (--pin-tau-ms): 0 = rigid pin. Like
+    // setWheelCouplingMode this is stored and re-forwarded when the owned
+    // twin provider is created in Initialize() (the CLI sets it before).
+    void setPinTauMs(double tauMs);
+
     // Select the coupling MODEL (how the clutch pressure is derived):
     // clutch-map (declarative smooth governor), torque-converter (fluid
     // coupling), or legacy (historical slip-lock + binary relief, A/B). Mirrors
@@ -156,6 +161,10 @@ private:
     // the live path. Defaults mirror the CLI defaults (pin + torque-converter).
     twin::WheelCouplingMode wheelCouplingMode_ = twin::WheelCouplingMode::Pin;
     twin::CouplingModelKind couplingModelKind_ = twin::CouplingModelKind::TorqueConverter;
+
+    // PIN-coupling compliance tau in ms (--pin-tau-ms; 0 = rigid, the CLI
+    // default). Stored so a pre-Initialize() set survives twin creation.
+    double pinTauMs_ = 0.0;
 
     // Keyboard input support for Q/P during replay
     IKeyboardInput* keyboard_ = nullptr;

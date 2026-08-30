@@ -563,7 +563,15 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
                 clutchPressure_ += std::clamp(clutchDelta, -maxRelease, maxEngage);
             }
             output.roadImpliedRpm = roadSpeedImpliedRpm;
-            output.pinVehicleSpeedTargetKmh = coupling_->vehicleSpeedTargetKmh(signal.speedKmh);
+            // PIN compliance (--pin-tau-ms): the coupling surfaces the RAW CSV
+            // target; the chase gives the pin finite response so the wheels -
+            // and with them the engine rpm/pitch - GLIDE between the CSV's
+            // held road-speed levels instead of teleporting at the ~5.5 Hz CAN
+            // cadence (the "piano keys" staircase). tau=0 is the raw target
+            // untouched. Scoped to THIS line: the gearbox (signal.speedKmh)
+            // and the slip-lock (wheelKmh above) keep the raw speed.
+            output.pinVehicleSpeedTargetKmh = pinTargetChase_.update(
+                dt, coupling_->vehicleSpeedTargetKmh(signal.speedKmh));
             // MATCH (Torque) mode: surface the recorded input torque so the
             // simulator injects it at the rotating mass each frame and the solver
             // integrates road speed from it (engine RPM emerges via the clutch

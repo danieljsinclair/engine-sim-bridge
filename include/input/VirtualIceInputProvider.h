@@ -47,6 +47,9 @@ public:
     // Select the live clutch wheel-coupling strategy (FREE/PIN).
     void setWheelCouplingMode(twin::WheelCouplingMode mode);
 
+    // PIN-coupling compliance tau in ms (--pin-tau-ms): 0 = rigid pin.
+    void setPinTauMs(double tauMs);
+
     // Select the coupling MODEL (clutch-map default, torque-converter, legacy).
     void setCouplingModel(twin::CouplingModelKind kind);
 

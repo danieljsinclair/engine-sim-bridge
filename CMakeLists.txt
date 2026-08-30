@@ -176,6 +176,7 @@ set(BRIDGE_SOURCES
     src/twin/AutomaticGearbox.cpp
     src/twin/GearboxCsvLogger.cpp
     src/twin/ThrottleSmoother.cpp
+    src/twin/PinTargetChase.cpp
     src/twin/VirtualIceTwin.cpp
     src/twin/ManualTwin.cpp
     src/twin/SlipLockController.cpp
@@ -645,6 +646,8 @@ if(BUILD_BRIDGE_TESTS)
     # Twin core tests - tests for ThrottleSmoother, VirtualIceTwin, and ManualTwin
     add_executable(twin_core_tests
         test/twin/ThrottleSmootherTest.cpp
+        test/twin/PinTargetChaseTest.cpp
+        test/twin/PinComplianceTwinTest.cpp
         test/twin/VirtualIceTwinTest.cpp
         test/twin/ManualTwinTest.cpp
         test/twin/SlipLockControllerTest.cpp

@@ -5,6 +5,7 @@
 #include <twin/IceVehicleProfile.h>
 #include <twin/AutomaticGearbox.h>
 #include <twin/ThrottleSmoother.h>
+#include <twin/PinTargetChase.h>
 #include <twin/IGearboxLogger.h>
 #include <twin/WheelCoupling.h>
 #include <twin/CouplingModelSelector.h>
@@ -61,6 +62,14 @@ public:
         coupling_ = makeWheelCoupling(mode);
     }
 
+    // Compliance for the PIN coupling target (--pin-tau-ms): chase the surfaced
+    // vehicle-speed pin with a critically-damped response instead of
+    // teleporting between the CSV's held road-speed levels (the audible rpm
+    // staircase at the ~5.5 Hz CAN cadence). 0 = the rigid pin, bit-identical
+    // (the default and the regression contract). Scoped to the pin TARGET:
+    // the gearbox shift map and slip-lock math keep the raw speed.
+    void setPinTauMs(double tauMs) { pinTargetChase_.setTauMs(tauMs); }
+
     // Select the coupling MODEL (how the clutch pressure is derived). Default is
     // ClutchMap (declarative smooth governor — no binary relief, no oscillation).
     // Legacy runs the historical slip-lock + binary-relief path for A/B;
@@ -75,6 +84,7 @@ private:
     IceVehicleProfile profile_;  // owned (was const ref — caused dangling + no reconfigure)
     std::unique_ptr<AutomaticGearbox> gearbox_;
     ThrottleSmoother throttleSmoother_;
+    PinTargetChase pinTargetChase_;
 
     TwinState state_ = TwinState::OFF;
     double timeWithoutValidTelemetryS_ = 0.0;

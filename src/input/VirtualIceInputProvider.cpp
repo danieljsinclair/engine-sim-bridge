@@ -127,6 +127,12 @@ void VirtualIceInputProvider::setWheelCouplingMode(twin::WheelCouplingMode mode)
     }
 }
 
+void VirtualIceInputProvider::setPinTauMs(double tauMs) {
+    if (twin_) {
+        twin_->setPinTauMs(tauMs);
+    }
+}
+
 void VirtualIceInputProvider::setCouplingModel(twin::CouplingModelKind kind) {
     if (twin_) {
         twin_->setCouplingModel(kind);

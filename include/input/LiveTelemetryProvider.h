@@ -88,6 +88,9 @@ public:
     /// Select the live clutch wheel-coupling strategy (FREE/PIN).
     void setWheelCouplingMode(twin::WheelCouplingMode mode);
 
+    /// PIN-coupling compliance tau in ms (--pin-tau-ms): 0 = rigid pin.
+    void setPinTauMs(double tauMs);
+
     /// Select the coupling MODEL (how the clutch pressure is derived): clutch-map
     /// (default — declarative smooth governor, no binary relief), torque-converter
     /// (fluid coupling), or legacy (historical slip-lock + binary relief, A/B).

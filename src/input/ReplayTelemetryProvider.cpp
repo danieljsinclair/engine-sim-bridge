@@ -80,6 +80,7 @@ bool ReplayTelemetryProvider::Initialize() {
         }
         twinProvider_->setWheelCouplingMode(wheelCouplingMode_);
         twinProvider_->setCouplingModel(couplingModelKind_);
+        twinProvider_->setPinTauMs(pinTauMs_);
         // Bring the twin to RUNNING before the first replayed frame so DRIVE
         // traces expose a forward gear immediately (replay is a running engine,
         // not a cranking capture). PARK/NEUTRAL traces stay out of RUNNING.
@@ -102,6 +103,13 @@ void ReplayTelemetryProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
 void ReplayTelemetryProvider::setWheelCouplingMode(twin::WheelCouplingMode mode) {
     wheelCouplingMode_ = mode;
     if (twinProvider_) twinProvider_->setWheelCouplingMode(mode);
+}
+
+void ReplayTelemetryProvider::setPinTauMs(double tauMs) {
+    // Stored + re-forwarded: the CLI sets this BEFORE Initialize() (where the
+    // twin provider is created), mirroring setWheelCouplingMode.
+    pinTauMs_ = tauMs;
+    if (twinProvider_) twinProvider_->setPinTauMs(pinTauMs_);
 }
 
 void ReplayTelemetryProvider::setCouplingModel(twin::CouplingModelKind kind) {

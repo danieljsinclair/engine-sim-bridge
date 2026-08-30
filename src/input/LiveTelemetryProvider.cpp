@@ -275,6 +275,14 @@ void LiveTelemetryProvider::setWheelCouplingMode(twin::WheelCouplingMode mode) {
     }
 }
 
+void LiveTelemetryProvider::setPinTauMs(double tauMs) {
+    // The CLI forwards --pin-tau-ms AFTER Initialize() (the same ordering as
+    // setWheelCouplingMode), so the twin provider exists by this call.
+    if (twinProvider_) {
+        twinProvider_->setPinTauMs(tauMs);
+    }
+}
+
 void LiveTelemetryProvider::setCouplingModel(twin::CouplingModelKind kind) {
     if (twinProvider_) {
         twinProvider_->setCouplingModel(kind);
