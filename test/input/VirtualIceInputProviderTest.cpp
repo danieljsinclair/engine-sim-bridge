@@ -137,6 +137,7 @@ TEST_F(VirtualIceInputProviderTest, PinTauChasesSpeedTargetThroughProvider) {
     provider_->setGearSelector(drive);
     provider_->setWheelCouplingMode(WheelCouplingMode::Pin);
     provider_->setPinTauMs(150.0);
+    provider_->setIgnition(true);  // twin ignition defaults OFF; commanded here
 
     UpstreamSignal signal;
     signal.throttleFraction = 0.3;
@@ -167,6 +168,7 @@ TEST_F(VirtualIceInputProviderTest, PinTauZeroIsRigidAtProviderSeam) {
     provider_->setGearSelector(drive);
     provider_->setWheelCouplingMode(WheelCouplingMode::Pin);
     provider_->setPinTauMs(0.0);
+    provider_->setIgnition(true);  // twin ignition defaults OFF; commanded here
 
     UpstreamSignal signal;
     signal.throttleFraction = 0.3;

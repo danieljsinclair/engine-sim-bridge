@@ -55,6 +55,13 @@ inline void warmBootTwinToRunning(VirtualIceInputProvider* twin,
     signal.isValid = true;
     signal.timestampUtcMs = 1;  // non-zero -> twin treats as valid telemetry
     twin->setGearSelector(seedSelector);
+    // The prime IS a start decision: command ignition ON. The twin defaults
+    // ignition OFF and never self-starts (startStop contract — the controller
+    // owns every start once engaged), but before the first driver input the
+    // PROVIDER owns start authority, and a warm boot to RUNNING is exactly
+    // such a decision (replay reproduces a running engine; live warm-boots to
+    // avoid the cold-start flow reversion).
+    twin->setIgnition(true);
     twin->setUpstreamSignal(signal);
 
     constexpr double kPrimeDt = 0.05;

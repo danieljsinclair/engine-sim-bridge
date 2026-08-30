@@ -166,6 +166,13 @@ private:
     // consumption by recording timestamp so that 1s of sim time = 1s of recording.
     bool tryReadNextRow(double simElapsedS);
 
+    /// Phase 1 of tryReadNextRow: refill rowBuffer_ from the stream until its
+    /// tail is far enough ahead of the sim clock (or EOF). Skips blank,
+    /// malformed, and pre---start-from rows; anchors the recording clock and
+    /// the stacked-skip origin on the first parsed row. Mechanical extraction
+    /// from tryReadNextRow (cognitive-complexity relief) — behavior identical.
+    void refillRowBuffer(double simElapsedS);
+
     /// Parse the CSV header (first non-blank line), once. False until a usable
     /// header is found (or EOF).
     bool ensureHeaderParsed();

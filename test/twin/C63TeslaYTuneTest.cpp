@@ -282,6 +282,9 @@ TEST(C63TeslaYTuneTest, GearAt40MphIsFourthOrFifth) {
         /*diffRatio=*/kC63DiffRatio,
         /*tireRadiusM=*/kC63TireRadius);
     twin->setGearSelector(bridge::GearSelector::DRIVE);
+    // Twin ignition defaults OFF (startStop contract: no self-start); the
+    // cascade below needs a commanded-on engine.
+    twin->setIgnition(true);
 
     // OFF -> CRANKING -> IDLE -> RUNNING with RPM feedback above the catch threshold.
     twin->update(0.016, input::UpstreamSignal{});          // OFF -> CRANKING

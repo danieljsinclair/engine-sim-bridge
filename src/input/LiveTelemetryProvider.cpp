@@ -488,13 +488,9 @@ double LiveTelemetryProvider::interpolatedSpeedKmh(double simElapsedS) const {
 // recording time (paced), and on a file-redirected capture the gearbox still
 // walks the speed ramp row-by-row (the drain-to-EOF freeze cannot recur: only
 // the lookahead tail is ever held, never the whole stream).
-bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
-    if (eofSeen_ || !stream_ || !ensureHeaderParsed()) return false;
-
+void LiveTelemetryProvider::refillRowBuffer(double simElapsedS) {
     constexpr double kLevelLookaheadS = 0.30;  // read-ahead horizon to find the next speed level
     const double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
-
-    // 1) Refill the lookahead buffer until its tail is far enough ahead (or EOF).
     while (true) {
         if (!rowBuffer_.empty() &&
             (rowBuffer_.back().timeS - baselineTimeS_) > simElapsedS + kLevelLookaheadS) {
@@ -528,6 +524,13 @@ bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
         }
         rowBuffer_.push_back(sample);
     }
+}
+
+bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
+    if (eofSeen_ || !stream_ || !ensureHeaderParsed()) return false;
+
+    // 1) Refill the lookahead buffer until its tail is far enough ahead (or EOF).
+    refillRowBuffer(simElapsedS);
 
     // 2) Advance currentSample_ through every row the sim clock has reached.
     bool found = false;

@@ -262,6 +262,12 @@ EngineInput ReplayTelemetryProvider::driveThroughTwin(const Sample& s, double dt
     const bridge::GearSelector sel = s.gearSelector.empty()
         ? bridge::GearSelector::DRIVE : parseGearSelector(s.gearSelector);
     twinProvider_->setGearSelector(static_cast<int>(sel));
+    // Replay owns its ignition (ignitionOn_, default ON, 'I' toggles): forward
+    // the LEVEL to the twin every frame. The twin defaults ignition OFF and
+    // never self-starts (startStop contract), and SimulationLoop's
+    // VehicleStartController does not engage on the replay path — without this
+    // forward the replayed twin would sit OFF and never process throttle.
+    twinProvider_->setIgnition(ignitionOn_);
     twinProvider_->setUpstreamSignal(signal);
     // VirtualIceInputProvider maps TwinOutput -> EngineInput (throttle, gear,
     // clutchPressure, ignition, starter, gearSelector, gearAutoMode, road speed
