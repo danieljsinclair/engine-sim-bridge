@@ -407,6 +407,7 @@ if(BUILD_BRIDGE_TESTS)
         test/ScriptLoadHelpersResolveAssetBasePathTests.cpp
         test/simulation/SimulationLoopStepTests.cpp
         test/simulation/SimulationLoopRunTests.cpp
+        test/simulation/SimulationLoopWarmStartPrefixTests.cpp
         test/simulation/SimulationLoopVehicleControlsTests.cpp
         test/simulation/SimulationLoopDynoSentinelTests.cpp
         test/simulation/SimulationLoopPollInputTests.cpp
