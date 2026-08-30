@@ -253,6 +253,7 @@ EngineInput ReplayTelemetryProvider::driveThroughTwin(const Sample& s, double dt
     signal.throttleFraction = s.throttle;
     signal.speedKmh = roadSpeedKmh;
     signal.motorTorqueNm = s.motorTorqueNm;
+    signal.brakeLight = s.brakeLight;
     signal.isValid = true;
     // Monotonic non-zero timestamp (the twin treats 0 as invalid + times out).
     signal.timestampUtcMs = std::max<uint64_t>(1, static_cast<uint64_t>(elapsedS_ * 1000.0));
@@ -273,6 +274,11 @@ EngineInput ReplayTelemetryProvider::driveThroughTwin(const Sample& s, double dt
     // clutchPressure, ignition, starter, gearSelector, gearAutoMode, road speed
     // pin, injected torque, diagnostics) — identical to the live path.
     EngineInput input = twinProvider_->OnUpdateSimulation(dt);
+    // Echo the brake light for display + the start/stop decision layer (the
+    // twin does not consume it) — mirrors the live CSV path's echo so the
+    // '-'/'B' overlay and the VehicleStartController see the same signal on
+    // replay as on live.
+    input.brakeLight = s.brakeLight;
 
     // Selector-gate overlay. The twin owns an automatic gearbox and therefore
     // ALWAYS reports gearAutoMode=true + a gear, even for a PARK/NEUTRAL stalk.
