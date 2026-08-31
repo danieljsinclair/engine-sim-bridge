@@ -274,10 +274,21 @@ TEST_F(TwinTorqueInputWiringTest, EffectiveThrottleOnLeavesGearboxDecisionsAlone
 // --torque-informed-gearbox ON — shift-DECISION input from commanded torque.
 // ---------------------------------------------------------------------------
 
-TEST_F(TwinTorqueInputWiringTest, TorqueInformedGearboxDownshiftsUnderApHardPull) {
+TEST_F(TwinTorqueInputWiringTest, TorqueInformedGearboxDownshiftsEarlierUnderApHardPull) {
     // The owner's scenario: pedal 0 at ~100 km/h while AP pulls 598 Nm. Today
     // the box reads COAST (0 throttle) and holds 8th; with the hint the pull
-    // reads as firm demand and the box drops at least one gear.
+    // reads as firm demand and the box drops gear EARLIER (at a higher speed)
+    // than the pedal-only box.
+    //
+    // SCENARIO SHAPE — deceleration sweep, NOT a fixed point. A downshift
+    // fires when speed falls BELOW the (throttle-raised) threshold. With the
+    // pinned bias cap 0.30 the zf8hp45 8->7 threshold sits at ~85 km/h, so a
+    // fixed speed of 101.28 km/h can NEVER cross it inside the cap (crossing
+    // 101.28 needs eff throttle > ~0.41 — above the cap by design, keeping
+    // the cap below kickdownDelta 0.4 so a torque step can never fake a pedal
+    // stab). The pull is therefore observed the same way the braking test
+    // observes regen: sweep speed down through the raised threshold and
+    // compare WHEN each box leaves 8th.
     auto featureOn = makeTwin();
     auto featureOff = makeTwin();
     featureOn->setTorqueInformedGearboxConfig(torqueGearboxOn());
@@ -287,16 +298,28 @@ TEST_F(TwinTorqueInputWiringTest, TorqueInformedGearboxDownshiftsUnderApHardPull
         driveToTopGearAtCruise(**twin, kApHardPull.speedKmh);
     }
 
-    const auto pull = makeSignal(kApHardPull);
-    int onGear = 8;
-    int offGear = 8;
-    for (int i = 0; i < 300; ++i) {          // ~4.8 s: past dwell + shift cycle
-        onGear = featureOn->update(kDt, pull).gear;
-        offGear = featureOff->update(kDt, pull).gear;
+    // Sweep 101.28 -> 40 km/h under the held 598 Nm pull, pedal 0. The floor
+    // (40) sits below the pedal-only 8->7 threshold (~50 km/h) so BOTH boxes
+    // eventually downshift and the comparison is meaningful.
+    constexpr double kSweepEndKmh = 40.0;
+    const int sweepFrames = 240;             // ~3.8 s
+    double onFirstDownshiftKmh = -1.0;
+    double offFirstDownshiftKmh = -1.0;
+    for (int i = 1; i <= sweepFrames; ++i) {
+        const double speed = kApHardPull.speedKmh
+            - (kApHardPull.speedKmh - kSweepEndKmh) * static_cast<double>(i) / sweepFrames;
+        const auto sig = makeSignal(kApHardPull.pedalFraction, speed,
+                                    kApHardPull.motorTorqueNm);
+        const int onGear = featureOn->update(kDt, sig).gear;
+        const int offGear = featureOff->update(kDt, sig).gear;
+        if (onFirstDownshiftKmh < 0.0 && onGear < 8) onFirstDownshiftKmh = speed;
+        if (offFirstDownshiftKmh < 0.0 && offGear < 8) offFirstDownshiftKmh = speed;
     }
 
-    EXPECT_EQ(offGear, 8) << "baseline: pedal 0 at 100 km/h holds top gear";
-    EXPECT_LT(onGear, offGear) << "AP pull must not be read as coasting";
+    EXPECT_GE(onFirstDownshiftKmh, 0.0) << "hinted box must leave 8th during the pull sweep";
+    EXPECT_GE(offFirstDownshiftKmh, 0.0) << "baseline box must eventually follow (sweep floor)";
+    EXPECT_GT(onFirstDownshiftKmh, offFirstDownshiftKmh)
+        << "AP hard pull must be read as demand, not coasting";
 }
 
 TEST_F(TwinTorqueInputWiringTest, TorqueInformedGearboxDownshiftsEarlierUnderApBraking) {
@@ -354,8 +377,11 @@ TEST_F(TwinTorqueInputWiringTest, PedalStillDrivesGearboxWhenBothFeaturesOn) {
 }
 
 TEST_F(TwinTorqueInputWiringTest, FeaturesComposeUnderApPull) {
-    // Both toggles together: the engine is audible (feature 1) AND the box
-    // reacts to the pull (feature 2) on the same frames.
+    // Both toggles together on the SAME frames: the engine is audible
+    // (feature 1, near-WOT effective throttle from the 598 Nm pull) at the
+    // exact moment the informed box downshifts (feature 2). Same sweep shape
+    // as the hard-pull test — a fixed 101.28 km/h point cannot cross the
+    // 8->7 threshold inside the pinned 0.30 bias cap (see that test's note).
     auto bothOn = makeTwin();
     auto featureOff = makeTwin();
     bothOn->setEffectiveThrottleConfig(effectiveThrottleOn());
@@ -366,17 +392,29 @@ TEST_F(TwinTorqueInputWiringTest, FeaturesComposeUnderApPull) {
         driveToTopGearAtCruise(**twin, kApHardPull.speedKmh);
     }
 
-    const auto pull = makeSignal(kApHardPull);
-    double onThrottle = 0.0;
-    int onGear = 8;
-    int offGear = 8;
-    for (int i = 0; i < 300; ++i) {
-        const TwinOutput out = bothOn->update(kDt, pull);
-        onThrottle = out.throttle;
-        onGear = out.gear;
-        offGear = featureOff->update(kDt, pull).gear;
+    constexpr double kSweepEndKmh = 40.0;
+    const int sweepFrames = 240;             // ~3.8 s
+    double onFirstDownshiftKmh = -1.0;
+    double offFirstDownshiftKmh = -1.0;
+    double throttleAtOnDownshift = 0.0;
+    for (int i = 1; i <= sweepFrames; ++i) {
+        const double speed = kApHardPull.speedKmh
+            - (kApHardPull.speedKmh - kSweepEndKmh) * static_cast<double>(i) / sweepFrames;
+        const auto sig = makeSignal(kApHardPull.pedalFraction, speed,
+                                    kApHardPull.motorTorqueNm);
+        const TwinOutput out = bothOn->update(kDt, sig);
+        const int offGear = featureOff->update(kDt, sig).gear;
+        if (onFirstDownshiftKmh < 0.0 && out.gear < 8) {
+            onFirstDownshiftKmh = speed;
+            throttleAtOnDownshift = out.throttle;
+        }
+        if (offFirstDownshiftKmh < 0.0 && offGear < 8) offFirstDownshiftKmh = speed;
     }
 
-    EXPECT_GT(onThrottle, 0.5) << "598 Nm pull should drive near-WOT effective throttle";
-    EXPECT_LT(onGear, offGear);
+    EXPECT_GE(onFirstDownshiftKmh, 0.0) << "hinted box must leave 8th during the pull sweep";
+    EXPECT_GE(offFirstDownshiftKmh, 0.0) << "baseline box must eventually follow (sweep floor)";
+    EXPECT_GT(onFirstDownshiftKmh, offFirstDownshiftKmh)
+        << "feature 2 must act while feature 1 drives";
+    EXPECT_GT(throttleAtOnDownshift, 0.5)
+        << "598 Nm pull must keep the engine near-WOT-audible at the downshift frame";
 }
