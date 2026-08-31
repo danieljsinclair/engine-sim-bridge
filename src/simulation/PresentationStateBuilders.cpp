@@ -72,6 +72,10 @@ namespace presentation::builders {
             audio.callbackRateHz = timing.callbackRateHz;
             audio.generatingRateFps = timing.generatingRateFps;
             audio.trendPct = timing.trendPct;
+            audio.ringLaps = timing.ringLaps;
+            audio.prodConsRatio = timing.prodConsRatio;
+            audio.seamDiscontinuities = timing.seamDiscontinuities;
+            audio.sustainedOverproductionWindows = timing.sustainedOverproductionWindows;
             audio.sampleRate = config.sampleRate();
             return audio;
         }

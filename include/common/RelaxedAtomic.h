@@ -51,4 +51,18 @@ private:
     std::atomic<bool> value_;
 };
 
+class RelaxedUInt64 {
+public:
+    RelaxedUInt64() noexcept : value_(0) {}
+    explicit RelaxedUInt64(uint64_t v) noexcept : value_(v) {}
+
+    void store(uint64_t v) noexcept { value_.store(v); }
+    uint64_t load() const noexcept { return value_.load(); }
+    operator uint64_t() const noexcept { return load(); }
+    RelaxedUInt64& operator=(uint64_t v) noexcept { store(v); return *this; }
+
+private:
+    std::atomic<uint64_t> value_;
+};
+
 #endif // RELAXED_ATOMIC_H

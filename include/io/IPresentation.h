@@ -11,6 +11,7 @@
 #include <memory>
 #include <functional>
 #include <optional>
+#include <cstdint>
 #include "simulation/EnginePhase.h"
 
 namespace presentation {
@@ -84,6 +85,13 @@ struct EngineState {
         double generatingRateFps = 0.0;
         double trendPct = 0.0;
         int sampleRate = 0;
+        // Audio-ring health (the sync-pull knock observability gap): the
+        // ring-level/content-level facts the service metrics above cannot
+        // see. Zero = healthy.
+        uint64_t ringLaps = 0;                   // audio discarded by a producer lap
+        double prodConsRatio = 0.0;              // windowed production/consumption
+        uint64_t seamDiscontinuities = 0;        // mid-waveform restarts at pull seams
+        int sustainedOverproductionWindows = 0;  // consecutive >1.05x windows
     } audio;
 
     // Cross-cutting

@@ -44,6 +44,10 @@ void InMemoryTelemetry::reset() {
     audioTiming_.callbackRateHz.store(0.0);
     audioTiming_.generatingRateFps.store(0.0);
     audioTiming_.trendPct.store(0.0);
+    audioTiming_.ringLaps.store(0);
+    audioTiming_.prodConsRatio.store(0.0);
+    audioTiming_.seamDiscontinuities.store(0);
+    audioTiming_.sustainedOverproductionWindows.store(0);
     vehicleInputs_.throttlePosition.store(0.0);
     vehicleInputs_.ignitionOn.store(false);
     vehicleInputs_.starterMotorEngaged.store(false);
@@ -83,6 +87,10 @@ void InMemoryTelemetry::writeAudioTiming(const AudioTimingTelemetry& timing) {
     audioTiming_.callbackRateHz.store(timing.callbackRateHz);
     audioTiming_.generatingRateFps.store(timing.generatingRateFps);
     audioTiming_.trendPct.store(timing.trendPct);
+    audioTiming_.ringLaps.store(timing.ringLaps);
+    audioTiming_.prodConsRatio.store(timing.prodConsRatio);
+    audioTiming_.seamDiscontinuities.store(timing.seamDiscontinuities);
+    audioTiming_.sustainedOverproductionWindows.store(timing.sustainedOverproductionWindows);
 }
 
 void InMemoryTelemetry::writeVehicleInputs(const VehicleInputsTelemetry& inputs) {
@@ -135,6 +143,10 @@ AudioTimingTelemetry InMemoryTelemetry::getAudioTiming() const {
     timing.callbackRateHz = audioTiming_.callbackRateHz.load();
     timing.generatingRateFps = audioTiming_.generatingRateFps.load();
     timing.trendPct = audioTiming_.trendPct.load();
+    timing.ringLaps = audioTiming_.ringLaps.load();
+    timing.prodConsRatio = audioTiming_.prodConsRatio.load();
+    timing.seamDiscontinuities = audioTiming_.seamDiscontinuities.load();
+    timing.sustainedOverproductionWindows = audioTiming_.sustainedOverproductionWindows.load();
     return timing;
 }
 

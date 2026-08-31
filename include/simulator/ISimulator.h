@@ -30,6 +30,15 @@ public:
         return renderOnDemand(buffer, frames, written);
     }
 
+    // Cumulative audio-ring health instrumentation (production/consumption
+    // ledger, ring laps, seam discontinuities). Default = all zeros: only
+    // simulators with a real synthesizer ring report. Used by the audio-ring
+    // health diagnostics that close the observability gap the sync-pull knock
+    // slipped through.
+    virtual AudioRingHealth audioRingHealth() const {
+        return AudioRingHealth{};
+    }
+
     // Twin-specific control methods
     virtual int setGear(int /* gear */) { return 0;}
     virtual int getGear() const { return 0; }

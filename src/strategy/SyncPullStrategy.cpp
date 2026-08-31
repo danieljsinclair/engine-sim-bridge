@@ -319,6 +319,15 @@ void SyncPullStrategy::resetFrameRender(int framesToGenerate, int framesRendered
 
     diagnostics_.recordRender(renderMs, framesRendered, framesToGenerate);
 
+    // Mirror the synthesizer's cumulative audio-ring health counters (four
+    // relaxed loads + stores - negligible on the callback path). The windowed
+    // ratio/sustained streak are folded into updateThroughput's 1s cadence.
+    if (simulator_ != nullptr) {
+        const AudioRingHealth ring = simulator_->audioRingHealth();
+        diagnostics_.recordRingHealth(ring.framesWritten, ring.framesConsumed,
+                                      ring.ringLaps, ring.seamDiscontinuities);
+    }
+
     // Update throughput rates once per second
     auto now = std::chrono::steady_clock::now();
     if (double elapsedSec = std::chrono::duration<double>(now - lastThroughputTime_).count(); elapsedSec >= 1.0) {
@@ -340,6 +349,10 @@ void SyncPullStrategy::updateTelemetry() {
     timing.callbackRateHz = snap.callbackRateHz;
     timing.generatingRateFps = snap.generatingRateFps;
     timing.trendPct = snap.trendPct;
+    timing.ringLaps = snap.ringLapCount;
+    timing.prodConsRatio = snap.prodConsRatio;
+    timing.seamDiscontinuities = snap.seamDiscontinuityCount;
+    timing.sustainedOverproductionWindows = snap.sustainedOverproductionWindows;
     telemetry_->writeAudioTiming(timing);
 }
 

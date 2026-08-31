@@ -8,6 +8,8 @@
 #include "common/RelaxedAtomic.h"
 #include "simulation/EnginePhase.h"
 
+#include <cstdint>
+
 namespace telemetry {
 
 // ============================================================================
@@ -54,6 +56,11 @@ struct AudioTimingTelemetry {
     double callbackRateHz = 0.0;     // Callback throughput in Hz
     double generatingRateFps = 0.0;  // Frame generation rate
     double trendPct = 0.0;           // Throughput trend percentage
+    // Audio-ring health (the sync-pull knock observability gap)
+    uint64_t ringLaps = 0;                    // write-index crossings of the read index
+    double prodConsRatio = 0.0;               // windowed production/consumption ratio
+    uint64_t seamDiscontinuities = 0;         // pull-boundary discontinuities
+    int sustainedOverproductionWindows = 0;   // consecutive >1.05x windows
 };
 
 // ============================================================================
@@ -160,6 +167,11 @@ private:
         RelaxedDouble callbackRateHz{0.0};
         RelaxedDouble generatingRateFps{0.0};
         RelaxedDouble trendPct{0.0};
+        // Audio-ring health (sync-pull knock observability)
+        RelaxedUInt64 ringLaps{0};
+        RelaxedDouble prodConsRatio{0.0};
+        RelaxedUInt64 seamDiscontinuities{0};
+        RelaxedInt sustainedOverproductionWindows{0};
     };
 
     struct AtomicVehicleInputs {

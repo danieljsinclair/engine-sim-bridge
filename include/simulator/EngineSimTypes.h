@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <cstring>
+#include <cstdint>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -125,6 +126,18 @@ struct ISimulatorConfig {
     // size and would make the per-frame substep count (and thus the whole run)
     // nondeterministic, tipping the warm-start into the reversion attractor.
     bool pacedReplay = false;
+};
+
+// AudioRingHealth — cumulative audio-ring instrumentation from the
+// synthesizer (see Synthesizer::audioFramesWritten/Consumed/RingLaps/
+// SeamDiscontinuities). The two-sided ledger + event counters that made the
+// sync-pull knock diagnosable: service metrics (req/got/took/budget) cannot
+// see ring-level defects.
+struct AudioRingHealth {
+    std::uint64_t framesWritten = 0;        // production INTO the audio ring
+    std::uint64_t framesConsumed = 0;       // consumption OUT of it
+    std::uint64_t ringLaps = 0;             // write index crossed read index (audio discarded)
+    std::uint64_t seamDiscontinuities = 0;  // pull boundaries stepping mid-waveform
 };
 
 // Runtime statistics

@@ -51,6 +51,10 @@ public:
     // already-synthesized audio instead of stepping the engine itself.
     bool renderDrainedAudio(float* buffer, int32_t frames, int32_t* written) override;
     bool readAudioBuffer(float* buffer, int32_t frames, int32_t* read) override;
+    // Audio-ring health: cumulative synthesizer ledger + lap/seam counters
+    // (see Synthesizer's audioFramesWritten/Consumed/audioRingLaps/
+    // audioSeamDiscontinuities).
+    AudioRingHealth audioRingHealth() const override;
     bool start() override;
     void stop() override;
     int getSimulationFrequency() const override { return engineConfig_.simulationFrequency; }

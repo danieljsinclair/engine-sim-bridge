@@ -369,6 +369,14 @@ void ThreadedStrategy::publishAudioDiagnostics(int underrunCount, double bufferH
 }
 
 void ThreadedStrategy::publishAudioTiming() {
+    // Mirror the synthesizer's cumulative audio-ring health counters (four
+    // relaxed loads + stores - negligible on the callback path).
+    if (simulator_ != nullptr) {
+        const AudioRingHealth ring = simulator_->audioRingHealth();
+        diagnostics_.recordRingHealth(ring.framesWritten, ring.framesConsumed,
+                                      ring.ringLaps, ring.seamDiscontinuities);
+    }
+
     // Update throughput rates once per second
     auto now = std::chrono::steady_clock::now();
     if (double elapsedSec = std::chrono::duration<double>(now - lastThroughputTime_).count(); elapsedSec >= 1.0) {
@@ -386,5 +394,9 @@ void ThreadedStrategy::publishAudioTiming() {
     timing.callbackRateHz = snap.callbackRateHz;
     timing.generatingRateFps = snap.generatingRateFps;
     timing.trendPct = snap.trendPct;
+    timing.ringLaps = snap.ringLapCount;
+    timing.prodConsRatio = snap.prodConsRatio;
+    timing.seamDiscontinuities = snap.seamDiscontinuityCount;
+    timing.sustainedOverproductionWindows = snap.sustainedOverproductionWindows;
     telemetry_->writeAudioTiming(timing);
 }

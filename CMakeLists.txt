@@ -401,6 +401,7 @@ if(BUILD_BRIDGE_TESTS)
         test/PresetEngineFactoryTests.cpp
         test/BridgeSimulatorContractTests.cpp
         test/SyncPullStrategyContractTests.cpp
+        test/AudioRingHealthDiagnosticsTests.cpp
         test/strategy/DeterministicStrategyTests.cpp
         test/InMemoryTelemetryResetTests.cpp
         test/SimulatorFactoryBoundaryTests.cpp

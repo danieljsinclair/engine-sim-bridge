@@ -119,6 +119,17 @@ bool BridgeSimulator::readAudioBuffer(float* buffer, int32_t framesToRead, int32
     return false;
 }
 
+AudioRingHealth BridgeSimulator::audioRingHealth() const {
+    ASSERT(m_simulator, "BridgeSimulator::audioRingHealth() called but m_simulator is null");
+    const Synthesizer& synth = m_simulator->synthesizer();
+    AudioRingHealth health;
+    health.framesWritten = synth.audioFramesWritten();
+    health.framesConsumed = synth.audioFramesConsumed();
+    health.ringLaps = synth.audioRingLaps();
+    health.seamDiscontinuities = synth.audioSeamDiscontinuities();
+    return health;
+}
+
 bool BridgeSimulator::start() {
     drainSynthesizerBuffer(m_simulator.get());
     m_simulator->startAudioRenderingThread();

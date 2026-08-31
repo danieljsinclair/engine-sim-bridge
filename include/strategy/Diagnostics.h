@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 
 /**
  * Diagnostics - Audio performance and timing diagnostics
@@ -98,6 +99,23 @@ struct Diagnostics {
     std::atomic<double> generatingRateFps{0.0};
     std::atomic<double> previousGeneratingRateFps{0.0};
 
+    // ---- Audio-ring health (the gap the sync-pull knock slipped through) --
+    // Cumulative counters mirrored from the simulator's synthesizer via
+    // recordRingHealth() each callback; the windowed production/consumption
+    // ratio and the sustained-overproduction streak are computed on the same
+    // 1-second cadence as updateThroughput().
+    std::atomic<uint64_t> ringLapCount{0};
+    std::atomic<uint64_t> seamDiscontinuityCount{0};
+    std::atomic<uint64_t> ringFramesWritten{0};
+    std::atomic<uint64_t> ringFramesConsumed{0};
+    std::atomic<double> lastProdConsRatio{0.0};
+    std::atomic<int> sustainedOverproductionWindows_{0};
+
+    // A window ratio above this counts as overproduction. ~5% headroom over
+    // unity absorbs startup transients and legitimate catch-up bursts; the
+    // sync-pull knock ran at 1.44x.
+    static constexpr double kOverproductionRatio = 1.05;
+
     void setSampleRate(int sampleRate) {
         sampleRate_ = sampleRate;
     }
@@ -158,7 +176,61 @@ struct Diagnostics {
         previousGeneratingRateFps.store(generatingRateFps.load());
         lastCallbackRateHz.store(callbackHz);
         generatingRateFps.store(genFps);
+
+        updateRingHealthWindow(elapsedSeconds);
     }
+
+    /**
+     * Mirror the simulator's cumulative audio-ring counters. Called each
+     * audio callback (four relaxed atomic stores - negligible on the
+     * realtime path).
+     */
+    void recordRingHealth(uint64_t framesWritten, uint64_t framesConsumed,
+                          uint64_t laps, uint64_t seams) {
+        ringFramesWritten.store(framesWritten, std::memory_order_relaxed);
+        ringFramesConsumed.store(framesConsumed, std::memory_order_relaxed);
+        ringLapCount.store(laps, std::memory_order_relaxed);
+        seamDiscontinuityCount.store(seams, std::memory_order_relaxed);
+    }
+
+    /**
+     * Compute the windowed production/consumption ratio from the cumulative
+     * ring counters and advance the sustained-overproduction streak.
+     * Called on the same cadence as updateThroughput (once per second from
+     * the audio callback thread).
+     */
+    void updateRingHealthWindow(double elapsedSeconds) {
+        (void)elapsedSeconds;  // the window is the delta between calls
+
+        const uint64_t written = ringFramesWritten.load(std::memory_order_relaxed);
+        const uint64_t consumed = ringFramesConsumed.load(std::memory_order_relaxed);
+        const uint64_t writtenDelta = (written > prevRingFramesWritten_) ? written - prevRingFramesWritten_ : 0;
+        const uint64_t consumedDelta = (consumed > prevRingFramesConsumed_) ? consumed - prevRingFramesConsumed_ : 0;
+        prevRingFramesWritten_ = written;
+        prevRingFramesConsumed_ = consumed;
+
+        // No consumption this window (e.g. pre-roll before playback starts):
+        // no ratio to judge - neither alarm nor reset.
+        if (consumedDelta == 0) {
+            if (writtenDelta == 0) return;
+            lastProdConsRatio.store(0.0);
+            return;
+        }
+
+        const double ratio = static_cast<double>(writtenDelta) / static_cast<double>(consumedDelta);
+        lastProdConsRatio.store(ratio);
+
+        if (ratio > kOverproductionRatio) {
+            sustainedOverproductionWindows_.fetch_add(1);
+        }
+        else {
+            sustainedOverproductionWindows_.store(0);
+        }
+    }
+
+    // Window state for updateRingHealthWindow (audio-callback-thread only).
+    uint64_t prevRingFramesWritten_ = 0;
+    uint64_t prevRingFramesConsumed_ = 0;
 
     /**
      * Reset all diagnostic counters
@@ -176,6 +248,12 @@ struct Diagnostics {
         lastCallbackRateHz.store(0.0);
         generatingRateFps.store(0.0);
         previousGeneratingRateFps.store(0.0);
+        ringLapCount.store(0);
+        seamDiscontinuityCount.store(0);
+        ringFramesWritten.store(0);
+        ringFramesConsumed.store(0);
+        lastProdConsRatio.store(0.0);
+        sustainedOverproductionWindows_.store(0);
     }
 
     /**
@@ -193,6 +271,11 @@ struct Diagnostics {
         double callbackRateHz;
         double generatingRateFps;
         double trendPct;
+        // Audio-ring health
+        uint64_t ringLapCount;
+        uint64_t seamDiscontinuityCount;
+        double prodConsRatio;
+        int sustainedOverproductionWindows;
 
         Snapshot()
             : lastRenderMs(0.0)
@@ -205,6 +288,10 @@ struct Diagnostics {
             , callbackRateHz(0.0)
             , generatingRateFps(0.0)
             , trendPct(0.0)
+            , ringLapCount(0)
+            , seamDiscontinuityCount(0)
+            , prodConsRatio(0.0)
+            , sustainedOverproductionWindows(0)
         {}
     };
 
@@ -227,6 +314,10 @@ struct Diagnostics {
         double prev = previousGeneratingRateFps.load();
         double curr = generatingRateFps.load();
         snapshot.trendPct = (prev > 0.0) ? ((curr - prev) / prev) * 100.0 : 0.0;
+        snapshot.ringLapCount = ringLapCount.load();
+        snapshot.seamDiscontinuityCount = seamDiscontinuityCount.load();
+        snapshot.prodConsRatio = lastProdConsRatio.load();
+        snapshot.sustainedOverproductionWindows = sustainedOverproductionWindows_.load();
         return snapshot;
     }
 };
