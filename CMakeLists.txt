@@ -673,6 +673,54 @@ if(BUILD_BRIDGE_TESTS)
         add_test(NAME twin_core_tests COMMAND twin_core_tests --gtest_color=yes)
     endif()
 
+    # Torque-input feature tests (--effective-throttle / --torque-informed-gearbox).
+    # Kept as their own targets so each feature's red/green is visible in isolation.
+    add_executable(twin_effective_throttle_tests
+        test/twin/EffectiveThrottleTest.cpp
+    )
+    target_include_directories(twin_effective_throttle_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_effective_throttle_tests
+        PRIVATE
+            GTest::gtest_main
+    )
+    target_compile_options(twin_effective_throttle_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_effective_throttle_tests COMMAND twin_effective_throttle_tests --gtest_color=yes)
+    endif()
+
+    add_executable(twin_torque_gearbox_tests
+        test/twin/UpstreamTorqueHintTest.cpp
+    )
+    target_include_directories(twin_torque_gearbox_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_torque_gearbox_tests
+        PRIVATE
+            GTest::gtest_main
+    )
+    target_compile_options(twin_torque_gearbox_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_torque_gearbox_tests COMMAND twin_torque_gearbox_tests --gtest_color=yes)
+    endif()
+
+    add_executable(twin_torque_input_wiring_tests
+        test/twin/TwinTorqueInputWiringTest.cpp
+    )
+    target_include_directories(twin_torque_input_wiring_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_torque_input_wiring_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(twin_torque_input_wiring_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_torque_input_wiring_tests COMMAND twin_torque_input_wiring_tests --gtest_color=yes)
+    endif()
+
     # Twin input provider tests - tests for VirtualIceInputProvider
     add_executable(twin_input_tests
         test/input/VirtualIceInputProviderTest.cpp

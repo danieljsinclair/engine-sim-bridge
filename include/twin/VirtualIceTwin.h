@@ -9,6 +9,8 @@
 #include <twin/IGearboxLogger.h>
 #include <twin/WheelCoupling.h>
 #include <twin/CouplingModelSelector.h>
+#include <twin/EffectiveThrottle.h>
+#include <twin/UpstreamTorqueHint.h>
 #include <io/UpstreamSignal.h>
 #include <simulator/GearConventions.h>
 #include <memory>
@@ -69,6 +71,25 @@ public:
     // (the default and the regression contract). Scoped to the pin TARGET:
     // the gearbox shift map and slip-lock math keep the raw speed.
     void setPinTauMs(double tauMs) { pinTargetChase_.setTauMs(tauMs); }
+
+    // --effective-throttle (CLI feature toggle, DEFAULT OFF). When enabled,
+    // the twin's ENGINE DRIVE throttle is derived ONCE per frame from the
+    // commanded motor torque whenever the pedal sits at the foot-off deadband
+    // and AP torque is pulling (see EffectiveThrottle.h for the pinned blend
+    // + hysteresis contract). Scoped to the engine drive only: the gearbox
+    // decision, coupling and pin target keep reading the raw signal. With
+    // enabled=false (the default) the twin must behave byte-identically to a
+    // twin that was never configured.
+    void setEffectiveThrottleConfig(const EffectiveThrottleConfig& config);
+
+    // --torque-informed-gearbox (CLI feature toggle, DEFAULT OFF). When
+    // enabled, the UPSTREAM commanded motor torque (sign + magnitude, from
+    // UpstreamSignal::motorTorqueNm) enters the gearbox shift decision as a
+    // demand hint through the ITorqueHint seam (see UpstreamTorqueHint.h for
+    // the pinned demand-magnitude contract). Decision input ONLY — never
+    // physics. With enabled=false the hint must be indistinguishable from
+    // NullTorqueHint (byte-identical decisions).
+    void setTorqueInformedGearboxConfig(const TorqueInformedGearboxConfig& config);
 
     // Select the coupling MODEL (how the clutch pressure is derived). Default is
     // ClutchMap (declarative smooth governor — no binary relief, no oscillation).
