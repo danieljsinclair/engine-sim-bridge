@@ -9,6 +9,8 @@
 #include <twin/IGearboxLogger.h>
 #include <twin/WheelCoupling.h>
 #include <twin/CouplingModelSelector.h>
+#include <twin/EffectiveThrottle.h>
+#include <twin/UpstreamTorqueHint.h>
 #include <io/UpstreamSignal.h>
 #include <simulator/GearConventions.h>
 #include <memory>
@@ -70,6 +72,25 @@ public:
     // the gearbox shift map and slip-lock math keep the raw speed.
     void setPinTauMs(double tauMs) { pinTargetChase_.setTauMs(tauMs); }
 
+    // --effective-throttle (CLI feature toggle, DEFAULT OFF). When enabled,
+    // the twin's ENGINE DRIVE throttle is derived ONCE per frame from the
+    // commanded motor torque whenever the pedal sits at the foot-off deadband
+    // and AP torque is pulling (see EffectiveThrottle.h for the pinned blend
+    // + hysteresis contract). Scoped to the engine drive only: the gearbox
+    // decision, coupling and pin target keep reading the raw signal. With
+    // enabled=false (the default) the twin must behave byte-identically to a
+    // twin that was never configured.
+    void setEffectiveThrottleConfig(const EffectiveThrottleConfig& config);
+
+    // --torque-informed-gearbox (CLI feature toggle, DEFAULT OFF). When
+    // enabled, the UPSTREAM commanded motor torque (sign + magnitude, from
+    // UpstreamSignal::motorTorqueNm) enters the gearbox shift decision as a
+    // demand hint through the ITorqueHint seam (see UpstreamTorqueHint.h for
+    // the pinned demand-magnitude contract). Decision input ONLY — never
+    // physics. With enabled=false the hint must be indistinguishable from
+    // NullTorqueHint (byte-identical decisions).
+    void setTorqueInformedGearboxConfig(const TorqueInformedGearboxConfig& config);
+
     // Select the coupling MODEL (how the clutch pressure is derived). Default is
     // ClutchMap (declarative smooth governor — no binary relief, no oscillation).
     // Legacy runs the historical slip-lock + binary-relief path for A/B;
@@ -85,6 +106,13 @@ private:
     std::unique_ptr<AutomaticGearbox> gearbox_;
     ThrottleSmoother throttleSmoother_;
     PinTargetChase pinTargetChase_;
+    // --effective-throttle derivation (DEFAULT disabled = inert passthrough).
+    // Owns the AP-takeover latch; applied once per frame between the raw pedal
+    // and the throttle smoother (the single derivation point).
+    EffectiveThrottleDerivation effectiveThrottle_{EffectiveThrottleConfig{}};
+    // --torque-informed-gearbox config (DEFAULT disabled = NullTorqueHint-
+    // equivalent). Stateless per frame: consumed by gearboxTorqueHint().
+    TorqueInformedGearboxConfig torqueInformedGearbox_;
 
     TwinState state_ = TwinState::OFF;
     double timeWithoutValidTelemetryS_ = 0.0;
@@ -151,6 +179,12 @@ private:
     // current gear (clones the replay formula). Fallback idleRpm when gear is
     // out of range.
     double roadSpeedImpliedRpmFor(double wheelSpeedKmh) const;
+
+    // The frame's gearbox torque-hint strategy (--torque-informed-gearbox):
+    // an UpstreamTorqueHint over the commanded motor torque when the feature
+    // is enabled, nullptr otherwise (= the gearbox's legacy SimTorqueHint wrap
+    // over the drivetrain feedback, bit-identical to the unconfigured twin).
+    std::unique_ptr<ITorqueHint> gearboxTorqueHint(const input::UpstreamSignal& signal) const;
 
     // Idle-hold controller step: advances the engage/release state machine
     // and PI, returns the throttle FLOOR to apply this tick (a fraction of
