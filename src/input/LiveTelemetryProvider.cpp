@@ -31,11 +31,10 @@ LiveTelemetryProvider::LiveTelemetryProvider(const twin::IceVehicleProfile& prof
     , initialized_(false) {
 }
 
-LiveTelemetryProvider::LiveTelemetryProvider(std::istream& stream, bool autoStart, bool liveStream)
+LiveTelemetryProvider::LiveTelemetryProvider(std::istream& stream, bool autoStart)
     : ownedProfile_(twin::IceVehicleProfile::zf8hp45())
     , profile_(ownedProfile_)
-    , stream_(&stream)
-    , liveStream_(liveStream) {
+    , stream_(&stream) {
     // NOTE: zf8hp45 is ONLY a construction-time default. The LIVE path must have
     // its geometry supplied by the loaded .mr — CLIMain::reconfigureGearboxProviders
     // FAILS FAST (throws CliException) if the script lacks a transmission/vehicle
@@ -146,9 +145,12 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
         // --end-at bounds the live run the same way it bounds replay: once the
         // relative clock crosses the bound the stream is finished — report EOF
         // so the loop's IsConnected check exits cleanly ("stop at that
-        // relative timecode or input end, whichever first").
+        // relative timecode or input end, whichever first"). The flag records
+        // that the BOUND (not stream EOF) ended the run, so the CLI can print
+        // the honest stop reason.
         if (endAtS_ >= 0.0 && elapsedS_ >= endAtS_) {
             eofSeen_ = true;
+            endAtReached_ = true;
         }
 
         if (!initialized_.load() || !twinProvider_) {
@@ -574,13 +576,18 @@ bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
     // EOF only when the stream AND the lookahead buffer are fully drained (a call
     // that surfaced a row stays "connected"; EOF is confirmed on a later call that
     // surfaces nothing) — mirrors the former live/paced contract.
-    // The LIVE path (engine-sim-cli --live-telemetry, a finite/buffered pipe such
-    // as `vehicle-sim --stdout-csv | cli`) must NOT disconnect at EOF (startStop
-    // lineage): the start/stop decision layer needs wall-clock time AFTER the
-    // last row to complete its crank delay and pending transitions. Disconnecting
-    // here would halt SimulationLoop (run() returns on !IsConnected) before
-    // ignition ever fires. The --duration guard bounds the run instead.
-    if (!liveStream_ && stream_->eof() && rowBuffer_.empty() && !found) {
+    //
+    // Owner decision 2026-08-30 ("EOF = immediate termination"): this now applies
+    // to the LIVE pipe path (engine-sim-cli --live-telemetry, e.g. a finite
+    // `vehicle-sim --stdout-csv | cli` capture) exactly as it always did to the
+    // deterministic path. When there is no data left to drive the sim, the
+    // provider disconnects and SimulationLoop::run() exits on !IsConnected() —
+    // the whole CLI stops at capture end. NO grace window: a brake-initiated
+    // start that is still mid-crank in the last ~0.5s of a capture is
+    // consciously cut short (KISS chosen over crank audibility at the tail).
+    // A genuinely open live stream (real car feed) never EOFs, so live
+    // listening is unaffected; --end-at still bounds bounded runs.
+    if (stream_->eof() && rowBuffer_.empty() && !found) {
         if (!eofSeen_) csvParser_.emitRejectionSummary();  // once, on EOF transition
         eofSeen_ = true;
     }

@@ -147,11 +147,12 @@ TEST(VehicleStartControllerTest, GearPWhileOff_NoStart) {
     EXPECT_FALSE(vsc.isStopLatched());
 }
 
-// 4. Brake + PARK while running stops and latches — but only after a drive gear
-// has been selected in the current run (drive-since-start gate, gap 3). Reaching
-// RUNNING is not enough: the sequence below mirrors the real captures
-// (brake-start in P, P->D drive-off, then back to P with the brake held).
-TEST(VehicleStartControllerTest, BrakeAndParkWhileRunning_StopsAndLatches) {
+// 4. (owner 2026-08-30) A brake press-and-hold in PARK must NOT cut ignition:
+// the stop is edge-triggered on brake RELEASE in park, so the driver can put
+// a foot on the brake to select first gear without the engine dying. The
+// drive-since-start gate is armed first (brake-start in P, P->D drive-off,
+// then back to P) — the sequence the real captures follow.
+TEST(VehicleStartControllerTest, BrakePressAndHoldInPark_AfterDrive_DoesNotCutIgnition) {
     SpyActuator spy;
     VehicleStartController vsc(spy);
 
@@ -166,10 +167,109 @@ TEST(VehicleStartControllerTest, BrakeAndParkWhileRunning_StopsAndLatches) {
     vsc.update(0.1, /*brake=*/false, GearSelector::DRIVE);
     ASSERT_TRUE(vsc.isEngineOn());
 
-    vsc.update(0.1, /*brake=*/true, GearSelector::PARK); // stop command
-    EXPECT_FALSE(spy.ignition_);    // ignition off
-    EXPECT_TRUE(vsc.isStopLatched());
+    // Back in PARK with the brake pressed and HELD — for a long time. Only the
+    // later release edge may cut, so the press alone must keep the engine alive.
+    for (int i = 0; i < 50; ++i) {
+        vsc.update(0.1, /*brake=*/true, GearSelector::PARK);
+        ASSERT_TRUE(vsc.isEngineOn())
+            << "brake press-and-hold in PARK cut ignition at tick " << i;
+        ASSERT_TRUE(spy.ignition_);
+    }
+    EXPECT_FALSE(vsc.isStopLatched());
+}
+
+// 4c. The cut fires on the brake ON->OFF transition while RUNNING in PARK with
+// the drive gate armed — exactly once: the stop takes the engine off on the
+// release tick and later PARK/no-brake ticks neither restart it nor re-fire
+// the stop. The gate then re-arms per engine run: a fresh brake-start in P
+// cannot be stopped by its own held brake until D/R is selected once more.
+TEST(VehicleStartControllerTest, BrakeReleaseInPark_AfterDrive_CutsIgnitionOnce) {
+    SpyActuator spy;
+    VehicleStartController vsc(spy);
+
+    vsc.update(0.2, true, GearSelector::PARK);
+    vsc.update(0.2, true, GearSelector::PARK);
+    vsc.update(0.1, true, GearSelector::PARK);          // running (brake-held start)
+    vsc.update(0.1, false, GearSelector::DRIVE);        // drive-since-start armed
+    vsc.update(0.1, false, GearSelector::REVERSE);      // R also counts as drive
+    ASSERT_TRUE(vsc.isEngineOn());
+
+    // Brake pressed and held in PARK: running continues (the press is not the cut).
+    vsc.update(0.1, /*brake=*/true, GearSelector::PARK);
+    ASSERT_TRUE(vsc.isEngineOn())
+        << "brake press in PARK must not cut ignition";
+
+    // Release edge in PARK: stopped ON THIS UPDATE, latched, exactly one cut.
+    vsc.update(0.1, /*brake=*/false, GearSelector::PARK);
     EXPECT_FALSE(vsc.isEngineOn());
+    EXPECT_FALSE(spy.ignition_);
+    EXPECT_TRUE(vsc.isStopLatched());
+    const int ignitionCallsAtStop = spy.ignitionCalls_;
+
+    // Later PARK/no-brake ticks: the engine stays off (no restart demand, no
+    // second stop artefact) and the latch releases on the brake-off tick.
+    for (int i = 0; i < 5; ++i) {
+        vsc.update(0.1, false, GearSelector::PARK);
+        EXPECT_FALSE(vsc.isEngineOn());
+        EXPECT_FALSE(spy.ignition_);
+    }
+    EXPECT_FALSE(vsc.isStopLatched());
+    EXPECT_EQ(spy.ignitionCalls_, ignitionCallsAtStop)
+        << "the stop must fire exactly once";
+
+    // New engine run via brake-start in P: the drive gate must have reset with
+    // the run, so the held brake must NOT stop this fresh start.
+    vsc.update(0.1, true, GearSelector::PARK);
+    vsc.update(0.1, true, GearSelector::PARK);
+    vsc.update(0.1, true, GearSelector::PARK);
+    vsc.update(0.1, true, GearSelector::PARK);  // past the 0.5s crank, brake held
+    vsc.update(0.1, true, GearSelector::PARK);
+    EXPECT_TRUE(vsc.isEngineOn())
+        << "drive-since-start gate did not reset with the engine run";
+    EXPECT_TRUE(spy.ignition_);
+}
+
+// 4d. Shifting out of PARK before the brake is released is a drive-off: no
+// cut — neither on the shift tick (brake still held but no longer PARK) nor on
+// the later release edge (released outside PARK). Includes the same-tick
+// variant: the gear change and the release arriving together must not stop
+// the engine either.
+TEST(VehicleStartControllerTest, ShiftOutOfParkBeforeBrakeRelease_NoCut) {
+    // Variant 1: shift while the brake is still held, release later in DRIVE.
+    {
+        SpyActuator spy;
+        VehicleStartController vsc(spy);
+        vsc.update(0.2, true, GearSelector::PARK);
+        vsc.update(0.2, true, GearSelector::PARK);
+        vsc.update(0.1, true, GearSelector::PARK);   // running
+        vsc.update(0.1, false, GearSelector::DRIVE); // arm the gate, drive-off
+        vsc.update(0.1, true, GearSelector::PARK);   // parked again, brake held
+        ASSERT_TRUE(vsc.isEngineOn());
+
+        vsc.update(0.1, /*brake=*/true, GearSelector::DRIVE);  // shift out first
+        EXPECT_TRUE(vsc.isEngineOn())
+            << "shifting out of PARK while braking must not cut ignition";
+        vsc.update(0.1, /*brake=*/false, GearSelector::DRIVE); // release in DRIVE
+        EXPECT_TRUE(vsc.isEngineOn())
+            << "release edge outside PARK must not cut ignition";
+        EXPECT_TRUE(spy.ignition_);
+    }
+    // Variant 2: release and shift out of PARK on the SAME tick.
+    {
+        SpyActuator spy;
+        VehicleStartController vsc(spy);
+        vsc.update(0.2, true, GearSelector::PARK);
+        vsc.update(0.2, true, GearSelector::PARK);
+        vsc.update(0.1, true, GearSelector::PARK);   // running
+        vsc.update(0.1, false, GearSelector::DRIVE); // arm the gate
+        vsc.update(0.1, true, GearSelector::PARK);   // brake held in PARK
+        ASSERT_TRUE(vsc.isEngineOn());
+
+        vsc.update(0.1, /*brake=*/false, GearSelector::DRIVE); // release + drive-off
+        EXPECT_TRUE(vsc.isEngineOn())
+            << "same-tick release+shift is a drive-off, not a stop";
+        EXPECT_TRUE(spy.ignition_);
+    }
 }
 
 // 4a. Gap 3, the old self-stop: a brake-initiated start in PARK must NOT be
@@ -196,10 +296,16 @@ TEST(VehicleStartControllerTest, BrakeStartInP_StaysRunningWhileBrakeHeld) {
             << "self-stopped at held-brake tick " << i;
         ASSERT_TRUE(spy.ignition_);
     }
+    // Releasing the brake in PARK must not stop it either: no drive gear has
+    // been selected in this run, so the release-edge stop is not armed yet.
+    vsc.update(0.1, /*brake=*/false, GearSelector::PARK);
+    EXPECT_TRUE(vsc.isEngineOn())
+        << "release in PARK before any drive gear must not stop the engine";
+    EXPECT_TRUE(spy.ignition_);
     EXPECT_FALSE(vsc.isStopLatched());
 }
 
-// 4b. A LATER brake+PARK press while running (not the starting brake) is also
+// 4b. A LATER brake press in PARK while running (not the starting brake) is
 // not a stop while no drive gear has been selected in the current run.
 TEST(VehicleStartControllerTest, BrakeAndPark_NoDriveSinceStart_DoesNotStop) {
     SpyActuator spy;
@@ -221,66 +327,28 @@ TEST(VehicleStartControllerTest, BrakeAndPark_NoDriveSinceStart_DoesNotStop) {
     EXPECT_FALSE(vsc.isStopLatched());
 }
 
-// 4c. The stop fires on the SAME frame brake+PARK arrives (once the gate is
-// armed by a drive gear), latches, and the gate re-arms per engine run: after a
-// restart, a held brake in PARK must not stop the engine again until D/R is
-// selected once more.
-TEST(VehicleStartControllerTest, BrakeAndPark_AfterDriveSelected_StopsSameFrameAndLatches) {
+// 5. Restart path (unchanged): after a release-triggered PARK stop the engine
+// stays off until a new start demand — a later brake press cranks it again.
+TEST(VehicleStartControllerTest, AfterParkReleaseStop_StaysOffUntilNewBrakeStart) {
     SpyActuator spy;
     VehicleStartController vsc(spy);
 
-    vsc.update(0.2, true, GearSelector::PARK);
-    vsc.update(0.2, true, GearSelector::PARK);
-    vsc.update(0.1, true, GearSelector::PARK);          // running (brake-held start)
-    vsc.update(0.1, false, GearSelector::DRIVE);        // drive-since-start armed
-    vsc.update(0.1, false, GearSelector::REVERSE);      // R also counts as drive
-    ASSERT_TRUE(vsc.isEngineOn());
-
-    // Brake+PARK: stopped ON THIS UPDATE, latched.
-    vsc.update(0.1, /*brake=*/true, GearSelector::PARK);
-    EXPECT_FALSE(vsc.isEngineOn());
-    EXPECT_FALSE(spy.ignition_);
-    EXPECT_TRUE(vsc.isStopLatched());
-
-    // Latch clears on brake release (PARK, no start demand -> stays off).
-    vsc.update(0.1, false, GearSelector::PARK);
-    ASSERT_FALSE(vsc.isStopLatched());
-    ASSERT_FALSE(vsc.isEngineOn());
-
-    // New engine run via brake-start in P: the drive gate must have reset with
-    // the run, so the held brake must NOT stop this fresh start.
-    vsc.update(0.1, true, GearSelector::PARK);
-    vsc.update(0.1, true, GearSelector::PARK);
-    vsc.update(0.1, true, GearSelector::PARK);
-    vsc.update(0.1, true, GearSelector::PARK);  // past the 0.5s crank, brake held
-    vsc.update(0.1, true, GearSelector::PARK);
-    EXPECT_TRUE(vsc.isEngineOn())
-        << "drive-since-start gate did not reset with the engine run";
-    EXPECT_TRUE(spy.ignition_);
-}
-
-// 5. Stop latch blocks restart while brake held; clears on release; then starts.
-TEST(VehicleStartControllerTest, StopLatchBlocksRestart_UntilBrakeReleased) {
-    SpyActuator spy;
-    VehicleStartController vsc(spy);
-
-    // Reach stopped + latched (brake-start, D to arm the stop gate, then P+brake).
+    // Reach stopped + latched (brake-start, D to arm the stop gate, brake press
+    // in PARK — no cut — then the release edge in PARK).
     vsc.update(0.2, true, GearSelector::PARK);
     vsc.update(0.2, true, GearSelector::PARK);
     vsc.update(0.1, true, GearSelector::PARK);
     vsc.update(0.1, false, GearSelector::DRIVE);
-    vsc.update(0.1, true, GearSelector::PARK); // brake + PARK while running
+    vsc.update(0.1, true, GearSelector::PARK);  // brake on in PARK: no cut yet
+    vsc.update(0.1, false, GearSelector::PARK); // brake released in PARK: stop
     ASSERT_TRUE(vsc.isStopLatched());
+    ASSERT_FALSE(vsc.isEngineOn());
+    ASSERT_FALSE(spy.ignition_);
 
-    // Brake still held -> blocked.
-    vsc.update(0.1, /*brake=*/true, GearSelector::PARK);
-    EXPECT_FALSE(vsc.isEngineOn());
-    EXPECT_TRUE(vsc.isStopLatched());
-    EXPECT_FALSE(spy.starter_); // starter not re-engaged
-
-    // Brake released -> latch clears.
+    // Brake-off frames in PARK: no restart demand, engine stays off.
     vsc.update(0.1, /*brake=*/false, GearSelector::PARK);
-    EXPECT_FALSE(vsc.isStopLatched());
+    EXPECT_FALSE(vsc.isEngineOn());
+    EXPECT_FALSE(vsc.isStopLatched());  // latch released on the brake-off tick
 
     // Brake pressed again -> starts.
     vsc.update(0.1, /*brake=*/true, GearSelector::PARK);
@@ -305,33 +373,29 @@ TEST(VehicleStartControllerTest, CrankPendingThenGearD_IgnitesImmediatelyAndCanc
     EXPECT_FALSE(vsc.isStopLatched());
 }
 
-// 7. Gap 4 (latch release): the latch releases on brake release ALONE (plan:
-// `stopLatch && !brake`) — not "brake released AND out of a drive gear". While a
-// drive gear is selected, the very tick that releases the latch also satisfies
-// the START rule (gear trigger) and restarts the engine: releasing the brake in
-// DRIVE is a drive-off. The old rule kept coldStart's engine dead for 135s
-// (brake released while in D, latch never cleared).
-TEST(VehicleStartControllerTest, LatchReleasesOnBrakeReleaseAlone_InDrive_RestartsViaGearTrigger) {
+// 7. Restart path (unchanged, gap 4 lineage): the latch releases on brake
+// release ALONE (plan: `stopLatch && !brake`) — not "brake released AND out of
+// a drive gear". After a release-triggered PARK stop, selecting D with the
+// brake already off (the walk-up restart) clears the latch and restarts the
+// engine on the SAME update via the gear trigger: engaging a gear is a
+// drive-off, not a stay-off.
+TEST(VehicleStartControllerTest, AfterParkReleaseStop_GearSelectionRestartsInstantly) {
     SpyActuator spy;
     VehicleStartController vsc(spy);
 
-    // Reach stopped + latched (brake-start, D to arm the stop gate, then P+brake).
+    // Reach stopped + latched (brake-start, D to arm the stop gate, brake press
+    // in PARK — no cut — then the release edge in PARK).
     vsc.update(0.2, true, GearSelector::PARK);
     vsc.update(0.2, true, GearSelector::PARK);
     vsc.update(0.1, true, GearSelector::PARK);
     vsc.update(0.1, false, GearSelector::DRIVE);
-    vsc.update(0.1, true, GearSelector::PARK); // brake + PARK while running
+    vsc.update(0.1, true, GearSelector::PARK);  // brake on in PARK: no cut yet
+    vsc.update(0.1, false, GearSelector::PARK); // release edge: stop + latch
     ASSERT_TRUE(vsc.isStopLatched());
+    ASSERT_FALSE(vsc.isEngineOn());
 
-    // Gear D selected, brake STILL held -> latch stays, no start (the held brake
-    // is exactly what the latch exists to block).
-    vsc.update(0.1, /*brake=*/true, GearSelector::DRIVE);
-    EXPECT_FALSE(vsc.isEngineOn());
-    EXPECT_TRUE(vsc.isStopLatched());
-    EXPECT_FALSE(spy.starter_);
-
-    // Brake released while STILL in D -> latch clears and the gear trigger
-    // restarts the engine on the SAME update (instant gear start).
+    // Brake off + gear D on the SAME tick: latch clears AND the gear trigger
+    // restarts the engine instantly (starter + ignition together).
     vsc.update(0.1, /*brake=*/false, GearSelector::DRIVE);
     EXPECT_FALSE(vsc.isStopLatched())
         << "latch must release on brake release alone, even in a drive gear";
@@ -361,7 +425,8 @@ TEST(VehicleStartControllerTest, ManualPathIndependence) {
     ASSERT_TRUE(vsc.isEngineOn());
 
     vsc.update(0.1, false, GearSelector::DRIVE); // arm the drive-since-start gate
-    vsc.update(0.1, true, GearSelector::PARK);   // vehicle engine stops + latches
+    vsc.update(0.1, true, GearSelector::PARK);   // brake on in PARK: no cut yet
+    vsc.update(0.1, false, GearSelector::PARK);  // release edge: stops + latches
     ASSERT_TRUE(vsc.isStopLatched());
 
     vsc.update(0.1, false, GearSelector::PARK); // latch clears

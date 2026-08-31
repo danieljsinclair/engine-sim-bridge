@@ -60,14 +60,13 @@ public:
     /// through the VirtualIceTwin (gearbox/clutch/throttle + cranking). The
     /// autoStart flag is retained for callers; the twin owns the start lifecycle.
     ///
-    /// liveStream=true (the engine-sim-cli --live-telemetry pipe) surfaces the
-    /// LATEST row available in the stream every frame — no consumption pacing by
-    /// recording timestamp. Pacing by recording time is correct for a seekable
-    /// replay file but adds up to ~0.5s+ latency on a live pipe (the sim clock
-    /// must "catch up" to each row's timestamp), so a live feed must echo the
-    /// freshest sample immediately. liveStream=false keeps the deterministic
-    /// timestamp-paced behaviour (used by unit tests).
-    LiveTelemetryProvider(std::istream& stream, bool autoStart, bool liveStream = false);
+    /// The buffered scan surfaces the LATEST row available within a short
+    /// lookahead horizon every frame — no full-stream drain, no pinning to the
+    /// capture's last row (the a321e1f regression). Stream EOF (with the
+    /// lookahead drained) disconnects the provider on EVERY construction path
+    /// (owner 2026-08-30: EOF = immediate termination — the whole CLI stops at
+    /// capture end); a genuinely open live feed simply never reaches EOF.
+    LiveTelemetryProvider(std::istream& stream, bool autoStart);
 
     ~LiveTelemetryProvider() override;
 
@@ -75,6 +74,7 @@ public:
     bool Initialize() override;
     void Shutdown() override;
     bool IsConnected() const override;
+    bool endAtReached() const override { return endAtReached_; }
 
     // IInputProvider input queries
     EngineInput OnUpdateSimulation(double dt) override;
@@ -253,7 +253,6 @@ private:
 
     /// CSV stdin members (unused in JSON mode)
     std::istream* stream_ = nullptr;
-    bool liveStream_ = false;  // retained for the ctor signature; the buffered scan unifies both paths
     CsvTelemetryParser csvParser_;
     CsvSample currentSample_{};
     bool hasSample_ = false;
@@ -262,6 +261,7 @@ private:
     bool headerParsed_ = false;  // header parsed once; later calls read data rows only
     double startFromS_ = -1.0;   // skip CSV rows before this time (-1 = disabled)
     double endAtS_ = -1.0;       // stop at this time (-1 = play to end); IReplayTimeline
+    bool endAtReached_ = false;  // eofSeen_ came from the --end-at bound, not stream EOF
     bool liveOffsetAnchored_ = false;  // elapsedS_ has cold-jumped to the effective offset (once)
     // In-band skip hint: seconds the SOURCE already dropped before the first
     // delivered row (0 = no hint). baselineTimeS_ anchors at first-row-epoch

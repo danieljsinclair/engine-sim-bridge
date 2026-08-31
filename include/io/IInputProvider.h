@@ -94,6 +94,16 @@ public:
     virtual void Shutdown() = 0;
     virtual bool IsConnected() const = 0;
 
+    /**
+     * True when THIS provider ended the run by hitting its --end-at bound
+     * (the provider reported EOF because its elapsed clock crossed the
+     * requested timecode). Lets the CLI report the honest stop reason
+     * ("--end-at Ns reached") instead of the generic duration/trace-end
+     * message, which would otherwise quote the full trace length. Default
+     * false: most providers never bound themselves.
+     */
+    virtual bool endAtReached() const { return false; }
+
     // ========================================================================
     // Input Queries (called from simulation thread)
     // ========================================================================
