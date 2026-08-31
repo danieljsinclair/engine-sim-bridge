@@ -80,12 +80,24 @@ void AutomaticGearbox::update(double dt, double speedKmh, double throttleFractio
 
 void AutomaticGearbox::update(double dt, double speedKmh, double throttleFraction,
                               double drivetrainTorqueNm) {
-    // Wrap the torque sample in the SimTorqueHint strategy (bounded bias). The
-    // decision consumes only ITorqueHint::shiftBias() — availability is
-    // encapsulated here, never an `if (hasTorque)` in the decision.
-    torqueHint_ = std::make_unique<SimTorqueHint>(drivetrainTorqueNm,
-                                                  profile_.torqueHintMaxNm,
-                                                  profile_.torqueHintMaxBias);
+    update(dt, speedKmh, throttleFraction, drivetrainTorqueNm, nullptr);
+}
+
+void AutomaticGearbox::update(double dt, double speedKmh, double throttleFraction,
+                              double drivetrainTorqueNm,
+                              std::unique_ptr<ITorqueHint> upstreamHint) {
+    // The frame's torque-hint strategy. Default: wrap the SIM-FEEDBACK torque
+    // sample in the SimTorqueHint strategy (bounded bias). With an upstream
+    // override (--torque-informed-gearbox) the caller's strategy replaces it.
+    // Either way the decision consumes only ITorqueHint::shiftBias() —
+    // availability is encapsulated here, never an `if (hasTorque)` in the
+    // decision.
+    torqueHint_ = std::move(upstreamHint);
+    if (!torqueHint_) {
+        torqueHint_ = std::make_unique<SimTorqueHint>(drivetrainTorqueNm,
+                                                      profile_.torqueHintMaxNm,
+                                                      profile_.torqueHintMaxBias);
+    }
 
     // AC6: clutch-out positions hold the gear and never request a shift.
     if (!isShifterInDrive()) {

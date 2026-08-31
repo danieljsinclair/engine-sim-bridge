@@ -126,6 +126,11 @@ public:
     // twin provider is created in Initialize() (the CLI sets it before).
     void setPinTauMs(double tauMs);
 
+    // --effective-throttle / --torque-informed-gearbox configs (both DEFAULT
+    // disabled = inert). Same store + re-forward contract as setPinTauMs.
+    void setEffectiveThrottleConfig(const twin::EffectiveThrottleConfig& config);
+    void setTorqueInformedGearboxConfig(const twin::TorqueInformedGearboxConfig& config);
+
     // Select the coupling MODEL (how the clutch pressure is derived):
     // clutch-map (declarative smooth governor), torque-converter (fluid
     // coupling), or legacy (historical slip-lock + binary relief, A/B). Mirrors
@@ -201,6 +206,12 @@ private:
     // PIN-coupling compliance tau in ms (--pin-tau-ms; 0 = rigid, the CLI
     // default). Stored so a pre-Initialize() set survives twin creation.
     double pinTauMs_ = 0.0;
+
+    // Torque-feature configs (--effective-throttle / --torque-informed-gearbox;
+    // defaults disabled). Stored so a pre-Initialize() set survives twin
+    // creation, same as pinTauMs_.
+    twin::EffectiveThrottleConfig effectiveThrottleConfig_;
+    twin::TorqueInformedGearboxConfig torqueInformedGearboxConfig_;
 
     // Keyboard input support for Q/P during replay
     IKeyboardInput* keyboard_ = nullptr;

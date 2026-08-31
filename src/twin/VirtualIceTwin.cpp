@@ -146,6 +146,26 @@ void VirtualIceTwin::setGearboxLogger(IGearboxLogger* logger) {
     gearbox_->setLogger(logger);
 }
 
+void VirtualIceTwin::setEffectiveThrottleConfig(const EffectiveThrottleConfig& config) {
+    // Reconfigure = fresh derivation: a new config must not inherit the
+    // previous configuration's takeover latch (reset() semantics, mirrored by
+    // constructing a new derivation).
+    effectiveThrottle_ = EffectiveThrottleDerivation(config);
+}
+
+void VirtualIceTwin::setTorqueInformedGearboxConfig(const TorqueInformedGearboxConfig& config) {
+    torqueInformedGearbox_ = config;
+}
+
+std::unique_ptr<ITorqueHint> VirtualIceTwin::gearboxTorqueHint(
+    const input::UpstreamSignal& signal) const {
+    if (!torqueInformedGearbox_.enabled) {
+        return nullptr;
+    }
+    return std::make_unique<UpstreamTorqueHint>(torqueInformedGearbox_,
+                                                signal.motorTorqueNm);
+}
+
 double VirtualIceTwin::roadSpeedImpliedRpmFor(double wheelSpeedKmh) const {
     // Clones ReplayTelemetryProvider::handleAutoGearboxDrive's implied-RPM math:
     //   wheelRadS = (v/3.6) / tireRadius
@@ -195,7 +215,17 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
         return output;
     }
 
-    throttleSmoother_.update(dt, signal.throttleFraction);
+    // Single derivation point for the ENGINE DRIVE (--effective-throttle):
+    // the effective throttle is computed ONCE per frame from the raw pedal and
+    // the upstream commanded motor torque, upstream of the throttle smoother
+    // (mirrors the brake-light single-derivation pattern in SimulationLoop).
+    // With the feature off (the default) update() returns the pedal unchanged,
+    // so the smoother input — and therefore the whole twin — is bit-identical
+    // to an unconfigured twin. Scoped to the engine drive ONLY: the gearbox
+    // shift decision below keeps reading the raw signal.throttleFraction.
+    const double engineDriveThrottle =
+        effectiveThrottle_.update(signal.throttleFraction, signal.motorTorqueNm);
+    throttleSmoother_.update(dt, engineDriveThrottle);
     output.throttle = throttleSmoother_.getCurrentValue();
 
     switch (state_) {
@@ -322,7 +352,8 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             // not be conflated into one wheel-speed variable.
             gearbox_->setTwinContext(static_cast<int>(state_), clutchPressure_, vehicleSpeedFeedbackKmh_, engineRpmFeedback_);
             gearbox_->setGearSelector(selector_);
-            gearbox_->update(dt, signal.speedKmh, signal.throttleFraction, drivetrainTorqueNm_);
+            gearbox_->update(dt, signal.speedKmh, signal.throttleFraction,
+                             drivetrainTorqueNm_, gearboxTorqueHint(signal));
             output.ignition = true;
 
             // FIX #3 (idle/stall): the engine must NEVER coast through the
