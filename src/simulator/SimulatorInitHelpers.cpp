@@ -92,15 +92,15 @@ void initializeConvolutionFilters(Simulator* simulator) {
     simulator->synthesizer().setAudioParameters(params);
 }
 
-// SKELETON ONLY — test-architect red phase. The span-tame implementer
-// replaces this body with the read-modify-write of the synthesizer's
-// AudioParameters (set spanTame, preserve everything else). Nothing in
-// production calls it yet (the factory wiring is part of the implementation),
-// so default builds are unaffected.
-void applySpanTame(Simulator* /*simulator*/, float /*spanTame*/)
+// Read-modify-write of the synthesizer's AudioParameters: set spanTame and
+// preserve every other field exactly as it was. Called from the factory after
+// the simulator is constructed but before the session starts.
+void applySpanTame(Simulator* simulator, float spanTame)
 {
-    throw span_tame::NotImplementedError(
-        "SimulatorInitHelpers::applySpanTame — skeleton, not implemented");
+    if (!simulator) return;
+    Synthesizer::AudioParameters params = simulator->synthesizer().getAudioParameters();
+    params.spanTame = spanTame;
+    simulator->synthesizer().setAudioParameters(params);
 }
 
 } // namespace SimulatorInitHelpers

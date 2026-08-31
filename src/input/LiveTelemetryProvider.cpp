@@ -278,6 +278,9 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
     // Echo the brake light for display (the twin does not consume it).
     input.brakeLight = signal.brakeLight;
 
+    // Echo the steering angle for display (the twin does not consume it).
+    input.steeringAngleDeg = signal.steeringAngleDeg;
+
     return input;
 }
 
