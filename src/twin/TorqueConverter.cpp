@@ -138,7 +138,22 @@ CouplingOutput TorqueConverter::compute(const CouplingInput& input) {
     const double engageStart = idle * params_.engageStartIdleFactor;
     const double lockRpm = idle * params_.lockIdleFactor;
 
-    const double creep = std::clamp(params_.creepPressure, 0.0, 1.0);
+    // Standstill/creep capacity, split by regime on DRIVER THROTTLE (the
+    // 2026-08-31 creep-grid resolution of the single-number trap): zero
+    // throttle idles on the reduced idleCreepPressure (the stoplight regime —
+    // D-idle droop/flow-flutter and the stall-prone standstill load), while
+    // a launch (throttle at/above creepThrottleRampEnd) sees the full
+    // creepPressure so the part-throttle flare equilibrium stays at the 0.6
+    // design point below the free-rev bar. Throttle is exogenous driver
+    // input — like road-implied rpm, unlike engine rpm — so the blend cannot
+    // close an engine-rpm feedback loop (the no-oscillation guarantee above).
+    const double launchCreep = std::clamp(params_.creepPressure, 0.0, 1.0);
+    const double idleCreep =
+        std::clamp(params_.idleCreepPressure, 0.0, launchCreep);
+    const double throttleGate = smoothstep(
+        params_.creepThrottleRampStart, params_.creepThrottleRampEnd,
+        std::clamp(input.throttleFraction, 0.0, 1.0));
+    const double creep = idleCreep + (launchCreep - idleCreep) * throttleGate;
     const double roadGate = smoothstep(engageStart, lockRpm, turbineRpm);
     fluidPressure_ = std::clamp(creep + (1.0 - creep) * roadGate, 0.0, 1.0);
 

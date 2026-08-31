@@ -1532,3 +1532,53 @@ TEST_F(VirtualIceTwinTest, CreepRelief_DoesNotFireForFreeCoupling_LaunchIntact_I
     EXPECT_FALSE(out.creepReliefFired)
         << "FREE coupling must not relieve (launch-assist owns the clutch)";
 }
+
+// ---------------------------------------------------------------------------
+// CREEP-FIX (2026-08-31): standstill-in-D with zero driver throttle, TC
+// coupling, PIN. The twin must command the REDUCED idle creep capacity (the
+// split's stoplight end — see TorqueConverterTest's
+// StandstillCreepIsSplit_IdleReduced_LaunchFull_CreepFix for the driveability
+// evidence), never open the fluid path (creep relief stays off in TC mode),
+// and the engine must stay alive the whole window. Pre-fix, the flat 0.6
+// standstill capacity was the owner's "hunts idle in gear and stalls almost
+// right away unless I have the throttle up" load.
+// ---------------------------------------------------------------------------
+TEST_F(VirtualIceTwinTest, StandstillInDrive_TCIdlesOnReducedCreep_EngineSustains_CreepFix) {
+    twin_->setCouplingModel(twin::CouplingModelKind::TorqueConverter);
+    twin_->setWheelCouplingMode(twin::WheelCouplingMode::Pin);
+    advanceThroughCranking();
+    auto sig = makeValidSignal(0.2, 0.5);
+    twin_->setEngineRpmFeedback(800.0);
+    twin_->update(0.016, sig);  // IDLE -> RUNNING
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING)
+        << "Precondition: RUNNING in D before the standstill window";
+
+    StallPlant plant;
+    plant.rpm = 800.0;
+    plant.stopped = false;
+    const double dt = 1.0 / 60.0;
+    constexpr double kIdleCreepCapacity = 0.35;  // the split's idle end
+    int inGearFrames = 0;
+    const int totalFrames = static_cast<int>(5.0 / dt);
+    for (int frame = 0; frame < totalFrames; ++frame) {
+        sig.throttleFraction = 0.0;  // zero driver throttle: the stall scenario
+        sig.speedKmh = 0.5;          // standstill-in-D (creep band)
+        twin_->setEngineRpmFeedback(plant.rpm);
+        const auto out = twin_->update(dt, sig);
+        plant.step(out.throttle, out.starterMotor, dt);
+        ASSERT_FALSE(plant.stopped)
+            << "standstill-in-D must sustain idle; engine latched STOPPED";
+        if (out.gear >= 1) {
+            ++inGearFrames;
+            EXPECT_TRUE(out.couplingIsTorqueConverter);
+            EXPECT_NEAR(out.clutchPressure, kIdleCreepCapacity, 1e-6)
+                << "in-gear zero-throttle standstill must command the reduced "
+                   "idle creep capacity";
+            EXPECT_FALSE(out.creepReliefFired)
+                << "TC mode never opens the fluid path (slip is the decouple)";
+        }
+    }
+    // The pressure contract must actually have been exercised (the box is in
+    // DA1 for essentially the whole window, not a stray neutral).
+    EXPECT_GE(inGearFrames, totalFrames * 95 / 100);
+}
