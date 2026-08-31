@@ -8,7 +8,9 @@
 
 #include <gtest/gtest.h>
 #include <twin/TorqueConverter.h>
+#include <twin/CouplingModelSelector.h>
 
+#include <memory>
 #include <vector>
 
 using namespace twin;
@@ -209,4 +211,57 @@ TEST(TorqueConverterTest, PressureStaysInUnitRange) {
             EXPECT_LE(p, 1.0);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// CREEP-FIX (2026-08-31): the standstill capacity is SPLIT BY REGIME on
+// driver throttle (the resolution of the "single-number trap" documented on
+// TorqueConverterParameters::creepPressure). Owner driveability evidence
+// (2026-08-30/31): with one flat 0.6 the in-gear idle hunted and stalled
+// without throttle (bench: D-idle droop ~-350 rpm vs a real C63's ~50-150,
+// exhaust-flow sign-flutter ~3x Park); a flat 0.35/0.4 relieved the standstill
+// load but scaled the part-throttle launch-flare equilibrium past the free-rev
+// design point (3041 -> 3486/3603 rpm in the grid). The split: zero throttle
+// idles at the reduced capacity; launch throttle keeps the full one.
+// ---------------------------------------------------------------------------
+
+// Zero-throttle standstill must idle on the REDUCED capacity; launch throttle
+// must keep the FULL capacity (flare protection). Both ends pinned via the
+// production default the selector installs.
+TEST(TorqueConverterTest, StandstillCreepIsSplit_IdleReduced_LaunchFull_CreepFix) {
+    auto model = makeCouplingModel(CouplingModelKind::TorqueConverter);
+    CouplingInput in{
+        /*engineRpm=*/kIdleRpm, /*roadSpeedImpliedRpm=*/0.0,
+        /*throttle=*/0.0, kIdleRpm, kRedlineRpm,
+        /*maxClutchTorqueNm=*/12000.0, /*dt=*/0.01};
+
+    in.throttleFraction = 0.0;  // stoplight: zero driver throttle
+    EXPECT_NEAR(model->compute(in).clutchPressure, 0.35, 1e-9);
+
+    in.throttleFraction = 0.25;  // launch (top of the blend band)
+    EXPECT_NEAR(model->compute(in).clutchPressure, 0.6, 1e-9);
+
+    in.throttleFraction = 1.0;  // WOT launch
+    EXPECT_NEAR(model->compute(in).clutchPressure, 0.6, 1e-9);
+
+    // The blend is monotonic in throttle and passes through its midpoint.
+    in.throttleFraction = 0.15;
+    const double pMid = model->compute(in).clutchPressure;
+    EXPECT_GT(pMid, 0.35);
+    EXPECT_LT(pMid, 0.6);
+    EXPECT_NEAR(pMid, 0.35 + (0.6 - 0.35) * 0.5, 0.02)  // smoothstep(0.05..0.25, 0.15) ~ 0.5
+        << "the throttle blend must be the smooth ramp, not a step";
+
+    // Cruise is unaffected by the split: locked at 1.0 at any throttle.
+    in.roadSpeedImpliedRpm = kIdleRpm * 2.0;
+    in.throttleFraction = 0.0;
+    EXPECT_NEAR(model->compute(in).clutchPressure, 1.0, 1e-9);
+
+    // The engine-rpm independence guarantee survives the split: at fixed road
+    // AND fixed throttle the pressure cannot see engine rpm (no feedback loop).
+    in.roadSpeedImpliedRpm = 0.0;
+    in.throttleFraction = 0.15;
+    const double pAtIdle = model->compute(in).clutchPressure;
+    in.engineRpm = kRedlineRpm;
+    EXPECT_NEAR(model->compute(in).clutchPressure, pAtIdle, 1e-9);
 }

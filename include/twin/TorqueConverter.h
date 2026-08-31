@@ -59,13 +59,16 @@
 // normalized pressure IS the coupling strength. The governor is a mechanical-
 // schedule ramp of the road-implied rpm:
 //
-//     p = creepPressure + (1 - creepPressure)
+//     p = creep + (1 - creep)
 //         * smoothstep(idle*engageStartIdleFactor, idle*lockIdleFactor, road)
+//     where creep = idleCreepPressure -> creepPressure blended on driver
+//     throttle (the standstill regime split; both inputs exogenous).
 //
-// Flat at creepPressure through the creep band, progressive through the slip
-// band (the engine tracks road-implied x ~1.0-1.3), flat at 1.0 (locked) at and
-// above the cruise lock point. Monotonic, C1-continuous, and engine-independent
-// by construction. All declarative, all smooth.
+// Flat at the (throttle-blended) creep capacity through the creep band,
+// progressive through the slip band (the engine tracks road-implied
+// x ~1.0-1.3), flat at 1.0 (locked) at and above the cruise lock point.
+// Monotonic, C1-continuous, and engine-independent by construction. All
+// declarative, all smooth.
 
 #ifndef TWIN_TORQUE_CONVERTER_H
 #define TWIN_TORQUE_CONVERTER_H
@@ -84,23 +87,48 @@ struct TorqueConverterParameters {
     // ratio, i.e. of engine rpm, i.e. feedback).
     double stallTorqueRatio = 2.0;
 
-    // Standstill/creep capacity scale. The fluid's creep capacity at zero
-    // turbine speed: enough to LOAD the engine (a flaring engine meets
-    // quadratic pump resistance and settles at its stall speed, it cannot
-    // free-rev unloaded), small enough to slip against the pinned stationary
-    // wheel (no rigid couple, no standstill oscillation). The engine-side
-    // K*N^2 pump law shapes the load; this only scales it. 0.6 holds a ~25%
-    // throttle launch flare under the 3000 rpm free-rev bar (equilibrium
-    // N = sqrt(T_engine / (0.6 * K * TR)) ~ 2500 for ~180 Nm).
+    // Standstill/creep capacity scale UNDER THROTTLE (the launch regime).
+    // The fluid's creep capacity at zero turbine speed while launching: enough
+    // to LOAD the engine (a flaring engine meets quadratic pump resistance and
+    // settles at its stall speed, it cannot free-rev unloaded), small enough
+    // to slip against the pinned stationary wheel (no rigid couple, no
+    // standstill oscillation). The engine-side K*N^2 pump law shapes the load;
+    // this only scales it. 0.6 holds a ~25% throttle launch flare under the
+    // 3000 rpm free-rev bar (equilibrium N = sqrt(T_engine / (0.6 * K * TR))
+    // ~ 2500 for ~180 Nm).
     //
-    // NOTE (2026-08 sweep evidence, single-number trap): this ONE flat scale
-    // serves three regimes at once — standstill idle-hold support, crawl-band
-    // coupling (1-3 km/h), and WOT launch flare loading. Lowering it to ~0.3
-    // to relieve a floored converter's standstill drag fixed standstill but
-    // multiplied crawl-band latch dips and let a WOT launch flare past the
-    // free-rev bar. Any recalibration must split the regimes (e.g. a crawl
-    // ramp below engageStart), not move this number.
+    // NOTE (2026-08 sweep evidence, single-number trap — resolved 2026-08-31
+    // by the idle/launch split): this ONE flat scale was serving two regimes
+    // at once — standstill idle-hold support and part/WOT launch flare
+    // loading. The 2026-08-31 creep grid re-measured the trap on live-master
+    // code (C63_TeslaY, PIN+tau150, PinFixDrive3): a flat 0.4/0.35 cut the
+    // standstill pump load 33-42% (stall margin at the D-engage bite up
+    // +7..+131 rpm) but scaled the part-throttle launch-flare equilibrium as
+    // 1/sqrt(capacity) past the 0.6 design point (3041 -> 3486 -> 3603 rpm at
+    // the t=131 launch probe) — the documented free-rev-bar regression. The
+    // split keeps creepPressure as the under-throttle standstill capacity and
+    // adds idleCreepPressure for the zero-throttle band; the governor blends
+    // between them on DRIVER THROTTLE (exogenous input, like road-implied
+    // rpm — never engine rpm or the speed ratio, so the no-feedback-loop
+    // guarantee is preserved).
     double creepPressure = 0.6;
+
+    // Zero-throttle standstill capacity (the stoplight / creep-band scale).
+    // Driveability evidence (owner 2026-08-30/31: "it still hunts idle in gear
+    // and it stalls almost right away unless I have the throttle up"; bench:
+    // D-idle droop ~-350 rpm vs a real C63's ~50-150, exhaust-flow
+    // sign-flutter ~3x Park, deeper rpm dips at the D-engage bite with 0.6).
+    // 0.35 cuts the zero-throttle standstill pump load ~40% (grid-measured)
+    // while a launch (throttle at/above creepThrottleRampEnd) still sees the
+    // full creepPressure above.
+    double idleCreepPressure = 0.35;
+
+    // Driver-throttle band (fraction) over which the standstill capacity
+    // blends idleCreepPressure -> creepPressure. Below the start the
+    // converter idles at idleCreepPressure; at/above the end it launches at
+    // creepPressure. Smooth (C1) in throttle: no bang-bang at tip-in.
+    double creepThrottleRampStart = 0.05;
+    double creepThrottleRampEnd = 0.25;
 
     // Road-implied rpm (as a fraction of idle) where the progressive band
     // STARTS. Below this the pressure sits flat at creepPressure.
