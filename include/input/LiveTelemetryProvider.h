@@ -103,6 +103,12 @@ public:
     /// PIN-coupling compliance tau in ms (--pin-tau-ms): 0 = rigid pin.
     void setPinTauMs(double tauMs);
 
+    /// --effective-throttle / --torque-informed-gearbox configs (both DEFAULT
+    /// disabled = inert). Stored + re-applied when the twin provider is created
+    /// in Initialize(), so a pre- or post-Initialize() set both take effect.
+    void setEffectiveThrottleConfig(const twin::EffectiveThrottleConfig& config);
+    void setTorqueInformedGearboxConfig(const twin::TorqueInformedGearboxConfig& config);
+
     /// Select the coupling MODEL (how the clutch pressure is derived): clutch-map
     /// (default — declarative smooth governor, no binary relief), torque-converter
     /// (fluid coupling), or legacy (historical slip-lock + binary relief, A/B).
@@ -243,6 +249,12 @@ private:
     twin::IceVehicleProfile ownedProfile_;          // used only in CSV mode
     const twin::IceVehicleProfile& profile_;        // points to ownedProfile_ or external
     std::unique_ptr<VirtualIceInputProvider> twinProvider_;
+
+    // Torque-feature configs (--effective-throttle / --torque-informed-gearbox;
+    // defaults disabled). Stored so a set arriving before Initialize() survives
+    // twin-provider creation and is re-applied there.
+    twin::EffectiveThrottleConfig effectiveThrottleConfig_;
+    twin::TorqueInformedGearboxConfig torqueInformedGearboxConfig_;
     std::atomic<UpstreamSignal> currentSignal_;
     std::atomic<bool> signalReceived_;
     std::atomic<bool> initialized_;

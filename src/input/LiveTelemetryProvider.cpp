@@ -86,6 +86,10 @@ bool LiveTelemetryProvider::initTwinProvider() {
             twinProvider_.reset();
             return false;
         }
+        // Re-apply any torque-feature configs that arrived before Initialize()
+        // (defaults are inert no-ops on the twin).
+        twinProvider_->setEffectiveThrottleConfig(effectiveThrottleConfig_);
+        twinProvider_->setTorqueInformedGearboxConfig(torqueInformedGearboxConfig_);
         return true;
     } catch (const std::bad_alloc& e) {
         lastError_ = std::string("Out of memory creating twin provider: ") + e.what();
@@ -323,6 +327,24 @@ void LiveTelemetryProvider::setPinTauMs(double tauMs) {
     // setWheelCouplingMode), so the twin provider exists by this call.
     if (twinProvider_) {
         twinProvider_->setPinTauMs(tauMs);
+    }
+}
+
+void LiveTelemetryProvider::setEffectiveThrottleConfig(
+    const twin::EffectiveThrottleConfig& config) {
+    // Stored + re-applied at twin-provider creation, so a pre-Initialize() set
+    // also takes effect (superset of the setPinTauMs ordering contract).
+    effectiveThrottleConfig_ = config;
+    if (twinProvider_) {
+        twinProvider_->setEffectiveThrottleConfig(config);
+    }
+}
+
+void LiveTelemetryProvider::setTorqueInformedGearboxConfig(
+    const twin::TorqueInformedGearboxConfig& config) {
+    torqueInformedGearboxConfig_ = config;
+    if (twinProvider_) {
+        twinProvider_->setTorqueInformedGearboxConfig(config);
     }
 }
 

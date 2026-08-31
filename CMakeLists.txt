@@ -177,6 +177,8 @@ set(BRIDGE_SOURCES
     src/twin/GearboxCsvLogger.cpp
     src/twin/ThrottleSmoother.cpp
     src/twin/PinTargetChase.cpp
+    src/twin/EffectiveThrottle.cpp
+    src/twin/UpstreamTorqueHint.cpp
     src/twin/VirtualIceTwin.cpp
     src/twin/ManualTwin.cpp
     src/twin/SlipLockController.cpp
@@ -677,6 +679,7 @@ if(BUILD_BRIDGE_TESTS)
     # Kept as their own targets so each feature's red/green is visible in isolation.
     add_executable(twin_effective_throttle_tests
         test/twin/EffectiveThrottleTest.cpp
+        src/twin/EffectiveThrottle.cpp
     )
     target_include_directories(twin_effective_throttle_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -692,6 +695,7 @@ if(BUILD_BRIDGE_TESTS)
 
     add_executable(twin_torque_gearbox_tests
         test/twin/UpstreamTorqueHintTest.cpp
+        src/twin/UpstreamTorqueHint.cpp
     )
     target_include_directories(twin_torque_gearbox_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include

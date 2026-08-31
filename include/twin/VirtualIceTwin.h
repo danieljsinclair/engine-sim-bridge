@@ -106,6 +106,13 @@ private:
     std::unique_ptr<AutomaticGearbox> gearbox_;
     ThrottleSmoother throttleSmoother_;
     PinTargetChase pinTargetChase_;
+    // --effective-throttle derivation (DEFAULT disabled = inert passthrough).
+    // Owns the AP-takeover latch; applied once per frame between the raw pedal
+    // and the throttle smoother (the single derivation point).
+    EffectiveThrottleDerivation effectiveThrottle_{EffectiveThrottleConfig{}};
+    // --torque-informed-gearbox config (DEFAULT disabled = NullTorqueHint-
+    // equivalent). Stateless per frame: consumed by gearboxTorqueHint().
+    TorqueInformedGearboxConfig torqueInformedGearbox_;
 
     TwinState state_ = TwinState::OFF;
     double timeWithoutValidTelemetryS_ = 0.0;
@@ -172,6 +179,12 @@ private:
     // current gear (clones the replay formula). Fallback idleRpm when gear is
     // out of range.
     double roadSpeedImpliedRpmFor(double wheelSpeedKmh) const;
+
+    // The frame's gearbox torque-hint strategy (--torque-informed-gearbox):
+    // an UpstreamTorqueHint over the commanded motor torque when the feature
+    // is enabled, nullptr otherwise (= the gearbox's legacy SimTorqueHint wrap
+    // over the drivetrain feedback, bit-identical to the unconfigured twin).
+    std::unique_ptr<ITorqueHint> gearboxTorqueHint(const input::UpstreamSignal& signal) const;
 
     // Idle-hold controller step: advances the engage/release state machine
     // and PI, returns the throttle FLOOR to apply this tick (a fraction of

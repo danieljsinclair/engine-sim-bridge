@@ -37,6 +37,17 @@ public:
     void update(double dt, double speedKmh, double throttleFraction,
                 double drivetrainTorqueNm);
 
+    // Same frame with an UPSTREAM hint strategy (--torque-informed-gearbox):
+    // a non-null upstreamHint REPLACES the SimTorqueHint wrap for this frame —
+    // the caller owns torque knowledge (the upstream commanded motor torque is
+    // the driver's intent, Autopilot included; the sim-feedback SimTorqueHint
+    // is derived, not commanded). nullptr keeps the legacy wrap exactly
+    // (byte-identical when the feature is off). The decision still consumes
+    // only ITorqueHint::shiftBias() — no new seam in the decision logic.
+    void update(double dt, double speedKmh, double throttleFraction,
+                double drivetrainTorqueNm,
+                std::unique_ptr<ITorqueHint> upstreamHint);
+
     int getCurrentGear() const;
     bool requestsShift() const;
     int getTargetGear() const;

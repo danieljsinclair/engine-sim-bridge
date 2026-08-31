@@ -24,6 +24,10 @@ bool VirtualIceInputProvider::Initialize() {
         if (pendingLogger_) {
             twin_->setGearboxLogger(pendingLogger_);
         }
+        // Apply any torque-feature configs that arrived before Initialize()
+        // (store + re-apply; the defaults are inert no-ops on the twin).
+        twin_->setEffectiveThrottleConfig(pendingEffectiveThrottle_);
+        twin_->setTorqueInformedGearboxConfig(pendingTorqueInformedGearbox_);
         isInitialized_ = true;
         return true;
     } catch (const PresetException& e) {
@@ -130,6 +134,22 @@ void VirtualIceInputProvider::setWheelCouplingMode(twin::WheelCouplingMode mode)
 void VirtualIceInputProvider::setPinTauMs(double tauMs) {
     if (twin_) {
         twin_->setPinTauMs(tauMs);
+    }
+}
+
+void VirtualIceInputProvider::setEffectiveThrottleConfig(
+    const twin::EffectiveThrottleConfig& config) {
+    pendingEffectiveThrottle_ = config;
+    if (twin_) {
+        twin_->setEffectiveThrottleConfig(config);
+    }
+}
+
+void VirtualIceInputProvider::setTorqueInformedGearboxConfig(
+    const twin::TorqueInformedGearboxConfig& config) {
+    pendingTorqueInformedGearbox_ = config;
+    if (twin_) {
+        twin_->setTorqueInformedGearboxConfig(config);
     }
 }
 

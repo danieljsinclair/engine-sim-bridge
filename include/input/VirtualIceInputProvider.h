@@ -50,6 +50,13 @@ public:
     // PIN-coupling compliance tau in ms (--pin-tau-ms): 0 = rigid pin.
     void setPinTauMs(double tauMs);
 
+    // --effective-throttle / --torque-informed-gearbox configs (both DEFAULT
+    // disabled = inert). Stored + re-applied like the pending logger: the CLI
+    // may set them BEFORE Initialize() creates the twin (ReplayTelemetryProvider
+    // seeds its twin provider at Initialize time).
+    void setEffectiveThrottleConfig(const twin::EffectiveThrottleConfig& config);
+    void setTorqueInformedGearboxConfig(const twin::TorqueInformedGearboxConfig& config);
+
     // Select the coupling MODEL (clutch-map default, torque-converter, legacy).
     void setCouplingModel(twin::CouplingModelKind kind);
 
@@ -88,6 +95,11 @@ private:
     std::string lastError_;
     bool isInitialized_;
     twin::IGearboxLogger* pendingLogger_ = nullptr;
+
+    // Pending torque-feature configs (see the setter contract above); applied
+    // to the twin when Initialize() creates it. Defaults are disabled.
+    twin::EffectiveThrottleConfig pendingEffectiveThrottle_;
+    twin::TorqueInformedGearboxConfig pendingTorqueInformedGearbox_;
 
     UpstreamSignal currentSignal_;
 
