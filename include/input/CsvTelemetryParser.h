@@ -15,6 +15,9 @@
 //                  = absent. The retired brake_percent / brake_pedal_state
 //                  columns are no longer consumed (they fall through to the
 //                  unknown-column path so old captures still parse).
+//   steering_angle_deg  vehicle-sim's decoded SCCM_steeringAngle (CAN 0x129,
+//                  degrees, signed). Blank/unparseable = absent. Feeds the
+//                  CLI console steering display only (no physics).
 
 #ifndef INPUT_CSV_TELEMETRY_PARSER_H
 #define INPUT_CSV_TELEMETRY_PARSER_H
@@ -35,6 +38,7 @@ struct CsvHeader {
     int colGearSelector = -1;
     int colMotorTorque = -1;
     int colBrakeLight = -1;  // brake_light: 1=on, 0=off
+    int colSteering = -1;    // steering_angle_deg: signed degrees, blank = absent
     bool timeInMs = false;
     bool rawCanFormat = false;  // true if can_id + data_hex columns detected
 };
@@ -49,6 +53,10 @@ struct CsvSample {
     std::string gearSelector;        // PRNDL string from vehicle-sim captures
     double motorTorqueNm = 0.0;      // Recorded motor/engine torque (Nm); -1 = missing
     std::optional<bool> brakeLight;  // brake light: true=on, false=off, nullopt=absent
+    // Steering wheel angle in degrees (signed; CAN 0x129 SCCM_steeringAngle via
+    // vehicle-sim's steering_angle_deg column). nullopt = not reported by this
+    // source (column absent, blank, or unparseable) — display-only signal.
+    std::optional<double> steeringAngleDeg;
 };
 
 class CsvTelemetryParser {
