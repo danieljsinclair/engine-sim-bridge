@@ -340,10 +340,10 @@ void LiveTelemetryProvider::warmBootToRunning() {
     // negative exhaust flow (reversion). Live has no parsed samples at
     // Initialize() time (rows are streamed lazily), so we seed the synthetic
     // prime from a running-baseline (light throttle / ~10 km/h, DRIVE) — the same
-    // attractor replay's first-sample seed lands in. The SimulationLoop
-    // warm-start prefix then steps the FULL sim (twin + core) silently for the
-    // startFromS_ window, so --live-telemetry --start-from now converges on the
-    // replay run rather than cold-jumping. Idempotent (primeWarmUp guards).
+    // attractor replay's first-sample seed lands in. Live gets NO loop-side
+    // settle (an unseekable stream cannot be held at an operating point); the
+    // prime plus the synthesised hold signal carry convergence until the first
+    // real post-offset row. Idempotent (primeWarmUp guards).
     if (stream_ && twinProvider_) {
         constexpr double kSeedThrottle = 0.20;
         constexpr double kSeedSpeedKmh = 10.0;

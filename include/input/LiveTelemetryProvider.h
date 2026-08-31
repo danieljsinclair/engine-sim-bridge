@@ -149,9 +149,9 @@ public:
     void setStartFromS(double s);
 
     // IReplayTimeline — the live path's instant start-from contract:
-    //   - getStartFromS() is informational (SimulationLoop runs its stepped
-    //     warm-start prefix ONLY for file traces, durationS() >= 0; live skips
-    //     it — see the header comment on setStartFromS).
+    //   - getStartFromS() is informational (SimulationLoop runs its
+    //     arrival-state settle ONLY for file traces, durationS() >= 0; live
+    //     skips it — see the header comment on setStartFromS).
     //   - durationS() < 0 marks an unbounded/forward-only stream.
     //   - setEndAtS bounds the run: once elapsedS_ crosses the bound the
     //     provider reports EOF (IsConnected false) so the loop exits cleanly —

@@ -821,3 +821,122 @@ TEST_F(ReplayTelemetryProviderTest, AutoStartSuppressedWhenTraceCarriesGearSelec
 
     EXPECT_FALSE(provider_->OnUpdateSimulation(0.016).starterButton);
 }
+
+
+// ===========================================================================
+// Group 7: Instant --start-from (IArrivalStatePrimer contract)
+//
+// The owner contract: rows before --start-from are NEVER simulated. The loop
+// asks the provider to PRIME the arrival state (twin warm-boot seeded from
+// the arrival row + clock anchored on it) and HOLD that row as the constant
+// synthetic input while the engine core settles; on release the trace plays
+// from the arrival row onward. These tests drive the provider directly.
+// ===========================================================================
+
+TEST_F(ReplayTelemetryProviderTest, PrimeAnchorsClockOnArrivalRow) {
+    // After primeArrivalState() the replay clock cold-jumps to the FIRST row
+    // at/after the offset and the held poll returns that row — no pre-offset
+    // row is ever sampled.
+    makeProvider("time_s,throttle_pct\n0.0,10.0\n0.5,50.0\n10.0,60.0\n11.0,70.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(10.0);
+    provider_->primeArrivalState();
+
+    EXPECT_TRUE(provider_->arrivalHoldActive());
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 10.0);
+    EXPECT_DOUBLE_EQ(input.throttle, 0.60);
+}
+
+TEST_F(ReplayTelemetryProviderTest, PrimeHoldsArrivalRowAcrossPolls) {
+    // While held, repeated polls keep returning the SAME arrival row: the
+    // settle window must see a constant operating point, not advancing rows.
+    makeProvider("time_s,throttle_pct\n0.0,10.0\n10.0,60.0\n10.5,65.0\n11.0,70.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(10.0);
+    provider_->primeArrivalState();
+
+    for (int i = 0; i < 100; ++i) {  // ~1.6s of settle polls
+        const EngineInput input = provider_->OnUpdateSimulation(0.016);
+        EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 10.0) << "poll " << i;
+        EXPECT_DOUBLE_EQ(input.throttle, 0.60) << "poll " << i;
+    }
+}
+
+TEST_F(ReplayTelemetryProviderTest, ArrivalRowIsFirstAtOrAfterOffset) {
+    // An offset that falls BETWEEN rows anchors on the LATER row (the first
+    // row at/after the offset), never the floor row before it.
+    makeProvider("time_s,throttle_pct\n0.0,10.0\n10.0,60.0\n10.4,64.0\n11.0,70.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(10.2);
+    provider_->primeArrivalState();
+
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 10.4);
+    EXPECT_DOUBLE_EQ(input.throttle, 0.64);
+}
+
+TEST_F(ReplayTelemetryProviderTest, ReleaseResumesAdvanceFromArrivalRow) {
+    // After releaseArrivalHold() the clock resumes advancing from the arrival
+    // row and later rows are reached — the hold is not a permanent latch.
+    makeProvider("time_s,throttle_pct\n0.0,10.0\n10.0,60.0\n10.3,63.0\n10.6,66.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(10.0);
+    provider_->primeArrivalState();
+    (void)provider_->OnUpdateSimulation(0.016);  // one held poll
+
+    provider_->releaseArrivalHold();
+    EXPECT_FALSE(provider_->arrivalHoldActive());
+
+    // Advance ~0.64s past the arrival row: the clock moves past 10.0 and the
+    // 10.6 row (throttle 66%) is reached.
+    bool sawLateRow = false;
+    for (int i = 0; i < 40; ++i) {
+        const EngineInput input = provider_->OnUpdateSimulation(0.016);
+        if (provider_->currentTimestampS() >= 10.6 - 1e-9) {
+            sawLateRow = true;
+            EXPECT_DOUBLE_EQ(input.throttle, 0.66);
+        }
+        EXPECT_GE(provider_->currentTimestampS(), 10.0 - 1e-9);  // never rewinds
+    }
+    EXPECT_TRUE(sawLateRow);
+}
+
+TEST_F(ReplayTelemetryProviderTest, PrimeWithoutOffsetIsNoOp) {
+    // from-0 runs never prime: without an offset, primeArrivalState() must
+    // not move the clock or sample anything but the t=0 row.
+    makeProvider("time_s,throttle_pct\n0.0,10.0\n1.0,50.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(-1.0);
+    provider_->primeArrivalState();
+
+    EXPECT_FALSE(provider_->arrivalHoldActive());
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 0.0);
+    EXPECT_DOUBLE_EQ(input.throttle, 0.10);
+}
+
+TEST_F(ReplayTelemetryProviderTest, PrimeSeedsTwinWithArrivalRowValues) {
+    // The twin warm-boot is seeded from the ARRIVAL row's operating point
+    // (speed/throttle), not the first row's: a DRIVE trace arriving at road
+    // speed must expose a vehicle-speed pin at that speed on the FIRST held
+    // poll (the twin is RUNNING, wheels pinned).
+    makeProvider("time_s,throttle_pct,road_speed_kmh,gear_selector\n"
+                 "0.0,5.0,0.0,P\n10.0,40.0,60.0,D\n11.0,40.0,60.0,D\n",
+                 /*autoStart=*/true, /*autoGearbox=*/true);
+    provider_->setWheelCouplingMode(twin::WheelCouplingMode::Pin);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(10.0);
+    provider_->primeArrivalState();
+
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(input.replayTimestampS, 10.0);
+    // PIN coupling surfaces the CSV road speed as the vehicle-speed target.
+    EXPECT_NEAR(input.vehicleSpeedTargetKmh, 60.0, 1e-6);
+}
