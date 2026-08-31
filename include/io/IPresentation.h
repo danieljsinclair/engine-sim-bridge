@@ -61,6 +61,11 @@ struct EngineState {
         double throttle = 0.0;         // Effective (cranking-aware)
         bool ignition = false;
         std::optional<bool> brakeLight;  // vehicle brake light (nullopt = not reported)
+        // Steering wheel angle in degrees, signed (CAN 0x129 SCCM_steeringAngle
+        // via the vehicle-sim steering_angle_deg column). nullopt = feed does
+        // not carry steering (non-DBC sources) — the console readout degrades
+        // to nothing. Display-only.
+        std::optional<double> steeringAngleDeg;
         int gearSelector = 0;
         bool gearAutoMode = false;
         // Commanded road-speed target (km/h) from the ','/'.' keys. Negative

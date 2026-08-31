@@ -8,6 +8,7 @@
 #include "simulator.h"
 #include "engine.h"
 #include "synthesizer.h"
+#include "span_tame.h"
 
 #include <array>
 #include <memory>
@@ -89,6 +90,17 @@ void initializeConvolutionFilters(Simulator* simulator) {
     Synthesizer::AudioParameters params = simulator->synthesizer().getAudioParameters();
     params.convolution = 0.0f;
     simulator->synthesizer().setAudioParameters(params);
+}
+
+// SKELETON ONLY — test-architect red phase. The span-tame implementer
+// replaces this body with the read-modify-write of the synthesizer's
+// AudioParameters (set spanTame, preserve everything else). Nothing in
+// production calls it yet (the factory wiring is part of the implementation),
+// so default builds are unaffected.
+void applySpanTame(Simulator* /*simulator*/, float /*spanTame*/)
+{
+    throw span_tame::NotImplementedError(
+        "SimulatorInitHelpers::applySpanTame — skeleton, not implemented");
 }
 
 } // namespace SimulatorInitHelpers

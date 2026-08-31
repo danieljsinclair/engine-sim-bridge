@@ -185,6 +185,57 @@ TEST_F(LiveTelemetryProviderTest, NetworkPath_NeutralGearSurfacesNeutral) {
     EXPECT_EQ(input.gearSelector, static_cast<int>(bridge::GearSelector::NEUTRAL));
 }
 
+// Steering-angle display chain: a network frame carrying steering (CAN 0x129
+// SCCM_steeringAngle, via vehicle-sim's steering_angle_deg column) must
+// surface verbatim on EngineInput for the console readout. Display-only: the
+// twin never consumes it. Signed value, no rounding at the plumbing layer.
+TEST_F(LiveTelemetryProviderTest, NetworkPath_SteeringAngleSurfacesToEngineInput) {
+    ASSERT_TRUE(provider_->Initialize());
+
+    input::UpstreamSignal signal;
+    signal.gearSelector = bridge::GearSelector::DRIVE;
+    signal.isValid = true;
+    signal.throttleFraction = 0.5;
+    signal.speedKmh = 30.0;
+    signal.steeringAngleDeg = -12.5;
+    provider_->submitSignal(signal);
+
+    EngineSimStats stats;
+    stats.currentRPM = 900.0;
+    input::EngineInput input;
+    for (int i = 0; i < 5; ++i) {
+        provider_->provideFeedback(stats);
+        input = provider_->OnUpdateSimulation(0.05);
+    }
+
+    ASSERT_TRUE(input.steeringAngleDeg.has_value())
+        << "network frame carrying steering must surface it on engineInput";
+    EXPECT_DOUBLE_EQ(*input.steeringAngleDeg, -12.5);
+}
+
+// Contrast: a frame WITHOUT steering leaves EngineInput.steeringAngleDeg
+// nullopt — the renderer's cue to degrade to nothing. No zero substitution.
+TEST_F(LiveTelemetryProviderTest, NetworkPath_NoSteering_StaysNullopt) {
+    ASSERT_TRUE(provider_->Initialize());
+
+    input::UpstreamSignal signal;
+    signal.gearSelector = bridge::GearSelector::DRIVE;
+    signal.isValid = true;
+    signal.throttleFraction = 0.5;
+    signal.speedKmh = 30.0;
+    provider_->submitSignal(signal);
+
+    EngineSimStats stats;
+    stats.currentRPM = 900.0;
+    input::EngineInput input;
+    for (int i = 0; i < 5; ++i) {
+        provider_->provideFeedback(stats);
+        input = provider_->OnUpdateSimulation(0.05);
+    }
+
+    EXPECT_FALSE(input.steeringAngleDeg.has_value());
+}
+
 }  // namespace
 
 // ============================================================================

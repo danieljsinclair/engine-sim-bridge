@@ -520,3 +520,94 @@ TEST_F(CsvTelemetryParserTest, ParseRow_VehicleSimSchemaDecodesClutchPressure) {
     EXPECT_DOUBLE_EQ(sample.roadSpeedKmh, 55.0);
     EXPECT_DOUBLE_EQ(sample.clutchPct, 0.40);         // 40% -> 0.40
 }
+
+// ============================================================================
+// Steering-angle column (steering_angle_deg): vehicle-sim's decoded
+// SCCM_steeringAngle (CAN 0x129 / 297, signed degrees). Recognised in the
+// real --stdout-csv header, decoded as an optional signed double (blank or
+// garbage = absent, mirroring the brake-light tri-state), and simply not
+// consumed when the feed has no such column (non-DBC sources unchanged).
+// The fixture header + rows below are REAL vehicle-sim output rows from the
+// ReadingPickup_2026-08-31_001408 capture (embedded, no file reads).
+// ============================================================================
+
+namespace {
+// The exact 13-column header vehicle-sim --stdout-csv emits (CsvRowFormatter).
+const char* const kVehicleSimHeader =
+    "timestamp_ms,vehicle_id,speed_kmh,throttle_percent,brake_light,"
+    "acceleration_g,steering_angle_deg,motor_rpm,motor_hv_voltage,"
+    "motor_hv_current,motor_torque_nm,gear_selector,dbc_signal_count";
+}  // namespace
+
+TEST_F(CsvTelemetryParserTest, ParseHeader_RecognisesSteeringAngleColumn) {
+    std::string error;
+    EXPECT_TRUE(parser.parseHeader(kVehicleSimHeader, error));
+    EXPECT_EQ(parser.header().colSteering, 6);  // steering_angle_deg position
+}
+
+TEST_F(CsvTelemetryParserTest, ParseRow_SteeringAngleDecodesRealRows) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader(kVehicleSimHeader, error));
+
+    // Real capture rows: early partial row (steering only), cruise row, and
+    // the capture's largest angle under way.
+    CsvSample early;
+    ASSERT_TRUE(parser.parseRow(
+        "1788131648475,tesla,,,,,1.60,,,,,,1", 0.001, early, error));
+    ASSERT_TRUE(early.steeringAngleDeg.has_value());
+    EXPECT_DOUBLE_EQ(*early.steeringAngleDeg, 1.60);
+
+    CsvSample underWay;
+    ASSERT_TRUE(parser.parseRow(
+        "1788131648574,tesla,95.60,0.00,,,1.80,,,,,D,4", 0.001, underWay, error));
+    ASSERT_TRUE(underWay.steeringAngleDeg.has_value());
+    EXPECT_DOUBLE_EQ(*underWay.steeringAngleDeg, 1.80);
+
+    CsvSample turning;
+    ASSERT_TRUE(parser.parseRow(
+        "1788131684325,tesla,106.00,31.60,0,,3.90,,,,360.00,D,6", 0.001, turning, error));
+    ASSERT_TRUE(turning.steeringAngleDeg.has_value());
+    EXPECT_DOUBLE_EQ(*turning.steeringAngleDeg, 3.90);
+}
+
+// The signal is signed (DBC range [-819.2, 819.1]); negative (left-hand)
+// angles must decode with their sign intact — the display reads direction
+// from it.
+TEST_F(CsvTelemetryParserTest, ParseRow_SteeringAngleNegativeDecodesSigned) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("time_s,steering_angle_deg", error));
+
+    CsvSample sample;
+    ASSERT_TRUE(parser.parseRow("1.0,-12.50", 1.0, sample, error));
+    ASSERT_TRUE(sample.steeringAngleDeg.has_value());
+    EXPECT_DOUBLE_EQ(*sample.steeringAngleDeg, -12.50);
+}
+
+// Blank (not reported this row) and unparseable cells are ABSENT — nullopt,
+// not zero. Zero-vs-absent is a real distinction: the renderer must show
+// nothing when the feed carries no steering.
+TEST_F(CsvTelemetryParserTest, ParseRow_SteeringAngleBlankAndGarbageAreAbsent) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("time_s,steering_angle_deg", error));
+
+    CsvSample blank;
+    ASSERT_TRUE(parser.parseRow("1.0,", 1.0, blank, error));
+    EXPECT_FALSE(blank.steeringAngleDeg.has_value());
+
+    CsvSample garbage;
+    ASSERT_TRUE(parser.parseRow("2.0,abc", 1.0, garbage, error));
+    EXPECT_FALSE(garbage.steeringAngleDeg.has_value());
+}
+
+// Degraded contract: a feed WITHOUT the column (legacy captures, non-DBC
+// sources) parses exactly as before — the column index stays -1 and the
+// sample stays absent. No behavior change for steering-less feeds.
+TEST_F(CsvTelemetryParserTest, ParseHeader_WithoutSteeringColumn_Unchanged) {
+    std::string error;
+    EXPECT_TRUE(parser.parseHeader("time_s,throttle_pct,road_speed_kmh", error));
+    EXPECT_EQ(parser.header().colSteering, -1);
+
+    CsvSample sample;
+    ASSERT_TRUE(parser.parseRow("1.0,50.0,80.0", 1.0, sample, error));
+    EXPECT_FALSE(sample.steeringAngleDeg.has_value());
+}

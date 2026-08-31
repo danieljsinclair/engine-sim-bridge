@@ -24,6 +24,11 @@ struct UpstreamSignal {
     // Defaults are neutral / not-pressed.
     bridge::GearSelector gearSelector = bridge::GearSelector::NEUTRAL;
     std::optional<bool> brakeLight;
+
+    // Steering wheel angle in degrees (signed; CAN 0x129 SCCM_steeringAngle).
+    // nullopt = signal absent. Display-only: flows to EngineState.Controls for
+    // the CLI console steering readout; never touches physics.
+    std::optional<double> steeringAngleDeg;
 };
 
 }
