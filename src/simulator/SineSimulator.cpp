@@ -82,8 +82,13 @@ void SineSimulator::destroy() {
 }
 
 void SineSimulator::simulateStep_() {
-    const double rpm = m_engine ? m_engine->getRpm() : 800.0;
-    const double frequency = rpm / 6.0;
+    // Pure sine test tone at 440 Hz — the documented --sine frequency (help text
+    // and CLI11 description both say "440Hz sine wave test tone"). The old
+    // `rpm / 6.0` formula derived the pitch from a fake idle RPM (~800) and
+    // produced ~133 Hz, which never matched the documentation. 440 Hz is the
+    // intent (git history: present since the first CLI11 refactor), so the
+    // generator is corrected to match the doc, not the other way around.
+    constexpr double frequency = 440.0;
     const double phaseIncrement = TWO_PI / (synthesizer().getInputSampleRate() / frequency);
 
     m_phase += phaseIncrement;

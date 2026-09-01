@@ -391,6 +391,8 @@ if(BUILD_BRIDGE_TESTS)
         test/GearClutchBugTest.cpp
         test/GearRefactorTest.cpp
         test/SineWaveRegressionTests.cpp
+        test/SineWaveFrequencyTest.cpp
+        test/WavWriterTest.cpp
         test/twin/SpeedRpmConversionTest.cpp
         test/twin/RedlineClampAndUpshiftTest.cpp
         test/twin/C63TeslaYTuneTest.cpp
