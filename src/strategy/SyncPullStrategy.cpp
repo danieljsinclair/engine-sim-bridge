@@ -174,25 +174,21 @@ bool SyncPullStrategy::attemptRender(float* dst, int offset, int framesNeeded,
         &framesWritten
     );
 
-    // Fallback: no synthesized audio is buffered yet. In production the loop
-    // thread's update() feeds the synth input ring and the CoreAudio callback
-    // renders it, so this path is the normal case and renderDrainedAudio
-    // returns frames. It is only reached when the audio callback is running
-    // ahead of the loop thread (a transient catch-up) — or, in a test with no
-    // loop thread at all, always. Stepping the engine here is safe: the loop
-    // thread only advances the core when it is this callback's turn to wait,
-    // so the two never step concurrently. Without this fallback a render with
-    // no buffered audio (the whole test suite) fills silence and fails.
+    // No synthesized audio buffered yet — the audio callback is running ahead
+    // of the loop thread's update() (a transient catch-up), or the producer
+    // has not yet filled the audio ring. MUST NOT fall back to renderOnDemand:
+    // renderOnDemand advances the engine (advanceFixedSteps -> simulateStep ->
+    // solver) on the audio thread, which races the loop thread's solver steps
+    // (e.g. during settleAtArrivalPoint's unpaced settle loop) and corrupts the
+    // shared solver state (heap corruption = 0xfff0...). The loop thread owns ALL
+    // engine advancement; the audio thread only drains already-synthesized audio.
+    // Filling silence here is correct — the next loop tick will produce audio.
     if (result && framesWritten == 0) {
-        result = simulator_->renderOnDemand(
-            dst + (offset * 2),
-            framesNeeded,
-            &framesWritten
-        );
-        if (!result) {
-            logger_->error(LogMask::AUDIO,
-                __ilog_format("SyncPullStrategy::render: renderOnDemand fallback failed, filling silence"));
-        }
+        EngineSimAudio::fillSilence(dst + (offset * 2), framesNeeded);
+        framesWritten = framesNeeded;
+        logger_->debug(LogMask::AUDIO,
+            __ilog_format("SyncPullStrategy::attemptRender: no buffered audio, filled %d frames silence",
+            framesNeeded));
     }
 
     if (!result) {
