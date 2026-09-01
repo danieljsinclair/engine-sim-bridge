@@ -92,10 +92,14 @@ std::unique_ptr<Simulator> buildPistonEngineSimulator(
     return pistonSim;
 }
 
-LoadedSimulation loadPresetSimulation(const std::string& scriptPath, const std::string& assetBasePath) {
-    PresetLoadResult result = PresetEngineFactory::loadFromFile(scriptPath);
+LoadedSimulation loadPresetSimulation(const std::string& scriptPath, const std::string& assetBasePath, bool useTorqueConverter) {
+    // Normalize once (exe-aware) so both the file open and the asset base use
+    // the same resolved path regardless of the launch directory.
+    const std::string normalizedPath = ScriptLoadHelpers::normalizeScriptPath(scriptPath);
+
+    PresetLoadResult result = PresetEngineFactory::loadFromFile(normalizedPath);
     if (!result.success()) {
-        throw SimulatorException("Failed to load preset: " + scriptPath + " — " + result.error);
+        throw SimulatorException("Failed to load preset: " + normalizedPath + " — " + result.error);
     }
 
     LoadedSimulation loaded;
@@ -103,12 +107,27 @@ LoadedSimulation loadPresetSimulation(const std::string& scriptPath, const std::
     loaded.vehicle = result.vehicle;
     loaded.transmission = result.transmission;
     loaded.initialGear = result.initialGear;
-    loaded.resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(
-        ScriptLoadHelpers::normalizeScriptPath(scriptPath), assetBasePath);
+    loaded.resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath, assetBasePath);
+    // Install the fluid-coupling torque converter on the (preset-built)
+    // transmission BEFORE the simulator wires it into the system, so addToSystem
+    // adds the constraint at the safe wiring time (never to a live system).
+    if (useTorqueConverter) {
+        if (loaded.transmission == nullptr) {
+            // The preset defines no transmission of its own (e.g. C63_TeslaY.mr);
+            // the converter can only live on a transmission, so synthesise a
+            // default one that already carries the converter. Mirrors the script
+            // path's createDefaultTransmission(useTorqueConverter) branch.
+            loaded.transmission = ScriptLoadHelpers::createDefaultTransmission(
+                /*useTorqueConverter=*/true);
+        } else if (!loaded.transmission->hasTorqueConverter()) {
+            loaded.transmission->ensureTorqueConverter(
+                ScriptLoadHelpers::kDefaultTorqueConverterParams);
+        }
+    }
     return loaded;
 }
 
-LoadedSimulation loadScriptSimulation(const std::string& scriptPath, const std::string& assetBasePath) {
+LoadedSimulation loadScriptSimulation(const std::string& scriptPath, const std::string& assetBasePath, bool useTorqueConverter) {
     std::filesystem::path normalizedPath = ScriptLoadHelpers::normalizeScriptPath(scriptPath);
     std::string resolvedAssetPath = ScriptLoadHelpers::resolveAssetBasePath(normalizedPath.string(), assetBasePath);
 
@@ -127,7 +146,19 @@ LoadedSimulation loadScriptSimulation(const std::string& scriptPath, const std::
     LoadedSimulation loaded;
     loaded.engine = output.engine;
     loaded.vehicle = output.vehicle ? output.vehicle : ScriptLoadHelpers::createDefaultVehicle();
-    loaded.transmission = output.transmission ? output.transmission : ScriptLoadHelpers::createDefaultTransmission();
+    loaded.transmission = output.transmission
+        ? output.transmission
+        : ScriptLoadHelpers::createDefaultTransmission(useTorqueConverter);
+    // The compiled script may define its own transmission (it usually does) but
+    // without a torque converter. When the TC coupling model is selected the
+    // converter must still be installed on THAT transmission — otherwise the
+    // friction clutch is the only coupling path and at standstill it rigidly
+    // locks the engine to the pinned wheels and stalls (the Red-gate failure).
+    // createDefaultTransmission already covers the no-transmission case above;
+    // this covers the script-provided-without-TC case.
+    if (useTorqueConverter && loaded.transmission != nullptr && !loaded.transmission->hasTorqueConverter()) {
+        loaded.transmission->ensureTorqueConverter(ScriptLoadHelpers::kDefaultTorqueConverterParams);
+    }
     loaded.resolvedAssetPath = resolvedAssetPath;
     return loaded;
 #else
@@ -139,7 +170,8 @@ SimulatorInit createPistonEngineSimulator(
     const std::string& scriptPath,
     const std::string& assetBasePath,
     const ISimulatorConfig& config,
-    ILogging* logger)
+    ILogging* logger,
+    bool useTorqueConverter)
 {
     std::string name;
     std::unique_ptr<Simulator> sim;
@@ -150,8 +182,8 @@ SimulatorInit createPistonEngineSimulator(
         name = "PistonEngine";
     } else {
         LoadedSimulation loaded = endsWith(scriptPath, ".json")
-            ? loadPresetSimulation(scriptPath, assetBasePath)
-            : loadScriptSimulation(scriptPath, assetBasePath);
+            ? loadPresetSimulation(scriptPath, assetBasePath, useTorqueConverter)
+            : loadScriptSimulation(scriptPath, assetBasePath, useTorqueConverter);
         sim = buildPistonEngineSimulator(std::move(loaded), config, logger);
         name = std::filesystem::path(scriptPath).stem().string();
     }
@@ -173,6 +205,12 @@ static void initSimulator(Simulator* sim, const ISimulatorConfig& config) {
     sim->setSimulationFrequency(config.simulationFrequency);
     sim->setFluidSimulationSteps(config.fluidSimulationSteps);
     sim->setTargetSynthesizerLatency(config.targetSynthesizerLatency);
+    sim->setPacedReplay(config.pacedReplay);
+
+    // Wire --span-tame into the synthesizer's AudioParameters before any
+    // renderAudio call happens. 0.0 (default/off) writes 0.0f, which the
+    // renderAudio path treats as "skip shape() entirely" for bit-identity.
+    SimulatorInitHelpers::applySpanTame(sim, config.spanTame);
 }
 
 static bool endsWith(std::string_view str, std::string_view suffix) {
@@ -191,7 +229,8 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
     const std::string& assetBasePath,
     const ISimulatorConfig& config,
     ILogging* logger,
-    telemetry::ITelemetryWriter* /*telemetryWriter*/)
+    telemetry::ITelemetryWriter* /*telemetryWriter*/,
+    bool useTorqueConverter)
 {
     SimulatorInit simInit;
     switch (type) {
@@ -200,7 +239,7 @@ std::unique_ptr<ISimulator> SimulatorFactory::create(
             break;
 
         case SimulatorType::PistonEngine:
-            simInit = createPistonEngineSimulator(scriptPath, assetBasePath, config, logger);
+            simInit = createPistonEngineSimulator(scriptPath, assetBasePath, config, logger, useTorqueConverter);
             break;
 
         default:
@@ -271,9 +310,10 @@ std::unique_ptr<ISimulator> SimulatorFactory::createAndConfigure(
     const std::string& scriptPath,
     const std::string& assetBasePath,
     ILogging* logger,
-    telemetry::ITelemetryWriter* telemetryWriter)
+    telemetry::ITelemetryWriter* telemetryWriter,
+    bool useTorqueConverter)
 {
-    auto sim = create(config.simulatorType, scriptPath, assetBasePath, config.engineConfig, logger, telemetryWriter);
+    auto sim = create(config.simulatorType, scriptPath, assetBasePath, config.engineConfig, logger, telemetryWriter, useTorqueConverter);
     configureLoadTorque(sim.get(), config.targetLoad, logger);
     return sim;
 }

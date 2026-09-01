@@ -463,3 +463,48 @@ TEST(CrankingControllerTest, Step_CrankingWithCatchRPM_ReturnsRunningDecision) {
     EXPECT_GT(decision.effectiveThrottle, 0.0);  // Partial throttle during cranking
     EXPECT_LT(decision.effectiveThrottle, 1.0);
 }
+
+// ============================================================================
+// Bump-start: Stopped + ignition + spinning above the catch bar -> Running
+// (push-start semantics — the drivetrain drags a Stopped engine; it fires
+// without the starter. Starter path stays for true standstill.)
+// ============================================================================
+
+TEST(CrankingControllerTest, Step_StoppedSpinningWithIgnition_BumpStartsToRunning) {
+    CrankingController controller;
+    StubEngine engine;
+    engine.phase_ = EnginePhase::Stopped;
+    engine.stats_.currentRPM = 1200.0;  // > MIN_CATCH_RPM (500), wheel-dragged
+
+    auto decision = controller.step(engine, 0.5, true);
+
+    EXPECT_EQ(decision.targetPhase, EnginePhase::Running);
+    EXPECT_TRUE(decision.isTransition);
+    EXPECT_FALSE(decision.starterMotor);  // push-start: no starter
+}
+
+TEST(CrankingControllerTest, Step_StoppedSpinningIgnitionOff_StaysStopped) {
+    CrankingController controller;
+    StubEngine engine;
+    engine.phase_ = EnginePhase::Stopped;
+    engine.stats_.currentRPM = 1200.0;
+
+    auto decision = controller.step(engine, 0.5, false);
+
+    EXPECT_EQ(decision.targetPhase, EnginePhase::Stopped);
+    EXPECT_FALSE(decision.isTransition);
+    EXPECT_FALSE(decision.starterMotor);
+}
+
+TEST(CrankingControllerTest, Step_StoppedAtStandstill_StaysStopped) {
+    CrankingController controller;
+    StubEngine engine;
+    engine.phase_ = EnginePhase::Stopped;
+    engine.stats_.currentRPM = 100.0;  // < MIN_CATCH_RPM: starter territory
+
+    auto decision = controller.step(engine, 0.5, true);
+
+    EXPECT_EQ(decision.targetPhase, EnginePhase::Stopped);
+    EXPECT_FALSE(decision.isTransition);
+    EXPECT_FALSE(decision.starterMotor);
+}

@@ -8,6 +8,7 @@
 #include <iostream>
 #include <unistd.h>
 
+#include "common/AssetResolver.h"
 #include "common/PresetExceptions.h"
 
 namespace script_compile_helpers {
@@ -105,6 +106,15 @@ inline std::optional<std::filesystem::path> findEngineSimRoot(
         if (fs::exists(resolvedAssetPathFs / "sound-library") &&
             fs::exists(resolvedAssetPathFs.parent_path() / "es" / "engine_sim.mr")) {
             return resolvedAssetPathFs.parent_path();
+        }
+    }
+
+    // Exe-aware fallback: probe the standard search roots (exe dir -> repo
+    // root -> cwd) for a directory carrying the engine-sim library so scripts
+    // staged outside the tree (e.g. a /tmp copy) still compile.
+    for (const auto& root : asset_resolver::searchRoots()) {
+        if (fs::exists(root / "es" / "engine_sim.mr")) {
+            return root;
         }
     }
 

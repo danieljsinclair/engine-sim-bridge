@@ -28,6 +28,15 @@ public:
 
     /// Set the stop time in seconds. -1 disables the clamp (play to end).
     virtual void setEndAtS(double s) = 0;
+
+    /// Start offset in seconds. -1 = disabled (play from 0). For FILE traces
+    // (durationS() >= 0) the loop primes an instant arrival state (bounded
+    // settle at the HELD arrival row — no pre-offset row is ever simulated;
+    // see SimulationLoop::settleAtArrivalPoint + IArrivalStatePrimer); live
+    // streams (durationS() < 0) implement the instant contract inside their
+    // provider instead (prime + display offset, unpaced prefix discard — see
+    // LiveTelemetryProvider).
+    virtual double getStartFromS() const = 0;
 };
 
 } // namespace input

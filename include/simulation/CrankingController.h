@@ -28,6 +28,15 @@ public:
 
     void reset();
 
+    // The engine's own Running->Stopped latch bar (step() flips the phase to
+    // Stopped below this rpm). Public because the twin's restart-on-stall
+    // detector must key its stall signal on the SAME bar: a stall threshold
+    // above this fires the one-tick starter edge while the phase is still
+    // Running, engageStarter() ignores the button (no Running case), and the
+    // retry cooldown then suppresses the pulse for exactly the window in
+    // which the phase IS Stopped — a dead engine that never recranked.
+    static constexpr double STOPPED_RPM = 5.0;
+
 private:
     int ticks_ = 0;
 
@@ -35,7 +44,6 @@ private:
     static constexpr int ROLLOVER_FALLBACK_TICKS = 3;
     static constexpr double CATCH_RATIO = 2.0;
     static constexpr double MIN_CATCH_RPM = 500.0;
-    static constexpr double STOPPED_RPM = 5.0;
 
     double exhaustFlowSum_ = 0.0;
     double exhaustFlowBaseline_ = 0.0;

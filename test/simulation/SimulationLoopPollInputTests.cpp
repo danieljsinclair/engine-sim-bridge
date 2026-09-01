@@ -102,8 +102,28 @@ public:
         return BridgeSimulator::setGear(gear);
     }
 
+    // Model a RESTING engine: 0 rpm until the starter has engaged. The sine
+    // stub reports 800rpm from birth (throttle-0 floor), so without this the
+    // cranking controller's bump-start (Stopped + ignition + spinning above
+    // the catch bar -> Running) consumes the start before the null-provider's
+    // first-tick starter press arrives — a Running engine ignores the button,
+    // and the starter-press plumbing this test exists to verify goes silent.
+    // A real pre-start engine sits at 0 rpm; the starter spins it to the
+    // stub's 800rpm floor, from which the catch proceeds as before.
+    EngineSimStats getStats() const override {
+        EngineSimStats stats = BridgeSimulator::getStats();
+        if (!starterEngagedOnce_) stats.currentRPM = 0.0;
+        return stats;
+    }
+
+    void applyTransition(const TransitionDecision& decision) override {
+        if (decision.starterMotor) starterEngagedOnce_ = true;
+        BridgeSimulator::applyTransition(decision);
+    }
+
 private:
     Calls* calls_;
+    mutable bool starterEngagedOnce_ = false;
 };
 
 class RecordingTelemetryWriter : public ITelemetryWriter {

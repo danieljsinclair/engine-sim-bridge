@@ -24,6 +24,17 @@ struct TwinOutput {
     // transmission input so the solver integrates road speed from it. 0.0 in
     // FREE/PIN (no injection — a true no-op on the rotating mass).
     double drivetrainInputTorqueNm = 0.0;
+    // Diagnostics (surfaced to presentation for the inline clutch readout and
+    // the CSV-out spelunking path). roadImpliedRpm is the RPM the engine would
+    // be at if locked to the wheels in the current gear; creepReliefFired is
+    // true on the frame the creep-drag relief opened the clutch (pressure 0).
+    double roadImpliedRpm = 0.0;
+    bool creepReliefFired = false;
+    // Which coupling model produced clutchPressure: true = torque-converter
+    // (the number is the fluid coupling engagement), false = clutch-map or
+    // legacy (friction-clutch pressure). Drives the display label so the
+    // readout says what the number actually is.
+    bool couplingIsTorqueConverter = false;
 };
 
 }

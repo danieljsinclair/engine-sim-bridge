@@ -54,6 +54,10 @@ public:
 
     EngineInput buildEngineInput(double dt) override;
 
+    // Did the keyboard touch the throttle this frame? (set/adjust/momentary).
+    // Used by OverlayInputProvider to decide whether keyboard overrides CSV throttle.
+    bool wasThrottleTouched() const { return throttleTouched_; }
+
     // Forward simulator feedback to the speed enhancer (twin/gearbox) when present.
     void provideFeedback(const EngineSimStats& stats) override;
 

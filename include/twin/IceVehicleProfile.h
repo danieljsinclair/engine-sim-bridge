@@ -41,10 +41,40 @@ struct IceVehicleProfile {
     double tipOutGradientThreshold = -10.0;  // %/s negative gradient blocks upshifts
     double tipInhibitWindowS = 0.4;          // transient upshift-inhibit after a tip event
     double redlineRpm = 6500.0;
-    double idleRpm = 750.0;
+    double idleRpm = 950.0;   // C63 M156 V3 emergent idle (measured ~930-990, NOT the stale .mr "400-600")
     double throttleIdleThreshold = 0.05;     // IDLE → RUNNING transition (5%)
     double idleThrottle = 0.0;               // No throttle injection — engine idles on physics alone
     double standstillThresholdKmh = 1.0;     // Below this speed = standstill
+    // Creep-drag relief ceiling (vehicle-speed gate). Below this road speed a
+    // coupling that pins the wheels to the road (PIN) opens the clutch so the
+    // engine idles decoupled instead of being lugged by 1st-gear road-implied
+    // RPM (the creep-lug bug). Covers the FULL creep regime — raised from the
+    // old standstill-only 1.0 km/h, which left 1-3 mph lugged. reconfigureProfile
+    // sets this to the road speed at which 1st-gear road-implied RPM reaches
+    // idle (so it is always coherent with the actual ratios); the default keeps
+    // the prior near-standstill behaviour for non-reconfigured profiles.
+    double creepReliefThresholdKmh = 5.0;
+
+    // ---- Declarative shift-decision thresholds (no magic constants in logic) ----
+    // Lug guard: the box downshifts whenever the ACTUAL engine RPM in the current
+    // gear drops below max(idleRpm + lugFloorMarginRpm, downshiftRpmFloor). The
+    // idle+margin term is the always-on hard floor (keeps the engine above idle
+    // under load); downshiftRpmFloor is an optional higher override (tests/profiling).
+    // 0 = no override → floor is just idle + margin.
+    double downshiftRpmFloor = 0.0;          // optional override floor (0 = idle+margin only)
+    double lugFloorMarginRpm = 150.0;        // keep engine >= idle + this margin
+    // RPM at/below which the engine is considered STOPPED (or feedback unwired).
+    // A stopped engine (0 rpm) must NOT be treated as lugging — that pinned the
+    // box in 1st every frame. The stall/restart path owns the stopped case.
+    double engineStoppedRpm = 30.0;
+    // Redline safety nets (fractions of redlineRpm) — declarative, not hardcoded.
+    double redlineUpshiftFraction = 0.95;    // upshift when speed-implied RPM > 0.95×redline
+    double redlineKickdownFraction = 0.90;   // kickdown never drops into a gear > 0.90×redline
+    // Torque-hint bounds (consumed by SimTorqueHint). The bias is a signed
+    // throttle-equivalent nudge capped to ±torqueHintMaxBias, saturated at
+    // torqueHintMaxNm. Zero torque → zero bias (NullTorqueHint).
+    double torqueHintMaxNm = 3000.0;
+    double torqueHintMaxBias = 0.15;
 
     IceVehicleProfile() = default;
 
@@ -99,13 +129,13 @@ struct IceVehicleProfile {
             {11, 17, 26, 32, 42, 54, 64},    // 5%
             {15, 22, 33, 41, 54, 69, 82},    // 15%
             {19, 28, 42, 53, 69, 88, 105},   // 25%
-            {23, 35, 52, 65, 85, 110, 130},  // 40%
-            {29, 43, 64, 81, 105, 136, 161}, // 55%
-            {35, 52, 77, 97, 126, 163, 194},// 70%
-            {40, 59, 88, 110, 143, 185, 220},// 80%
-            {44, 65, 97, 122, 159, 205, 244},// 90%
-            {46, 68, 102, 128, 167, 215, 256},// 95%
-            {48, 71, 106, 134, 174, 225, 268} // 100% (~85% redline)
+            {23, 35, 52, 65, 85, 95, 110},   // 40%
+            {29, 43, 64, 81, 105, 118, 138}, // 55%
+            {35, 52, 77, 97, 126, 143, 170}, // 70%
+            {40, 59, 88, 110, 143, 162, 193},// 80%
+            {44, 65, 97, 122, 159, 180, 213},// 90%
+            {46, 68, 102, 128, 167, 188, 224},// 95%
+            {48, 71, 106, 134, 174, 198, 235} // 100% (~85% redline)
         };
 
         // Separate downshift table
@@ -159,7 +189,7 @@ struct IceVehicleProfile {
 
         // Engine parameters
         p.redlineRpm = 6500.0;
-        p.idleRpm = 750.0;
+        p.idleRpm = 950.0;
         p.throttleIdleThreshold = 0.05;
         p.idleThrottle = 0.0;
         p.standstillThresholdKmh = 1.0;

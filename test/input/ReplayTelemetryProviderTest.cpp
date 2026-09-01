@@ -452,17 +452,21 @@ TEST_F(ReplayTelemetryProviderTest, ManualClutchPctPropagates) {
     EXPECT_DOUBLE_EQ(input.clutchPressure, 0.5);
 }
 
-TEST_F(ReplayTelemetryProviderTest, TimeSlicingStartFromSkipsEarlySamples) {
-    // startFromS=0.5 => the clock starts at 0.5s, so the first sample shown is
-    // the one at t=0.5 (the floor of 0.5 in [0.0, 0.5, 1.0]).
+TEST_F(ReplayTelemetryProviderTest, TimeSlicingStartFromClockStartsAtZero) {
+    // startFromS=0.5 is owned by the loop-side warm-start prefix
+    // (SimulationLoop::run), NOT by the provider. The provider clock starts at 0
+    // and advances by dt each frame -- there is no cold-jump/teleport to
+    // startFromS. So the first OnUpdateSimulation samples the t=0 row.
     makeProvider("time_s,throttle_pct\n0.0,10.0\n0.5,50.0\n1.0,90.0\n");
     ASSERT_TRUE(provider_->Initialize());
     wireDefault();
     provider_->setStartFromS(0.5);
 
     EngineInput input = provider_->OnUpdateSimulation(0.016);
-    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 0.5);
-    EXPECT_DOUBLE_EQ(input.throttle, 0.5);
+    // Provider clock is at the t=0 sample (no cold-jump): timestamp 0.0,
+    // throttle 10% -> 0.10.
+    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 0.0);
+    EXPECT_DOUBLE_EQ(input.throttle, 0.10);
 }
 
 TEST_F(ReplayTelemetryProviderTest, TimeSlicingEndAtStopsSession) {
@@ -472,12 +476,17 @@ TEST_F(ReplayTelemetryProviderTest, TimeSlicingEndAtStopsSession) {
     wireDefault();
     provider_->setEndAtS(0.25);
 
-    // Advance to ~0.2s (before the cutoff): no stop yet.
+    // Advance to ~0.2s (before the cutoff): no stop yet, no --end-at claim.
     advanceSeconds(0.2);
     const int stopsBefore = session_.stopCount();
+    EXPECT_FALSE(provider_->endAtReached())
+        << "Before the bound the provider must not claim an --end-at stop.";
     // Advance past 0.25s: stop should now fire.
     advanceSeconds(0.1);
     EXPECT_GT(session_.stopCount(), stopsBefore);
+    EXPECT_TRUE(provider_->endAtReached())
+        << "The bound that stopped the session must be reported so the CLI can "
+           "print the honest stop reason (not the full trace length).";
 }
 
 // ===========================================================================
@@ -597,4 +606,393 @@ TEST_F(ReplayTelemetryProviderTest, ReconfigureProfileValidRatiosGeneratesShiftT
     EngineInput input = provider_->OnUpdateSimulation(0.016);
     EXPECT_TRUE(input.gearAutoMode);
     EXPECT_GT(input.gearAbsolute, 0);
+}
+
+// ===========================================================================
+// Group N: PIN-coupling compliance (--pin-tau-ms) on the replay path
+// ===========================================================================
+namespace {
+
+// A road-speed staircase at the measured CAN cadence: a new held level every
+// 0.181 s, +0.9 km/h per level (the "piano keys" signal the chase smooths).
+std::string staircaseCsv(int levels) {
+    std::string csv = "time_s,speed_kmh,gear_selector\n";
+    for (int level = 0; level <= levels; ++level) {
+        csv += std::to_string(level * 0.181) + "," +
+               std::to_string(level * 0.9) + ",D\n";
+    }
+    return csv;
+}
+
+}  // namespace
+
+TEST_F(ReplayTelemetryProviderTest, PinTauSetBeforeInitializeChasesCsvStaircase) {
+    // The CLI sets --pin-tau-ms BEFORE Initialize() (the twin provider is
+    // created inside Initialize), so the value must be STORED and applied to
+    // the twin then. PIN mode + tau=150: the surfaced vehicleSpeedTargetKmh
+    // glides between held levels instead of stepping the full 0.9 km/h.
+    makeProvider(staircaseCsv(25), true, true);
+    provider_->setWheelCouplingMode(twin::WheelCouplingMode::Pin);
+    provider_->setPinTauMs(150.0);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    double maxJump = 0.0;
+    double prev = -1.0;
+    for (int i = 0; i < 300; ++i) {
+        const EngineInput in = provider_->OnUpdateSimulation(0.016);
+        if (in.vehicleSpeedTargetKmh >= 0.0 && prev >= 0.0) {
+            maxJump = std::max(maxJump, std::abs(in.vehicleSpeedTargetKmh - prev));
+        }
+        if (in.vehicleSpeedTargetKmh >= 0.0) prev = in.vehicleSpeedTargetKmh;
+    }
+    // Sanity: the pin engaged at all.
+    ASSERT_GE(prev, 0.0) << "PIN mode must surface a pin target during the drive";
+    EXPECT_LT(maxJump, 0.45)
+        << "per-frame pin jumps must stay well under the 0.9 km/h CSV step";
+}
+
+TEST_F(ReplayTelemetryProviderTest, PinTauZeroReplayIsRigid) {
+    makeProvider(staircaseCsv(8), true, true);
+    provider_->setWheelCouplingMode(twin::WheelCouplingMode::Pin);
+    provider_->setPinTauMs(0.0);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    // tau=0: every surfaced pin target equals a held CSV level EXACTLY (the
+    // rigid pin). Collect the distinct levels seen and verify each matches
+    // n*0.9 to the digit (never an in-between chase value).
+    bool sawPin = false;
+    for (int i = 0; i < 150; ++i) {
+        const EngineInput in = provider_->OnUpdateSimulation(0.016);
+        if (in.vehicleSpeedTargetKmh < 0.0) continue;
+        sawPin = true;
+        const double level = in.vehicleSpeedTargetKmh / 0.9;
+        EXPECT_NEAR(level, std::round(level), 1e-9)
+            << "tau=0 must surface only exact held CSV levels, got "
+            << in.vehicleSpeedTargetKmh;
+    }
+    ASSERT_TRUE(sawPin);
+}
+
+// ===========================================================================
+// Group 6: Start/stop opinion wiring (brake_light + gear_selector)
+//
+// Mirrors the live provider's CsvBrakeLightColumn_* tests
+// (LiveTelemetryProviderTest.cpp): replay must surface the same telemetry
+// opinions so SimulationLoop::applyStartStopDecision cannot tell the sources
+// apart and VehicleStartController runs in replay exactly as it does live.
+// ===========================================================================
+
+TEST_F(ReplayTelemetryProviderTest, BrakeLightColumn_PopulatesEngineInput) {
+    // The brake_light column reaches EngineInput.brakeLight with its tri-state
+    // intact (1 -> true, 0 -> false, blank -> nullopt) and never writes the
+    // physics level. SimulationLoop reads the PRESENCE of the value as
+    // "telemetry reported an opinion", which is what hands start/stop
+    // authority to VehicleStartController in replay.
+    makeProvider(
+        "time_s,throttle_pct,brake_light\n"
+        "0.0,10,1\n"
+        "1.0,10,1\n"
+        "2.0,20,0\n"
+        "3.0,20,0\n"
+        "4.0,30,\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    // t~0.5 (floor sample t=0.0): brake_light=1 -> true.
+    const EngineInput on = advanceSeconds(0.5);
+    ASSERT_TRUE(on.brakeLight.has_value());
+    EXPECT_TRUE(*on.brakeLight);
+    EXPECT_DOUBLE_EQ(on.brakeLevel, 0.0)
+        << "CSV brake light is an indicator — it must never write the physics level";
+
+    // t~2.5 (floor sample t=2.0): brake_light=0 -> false.
+    const EngineInput off = advanceSeconds(2.0);
+    ASSERT_TRUE(off.brakeLight.has_value());
+    EXPECT_FALSE(*off.brakeLight);
+    EXPECT_DOUBLE_EQ(off.brakeLevel, 0.0);
+
+    // t~4.5 (floor sample t=4.0): blank cell -> nullopt (opinion withdrawn).
+    const EngineInput absent = advanceSeconds(2.0);
+    EXPECT_FALSE(absent.brakeLight.has_value());
+}
+
+TEST_F(ReplayTelemetryProviderTest, BrakeLightColumnAbsent_LeavesNullopt) {
+    // Old-schema regression guard: no brake_light column => the provider emits
+    // NO brake opinion (nullopt) on every frame, exactly as before the wiring.
+    // nullopt is what keeps SimulationLoop's assembly point deriving the light
+    // from the keyboard brake level instead of telemetry.
+    makeProvider("time_s,throttle_pct\n0.0,50\n1.0,50\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    const EngineInput input = advanceSeconds(0.5);
+    EXPECT_FALSE(input.brakeLight.has_value());
+    EXPECT_DOUBLE_EQ(input.brakeLevel, 0.0);
+}
+
+TEST_F(ReplayTelemetryProviderTest, BrakeLightPopulatedInAutoGearboxModeToo) {
+    // The brake light is gearbox-agnostic: it flows through the base input on
+    // the auto-gearbox path exactly as on the manual path.
+    makeProvider("time_s,brake_light,speed_kmh,gear_selector\n0.0,1,0.0,P\n",
+                 /*autoStart=*/true, /*autoGearbox=*/true);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    ASSERT_TRUE(input.brakeLight.has_value());
+    EXPECT_TRUE(*input.brakeLight);
+}
+
+TEST_F(ReplayTelemetryProviderTest, GearSelectorColumn_MapsPRNDLInManualMode) {
+    // vehicle-sim's decoded schema carries gear_selector (PRNDL) and NO numeric
+    // gear column. In manual mode the selector must drive
+    // EngineInput.gearSelector — the field applyStartStopDecision reads to
+    // compute driveSelected — through the full P/R/N/D alphabet. Blank cells
+    // (the capture's bus-wakeup preamble) fall back to NEUTRAL.
+    makeProvider(
+        "time_s,gear_selector\n"
+        "0.0,\n"
+        "1.0,P\n"
+        "2.0,R\n"
+        "3.0,N\n"
+        "4.0,D\n",
+        /*autoStart=*/true, /*autoGearbox=*/false);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EXPECT_EQ(advanceSeconds(0.5).gearSelector, static_cast<int>(GearSelector::NEUTRAL));
+    EXPECT_EQ(advanceSeconds(1.0).gearSelector, static_cast<int>(GearSelector::PARK));
+    EXPECT_EQ(advanceSeconds(1.0).gearSelector, static_cast<int>(GearSelector::REVERSE));
+    EXPECT_EQ(advanceSeconds(1.0).gearSelector, static_cast<int>(GearSelector::NEUTRAL));
+
+    const EngineInput drive = advanceSeconds(1.0);
+    EXPECT_EQ(drive.gearSelector, static_cast<int>(GearSelector::DRIVE));
+    EXPECT_EQ(drive.gearAbsolute, -1);  // numeric gear column absent: unchanged sentinel
+    EXPECT_FALSE(drive.gearAutoMode);   // manual mode stays manual
+}
+
+TEST_F(ReplayTelemetryProviderTest, GearSelectorColumnAbsent_GearColumnStillDrivesSelector) {
+    // Old-schema regression guard: with no gear_selector column the numeric
+    // gear column keeps driving engineInput.gearSelector exactly as before
+    // (1..8 -> that gear, 0 -> NEUTRAL, blank/absent -> NEUTRAL).
+    makeProvider("time_s,gear\n0.0,3\n1.0,0\n2.0,\n", true, false);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EXPECT_EQ(advanceSeconds(0.5).gearSelector, 3);
+    EXPECT_EQ(advanceSeconds(1.0).gearSelector, static_cast<int>(GearSelector::NEUTRAL));
+    EXPECT_EQ(advanceSeconds(1.0).gearSelector, static_cast<int>(GearSelector::NEUTRAL));
+}
+
+TEST_F(ReplayTelemetryProviderTest, GearSelectorBeatsNumericGearWhenBothPresent) {
+    // When both columns exist the PRNDL selector is authoritative for
+    // gearSelector (it is the driver's command; the numeric column is the
+    // gearbox's output). The numeric column still drives gearAbsolute.
+    makeProvider("time_s,gear,gear_selector\n0.0,2,D\n", true, false);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_EQ(input.gearSelector, static_cast<int>(GearSelector::DRIVE));
+    EXPECT_EQ(input.gearAbsolute, 2);
+}
+
+TEST_F(ReplayTelemetryProviderTest, AutoStartSuppressedWhenTraceCarriesBrakeLight) {
+    // A capture with start/stop opinion columns describes the full vehicle
+    // lifecycle: VehicleStartController owns every start (it engages in
+    // SimulationLoop as soon as the opinion is seen), so the frame-0 autoStart
+    // pulse must NOT fire — it would crank before the first real brake/gear
+    // event and then be cut mid-run when the controller takes authority.
+    makeProvider("time_s,brake_light\n0.0,0\n1.0,0\n", /*autoStart=*/true, false);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EXPECT_FALSE(provider_->OnUpdateSimulation(0.016).starterButton);
+    EXPECT_FALSE(provider_->OnUpdateSimulation(0.016).starterButton);
+}
+
+TEST_F(ReplayTelemetryProviderTest, AutoStartSuppressedWhenTraceCarriesGearSelector) {
+    // Same suppression when the opinion column is gear_selector.
+    makeProvider("time_s,gear_selector\n0.0,P\n1.0,P\n", /*autoStart=*/true, false);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EXPECT_FALSE(provider_->OnUpdateSimulation(0.016).starterButton);
+}
+
+// ===========================================================================
+// Group 8: steering-angle echo (display-only) on the replay path
+//
+// The CSV steering_angle_deg column is parsed into CsvSample.steeringAngleDeg
+// but the replay provider never echoed it to EngineInput — so the console
+// [Str: ...] readout never appeared on replay benches despite the data being
+// present. These tests pin the echo: the signed angle must surface verbatim
+// into EngineInput.steeringAngleDeg on the frame where the sample is served.
+// ===========================================================================
+
+TEST_F(ReplayTelemetryProviderTest, SteeringAngleColumn_SurfacesInEngineInput) {
+    // A trace carrying steering_angle_deg must surface the signed angle on
+    // EngineInput (display-only — never touches physics). Verbatim, no clamp.
+    makeProvider(
+        "time_s,steering_angle_deg\n"
+        "0.0,-12.5\n"
+        "1.0,3.9\n",
+        /*autoStart=*/true, /*autoGearbox=*/false);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    const EngineInput first = advanceSeconds(0.5);  // floor sample t=0.0
+    ASSERT_TRUE(first.steeringAngleDeg.has_value())
+        << "replay steering angle must surface on EngineInput";
+    EXPECT_DOUBLE_EQ(*first.steeringAngleDeg, -12.5);
+
+    const EngineInput second = advanceSeconds(1.0);  // floor sample t=1.0
+    ASSERT_TRUE(second.steeringAngleDeg.has_value());
+    EXPECT_DOUBLE_EQ(*second.steeringAngleDeg, 3.9);
+}
+
+TEST_F(ReplayTelemetryProviderTest, SteeringAngleColumn_Absent_StaysNullopt) {
+    // No steering column => EngineInput.steeringAngleDeg stays nullopt on
+    // every frame (non-DBC sources render nothing — no fake zero).
+    makeProvider("time_s,throttle_pct\n0.0,50\n1.0,60\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    const EngineInput input = advanceSeconds(0.5);
+    EXPECT_FALSE(input.steeringAngleDeg.has_value());
+}
+
+TEST_F(ReplayTelemetryProviderTest, SteeringAngleColumn_BlankCell_StaysNullopt) {
+    // A blank steering cell on an otherwise valid row must be absent (nullopt),
+    // not guessed as zero.
+    makeProvider(
+        "time_s,steering_angle_deg\n"
+        "0.0,\n"
+        "1.0,5.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    const EngineInput blank = advanceSeconds(0.5);  // floor sample t=0.0 (blank)
+    EXPECT_FALSE(blank.steeringAngleDeg.has_value());
+}
+
+
+// ===========================================================================
+// Group 7: Instant --start-from (IArrivalStatePrimer contract)
+//
+// The owner contract: rows before --start-from are NEVER simulated. The loop
+// asks the provider to PRIME the arrival state (twin warm-boot seeded from
+// the arrival row + clock anchored on it) and HOLD that row as the constant
+// synthetic input while the engine core settles; on release the trace plays
+// from the arrival row onward. These tests drive the provider directly.
+// ===========================================================================
+
+TEST_F(ReplayTelemetryProviderTest, PrimeAnchorsClockOnArrivalRow) {
+    // After primeArrivalState() the replay clock cold-jumps to the FIRST row
+    // at/after the offset and the held poll returns that row — no pre-offset
+    // row is ever sampled.
+    makeProvider("time_s,throttle_pct\n0.0,10.0\n0.5,50.0\n10.0,60.0\n11.0,70.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(10.0);
+    provider_->primeArrivalState();
+
+    EXPECT_TRUE(provider_->arrivalHoldActive());
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 10.0);
+    EXPECT_DOUBLE_EQ(input.throttle, 0.60);
+}
+
+TEST_F(ReplayTelemetryProviderTest, PrimeHoldsArrivalRowAcrossPolls) {
+    // While held, repeated polls keep returning the SAME arrival row: the
+    // settle window must see a constant operating point, not advancing rows.
+    makeProvider("time_s,throttle_pct\n0.0,10.0\n10.0,60.0\n10.5,65.0\n11.0,70.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(10.0);
+    provider_->primeArrivalState();
+
+    for (int i = 0; i < 100; ++i) {  // ~1.6s of settle polls
+        const EngineInput input = provider_->OnUpdateSimulation(0.016);
+        EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 10.0) << "poll " << i;
+        EXPECT_DOUBLE_EQ(input.throttle, 0.60) << "poll " << i;
+    }
+}
+
+TEST_F(ReplayTelemetryProviderTest, ArrivalRowIsFirstAtOrAfterOffset) {
+    // An offset that falls BETWEEN rows anchors on the LATER row (the first
+    // row at/after the offset), never the floor row before it.
+    makeProvider("time_s,throttle_pct\n0.0,10.0\n10.0,60.0\n10.4,64.0\n11.0,70.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(10.2);
+    provider_->primeArrivalState();
+
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 10.4);
+    EXPECT_DOUBLE_EQ(input.throttle, 0.64);
+}
+
+TEST_F(ReplayTelemetryProviderTest, ReleaseResumesAdvanceFromArrivalRow) {
+    // After releaseArrivalHold() the clock resumes advancing from the arrival
+    // row and later rows are reached — the hold is not a permanent latch.
+    makeProvider("time_s,throttle_pct\n0.0,10.0\n10.0,60.0\n10.3,63.0\n10.6,66.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(10.0);
+    provider_->primeArrivalState();
+    (void)provider_->OnUpdateSimulation(0.016);  // one held poll
+
+    provider_->releaseArrivalHold();
+    EXPECT_FALSE(provider_->arrivalHoldActive());
+
+    // Advance ~0.64s past the arrival row: the clock moves past 10.0 and the
+    // 10.6 row (throttle 66%) is reached.
+    bool sawLateRow = false;
+    for (int i = 0; i < 40; ++i) {
+        const EngineInput input = provider_->OnUpdateSimulation(0.016);
+        if (provider_->currentTimestampS() >= 10.6 - 1e-9) {
+            sawLateRow = true;
+            EXPECT_DOUBLE_EQ(input.throttle, 0.66);
+        }
+        EXPECT_GE(provider_->currentTimestampS(), 10.0 - 1e-9);  // never rewinds
+    }
+    EXPECT_TRUE(sawLateRow);
+}
+
+TEST_F(ReplayTelemetryProviderTest, PrimeWithoutOffsetIsNoOp) {
+    // from-0 runs never prime: without an offset, primeArrivalState() must
+    // not move the clock or sample anything but the t=0 row.
+    makeProvider("time_s,throttle_pct\n0.0,10.0\n1.0,50.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(-1.0);
+    provider_->primeArrivalState();
+
+    EXPECT_FALSE(provider_->arrivalHoldActive());
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 0.0);
+    EXPECT_DOUBLE_EQ(input.throttle, 0.10);
+}
+
+TEST_F(ReplayTelemetryProviderTest, PrimeSeedsTwinWithArrivalRowValues) {
+    // The twin warm-boot is seeded from the ARRIVAL row's operating point
+    // (speed/throttle), not the first row's: a DRIVE trace arriving at road
+    // speed must expose a vehicle-speed pin at that speed on the FIRST held
+    // poll (the twin is RUNNING, wheels pinned).
+    makeProvider("time_s,throttle_pct,road_speed_kmh,gear_selector\n"
+                 "0.0,5.0,0.0,P\n10.0,40.0,60.0,D\n11.0,40.0,60.0,D\n",
+                 /*autoStart=*/true, /*autoGearbox=*/true);
+    provider_->setWheelCouplingMode(twin::WheelCouplingMode::Pin);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(10.0);
+    provider_->primeArrivalState();
+
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(input.replayTimestampS, 10.0);
+    // PIN coupling surfaces the CSV road speed as the vehicle-speed target.
+    EXPECT_NEAR(input.vehicleSpeedTargetKmh, 60.0, 1e-6);
 }

@@ -31,8 +31,11 @@ struct AudioBufferConfig {
 
 // Audio mode enumeration
 enum class AudioMode {
-    Threaded,    // Cursor-chasing mode with separate audio thread
-    SyncPull     // Lock-step mode where simulation advances with audio playback
+    Threaded,      // Cursor-chasing mode with separate audio thread
+    SyncPull,      // Lock-step mode where simulation advances with audio playback
+    Deterministic  // Headless fixed-timestep mode: simulation advances on the
+                   // loop thread at the fixed update interval; no audio
+                   // callback thread, no wall-clock dependence (replay/gate)
 };
 
 /**

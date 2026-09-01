@@ -56,7 +56,8 @@ public:
         const std::string& assetBasePath,
         const ISimulatorConfig& config,
         ILogging* logger = nullptr,
-        telemetry::ITelemetryWriter* /*telemetryWriter*/ = nullptr);
+        telemetry::ITelemetryWriter* /*telemetryWriter*/ = nullptr,
+        bool useTorqueConverter = false);
 
     static SimulatorType getDefaultType();
 
@@ -81,7 +82,8 @@ public:
         const std::string& scriptPath,
         const std::string& assetBasePath,
         ILogging* logger,
-        telemetry::ITelemetryWriter* telemetryWriter);
+        telemetry::ITelemetryWriter* telemetryWriter,
+        bool useTorqueConverter = false);
 
     /**
      * Discover preset paths and find current index.

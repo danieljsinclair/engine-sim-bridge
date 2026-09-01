@@ -3,6 +3,7 @@
 		check test test-core test-isomorphism test-deep test-reset \
 		presets clean-presets \
 		sonar-clean coverage-clean coverage-run coverage-summary sonar-summary test-nosonar \
+	sonar-scan-soft \
 		summary
 
 BUILD_DIR ?= build
@@ -139,7 +140,7 @@ clean-test-fixtures:
 # --label "[engine-sim-bridge]", sonar-summary prints its own === headers), so
 # no procedural echo/banner wrapper is needed under test: itself. `summary`
 # (the end-of-make headline) is the LAST prereq so it is the final output.
-test: test-core test-deep sonar-scan coverage-summary sonar-summary summary
+test: test-core test-deep coverage-summary summary
 
 # Order-only reset of the combined ctest summary log. Both ctest tiers depend
 # on this so the log is empty at the start of a `make test` regardless of
@@ -217,13 +218,29 @@ sonar-scan: $(SONAR_REPORT)
 # writes SONAR_REPORT itself. The CE-poll block guarantees the report is only
 # cached after the Compute Engine has settled: under this file-stamp-gated model
 # a stale report would otherwise not self-correct until the next build change.
+# Derive -Dsonar.branch.name from the current git branch (worktree-aware).
+# In a worktree, git rev-parse --abbrev-ref HEAD returns the branch name of the
+# worktree, NOT "HEAD". In the main checkout it returns the checked-out branch.
+# If derivation fails (no git, detached HEAD with no branch, etc.), FAIL FAST —
+# never publish a branchless scan that overwrites SonarCloud master.
+# Master scans remain possible: on master, BRANCH derives to "master".
+BRANCH := $(shell git -C $$(dirname $(abspath $(firstword $(MAKEFILE_LIST)))) rev-parse --abbrev-ref HEAD 2>/dev/null)
+ifeq ($(BRANCH),)
+  $(error SONAR GUARD: cannot derive sonar.branch.name from git (no branch / no git). Refusing to publish a branchless scan.)
+endif
+ifeq ($(BRANCH),HEAD)
+  $(error SONAR GUARD: HEAD is detached — cannot derive a branch name. Check out a named branch before scanning.)
+endif
+SONAR_BRANCH_FLAG := -Dsonar.branch.name=$(BRANCH)
+
 $(SONAR_REPORT): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(BUILD_INPUTS)
 	@if [ -z "$${SONAR_TOKEN_ES}" ] && [ -z "$${SONAR_TOKEN}" ]; then \
 		echo "ERROR: Neither SONAR_TOKEN_ES nor SONAR_TOKEN is set. Run: source ~/.zshrc"; \
 		exit 1; \
 	fi
-	@echo "=== [engine-sim-bridge] Running Sonar scan ==="
+	@echo "=== [engine-sim-bridge] Running Sonar scan (branch: $(BRANCH)) ==="
 	@SONAR_TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}" sonar-scanner \
+		$(SONAR_BRANCH_FLAG) \
 		-Dsonar.coverageReportPaths=$(BUILD_COV_DIR)/coverage-sonar.xml \
 		-Dsonar.cfamily.compile-commands=$(BUILD_COV_DIR)/compile_commands.json \
 		> $(BUILD_COV_DIR)/sonar-scanner.log 2>&1; \

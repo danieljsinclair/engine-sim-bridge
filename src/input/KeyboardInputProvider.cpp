@@ -121,7 +121,10 @@ void KeyboardInputProvider::processDynoAndBrake() {
         target_->releaseDynoTorque();
     }
 
-    // Brake: level-triggered (keyDown), fire 0.0 on release edge
+    // Brake: level-triggered (keyDown), fire 0.0 on release edge. Writes the
+    // PHYSICS level only — the brake LIGHT derives from it at the single
+    // assembly point in SimulationLoop::step(), so a keyboard 'B' and a CSV
+    // brake_light=1 row converge on the same canonical signal downstream.
     if (keyHold_.isKeyDown('b')) {
         target_->setBrake(1.0);
     } else if (keyHold_.isKeyReleased('b')) {
