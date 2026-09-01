@@ -60,17 +60,6 @@ void cleanupPhysics(
 /// @param simulator        The simulator to initialize (must have loaded engine/synthesizer)
 void initializeConvolutionFilters(Simulator* simulator);
 
-/// Set the output-stage span-taming amount on the simulator's synthesizer
-/// (read-modify-write of AudioParameters — all other fields preserved).
-/// Called from the factory wiring path with ISimulatorConfig::spanTame so the
-/// --span-tame CLI arg reaches renderAudio. 0.0 = feature off (and a valid,
-/// non-throwing call — the explicit-off value must be applicable).
-/// SKELETON: declared only; the span-tame implementer provides the body.
-///
-/// @param simulator        The simulator whose synthesizer is configured
-/// @param spanTame         Taming amount, [0, 1]
-void applySpanTame(Simulator* simulator, float spanTame);
-
 } // namespace SimulatorInitHelpers
 
 #endif // ENGINE_SIM_BRIDGE_SIMULATOR_INIT_HELPERS_H

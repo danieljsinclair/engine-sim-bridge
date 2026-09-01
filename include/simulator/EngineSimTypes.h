@@ -117,13 +117,6 @@ struct ISimulatorConfig {
     double targetSynthesizerLatency = EngineSimDefaults::TARGET_SYNTH_LATENCY;
     float volume = 0.5f;           // Runtime-tunable default
     float convolutionLevel = 0.5f; // Runtime-tunable default
-    // Output-stage span taming amount (--span-tame CLI arg, [0,1], default 0
-    // = OFF = bit-identical audio). Flows to the synthesizer's
-    // AudioParameters.spanTame via SimulatorInitHelpers::applySpanTame at
-    // factory build time. See engine-sim include/span_tame.h for the pinned
-    // parameterization (soft-knee compressor + makeup + safety soft-clip,
-    // applied just before the int16 conversion in renderAudio).
-    float spanTame = 0.0f;
     // When true the simulation is paced to a recording (deterministic replay or
     // live/replay telemetry with a warm-start prefix) rather than free-running
     // real-time audio. In paced mode the loop thread owns core advancement at a
