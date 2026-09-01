@@ -822,6 +822,62 @@ TEST_F(ReplayTelemetryProviderTest, AutoStartSuppressedWhenTraceCarriesGearSelec
     EXPECT_FALSE(provider_->OnUpdateSimulation(0.016).starterButton);
 }
 
+// ===========================================================================
+// Group 8: steering-angle echo (display-only) on the replay path
+//
+// The CSV steering_angle_deg column is parsed into CsvSample.steeringAngleDeg
+// but the replay provider never echoed it to EngineInput — so the console
+// [Str: ...] readout never appeared on replay benches despite the data being
+// present. These tests pin the echo: the signed angle must surface verbatim
+// into EngineInput.steeringAngleDeg on the frame where the sample is served.
+// ===========================================================================
+
+TEST_F(ReplayTelemetryProviderTest, SteeringAngleColumn_SurfacesInEngineInput) {
+    // A trace carrying steering_angle_deg must surface the signed angle on
+    // EngineInput (display-only — never touches physics). Verbatim, no clamp.
+    makeProvider(
+        "time_s,steering_angle_deg\n"
+        "0.0,-12.5\n"
+        "1.0,3.9\n",
+        /*autoStart=*/true, /*autoGearbox=*/false);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    const EngineInput first = advanceSeconds(0.5);  // floor sample t=0.0
+    ASSERT_TRUE(first.steeringAngleDeg.has_value())
+        << "replay steering angle must surface on EngineInput";
+    EXPECT_DOUBLE_EQ(*first.steeringAngleDeg, -12.5);
+
+    const EngineInput second = advanceSeconds(1.0);  // floor sample t=1.0
+    ASSERT_TRUE(second.steeringAngleDeg.has_value());
+    EXPECT_DOUBLE_EQ(*second.steeringAngleDeg, 3.9);
+}
+
+TEST_F(ReplayTelemetryProviderTest, SteeringAngleColumn_Absent_StaysNullopt) {
+    // No steering column => EngineInput.steeringAngleDeg stays nullopt on
+    // every frame (non-DBC sources render nothing — no fake zero).
+    makeProvider("time_s,throttle_pct\n0.0,50\n1.0,60\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    const EngineInput input = advanceSeconds(0.5);
+    EXPECT_FALSE(input.steeringAngleDeg.has_value());
+}
+
+TEST_F(ReplayTelemetryProviderTest, SteeringAngleColumn_BlankCell_StaysNullopt) {
+    // A blank steering cell on an otherwise valid row must be absent (nullopt),
+    // not guessed as zero.
+    makeProvider(
+        "time_s,steering_angle_deg\n"
+        "0.0,\n"
+        "1.0,5.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    const EngineInput blank = advanceSeconds(0.5);  // floor sample t=0.0 (blank)
+    EXPECT_FALSE(blank.steeringAngleDeg.has_value());
+}
+
 
 // ===========================================================================
 // Group 7: Instant --start-from (IArrivalStatePrimer contract)

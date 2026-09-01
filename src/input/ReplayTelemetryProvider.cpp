@@ -319,6 +319,12 @@ EngineInput ReplayTelemetryProvider::driveThroughTwin(const Sample& s, double dt
     // replay as on live.
     input.brakeLight = s.brakeLight;
 
+    // Echo the steering angle for display (the twin does not consume it) — the
+    // CSV steering_angle_deg column is parsed into Sample.steeringAngleDeg but
+    // the replay path never surfaced it, so the console [Str: ...] readout was
+    // always silent on replay benches. Verbatim pass-through, absent stays nullopt.
+    input.steeringAngleDeg = s.steeringAngleDeg;
+
     // Selector-gate overlay. The twin owns an automatic gearbox and therefore
     // ALWAYS reports gearAutoMode=true + a gear, even for a PARK/NEUTRAL stalk.
     // But a replayed P/N stalk means the vehicle is NOT in an auto drive state,
@@ -450,6 +456,9 @@ void ReplayTelemetryProvider::buildBaseEngineInput(EngineInput& input, const Sam
     // VehicleStartController. Absent column => nullopt propagates => the
     // old-schema behavior (no telemetry opinion) is unchanged.
     input.brakeLight = s.brakeLight;
+    // Steering angle for display (the twin does not consume it). Surfaces the
+    // CSV steering_angle_deg column on the non-auto path; absent stays nullopt.
+    input.steeringAngleDeg = s.steeringAngleDeg;
 }
 
 void ReplayTelemetryProvider::handleNonAutoGearbox(EngineInput& input, const Sample& s) const {

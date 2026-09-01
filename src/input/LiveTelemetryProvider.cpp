@@ -192,6 +192,12 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
             // the JSON network path does the equivalent via submitSignal().
             signal.brakeLight = currentSample_.brakeLight;
             signal.gearSelector = csvGearSelector();
+            // Steering angle for display (the twin does not consume it). The CSV
+            // steering_angle_deg column is parsed into currentSample_ but the
+            // stdin path never copied it into the signal — so the console
+            // [Str: ...] readout was always silent on live-telemetry benches.
+            // Absent column => nullopt propagates => non-DBC sources render nothing.
+            signal.steeringAngleDeg = currentSample_.steeringAngleDeg;
             // The row is valid telemetry even when speed is blank (dyno off); a
             // non-zero timestamp keeps the twin's telemetry-timeout guard happy.
             signal.isValid = true;
@@ -238,6 +244,10 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
         input.replayTimestampS = elapsedS_;
         // Echo the brake light for display (the twin does not consume it).
         input.brakeLight = signal.brakeLight;
+        // Echo the steering angle for display (the twin does not consume it) —
+        // the JSON network path does the equivalent at line ~292. Absent column
+        // => nullopt propagates => non-DBC sources render nothing.
+        input.steeringAngleDeg = signal.steeringAngleDeg;
         return input;
     }
 

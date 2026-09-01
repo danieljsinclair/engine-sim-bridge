@@ -1107,4 +1107,44 @@ TEST(LiveTelemetryStreamTest, GearSelectorOnlyRowIsNotBlankAndSurfaces) {
            "skipped";
 }
 
+// T15: live stdin pipe carrying steering_angle_deg surfaces the signed angle
+// on EngineInput. The stdin signal assembly never copied steeringAngleDeg
+// from the parsed CsvSample, so the console [Str: ...] readout never appeared
+// on live-telemetry benches. The echo must match the network path: present
+// when the column carries a value, nullopt when blank, verbatim (no clamp).
+TEST(LiveTelemetryStreamTest, SteeringAngleColumn_SurfacesInEngineInput) {
+    StreamHarness h(
+        "time_s,throttle_pct,road_speed_kmh,steering_angle_deg\n"
+        "0.0,50,30,-12.5\n"
+        "1.0,50,30,3.9\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    // Advance 0.5s: floor sample is the t=0.0 row (steering -12.5).
+    h.provider->OnUpdateSimulation(0.5);
+    input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+    ASSERT_TRUE(in.steeringAngleDeg.has_value())
+        << "live stdin steering must surface on EngineInput";
+    EXPECT_DOUBLE_EQ(*in.steeringAngleDeg, -12.5);
+
+    // Advance past t=1.0: floor sample is now the t=1.0 row (steering 3.9).
+    h.provider->OnUpdateSimulation(0.6);
+    input::EngineInput in2 = h.provider->OnUpdateSimulation(0.05);
+    ASSERT_TRUE(in2.steeringAngleDeg.has_value());
+    EXPECT_DOUBLE_EQ(*in2.steeringAngleDeg, 3.9);
+}
+
+TEST(LiveTelemetryStreamTest, SteeringAngleColumn_BlankCell_StaysNullopt) {
+    StreamHarness h(
+        "time_s,throttle_pct,road_speed_kmh,steering_angle_deg\n"
+        "0.0,50,30,\n"
+        "1.0,50,30,5.0\n");
+    ASSERT_TRUE(h.provider->Initialize());
+
+    // Advance 0.5s: floor sample is the t=0.0 row (blank steering cell).
+    h.provider->OnUpdateSimulation(0.5);
+    input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_FALSE(in.steeringAngleDeg.has_value())
+        << "blank steering cell must stay nullopt (no fake zero)";
+}
+
 }  // namespace
