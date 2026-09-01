@@ -475,6 +475,14 @@ TEST_F(StrategyPipelineTest, SyncPullStrategy_Render_AccumulatesFramesAcrossMult
     const int NUM_CALLS = 4;
 
     for (int i = 0; i < NUM_CALLS; ++i) {
+        // Feed input before each render: renderAudioOnDemand now consumes input
+        // atomically (read + remove under m_lock0), so each call synthesizes
+        // exactly the input that arrived since the previous call. Without this
+        // update the synth's input ring would deplete and later renders would
+        // produce fewer frames. This mirrors what the loop thread does in
+        // production (updateSimulation -> advanceFixedSteps -> writeToSynthesizer).
+        engine.simulator->update(1.0 / 60.0);
+
         AudioBufferView audioBuffer = createAudioBuffer(FRAMES_PER_CALL);
         ASSERT_TRUE(strategy->render(audioBuffer));
         freeAudioBuffer(audioBuffer);
