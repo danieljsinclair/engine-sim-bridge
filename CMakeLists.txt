@@ -395,6 +395,8 @@ if(BUILD_BRIDGE_TESTS)
         test/twin/RedlineClampAndUpshiftTest.cpp
         test/twin/C63TeslaYTuneTest.cpp
         test/simulation/CommandedSpeedDisplayTest.cpp
+        test/simulation/SteeringDisplayTest.cpp
+        test/simulator/SpanTameConfigTest.cpp
         test/PathNormalizerTests.cpp
         test/AssetResolverTests.cpp
         test/JsonParserTests.cpp

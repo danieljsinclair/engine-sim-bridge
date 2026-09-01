@@ -76,7 +76,7 @@ struct ColumnAlias {
 
 // Fixed size mirrors the row count below; std::array (not a C-style array)
 // keeps the registry a constexpr value with STL ergonomics.
-constexpr std::array<ColumnAlias, 9> kColumnAliases = {{
+constexpr std::array<ColumnAlias, 10> kColumnAliases = {{
     {&CsvHeader::colTime,         &CsvHeader::timeInMs, "timestamp_utc_ms timestamp_ms ts_ms"},
     {&CsvHeader::colTime,         nullptr,              "time_s time t timecode"},
     {&CsvHeader::colThrottle,     nullptr,              "throttle_pct throttle_percent throttle throttle_gas_pct"},
@@ -86,6 +86,7 @@ constexpr std::array<ColumnAlias, 9> kColumnAliases = {{
     {&CsvHeader::colClutch,       nullptr,              "clutch_pct clutch clutch_pressure"},
     {&CsvHeader::colMotorTorque,  nullptr,              "motor_torque_nm motor_torque torque_nm"},
     {&CsvHeader::colBrakeLight,   nullptr,              "brake_light brakelight"},
+    {&CsvHeader::colSteering,     nullptr,              "steering_angle_deg steering_angle"},
 }};
 
 bool matchesAlias(std::string_view name, std::string_view aliases) {
@@ -244,6 +245,16 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
         if (parseInt(fields[header_.colBrakeLight], brakeLight)) {
             if (brakeLight == 1)      s.brakeLight = true;
             else if (brakeLight == 0) s.brakeLight = false;
+        }
+    }
+
+    // steering_angle_deg: signed degrees from CAN SCCM_steeringAngle (BO_ 297).
+    // Blank or unparseable leaves the field absent (nullopt) — never a guess.
+    if (header_.colSteering >= 0 &&
+        header_.colSteering < static_cast<int>(fields.size())) {
+        double steeringDeg = 0.0;
+        if (parseDouble(fields[header_.colSteering], steeringDeg)) {
+            s.steeringAngleDeg = steeringDeg;
         }
     }
 

@@ -206,6 +206,11 @@ static void initSimulator(Simulator* sim, const ISimulatorConfig& config) {
     sim->setFluidSimulationSteps(config.fluidSimulationSteps);
     sim->setTargetSynthesizerLatency(config.targetSynthesizerLatency);
     sim->setPacedReplay(config.pacedReplay);
+
+    // Wire --span-tame into the synthesizer's AudioParameters before any
+    // renderAudio call happens. 0.0 (default/off) writes 0.0f, which the
+    // renderAudio path treats as "skip shape() entirely" for bit-identity.
+    SimulatorInitHelpers::applySpanTame(sim, config.spanTame);
 }
 
 static bool endsWith(std::string_view str, std::string_view suffix) {

@@ -41,6 +41,12 @@ struct EngineInput {
     // physics. nullopt = not reported (pre-assembly).
     std::optional<bool> brakeLight;
 
+    // Steering wheel angle (degrees, signed; CAN 0x129 SCCM_steeringAngle via
+    // the vehicle-sim steering_angle_deg CSV column). nullopt = not reported.
+    // Display-only: surfaced to EngineState.Controls for the console readout;
+    // never drives physics or the start/stop controller.
+    std::optional<double> steeringAngleDeg;
+
     // Twin control
     int gearAbsolute = -1;          // -1 = use gearDelta logic, 0+ = set this gear directly
     double clutchPressure = -1.0;   // -1 = unchanged, 0.0-1.0 = set clutch pressure

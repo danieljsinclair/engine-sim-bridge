@@ -52,6 +52,9 @@ namespace presentation::builders {
             // Surface the commanded road-speed target so it is visible even in
             // neutral (where the vehicle speed readout reflects physics only).
             controls.commandedSpeedKmh = input.roadSpeedKmh;
+            // Steering angle: presence flows through from the telemetry feed;
+            // absent feed (keyboard/demo/non-DBC) leaves it nullopt.
+            controls.steeringAngleDeg = input.steeringAngleDeg;
             return controls;
         }
 
