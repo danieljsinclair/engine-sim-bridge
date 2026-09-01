@@ -91,16 +91,34 @@ bool BridgeSimulator::renderDrainedAudio(float* buffer, int32_t frames, int32_t*
     // thread (SyncPullStrategy::updateSimulation), so we must NOT call
     // advanceFixedSteps here. Synthesize whatever engine-audio input the loop
     // thread produced, then read it out. Mirrors the tail of renderOnDemand.
-    m_simulator->synthesizer().renderAudioOnDemand();
-
+    //
+    // Loop to satisfy the full request: a single renderAudioOnDemand + read can
+    // return a short count when the synth's free-space cap (see synthesizer.cpp)
+    // bounded production below the request. One short read fills the remainder
+    // with a zero-sample dropout (a discontinuity); instead we re-render and
+    // drain until the request is satisfied or the producer truly stalls (no new
+    // input and no buffered audio). The loop guard bounds iterations.
     int16_t* conversionBuffer = ensureAudioConversionBufferSize(frames);
-    int samplesRead = m_simulator->readAudioOutput(frames, conversionBuffer);
-    EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, samplesRead, buffer, engineConfig_.volume, engineConfig_.convolutionLevel);
+    int32_t totalRead = 0;
+    const int MAX_DRAIN_ITERATIONS = 8;
+    for (int iter = 0; iter < MAX_DRAIN_ITERATIONS && totalRead < frames; ++iter) {
+        m_simulator->synthesizer().renderAudioOnDemand();
 
-    if (samplesRead < frames) {
-        EngineSimAudio::fillSilence(buffer + samplesRead * 2, frames - samplesRead);
+        const int32_t remaining = frames - totalRead;
+        int samplesRead = m_simulator->readAudioOutput(remaining, conversionBuffer);
+        if (samplesRead <= 0) {
+            break; // Producer stalled — no more audio this callback.
+        }
+        EngineSimAudio::convertInt16ToStereoFloat(
+            conversionBuffer, samplesRead,
+            buffer + totalRead * 2, engineConfig_.volume, engineConfig_.convolutionLevel);
+        totalRead += samplesRead;
     }
-    if (written) *written = samplesRead;
+
+    if (totalRead < frames) {
+        EngineSimAudio::fillSilence(buffer + totalRead * 2, frames - totalRead);
+    }
+    if (written) *written = totalRead;
     return true;
 }
 
