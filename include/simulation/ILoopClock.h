@@ -17,6 +17,13 @@ public:
 
     // Wait until the next tick (real-time pacing for steady clock)
     virtual void waitUntilNextTick() = 0;
+
+    // Re-anchor the pacing schedule to NOW. Call after a period of unpaced
+    // stepping (e.g. the suppressed --start-from arrival settle on a file
+    // trace): without resync the schedule is stale in the past and the next
+    // paced loop sprints to catch up. Default no-op: clocks without a
+    // schedule (FakeLoopClock) need nothing.
+    virtual void resync() {}
 };
 
 // ============================================================================
@@ -33,6 +40,10 @@ public:
     void waitUntilNextTick() override {
         nextWakeTime_ += intervalUs_;
         std::this_thread::sleep_until(nextWakeTime_);
+    }
+
+    void resync() override {
+        nextWakeTime_ = std::chrono::steady_clock::now();
     }
 
 private:

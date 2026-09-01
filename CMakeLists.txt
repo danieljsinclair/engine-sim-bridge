@@ -137,6 +137,7 @@ set(BRIDGE_SOURCES
     # Audio strategies
     src/strategy/ThreadedStrategy.cpp
     src/strategy/SyncPullStrategy.cpp
+    src/strategy/DeterministicStrategy.cpp
     src/strategy/IAudioBufferFactory.cpp
     # Audio hardware
     src/hardware/AudioHardwareProviderFactory.cpp
@@ -175,9 +176,14 @@ set(BRIDGE_SOURCES
     src/twin/AutomaticGearbox.cpp
     src/twin/GearboxCsvLogger.cpp
     src/twin/ThrottleSmoother.cpp
+    src/twin/PinTargetChase.cpp
+    src/twin/EffectiveThrottle.cpp
+    src/twin/UpstreamTorqueHint.cpp
     src/twin/VirtualIceTwin.cpp
     src/twin/ManualTwin.cpp
     src/twin/SlipLockController.cpp
+    src/twin/ClutchMapModel.cpp
+    src/twin/TorqueConverter.cpp
     src/twin/TorqueConverterLaunch.cpp
     # Input providers
     src/input/VirtualIceInputProvider.cpp
@@ -194,6 +200,8 @@ set(BRIDGE_SOURCES
     src/input/ReplayTelemetryProvider.cpp
     src/input/CsvTelemetryParser.cpp
     src/input/LiveTelemetryProvider.cpp
+    src/input/OverlayInputProvider.cpp
+    src/input/VehicleStartController.cpp
     # IO
     src/io/LiveTelemetryParser.cpp
 )
@@ -385,8 +393,12 @@ if(BUILD_BRIDGE_TESTS)
         test/SineWaveRegressionTests.cpp
         test/twin/SpeedRpmConversionTest.cpp
         test/twin/RedlineClampAndUpshiftTest.cpp
+        test/twin/C63TeslaYTuneTest.cpp
         test/simulation/CommandedSpeedDisplayTest.cpp
+        test/simulation/SteeringDisplayTest.cpp
+        test/simulator/SpanTameConfigTest.cpp
         test/PathNormalizerTests.cpp
+        test/AssetResolverTests.cpp
         test/JsonParserTests.cpp
         test/SimulatorFactoryPresetDiscoveryTests.cpp
         test/IntakeDeserializerTests.cpp
@@ -394,18 +406,22 @@ if(BUILD_BRIDGE_TESTS)
         test/PresetEngineFactoryTests.cpp
         test/BridgeSimulatorContractTests.cpp
         test/SyncPullStrategyContractTests.cpp
+        test/strategy/DeterministicStrategyTests.cpp
         test/InMemoryTelemetryResetTests.cpp
         test/SimulatorFactoryBoundaryTests.cpp
         test/ScriptLoadHelpersResolveAssetBasePathTests.cpp
+        test/ScriptLoadHelpersLoadImpulseResponsesTests.cpp
         test/simulation/SimulationLoopStepTests.cpp
         test/simulation/SimulationLoopRunTests.cpp
         test/simulation/SimulationLoopVehicleControlsTests.cpp
         test/simulation/SimulationLoopDynoSentinelTests.cpp
         test/simulation/SimulationLoopPollInputTests.cpp
         test/simulation/SimulationLoopHandoverTests.cpp
+        test/simulation/SimulationLoopStartFromTests.cpp
         test/simulator/ISimulatorVersionTest.cpp
         test/input/DemoControlsTargetTest.cpp
         test/input/LiveTelemetryProviderTest.cpp
+        test/input/VehicleStartControllerTest.cpp
         test/twin/GearboxCsvLoggerTest.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE
@@ -494,6 +510,7 @@ if(BUILD_BRIDGE_TESTS)
     # SyncPullStrategy, IAudioBuffer, CircularBuffer telemetry).
     add_executable(strategy_tests
         test/strategy/ThreadedStrategyIntegrationTest.cpp
+        test/strategy/ThreadedStrategyOverflowWarningTest.cpp
         test/strategy/StrategyPipelineTest.cpp
         test/strategy/BufferContextEradicationTest.cpp
         test/strategy/IAudioBufferTest.cpp
@@ -638,10 +655,13 @@ if(BUILD_BRIDGE_TESTS)
     # Twin core tests - tests for ThrottleSmoother, VirtualIceTwin, and ManualTwin
     add_executable(twin_core_tests
         test/twin/ThrottleSmootherTest.cpp
+        test/twin/PinTargetChaseTest.cpp
+        test/twin/PinComplianceTwinTest.cpp
         test/twin/VirtualIceTwinTest.cpp
         test/twin/ManualTwinTest.cpp
         test/twin/SlipLockControllerTest.cpp
         test/twin/TorqueConverterLaunchTest.cpp
+        test/twin/TorqueConverterTest.cpp
         test/twin/WheelCouplingTest.cpp
     )
     target_include_directories(twin_core_tests PRIVATE
@@ -655,6 +675,56 @@ if(BUILD_BRIDGE_TESTS)
     target_compile_options(twin_core_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
     if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_test(NAME twin_core_tests COMMAND twin_core_tests --gtest_color=yes)
+    endif()
+
+    # Torque-input feature tests (--effective-throttle / --torque-informed-gearbox).
+    # Kept as their own targets so each feature's red/green is visible in isolation.
+    add_executable(twin_effective_throttle_tests
+        test/twin/EffectiveThrottleTest.cpp
+        src/twin/EffectiveThrottle.cpp
+    )
+    target_include_directories(twin_effective_throttle_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_effective_throttle_tests
+        PRIVATE
+            GTest::gtest_main
+    )
+    target_compile_options(twin_effective_throttle_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_effective_throttle_tests COMMAND twin_effective_throttle_tests --gtest_color=yes)
+    endif()
+
+    add_executable(twin_torque_gearbox_tests
+        test/twin/UpstreamTorqueHintTest.cpp
+        src/twin/UpstreamTorqueHint.cpp
+    )
+    target_include_directories(twin_torque_gearbox_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_torque_gearbox_tests
+        PRIVATE
+            GTest::gtest_main
+    )
+    target_compile_options(twin_torque_gearbox_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_torque_gearbox_tests COMMAND twin_torque_gearbox_tests --gtest_color=yes)
+    endif()
+
+    add_executable(twin_torque_input_wiring_tests
+        test/twin/TwinTorqueInputWiringTest.cpp
+    )
+    target_include_directories(twin_torque_input_wiring_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(twin_torque_input_wiring_tests
+        PRIVATE
+            GTest::gtest_main
+            engine-sim-bridge
+    )
+    target_compile_options(twin_torque_input_wiring_tests PRIVATE -Werror -Wall -Wextra -Wno-unused-parameter -Wno-mismatched-tags)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        add_test(NAME twin_torque_input_wiring_tests COMMAND twin_torque_input_wiring_tests --gtest_color=yes)
     endif()
 
     # Twin input provider tests - tests for VirtualIceInputProvider

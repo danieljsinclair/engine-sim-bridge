@@ -23,9 +23,11 @@ TEST(IceVehicleProfile, Zf8hp45FactoryDefaults)
     EXPECT_DOUBLE_EQ(profile.tireRadiusM, 0.32);
     EXPECT_DOUBLE_EQ(profile.vehicleMassKg, 1800.0);
 
-    // RPM limits
+    // RPM limits. idleRpm is the C63 M156 V3 *emergent* idle (measured ~930-990
+    // at standstill), NOT the stale .mr "400-600" comment the prior value of 750
+    // approximated. See IceVehicleProfile.h and VirtualIceTwin.cpp for grounding.
     EXPECT_DOUBLE_EQ(profile.redlineRpm, 6500.0);
-    EXPECT_DOUBLE_EQ(profile.idleRpm, 750.0);
+    EXPECT_DOUBLE_EQ(profile.idleRpm, 950.0);
 
     // Shift timing (ms) — TUNING KNOBS. Do NOT lock exact values here: that
     // freezes the clutch calibration. The exact milligrams belong to tuning, and

@@ -8,6 +8,7 @@
 #include "simulator.h"
 #include "engine.h"
 #include "synthesizer.h"
+#include "span_tame.h"
 
 #include <array>
 #include <memory>
@@ -88,6 +89,17 @@ void initializeConvolutionFilters(Simulator* simulator) {
     // Presets have no real IR data, so convolution is unnecessary
     Synthesizer::AudioParameters params = simulator->synthesizer().getAudioParameters();
     params.convolution = 0.0f;
+    simulator->synthesizer().setAudioParameters(params);
+}
+
+// Read-modify-write of the synthesizer's AudioParameters: set spanTame and
+// preserve every other field exactly as it was. Called from the factory after
+// the simulator is constructed but before the session starts.
+void applySpanTame(Simulator* simulator, float spanTame)
+{
+    if (!simulator) return;
+    Synthesizer::AudioParameters params = simulator->synthesizer().getAudioParameters();
+    params.spanTame = spanTame;
     simulator->synthesizer().setAudioParameters(params);
 }
 

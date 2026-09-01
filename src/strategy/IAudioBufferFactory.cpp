@@ -4,6 +4,7 @@
 #include "strategy/IAudioBuffer.h"
 #include "strategy/ThreadedStrategy.h"
 #include "strategy/SyncPullStrategy.h"
+#include "strategy/DeterministicStrategy.h"
 #include "telemetry/ITelemetryProvider.h"
 
 #include <memory>
@@ -16,6 +17,7 @@ std::unique_ptr<IAudioBuffer> IAudioBufferFactory::createBuffer(
     switch (mode) {
         case AudioMode::Threaded: return std::make_unique<ThreadedStrategy>(logger, telemetry);
         case AudioMode::SyncPull: return std::make_unique<SyncPullStrategy>(logger, telemetry);
+        case AudioMode::Deterministic: return std::make_unique<DeterministicStrategy>(logger, telemetry);
     }
 
     return nullptr;

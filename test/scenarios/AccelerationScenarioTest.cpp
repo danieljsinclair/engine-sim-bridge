@@ -14,6 +14,9 @@ protected:
     void SetUp() override {
         profile_ = IceVehicleProfile::zf8hp45();
         twin_ = std::make_unique<VirtualIceTwin>(profile_);
+        // Twin ignition defaults OFF (no self-start without a start decision);
+        // these scenario tests exercise a commanded-on twin.
+        twin_->setIgnition(true);
         twin_->setGearSelector(bridge::GearSelector::DRIVE);
         dt_ = 1.0 / 60.0;
     }
@@ -330,6 +333,7 @@ TEST_F(AccelerationScenarioTest, ShiftCompletesWithinConfiguredTime_AC01_7) {
     // the isolated shift — the clutch-cycle behaviour must be sampled relative to
     // one clean shift, not whatever state the prior loop left behind.
     twin_ = std::make_unique<VirtualIceTwin>(profile_);
+    twin_->setIgnition(true);  // commanded-on twin (default is OFF — no self-start)
     twin_->setGearSelector(bridge::GearSelector::DRIVE);
     UpstreamSignal trigger;
     trigger.throttleFraction = 0.1;

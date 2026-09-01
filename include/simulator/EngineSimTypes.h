@@ -75,6 +75,20 @@ namespace EngineSimDefaults {
     constexpr double  TELEMETRY_TIMEOUT_S         = 5.0;   // Seconds without valid telemetry before OFF transition
     constexpr double  CRANKING_THROTTLE           = 0.6;   // Throttle fraction during cranking
     constexpr double  IDLE_SUSTAIN_THROTTLE       = 0.05;  // Minimum throttle to sustain combustion at idle; floor applied in IDLE so the engine never coasts through the Stopped latch at the CRANKING->IDLE handoff before the driver throttle arrives
+    constexpr double  RELIEF_IDLE_SUSTAIN_THROTTLE = 0.055; // Stronger idle-sustain floor applied when the creep-drag relief opens the clutch (engine decoupled from the wheels). The normal 5% floor lets the M156 settle ~750-800 rpm decoupled at 6 mph (below the 950 idle target — the no-load throttle curve is steep: 5%≈800, 7%≈1650, 12%≈2600, so a small bump shifts rpm a lot). 5.5% holds the engine at ~950-1000 through the relief so the decoupled engine idles near its coupled target instead of drooping.
+    // Clutch pressure rate limits (per second). The relief and re-engage are
+    // RATE-LIMITED, not instant steps, so the clutch never goes 0%↔100% in one
+    // frame (the binary slam that crashed the engine 4700→771 rpm). Asymmetric:
+    // the release is FAST (a lugging engine must be decoupled before it death-
+    // spirals), the engage is SMOOTH (no slam when the slip-lock takes over).
+    constexpr double  CLUTCH_RELEASE_RATE_PER_SEC = 10.0;  // relief open: 0.076→0 in ~1 frame
+    constexpr double  CLUTCH_ENGAGE_RATE_PER_SEC  = 3.0;   // re-engage: 0→1 in ~0.33s (smooth)
+    // The creep-relief fires just BEFORE the engine crosses idle (idle + this
+    // margin) so the clutch opens with a head-start and the relief idle-sustain
+    // catches the engine at ~idle instead of letting downward momentum carry it
+    // to ~750. Small enough that a healthy/high engine (4700 rpm) never triggers
+    // it; large enough to preempt the droop.
+    constexpr double  CREEP_RELIEF_TRIGGER_MARGIN_RPM = 60.0;
     constexpr double  STANDSTILL_SPEED_MS         = 0.001; // Below this speed (m/s), vehicle is considered stopped
 
     // Display thresholds
@@ -103,16 +117,36 @@ struct ISimulatorConfig {
     double targetSynthesizerLatency = EngineSimDefaults::TARGET_SYNTH_LATENCY;
     float volume = 0.5f;           // Runtime-tunable default
     float convolutionLevel = 0.5f; // Runtime-tunable default
+    // Output-stage span taming amount (--span-tame CLI arg, [0,1], default 0
+    // = OFF = bit-identical audio). Flows to the synthesizer's
+    // AudioParameters.spanTame via SimulatorInitHelpers::applySpanTame at
+    // factory build time. See engine-sim include/span_tame.h for the pinned
+    // parameterization (soft-knee compressor + makeup + safety soft-clip,
+    // applied just before the int16 conversion in renderAudio).
+    float spanTame = 0.0f;
+    // When true the simulation is paced to a recording (deterministic replay or
+    // live/replay telemetry with a warm-start prefix) rather than free-running
+    // real-time audio. In paced mode the loop thread owns core advancement at a
+    // fixed timestep, so the audio-latency self-adjustment of m_steps in
+    // Simulator::startFrame must be DISABLED: it reads a timing-dependent buffer
+    // size and would make the per-frame substep count (and thus the whole run)
+    // nondeterministic, tipping the warm-start into the reversion attractor.
+    bool pacedReplay = false;
 };
 
 // Runtime statistics
 struct EngineSimStats {
-    double currentRPM = 0.0;
+    double currentRPM = 0.0;       // raw crank rpm
+    double filteredRPM = 0.0;      // tach-sensor rpm (first-order, tau=0.1s)
     double currentLoad = 0.0;
     double exhaustFlow = 0.0;
     double manifoldPressure = 0.0;
     int32_t activeChannels = 0;
     double processingTimeMs = 0.0;
+    // Synth output level of the last rendered audio block: post-leveler,
+    // PRE-volume RMS in int16 output scale — the "what you would hear at
+    // volume 1" quantity. -1.0 = nothing rendered yet (honest-absent).
+    double synthOutputRms = -1.0;
 
     // Dyno state (0.0 when dyno disabled)
     double dynoTorque = 0.0;         // Current dyno applied torque (ft*lbs)

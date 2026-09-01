@@ -7,6 +7,7 @@
 #ifndef I_INPUT_PROVIDER_H
 #define I_INPUT_PROVIDER_H
 
+#include <optional>
 #include <string>
 
 struct EngineSimStats;
@@ -29,8 +30,22 @@ struct EngineInput {
     // Dyno control
     double dynoTorqueScale = -1.0;  // -1 = unchanged, 0.0-1.0 = fraction of max torque
 
-    // Brake control (HACK: engine braking via dyno, not wheel braking)
+    // Brake control — the PHYSICS input (dyno/BrakeConstraint pressure).
+    // The keyboard 'B' key is its only writer.
     double brakeLevel = 0.0;        // 0.0 = no brake, 1.0 = full brake
+
+    // Vehicle brake LIGHT — the canonical display/start-stop signal. Supplied
+    // directly by telemetry (CSV brake_light column / network signal), or
+    // derived from brakeLevel at the single assembly point in
+    // SimulationLoop::step() when no telemetry reports it. Never drives
+    // physics. nullopt = not reported (pre-assembly).
+    std::optional<bool> brakeLight;
+
+    // Steering wheel angle (degrees, signed; CAN 0x129 SCCM_steeringAngle via
+    // the vehicle-sim steering_angle_deg CSV column). nullopt = not reported.
+    // Display-only: surfaced to EngineState.Controls for the console readout;
+    // never drives physics or the start/stop controller.
+    std::optional<double> steeringAngleDeg;
 
     // Twin control
     int gearAbsolute = -1;          // -1 = use gearDelta logic, 0+ = set this gear directly
@@ -54,6 +69,15 @@ struct EngineInput {
     // 0; applying 0.0 Nm is a true no-op on the rotating mass).
     double drivetrainInputTorqueNm = 0.0;
 
+    // Live twin diagnostics threaded through to presentation (inline clutch
+    // readout + CSV-out). roadImpliedRpm = RPM if locked to wheels in current
+    // gear; creepReliefFired = the creep-drag relief opened the clutch (the
+    // #24 slow-speed stall protection) this frame; couplingIsTorqueConverter
+    // selects the display label for clutchPressure ('TC' vs 'Cl').
+    double roadImpliedRpm = 0.0;
+    bool creepReliefFired = false;
+    bool couplingIsTorqueConverter = false;
+
     // Simulator auto-disengages starter when RPM > threshold
     // Preset cycling
     bool presetCycle = false;       // true = cycle to next preset engine configuration
@@ -75,6 +99,16 @@ public:
     virtual bool Initialize() = 0;
     virtual void Shutdown() = 0;
     virtual bool IsConnected() const = 0;
+
+    /**
+     * True when THIS provider ended the run by hitting its --end-at bound
+     * (the provider reported EOF because its elapsed clock crossed the
+     * requested timecode). Lets the CLI report the honest stop reason
+     * ("--end-at Ns reached") instead of the generic duration/trace-end
+     * message, which would otherwise quote the full trace length. Default
+     * false: most providers never bound themselves.
+     */
+    virtual bool endAtReached() const { return false; }
 
     // ========================================================================
     // Input Queries (called from simulation thread)

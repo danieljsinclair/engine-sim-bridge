@@ -9,10 +9,14 @@
 #include "simulation/CrankingController.h"
 #include "simulation/PresentationStateBuilders.h"
 #include "session/ISimulatorSession.h"
+#include "input/IVehicleControlSink.h"
 
 #include "simulator/ISimulator.h"
 #include "simulator/ICombustionEngine.h"
 #include "simulator/BridgeSimulator.h"
+#include "input/VirtualIceInputProvider.h"
+#include "input/IReplayTimeline.h"
+#include "input/IArrivalStatePrimer.h"
 #include "simulator/EngineSimTypes.h"
 #include "simulator/SimulatorFactory.h"
 
@@ -26,6 +30,7 @@
 #include "common/Verification.h"
 
 #include <cstring>
+#include <cstdio>
 
 
 namespace {
@@ -35,11 +40,69 @@ constexpr double THROTTLE_RAMP_DURATION_SECONDS = 0.5;  // Time to ramp from 0 t
 constexpr double FULL_THROTTLE = 1.0;                     // Maximum throttle value
 constexpr double SECONDS_TO_MILLISECONDS = 1000.0;
 
+// Instant --start-from: sim seconds of suppressed settling at the HELD
+// arrival operating point before the first emitted frame. Long enough for
+// the engine to catch through the wheel pin (~0.2s family-A) AND for the
+// gas path (runners/chambers/exhaust basin) to relax to the quasi-steady
+// state at the arrival rpm/throttle; bounded so the instant contract holds
+// (~1.4s wall on the quiet M4 bench at the measured 0.35x compute ratio).
+// CONSTANT, independent of the offset — that independence is the contract.
+constexpr double ARRIVAL_SETTLE_SECONDS = 4.0;
+
 } // anonymous namespace — constants only
 
 // ============================================================================
 // SimulationLoop - Private methods (file scope, access members directly)
 // ============================================================================
+
+void SimulationLoop::applyStartStopDecision(LoopState& state, bool lightReportedByTelemetry) {
+    // Opinion = a vehicle-control signal exists this frame: telemetry reported
+    // the brake light, the keyboard brake level is non-zero, or a drive gear
+    // (D/R) is selected. With no opinion the provider keeps start/stop
+    // authority (e.g. replay autoStart's frame-0 starter pulse). Once any
+    // opinion is seen the controller keeps authority: it is a state machine
+    // (crank delay, stop latch) that must not be suspended mid-decision.
+    const auto gear = static_cast<bridge::GearSelector>(state.engineInput.gearSelector);
+    if (const bool driveSelected =
+            gear == bridge::GearSelector::DRIVE || gear == bridge::GearSelector::REVERSE;
+        !startStopEngaged_ &&
+        !lightReportedByTelemetry &&
+        state.engineInput.brakeLevel <= 0.0 &&
+        !driveSelected) {
+        return;
+    }
+    startStopEngaged_ = true;
+
+    startStopController_.update(config_.updateInterval(),
+                                state.engineInput.brakeLight.value_or(false),
+                                gear);
+
+    // Flatten the decision into the input: the controller only writes these
+    // two fields; CrankingController downstream stays the ignition/starter
+    // actuator authority, exactly as the removed StartStopInputAdapter did.
+    state.engineInput.ignition = startStopObserver_.ignition_;
+    state.engineInput.starterButton = starterPulseFromLevel(startStopObserver_.starter_);
+
+    // Command twin-based live providers with the same level. The twin gates all
+    // of its processing (throttle/gearbox/cranking) on ignition and defaults
+    // OFF, so without this push the live path could never process throttle even
+    // after a legal start — and conversely the twin can never self-start before
+    // the controller's first decision, which now only happens on a real input.
+    // Providers without the seam (keyboard, demo, replay) are unaffected.
+    if (auto* ignitionSink = dynamic_cast<input::IVehicleControlSink*>(inputProvider_)) {
+        ignitionSink->setIgnition(startStopObserver_.ignition_);
+    }
+}
+
+bool SimulationLoop::starterPulseFromLevel(bool controllerStarterLevel) {
+    // The controller can hold starter=true across many frames (e.g. a held
+    // brake crank). CrankingController::engageStarter TOGGLES on a held-high
+    // button (Stopped -> Cranking -> Stopped), which would abort the crank.
+    // Emit a single-frame pulse on the rising edge; hold low until released.
+    const bool pulse = controllerStarterLevel && !prevStarterLevel_;
+    prevStarterLevel_ = controllerStarterLevel;
+    return pulse;
+}
 
 input::EngineInput SimulationLoop::pollInput(double currentTime, double updateInterval, bool isFirstTick) {
     if (inputProvider_) {
@@ -54,6 +117,62 @@ input::EngineInput SimulationLoop::pollInput(double currentTime, double updateIn
         timed.starterButton = true;
     }
     return timed;
+}
+
+// One suppressed settle tick. Returns false when settling must stop, each
+// for a reason the main loop's machinery already handles: a stop request
+// (CTRL+C/SIGTERM — the main loop's stop check returns immediately), a
+// disconnected source (its IsConnected check exits cleanly), or a
+// non-Continue step result (Stop: duration already reached — e.g. a
+// --duration shorter than the settle window — so step() can never advance
+// currentTime further; handing over avoids spinning on a frozen clock).
+bool SimulationLoop::settleTick(LoopState& state) {
+    if (stopRequested_->load(std::memory_order_seq_cst)) return false;
+    if (!inputProvider_->IsConnected()) return false;
+    if (step(state) != StepResult::Continue) return false;
+    state.engineInput = pollInput(state.currentTime, config_.updateInterval(), state.isFirstTick);
+    state.isFirstTick = false;
+    inputProvider_->provideFeedback(state.previousStats);
+    return true;
+}
+
+void SimulationLoop::settleAtArrivalPoint(LoopState& state,
+                                          input::IArrivalStatePrimer& primer,
+                                          double offsetS) {
+    logger_->info(LogMask::BRIDGE,
+        __ilog_format("Instant start-from %.3fs: priming arrival state + %.1fs core settle (no pre-offset rows simulated)",
+            offsetS, ARRIVAL_SETTLE_SECONDS));
+
+    // (1) Provider prime: twin warm-boot from the arrival row + clock anchor +
+    //     arrival-row HOLD (constant synthetic input for the settle below).
+    primer.primeArrivalState();
+
+    // (2) Core settle: step the FULL per-tick path (engine core + twin via
+    //     step(), physics tick via audioBuffer_.updateSimulation) at the held
+    //     arrival operating point, suppressing ALL output — CSV write
+    //     (emitCsv_=false), presentation, and audio queueing (emitAudio_=false;
+    //     the physics tick still runs, only the playback ring stops being
+    //     filled). Bounded and offset-independent: the settle constructs the
+    //     steady state AT the operating point; it never replays rows.
+    emitCsv_ = false;
+    emitAudio_ = false;
+    if (presentation_) presentation_->setCsvEmissionEnabled(false);
+    while (state.currentTime < ARRIVAL_SETTLE_SECONDS && settleTick(state)) {
+    }
+
+    // (3) Handoff: release the hold (rows emit from the arrival row onward),
+    //     anchor the loop clock at the offset (duration + telemetry timestamps
+    //     read the true recording-relative time), resume emission, and start
+    //     audio CLEAN at the offset — the ring is reset and the schedule
+    //     resynced so playback begins at the --start-from point. Identical
+    //     handoff acts to the retired warm-start prefix.
+    primer.releaseArrivalHold();
+    state.currentTime = offsetS;
+    emitCsv_ = true;
+    emitAudio_ = true;
+    audioBuffer_.resetBufferAfterWarmup();
+    clock_->resync();  // un-paced settle left the schedule in the past
+    if (presentation_) presentation_->setCsvEmissionEnabled(true);
 }
 
 void SimulationLoop::updatePresentation(
@@ -212,16 +331,18 @@ void SimulationLoop::applyVehicleControls(
         // Non-bridge path: dyno only when starter not engaged (legacy).
         applyDynoControl(simulator_, input.dynoTorqueScale, lastDynoTorqueScale);
     }
-    if (crankingState.starterEngaged) {
+    if (crankingState.starterEngaged && !lastStarterEngaged_) {
         logger_->info(LogMask::BRIDGE, "Cranking: starter engaged, dyno disabled - consider using the clutch instead");
     }
+    lastStarterEngaged_ = crankingState.starterEngaged;
 
     // Twin clutch control (direct pressure, overrides applyGearChange's hardwired clutch)
     if (input.clutchPressure >= 0.0) {
         simulator_.setClutchPressure(input.clutchPressure);
     }
 
-    // Brake
+    // Brake — physics consumes the analog level (keyboard 'B' only). The CSV
+    // brake light is an indicator, not a pedal: it never reaches this call.
     simulator_.setBrakePressure(input.brakeLevel);
 }
 
@@ -322,7 +443,10 @@ public:
             }
         }
 
-        // Create loop with injected dependencies — no parameter plumbing
+        // Create loop with injected dependencies — no parameter plumbing.
+        // Deterministic mode paces with the no-op clock: the run advances at
+        // CPU speed with zero wall-clock dependence (input rows are consumed
+        // on the loop's fixed sim clock, physics on the same thread).
         SessionDependencies loopDeps{
             audioBuffer_,
             &crankingController_,
@@ -331,7 +455,8 @@ public:
             presentation_,
             telemetryWriter_,
             telemetryReader_,
-            logger_
+            logger_,
+            config_.deterministic ? &fakeClock_ : nullptr
         };
         SimulationLoop loop(*simulator_, config_, loopDeps);
 
@@ -446,6 +571,8 @@ private:
     ILogging* logger_;
     CrankingController crankingController_;
     std::atomic<bool> stopRequested_{false};
+    // No-op clock for deterministic mode (unpaced, CPU-speed replay).
+    FakeLoopClock fakeClock_;
     bool closed_{false};
 };
 
@@ -490,6 +617,57 @@ int SimulationLoop::run() {
 
     // Pre-loop: provide initial feedback to input provider
     if (inputProvider_) inputProvider_->provideFeedback(state.previousStats);
+
+    // Instant --start-from — FILE TRACES ONLY (durationS() >= 0). The owner
+    // contract: rows before the offset NEVER existed — no frame of them is
+    // simulated, whatever the offset (start, middle, end; a capture may only
+    // hold the middle of a drive). The old warm-start prefix stepped the full
+    // sim from 0 to the offset at CPU speed (~0.35x real time — 31s of compute
+    // for a 90s offset) to carry the gas path's history; the owner has
+    // rejected that trade. The replacement synthesizes the arrival state:
+    //
+    //   (1) PROVIDER PRIME (IArrivalStatePrimer): the twin warm-boots seeded
+    //       from the ARRIVAL row (first row at/after the offset: throttle,
+    //       road speed, selector) and settles its gearbox/coupling at that
+    //       operating point; the replay clock cold-jumps onto the arrival
+    //       row's timecode. Twin-only, microseconds.
+    //   (2) CORE SETTLE (here): a BOUNDED window (kArrivalSettleSeconds of
+    //       sim time) stepping the full per-tick path with the HELD arrival
+    //       row as a CONSTANT input and all emission suppressed. The wheel
+    //         pin (PIN/TC coupling) drags the drivetrain to the recorded
+    //       road speed — the engine catches through its own physics (the
+    //       same bump-start the live attach uses, family-A ~0.17s) — and the
+    //       gas path (intake runners, chambers, exhaust basin) relaxes to
+    //       the quasi-steady state CONSISTENT with that rpm/throttle: the
+    //       steady state is an attractor of the operating point, so holding
+    //       the point reaches it without any pre-offset history. This is the
+    //       same "construct a running engine at time T" model as preset
+    //       hot-swap (transferDrivetrainState) — momentum transfer through
+    //       the drivetrain, never a hand-set crank speed.
+    //   (3) HANDOFF: release the hold (rows emit from the arrival row on),
+    //       anchor the loop clock at the offset, reset the audio ring and
+    //       resync the schedule — identical handoff acts to the old prefix.
+    //
+    // LIVE streams (durationS() < 0, e.g. stdin) SKIP this block exactly as
+    // before: a live stream cannot be seeked, only consumed; the live
+    // provider implements its own instant contract (unpaced pre-window
+    // discard + warm-boot prime + display offset — see
+    // LiveTelemetryProvider::setStartFromS) and must stay unchanged.
+    //
+    // A provider with no offset (startFromS_ <= 0) skips this entirely ->
+    // zero behavior change for from-0 runs (byte-identical). Only
+    // IReplayTimeline providers (replay/live) carry an offset;
+    // keyboard/demo/manual providers don't, and the cast is null for them.
+    if (inputProvider_) {
+        const auto* timeline = dynamic_cast<const input::IReplayTimeline*>(inputProvider_);
+        if (timeline && timeline->getStartFromS() > 0.0
+                && timeline->durationS() >= 0.0) {
+            auto* primer = dynamic_cast<input::IArrivalStatePrimer*>(inputProvider_);
+            ASSERT(primer, "file-trace --start-from provider must implement "
+                           "IArrivalStatePrimer (instant arrival-state prime)");
+            settleAtArrivalPoint(state, *primer, timeline->getStartFromS());
+        }
+    }
 
     // Main loop: thin wrapper calling step()
     for (;;) {
@@ -541,19 +719,52 @@ StepResult SimulationLoop::step(LoopState& state) {
         return StepResult::Stop;
     }
 
+    // Brake-light assembly — the SINGLE derivation point. brakeLight is the
+    // canonical display/start-stop signal; brakeLevel is the physics control
+    // (keyboard 'B' is its only writer). Telemetry (CSV brake_light column)
+    // supplies the light directly; when no telemetry reports it, the local
+    // brake level derives it. The light never writes the level (physics).
+    // The pre-assembly presence of the value tells the start/stop decision
+    // below whether telemetry reported an opinion this frame.
+    const bool lightReportedByTelemetry = state.engineInput.brakeLight.has_value();
+    if (!lightReportedByTelemetry) {
+        state.engineInput.brakeLight = state.engineInput.brakeLevel > 0.0;
+    }
+
+    // Vehicle start/stop — the ONE decision site every input mode traverses
+    // (keyboard, demo, replay, live). Runs off the canonical light + gear so
+    // the consumer cannot tell the sources apart.
+    applyStartStopDecision(state, lightReportedByTelemetry);
+
     // Per-tick simulation logic
     CrankingController::State crankingState = applyCrankingDecision(state.combustionEngine, state.engineInput);
 
     applyVehicleControls(state.combustionEngine, state.engineInput, crankingState, state.lastDynoTorqueScale);
 
     audioBuffer_.updateSimulation(&simulator_, config_.updateInterval() * SECONDS_TO_MILLISECONDS);
-    audioBuffer_.fillBufferFromEngine(&simulator_, config_.framesPerUpdate());
+    // Physics tick (updateSimulation -> simulator->update) ALWAYS runs — it must
+    // advance identically in settle and main loop or the gas path stays cold at
+    // the handoff (the bug behind sick --start-from runs). Audio QUEUEING is
+    // gated: during the suppressed settle no rendered samples enter the
+    // playback ring (silent settle; the ring is drained/reset at handoff).
+    if (emitAudio_) {
+        audioBuffer_.fillBufferFromEngine(&simulator_, config_.framesPerUpdate());
+    }
 
-    writeTelemetry(state.currentTime, crankingState.startingThrottle, state.engineInput.ignition, crankingState.starterEngaged);
+    // CSV telemetry write is suppressed during the suppressed settle (emitCsv_
+    // gate); the engine is stepped normally (above).
+    if (emitCsv_) {
+        writeTelemetry(state.currentTime, crankingState.startingThrottle, state.engineInput.ignition, crankingState.starterEngaged);
+    }
 
     EngineSimStats stats = simulator_.getStats();
     state.currentTime += config_.updateInterval();
-    updatePresentation(stats, crankingState, state.engineInput, state.currentTime);
+    // Presentation suppressed during the suppressed settle (emitCsv_ false) so
+    // console progress lines don't print during the silent settle; the audio
+    // simulation advancement above keeps running regardless.
+    if (emitCsv_) {
+        updatePresentation(stats, crankingState, state.engineInput, state.currentTime);
+    }
 
     // Update cross-tick state
     state.previousStats = stats;
@@ -606,6 +817,14 @@ std::unique_ptr<ISimulatorSession> createSession(
     initializeSimulator(*simulator, config, logger, telemetryWriter, &config.engineConfig);
     SimulationConfig sessionConfig = config;
     sessionConfig.configPath = scriptPath;
+
+    // Bind the live BridgeSimulator to the input provider so it can install the
+    // fluid-coupling torque converter on the transmission when --coupling-model
+    // torque-converter is selected (the provider is constructed BEFORE the
+    // simulator exists, so the install is deferred until here).
+    if (auto* virtualIce = dynamic_cast<input::VirtualIceInputProvider*>(inputProvider)) {
+        virtualIce->setBridgeSimulator(dynamic_cast<::BridgeSimulator*>(simulator.get()));
+    }
 
     // Initialize audio buffer and create hardware provider (first run only)
     AudioBufferConfig strategyConfig;

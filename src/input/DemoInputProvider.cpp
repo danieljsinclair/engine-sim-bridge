@@ -102,6 +102,8 @@ EngineInput DemoInputProvider::OnUpdateSimulation(double dt) {
     // NOTE: brakeLevel is tracked but has no physics effect yet.
     // Dyno-based approach was investigated but dyno is a velocity-targeting
     // measurement constraint, not a brake. Needs Vehicle drag/force API.
+    // The brake LIGHT derives from this level at the SimulationLoop assembly
+    // point (same as the standard keyboard path).
     input.brakeLevel = brake;
 
     return input;

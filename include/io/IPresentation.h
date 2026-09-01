@@ -10,6 +10,7 @@
 #include <string>
 #include <memory>
 #include <functional>
+#include <optional>
 #include "simulation/EnginePhase.h"
 
 namespace presentation {
@@ -21,13 +22,18 @@ namespace presentation {
 struct EngineState {
     // Engine physics + operational state
     struct Engine {
-        double rpm = 0.0;
+        double rpm = 0.0;             // tach-sensor rpm (first-order, tau=0.1s)
+        double rpmRaw = 0.0;          // raw crank rpm (evidence; never destroy it)
         double load = 0.0;
         double exhaustFlow = 0.0;     // m^3/s
         double engineTorqueNm = 0.0;
         double drivetrainTorqueNm = 0.0;
         bool starterEngaged = false;   // Starter motor physically engaged with engine
         EnginePhase phase = EnginePhase::Stopped;
+        // Synth output level of the last rendered audio block: post-leveler,
+        // pre-volume RMS in int16 output scale (what you would hear at volume
+        // 1). -1.0 = nothing rendered yet (honest-absent).
+        double synthOutputRms = -1.0;
     } engine;
 
     // Mechanical transmission state
@@ -38,13 +44,28 @@ struct EngineState {
         double dynoTorque = 0.0;
         double dynoTargetRPM = 0.0;
         double replayTimestampS = -1.0;  // absolute CSV timestamp (-1 = not replaying)
+        // Live coupling diagnostics (surfaced from the twin for the inline
+        // [Gear:DAx TC/Cl NN%] readout and the CSV-out spelunking path).
+        double clutchPressure = -1.0;    // coupling engagement: 0=decoupled .. 1=coupled (-1=unknown)
+        double roadImpliedRpm = 0.0;     // RPM if engine locked to wheels in current gear
+        bool creepReliefFired = false;   // creep-drag relief opened the clutch this frame
+        // Label selector for clutchPressure: 'TC' when the torque-converter
+        // model produced it (fluid coupling engagement), 'Cl' for the
+        // clutch-map/legacy friction-clutch pressure. Same field either way —
+        // normalized coupling engagement.
+        bool couplingIsTorqueConverter = false;
     } drivetrain;
 
     // User control inputs (what the driver is commanding)
     struct Controls {
         double throttle = 0.0;         // Effective (cranking-aware)
         bool ignition = false;
-        double brakeLevel = 0.0;
+        std::optional<bool> brakeLight;  // vehicle brake light (nullopt = not reported)
+        // Steering wheel angle in degrees, signed (CAN 0x129 SCCM_steeringAngle
+        // via the vehicle-sim steering_angle_deg column). nullopt = feed does
+        // not carry steering (non-DBC sources) — the console readout degrades
+        // to nothing. Display-only.
+        std::optional<double> steeringAngleDeg;
         int gearSelector = 0;
         bool gearAutoMode = false;
         // Commanded road-speed target (km/h) from the ','/'.' keys. Negative
@@ -125,6 +146,12 @@ public:
     virtual void ShowMessage(const std::string& message) = 0;
     virtual void ShowError(const std::string& error) = 0;
     virtual void ShowProgress(double currentTime, double duration) = 0;
+
+    // Suppress file-backed CSV row emission (e.g. during the suppressed
+    // --start-from arrival settle). Default no-op: console-only presentations
+    // ignore it (no file artifact to corrupt). CsvPresentation overrides it to
+    // close/suppress its writer.
+    virtual void setCsvEmissionEnabled(bool /*enabled*/) {}
 
     virtual void Update(double dt) = 0;
 };

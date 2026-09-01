@@ -12,6 +12,8 @@
 
 #include <memory>
 
+#include <twin/SlipLockController.h>
+
 namespace twin {
 
 // Which wheel-speed source drives the slip-lock / vehicle-speed pin.
@@ -39,6 +41,19 @@ public:
     // the strategy keeps the twin free of mode-specific conditionals (OCP).
     virtual bool launchAssistAtStandstill() const = 0;
 
+    // Does this mode open the clutch to relieve creep-drag at standstill? PIN
+    // pins the sim wheels to the upstream road speed, so at standstill an engaged
+    // clutch (even at the slip-lock floor) couples the engine to a wheel that
+    // cannot turn and drags it down through idle to stall (the creep clutch-drag
+    // bug). PIN relieves by opening the clutch so the engine idles decoupled
+    // (the pinned wheel follows the CSV regardless). FREE/TORQUE do NOT relieve:
+    // their vehicle speed is independent/emergent, so at standstill their
+    // launch-assist path owns the clutch and an open clutch would free-rev them.
+    // The twin applies the relief uniformly below the profile's standstill
+    // threshold (no mode conditional in the twin) — this method only declares
+    // the strategy's behaviour, mirroring launchAssistAtStandstill above.
+    virtual bool relievesCreepDragAtStandstill() const = 0;
+
     // Recorded drivetrain torque (Nm) to inject at the transmission input this
     // frame (MATCH mode). Torque returns the recorded value verbatim so the
     // solver integrates road speed from it; Free/Pin return 0 (no injection — a
@@ -49,10 +64,17 @@ public:
     // behaviour such as the FREE-mode standstill clutch-pressure floor).
     virtual WheelCouplingMode getMode() const = 0;
 
-    // Clutch lock override for PIN mode: when road-implied RPM >= idle, return
-    // 1.0 to force clutch lock (engine rigidly follows wheel×gear×diff).
-    // Return -1.0 to defer to the slip-lock controller (FREE/TORQUE default).
-    virtual double clutchLockOverride(double roadSpeedImpliedRpm, double idleRpm) const = 0;
+    // Clutch pressure for PIN mode. Returns a concrete clutch pressure that the
+    // twin uses INSTEAD of the emergent slip-lock pass — PIN pins the wheels, so
+    // the clutch must be the bounded slip-lock (engine revs on launch via partial
+    // pressure, locks at cruise) rather than the rigid 1.0 full-lock or the
+    // FREE/TORQUE emergent path. Returns -1.0 to defer to the slip-lock
+    // controller (FREE/TORQUE default).
+    virtual double clutchLockOverride(double engineRpm,
+                                      double roadSpeedImpliedRpm,
+                                      double throttleFraction,
+                                      double idleRpm,
+                                      double redlineRpm) const = 0;
 };
 
 // FREE (default): the slip-lock uses the ACTUAL simulated wheel speed, and we do
@@ -66,9 +88,12 @@ public:
         return -1.0;
     }
     bool launchAssistAtStandstill() const override { return true; }
+    bool relievesCreepDragAtStandstill() const override { return false; }
     double injectedInputTorqueNm(double /*recordedTorqueNm*/) const override { return 0.0; }
     WheelCouplingMode getMode() const override { return WheelCouplingMode::Free; }
-    double clutchLockOverride(double /*roadSpeedImpliedRpm*/, double /*idleRpm*/) const override {
+    double clutchLockOverride(double /*engineRpm*/, double /*roadSpeedImpliedRpm*/,
+                              double /*throttleFraction*/, double /*idleRpm*/,
+                              double /*redlineRpm*/) const override {
         return -1.0;  // Free mode: slip-lock controls clutch pressure
     }
 };
@@ -84,13 +109,30 @@ public:
         return csvKmh;
     }
     bool launchAssistAtStandstill() const override { return false; }
+    bool relievesCreepDragAtStandstill() const override { return true; }
     double injectedInputTorqueNm(double /*recordedTorqueNm*/) const override { return 0.0; }
     WheelCouplingMode getMode() const override { return WheelCouplingMode::Pin; }
-    double clutchLockOverride(double roadSpeedImpliedRpm, double idleRpm) const override {
-        // PIN mode: lock the clutch (pressure=1.0) once road-implied RPM >= idle,
-        // so the engine rigidly follows wheel×gear×diff. Below idle (standstill)
-        // defer to slip-lock/launch-assist for creep.
-        return (roadSpeedImpliedRpm >= idleRpm) ? 1.0 : -1.0;
+    double clutchLockOverride(double engineRpm, double roadSpeedImpliedRpm,
+                              double throttleFraction, double idleRpm,
+                              double redlineRpm) const override {
+        // PIN mode: the clutch uses the BOUNDED slip-lock controller (not the
+        // rigid full-lock). Because PIN pins the wheels, the wheel-speed source
+        // fed to the slip-lock is the CSV road speed, so the slip-lock modulates
+        // pressure from the engine↔road mismatch: at launch (high slip) it slips
+        // with PARTIAL pressure (engine revs, not lugged, not rigidly locked);
+        // as road catches up (slip→0) pressure→1.0 and the engine locks to
+        // wheel×gear×diff. The re-tuned controller's pressure floor guarantees
+        // the clutch is NEVER fully open, so the engine can never free-rev to the
+        // redline (the old bug). This is the "bounded slip-lock" for PIN.
+        //
+        // Standstill creep-drag relief is NOT applied here (this function lacks
+        // the vehicle speed) — the twin opens the clutch below the profile's
+        // standstill threshold via relievesCreepDragAtStandstill() above.
+        return computeSlipLockPressure(
+                   SlipLockInput{engineRpm, roadSpeedImpliedRpm,
+                                 throttleFraction, idleRpm, redlineRpm},
+                   /*maxCreepPressure=*/0.10)
+            .clutchPressure;
     }
 };
 
@@ -113,11 +155,14 @@ public:
         return -1.0;  // no pin - speed emerges from torque
     }
     bool launchAssistAtStandstill() const override { return true; }
+    bool relievesCreepDragAtStandstill() const override { return false; }
     double injectedInputTorqueNm(double recordedTorqueNm) const override {
         return recordedTorqueNm;  // inject recorded torque -> solver integrates speed
     }
     WheelCouplingMode getMode() const override { return WheelCouplingMode::Torque; }
-    double clutchLockOverride(double /*roadSpeedImpliedRpm*/, double /*idleRpm*/) const override {
+    double clutchLockOverride(double /*engineRpm*/, double /*roadSpeedImpliedRpm*/,
+                              double /*throttleFraction*/, double /*idleRpm*/,
+                              double /*redlineRpm*/) const override {
         return -1.0;  // Torque mode: slip-lock controls clutch pressure (emergent speed)
     }
 };

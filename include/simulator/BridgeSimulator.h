@@ -15,12 +15,13 @@
 #include "telemetry/NullTelemetryWriter.h"
 #include "engine-sim/include/simulator.h"
 #include "simulator/BrakeConstraint.h"
+#include "input/IEngineActuator.h"
 
 #include <memory>
 #include <string>
 #include <vector>
 
-class BridgeSimulator : public ICombustionEngine {
+class BridgeSimulator : public ICombustionEngine, public input::IEngineActuator {
     // SimulatorFactory completes audio-config initialization at construction
     // (initAudioConfig populates engineConfig_ + sizes the audio buffer) so a
     // freshly-factory-built simulator reports a correct simulationFrequency and
@@ -44,6 +45,11 @@ public:
     // ISimulator audio pipeline
     void update(double deltaTime) override;
     bool renderOnDemand(float* buffer, int32_t frames, int32_t* written) override;
+    // Drain-only render: synthesize + read audio WITHOUT advancing the core.
+    // Used by SyncPull when the loop thread owns core advancement (see
+    // SyncPullStrategy::updateSimulation), so the audio callback only pulls
+    // already-synthesized audio instead of stepping the engine itself.
+    bool renderDrainedAudio(float* buffer, int32_t frames, int32_t* written) override;
     bool readAudioBuffer(float* buffer, int32_t frames, int32_t* read) override;
     bool start() override;
     void stop() override;
@@ -68,6 +74,16 @@ public:
     int getGear() const override;
     void setClutchPressure(double pressure) override;
     void setBrakePressure(double pressure) override;
+
+    // Install the fluid-coupling torque converter on the live transmission
+    // (proper SCS direct-torque model). Called when --coupling-model
+    // torque-converter is selected. The converter is added in parallel with the
+    // friction clutch; the friction clutch is then only used to open the
+    // driveline during a shift. Safe to call once after the simulator has loaded
+    // its script. No-op if the converter is already installed or the
+    // transmission is unavailable.
+    void setUseTorqueConverter(bool enabled);
+    bool usesTorqueConverter() const { return usesTorqueConverter_; }
 
     // MATCH mode: inject recorded drivetrain torque (Nm) at the transmission
     // input / rotating-mass side. The torque flows clutch->gearbox->diff->wheels.
@@ -133,10 +149,12 @@ private:
     // Single source of truth for engine phase — written via applyTransition()
     EnginePhase enginePhase_ = EnginePhase::Stopped;
 
-    // Cached transmission state — written on setGear/setClutchPressure so
-    // mutations are visible to static analysis without requiring const on a
-    // pointee-only mutation path.
+    // Cached transmission state — written on setGear/setDrivetrainInputTorque
+    // so mutations are visible to static analysis without requiring const on a
+    // pointee-only mutation path (S5817 false positive: the adapter mutates
+    // the Simulator owned by m_simulator, not this object's members directly).
     int lastSetGear_ = 0;
+    double lastDrivetrainInputTorqueNm_ = 0.0;
 
     static void advanceFixedSteps(Simulator* sim, int simulationFrequency, double dt, bool ceil);
     void drainSynthesizerBuffer(Simulator* sim) const;
@@ -163,6 +181,10 @@ private:
     // Audio config
     std::vector<int16_t> m_audioConversionBuffer;
     ISimulatorConfig engineConfig_;
+
+    // Whether the fluid-coupling torque converter (proper SCS direct-torque
+    // model) is installed on the live transmission.
+    bool usesTorqueConverter_ = false;
 };
 
 #endif // BRIDGE_SIMULATOR_H
