@@ -26,6 +26,7 @@
 #include "io/IPresentation.h"
 #include "common/ILogging.h"
 #include "common/PresetExceptions.h"
+#include "common/wav_writer.h"
 #include "telemetry/ITelemetryProvider.h"
 #include "common/Verification.h"
 
@@ -406,11 +407,13 @@ public:
         const SimulationConfig& config,
         std::unique_ptr<ISimulator> simulator,
         const SessionDependencies& deps,
-        std::unique_ptr<IAudioHardwareProvider> hardwareProvider)
+        std::unique_ptr<IAudioHardwareProvider> hardwareProvider,
+        std::unique_ptr<WavWriter> wavWriter)
         : config_(config)
         , simulator_(std::move(simulator))
         , audioBuffer_(deps.audioBuffer)
         , hardwareProvider_(std::move(hardwareProvider))
+        , wavWriter_(std::move(wavWriter))
         , inputProvider_(deps.inputProvider)
         , presentation_(deps.presentation)
         , telemetryWriter_(deps.telemetryWriter)
@@ -564,6 +567,7 @@ private:
     std::unique_ptr<ISimulator> previousSimulator_;
     IAudioBuffer* audioBuffer_;
     std::unique_ptr<IAudioHardwareProvider> hardwareProvider_;
+    std::unique_ptr<WavWriter> wavWriter_;
     input::IInputProvider* inputProvider_;
     presentation::IPresentation* presentation_;
     telemetry::ITelemetryWriter* telemetryWriter_;
@@ -832,8 +836,41 @@ std::unique_ptr<ISimulatorSession> createSession(
     strategyConfig.synthLatency = config.engineConfig.targetSynthesizerLatency;
     audioBuffer->initialize(strategyConfig, config.sampleRate());
 
-    auto callback = [audioBuffer](AudioBufferView& buffer) {
-        return audioRenderCallback(audioBuffer, buffer);
+    // Optional WAV writer for --output <path>. Taps the rendered output AFTER
+    // the strategy fills the buffer (the true rendered-output seam) but BEFORE
+    // the hardware provider applies the --silent volume mute — so --silent does
+    // NOT suppress --output (the file is diagnostic and captures full-scale
+    // samples). Ownership passes to the SimulatorSession (lives for the session
+    // lifetime); the audio callback captures a raw pointer that stays valid for
+    // as long as the session does. No writer == no --output (byte-identical to
+    // legacy behavior).
+    std::unique_ptr<WavWriter> wavWriter;
+    if (config.outputWav && config.outputWav[0] != '\0') {
+        auto w = std::make_unique<WavWriter>();
+        if (w->open(config.outputWav,
+                   static_cast<uint32_t>(config.sampleRate()),
+                   static_cast<uint32_t>(EngineSimAudio::STEREO))) {
+            wavWriter = std::move(w);
+        } else {
+            logger->error(LogMask::AUDIO,
+                std::string("Failed to open --output WAV for writing: ") + config.outputWav);
+        }
+    }
+
+    // Stable raw pointer for the callback lambda. The session owns the writer
+    // (via wavWriter_) and outlives every callback invocation, so this pointer
+    // is valid for the callback's entire lifetime.
+    WavWriter* wavWriterPtr = wavWriter.get();
+    auto callback = [audioBuffer, wavWriterPtr](AudioBufferView& buffer) {
+        int rc = audioRenderCallback(audioBuffer, buffer);
+        // Tap rendered output for WAV writing (post-render, pre-silent-mute).
+        // asFloat() is non-null for the float32 render path; guard anyway.
+        if (wavWriterPtr && wavWriterPtr->isOpen()) {
+            if (const float* dst = buffer.asFloat(); dst) {
+                wavWriterPtr->writeFrames(dst, static_cast<uint64_t>(buffer.frameCount));
+            }
+        }
+        return rc;
     };
 
     // Use an injected provider when supplied (headless/testing); otherwise create
@@ -862,5 +899,6 @@ std::unique_ptr<ISimulatorSession> createSession(
         sessionConfig,
         std::move(simulator),
         sessionDeps,
-        std::move(hardwareProvider));
+        std::move(hardwareProvider),
+        std::move(wavWriter));
 }// GLOBAL scope — session factory, no access to SimulationLoop members
