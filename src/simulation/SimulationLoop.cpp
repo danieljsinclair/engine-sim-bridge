@@ -640,6 +640,12 @@ SimulationLoop::SimulationLoop(
         if (!clock_) {
             clock_ = steadyClock_.get();
         }
+
+        // Deterministic duration: pre-compute required tick count from config.
+        // Replaces FP-accumulated time comparison to eliminate row-count jitter.
+        requiredTicks_ = config_.duration > 0.0
+            ? static_cast<int>(std::round(config_.duration / config_.updateInterval()))
+            : 0;
     }
 
 int SimulationLoop::run() {
@@ -722,6 +728,10 @@ int SimulationLoop::run() {
 
     // Main loop: thin wrapper calling step()
     for (;;) {
+        // Deterministic tick counter: pre-increment before step() so termination
+        // in step() can compare against requiredTicks_ without FP time.
+        ++state.tickCount;
+
         // Execute one simulation tick
         StepResult result = step(state);
 
@@ -765,8 +775,10 @@ int SimulationLoop::run() {
 // ============================================================================
 
 StepResult SimulationLoop::step(LoopState& state) {
-    // Duration check: stop when currentTime reaches or exceeds duration
-    if (config_.duration > 0.0 && state.currentTime >= config_.duration) {
+    // Deterministic duration check: stop when tickCount exceeds requiredTicks_.
+    // This replaces the previous FP-accumulated time comparison which caused
+    // row-count jitter across identical runs.
+    if (requiredTicks_ > 0 && state.tickCount >= requiredTicks_) {
         return StepResult::Stop;
     }
 

@@ -77,6 +77,7 @@ struct LoopState {
     EngineSimStats previousStats = {};
     bool isFirstTick = true;
     ICombustionEngine* combustionEngine = nullptr;
+    int tickCount = 0;  // Deterministic tick counter for duration termination
 };
 
 // ============================================================================
@@ -255,6 +256,11 @@ private:
                                       // signal is seen, the controller keeps it
     bool prevStarterLevel_ = false;   // edge detection for the starter pulse
     bool startApplied_ = false;       // --start latch: requestCombinedStart fires once
+
+    // Deterministic duration termination: pre-computed tick count from config
+    // duration. Replaces FP-accumulated time comparison to eliminate row-count
+    // jitter across identical runs.
+    int requiredTicks_ = 0;
 };
 
 // ============================================================================
