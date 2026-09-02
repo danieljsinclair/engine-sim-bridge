@@ -167,6 +167,14 @@ TEST_F(StrategyPipelineTest, SyncPullStrategy_Render_ProducesAudioOnSuccessiveCa
     const int FRAMES_PER_CALL = 64;
 
     for (int call = 0; call < NUM_RENDER_CALLS; ++call) {
+        // Feed input before each render: renderAudioOnDemand now consumes input
+        // atomically (read + remove under m_lock0), so each call synthesizes
+        // exactly the input that arrived since the previous call. Without this
+        // update the synth's input ring would deplete and later renders would
+        // produce silence. Mirrors what the loop thread does in production
+        // (updateSimulation -> advanceFixedSteps -> writeToSynthesizer).
+        engine.simulator->update(1.0 / 60.0);
+
         AudioBufferView audioBuffer = createAudioBuffer(FRAMES_PER_CALL);
 
         bool result = strategy->render(audioBuffer);
@@ -193,6 +201,9 @@ TEST_F(StrategyPipelineTest, SyncPullStrategy_Render_FirstAndSubsequentCallsBoth
     ASSERT_TRUE(strategy->startPlayback(engine.simulator.get()));
 
     const int FRAMES = 64;
+
+    // Feed input before each render (see SyncPullStrategy_Render_ProducesAudioOnSuccessiveCalls).
+    engine.simulator->update(1.0 / 60.0);
 
     // First render
     AudioBufferView firstBuffer = createAudioBuffer(FRAMES);
@@ -300,13 +311,16 @@ TEST_F(StrategyPipelineTest, SyncPull_ReadAudioBufferDrainsEngineBeforeRenderOnD
 
     const int FRAMES = 64;
 
+    // Feed input before the first render (mirrors loop thread).
+    engine.simulator->update(1.0 / 60.0);
+
     // First render (baseline)
     AudioBufferView firstBuffer = createAudioBuffer(FRAMES);
     ASSERT_TRUE(strategy->render(firstBuffer));
     bool firstSilent = isAllSilence(firstBuffer.asFloat(), FRAMES);
     freeAudioBuffer(firstBuffer);
 
-    // Advance simulation
+    // Advance simulation again so there is fresh input to drain.
     engine.simulator->update(1.0 / 60.0);
 
     // Drain via readAudioBuffer
@@ -340,10 +354,17 @@ TEST_F(StrategyPipelineTest, SyncPull_RenderOnDemand_RecoversAfterReadAudioBuffe
 
     const int FRAMES = 64;
 
+    // Feed input before drain so there is audio to drain + recover from.
+    engine.simulator->update(1.0 / 60.0);
+
     // Drain via readAudioBuffer
     std::vector<float> drainBuffer(FRAMES * 2);
     int drained = 0;
     engine.simulator->readAudioBuffer(drainBuffer.data(), FRAMES, &drained);
+
+    // Feed fresh input after the drain so the subsequent render has audio
+    // to drain WITHOUT needing the (now-removed) renderOnDemand fallback.
+    engine.simulator->update(1.0 / 60.0);
 
     // Immediate render
     AudioBufferView starvedBuffer = createAudioBuffer(FRAMES);
@@ -475,6 +496,14 @@ TEST_F(StrategyPipelineTest, SyncPullStrategy_Render_AccumulatesFramesAcrossMult
     const int NUM_CALLS = 4;
 
     for (int i = 0; i < NUM_CALLS; ++i) {
+        // Feed input before each render: renderAudioOnDemand now consumes input
+        // atomically (read + remove under m_lock0), so each call synthesizes
+        // exactly the input that arrived since the previous call. Without this
+        // update the synth's input ring would deplete and later renders would
+        // produce fewer frames. This mirrors what the loop thread does in
+        // production (updateSimulation -> advanceFixedSteps -> writeToSynthesizer).
+        engine.simulator->update(1.0 / 60.0);
+
         AudioBufferView audioBuffer = createAudioBuffer(FRAMES_PER_CALL);
         ASSERT_TRUE(strategy->render(audioBuffer));
         freeAudioBuffer(audioBuffer);
