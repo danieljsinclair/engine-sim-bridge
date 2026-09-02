@@ -126,6 +126,17 @@ private:
     float lastAudioLeft_ = 0.0f;
     float lastAudioRight_ = 0.0f;
     int fadeInProgress_ = 0;
+
+    // Startup zero-drain guard. The synthesizer ring is zero-initialized, so
+    // before the engine produces its first sample renderDrainedAudio() can
+    // return FULL chunks of exact-zero frames that read as genuine audio —
+    // consuming the startup fade-in on silence and leaving the first real
+    // sample to arrive as a hard edge (the startup crackle), while the WAV
+    // records a long exact-zero block. Until the first chunk containing a
+    // non-zero sample is seen, all-zero drained chunks are discarded to the
+    // dry path (faded floor fill) and fadeInProgress_ stays armed for the
+    // first REAL audio. Flips to true permanently at first real audio.
+    bool seenRealAudio_ = false;
     // FADE_SAMPLES and SILENCE_FLOOR live in EngineSimAudio (EngineSimTypes.h)
     // so audioRenderCallback and SyncPullStrategy share one definition.
 };

@@ -117,6 +117,7 @@ bool SyncPullStrategy::startPlayback(ISimulator* simulator) {
     lastAudioLeft_ = EngineSimAudio::SILENCE_FLOOR;
     lastAudioRight_ = EngineSimAudio::SILENCE_FLOOR;
     fadeInProgress_ = EngineSimAudio::FADE_SAMPLES;
+    seenRealAudio_ = false;
 
     logger_->info(LogMask::AUDIO, __ilog_format("SyncPullStrategy::startPlayback: On-demand rendering started"));
 
@@ -185,6 +186,26 @@ bool SyncPullStrategy::attemptRender(float* dst, int offset, int framesNeeded,
         &framesWritten
     );
 
+    if (result && framesWritten > 0 && !seenRealAudio_) {
+        // Zero-drain guard (startup window): the ring starts zero-filled, so a
+        // full read of exact zeros is pre-first-sample ring content, not audio.
+        // Discard it to the dry path below (faded floor, fadeInProgress_ stays
+        // armed) instead of letting silence consume the startup fade-in.
+        const float* audio = dst + (offset * 2);
+        const int samples = framesWritten * 2;
+        bool anyNonZero = false;
+        for (int i = 0; i < samples; ++i) {
+            if (audio[i] != 0.0f) { anyNonZero = true; break; }
+        }
+        if (anyNonZero) {
+            seenRealAudio_ = true;
+        } else {
+            logger_->debug(LogMask::AUDIO,
+                __ilog_format("SyncPullStrategy::attemptRender: startup zero-drain discarded (%d frames)", framesWritten));
+            framesWritten = 0;
+        }
+    }
+
     if (result && framesWritten > 0) {
         // Real synthesized audio produced. Apply a fade-in ramp at the start of
         // this chunk if we are resuming from a silence gap (silence->audio
@@ -222,6 +243,7 @@ bool SyncPullStrategy::attemptRender(float* dst, int offset, int framesNeeded,
                 __ilog_format("SyncPullStrategy::attemptRender: partial drain %d/%d, fading %d tail frames (lastL=%.4f lastR=%.4f)",
                 framesWritten, framesNeeded, silenceFrames, lastAudioLeft_, lastAudioRight_));
         }
+        fprintf(stderr, "[FADE] attemptRender tail written=%d need=%d\n", framesWritten, framesNeeded);
         fillSilenceFaded(dst + (offset + framesWritten) * 2, silenceFrames);
         framesWritten = framesNeeded;
     }
@@ -239,6 +261,7 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
     }
 
     if (!simulator_ || shuttingDown_.load()) {
+        fprintf(stderr, "[FILL] A teardown frames=%d\n", buffer.frameCount);
         EngineSimAudio::fillSilence(dst, buffer.frameCount);
         return true;
     }
@@ -264,6 +287,7 @@ int SyncPullStrategy::renderChunked(float* dst, int framesToGenerate) {
     while (remainingFrames > 0 && framesRendered < framesToGenerate && !shuttingDown_.load()) {
         int32_t framesWritten = 0;
         if (!attemptRender(dst, framesRendered, remainingFrames, framesWritten)) {
+            fprintf(stderr, "[FILL] B attemptfail frames=%d\n", framesToGenerate);
             EngineSimAudio::fillSilence(dst, framesToGenerate);
             return framesRendered;
         }
@@ -279,6 +303,7 @@ int SyncPullStrategy::renderChunked(float* dst, int framesToGenerate) {
             int32_t retryFrames = 0;
             if (bool retryOk = retryRender(dst, framesRendered, remainingFrames, retryFrames, MAX_RETRIES); !retryOk) {
                 logger_->error(LogMask::AUDIO, __ilog_format("SyncPullStrategy::render: renderOnDemand failed during retry, filling silence"));
+                fprintf(stderr, "[FILL] C retryfail frames=%d\n", framesToGenerate);
                 EngineSimAudio::fillSilence(dst, framesToGenerate);
                 return framesRendered;
             }

@@ -219,6 +219,8 @@ int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer) {
         if (float* dst = buffer.asFloat(); dst) {
             const size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
             constexpr float kStartupFloor = EngineSimAudio::SILENCE_FLOOR;
+            static int npCalls = 0;
+            if (npCalls < 12) { fprintf(stderr, "[NP] notplaying floor frames=%d\n", buffer.frameCount); npCalls++; }
             for (size_t i = 0; i < totalSamples; ++i) {
                 dst[i] = kStartupFloor;
             }
