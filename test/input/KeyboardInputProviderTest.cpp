@@ -51,6 +51,13 @@ protected:
         drainFrame(dt);
     }
 
+    // Drain a frame with no key event — releases any held key so the next
+    // press of the same key is detected as a new edge (KeyHoldBridge treats
+    // a key still-down as a repeat, not a press).
+    void releaseKeys(double dt = 16.0) {
+        drainFrame(dt);
+    }
+
     // Convenience: enqueue multiple keys (one per frame) and drain all
     void pressKeys(const std::vector<int>& keys, double dt = 16.0) {
         for (int key : keys) {
@@ -188,6 +195,8 @@ TEST_F(KeyboardDispatchTest, IKey_RequestsIgnitionThroughSharedMachine) {
     pressKey('i');
     ASSERT_EQ(mockTargetPtr->ignitionRequests.size(), 1u);
     EXPECT_FALSE(mockTargetPtr->ignitionRequests.back());
+    // Release so the next 'i' is a fresh edge (KeyHoldBridge edge-detects).
+    releaseKeys();
     // Second press requests ON again.
     pressKey('i');
     ASSERT_EQ(mockTargetPtr->ignitionRequests.size(), 2u);
