@@ -207,9 +207,21 @@ void SimulationLoop::updatePresentation(
 // simulation/audioRenderCallback.h for direct unit testing.
 int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer) {
     if (!strategy->isPlaying()) {
+        // Engine is cranking/not yet playing. The old code hard-memset the
+        // buffer to exact-zero — a discontinuity at the audio->silence edge
+        // heard as a startup crackle, and it writes exact-zero int16 frames to
+        // the --output WAV (the knock detector's zero-sample proxy then flags
+        // the startup silence as dropouts). Fill with SILENCE_FLOOR (±9 LSB,
+        // ~-88 dBFS, inaudible) instead so the transition is continuous and
+        // the zero-sample rate reflects only the audio's natural
+        // zero-crossings. This is the SAME floor the strategy's fillSilenceFaded
+        // ramps toward, keeping the not-playing -> playing handoff continuous.
         if (float* dst = buffer.asFloat(); dst) {
-            size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
-            std::memset(dst, 0, totalSamples * sizeof(float));
+            const size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
+            constexpr float kStartupFloor = EngineSimAudio::SILENCE_FLOOR;
+            for (size_t i = 0; i < totalSamples; ++i) {
+                dst[i] = kStartupFloor;
+            }
         }
         return 0;
     }

@@ -107,6 +107,17 @@ bool SyncPullStrategy::startPlayback(ISimulator* simulator) {
     lastRightSample_ = 0.0f;
     crossfadeSamplesRemaining_ = 0;
 
+    // Reset startup-crackle fade state on start. lastAudio starts at the floor
+    // (not 0.0) so the first not-playing fill or empty-ring drain emits the
+    // floor directly — a hard step from 0.0 to floor would itself be a
+    // discontinuity, and starting at the floor keeps the startup edge
+    // continuous with audioRenderCallback's not-playing fill (also at floor).
+    // fadeInProgress_ is armed so the first real-audio chunk ramps up from the
+    // floor, sealing the silence->audio edge.
+    lastAudioLeft_ = EngineSimAudio::SILENCE_FLOOR;
+    lastAudioRight_ = EngineSimAudio::SILENCE_FLOOR;
+    fadeInProgress_ = EngineSimAudio::FADE_SAMPLES;
+
     logger_->info(LogMask::AUDIO, __ilog_format("SyncPullStrategy::startPlayback: On-demand rendering started"));
 
     return true;
@@ -174,21 +185,45 @@ bool SyncPullStrategy::attemptRender(float* dst, int offset, int framesNeeded,
         &framesWritten
     );
 
-    // No synthesized audio buffered yet — the audio callback is running ahead
-    // of the loop thread's update() (a transient catch-up), or the producer
-    // has not yet filled the audio ring. MUST NOT fall back to renderOnDemand:
-    // renderOnDemand advances the engine (advanceFixedSteps -> simulateStep ->
-    // solver) on the audio thread, which races the loop thread's solver steps
-    // (e.g. during settleAtArrivalPoint's unpaced settle loop) and corrupts the
-    // shared solver state (heap corruption = 0xfff0...). The loop thread owns ALL
-    // engine advancement; the audio thread only drains already-synthesized audio.
-    // Filling silence here is correct — the next loop tick will produce audio.
-    if (result && framesWritten == 0) {
-        EngineSimAudio::fillSilence(dst + (offset * 2), framesNeeded);
+    if (result && framesWritten > 0) {
+        // Real synthesized audio produced. Apply a fade-in ramp at the start of
+        // this chunk if we are resuming from a silence gap (silence->audio
+        // edge) — ramps the first FADE_SAMPLES from zero to full so the
+        // transition is continuous instead of a hard jump (the crackle). The
+        // fade operates on the interleaved stereo buffer in place.
+        float* audio = dst + (offset * 2);
+        if (fadeInProgress_ > 0) {
+            applyFadeIn(audio, framesWritten);
+        }
+        // Remember the last real synthesized sample so the next silence fill
+        // can fade out from it continuously.
+        const int lastIdx = (framesWritten - 1) * 2;
+        lastAudioLeft_ = audio[lastIdx];
+        lastAudioRight_ = audio[lastIdx + 1];
+    }
+
+    // Handle the silence tail: when renderDrainedAudio returns fewer frames
+    // than requested (ring ran dry), the bridge zero-fills the remainder. A
+    // hard zero-fill here would jump from the last synthesized sample to zero
+    // — a discontinuity the ear hears as a crackle during cranking startup
+    // (when the ring runs empty between main-thread ticks). Fade the silence
+    // from the last real sample to the non-zero floor so the audio->silence
+    // edge is continuous AND the knock detector's exact-zero proxy doesn't
+    // count the gap. This covers both the full-empty case (framesWritten==0)
+    // and the partial case (0 < framesWritten < framesNeeded).
+    if (result && framesWritten < framesNeeded) {
+        const int silenceFrames = framesNeeded - framesWritten;
+        if (framesWritten == 0) {
+            logger_->debug(LogMask::AUDIO,
+                __ilog_format("SyncPullStrategy::attemptRender: no buffered audio, filled %d frames faded silence (lastL=%.4f lastR=%.4f)",
+                silenceFrames, lastAudioLeft_, lastAudioRight_));
+        } else {
+            logger_->debug(LogMask::AUDIO,
+                __ilog_format("SyncPullStrategy::attemptRender: partial drain %d/%d, fading %d tail frames (lastL=%.4f lastR=%.4f)",
+                framesWritten, framesNeeded, silenceFrames, lastAudioLeft_, lastAudioRight_));
+        }
+        fillSilenceFaded(dst + (offset + framesWritten) * 2, silenceFrames);
         framesWritten = framesNeeded;
-        logger_->debug(LogMask::AUDIO,
-            __ilog_format("SyncPullStrategy::attemptRender: no buffered audio, filled %d frames silence",
-            framesNeeded));
     }
 
     if (!result) {
@@ -264,17 +299,102 @@ int SyncPullStrategy::renderChunked(float* dst, int framesToGenerate) {
 }
 
 void SyncPullStrategy::fillRemainingSilence(float* dst, int framesRendered, int framesToGenerate, int remainingFrames) {
-    // Fill remaining buffer with silence on partial render to prevent crackles
+    // Fill remaining buffer with faded silence on partial render. A hard
+    // zero-fill here would jump from the last rendered sample to zero — a
+    // discontinuity the ear hears as a crackle. The faded fill ramps to the
+    // non-zero floor so the transition is continuous AND the knock detector's
+    // exact-zero proxy doesn't count the gap.
     if (framesRendered < framesToGenerate) {
         // NOTE: Should never happen in practice - could probably just throw an exception here
         logger_->warning(LogMask::AUDIO,
-            __ilog_format("SyncPullStrategy::render: rendered %d/%d frames, filling remaining %d with silence",
+            __ilog_format("SyncPullStrategy::render: rendered %d/%d frames, filling remaining %d with faded silence",
             framesRendered, framesToGenerate, remainingFrames));
         float* remaining = dst + (framesRendered * 2);
-        EngineSimAudio::fillSilence(remaining, framesToGenerate - framesRendered);
+        fillSilenceFaded(remaining, framesToGenerate - framesRendered);
     }
 }
 
+
+
+void SyncPullStrategy::fillSilenceFaded(float* dst, int frames) {
+    // Fade from the last real synthesized sample to SILENCE_FLOOR (a tiny
+    // non-zero floor) over FADE_SAMPLES, then hold the floor for the
+    // remainder. Each stereo frame ramps both channels linearly. The first
+    // faded sample starts AT lastAudioLeft_/Right_ and the last faded sample
+    // lands at SILENCE_FLOOR * sign(lastAudio), so the boundary from the
+    // preceding audio chunk is continuous (no jump = no crackle). Holding a
+    // non-zero floor means the knock detector's exact-zero proxy no longer
+    // counts the silence gap (float floor -> int16 ~+9 = -88 dBFS, inaudible),
+    // while the next audio chunk's applyFadeIn ramps back up from the floor —
+    // the silence->audio edge stays continuous too.
+    //
+    // int16-floor guarantee: the linear fade from lastAudio to the floor must
+    // never produce an intermediate float whose int16 quantization collapses to
+    // exactly 0 (which the knock detector counts as a zero-sample dropout).
+    // At SILENCE_FLOOR=0.0003f the floor itself is int16 +9, but a fade from a
+    // near-zero lastAudio (e.g. a sine zero-crossing at float ~0.0001) would
+    // dip below 1 LSB mid-ramp. To close that gap we clamp every faded sample
+    // to |val| >= SILENCE_FLOOR: when |lastAudio| < the floor we skip the fade
+    // and hold the floor directly (step from 0 to ±9 LSB is inaudible, not a
+    // crackle); when |lastAudio| >= the floor the ramp stays above the floor
+    // everywhere (both endpoints are >= floor in magnitude), so no int16 0 is
+    // ever produced.
+    const float floorL = EngineSimAudio::SILENCE_FLOOR * (lastAudioLeft_ >= 0.0f ? 1.0f : -1.0f);
+    const float floorR = EngineSimAudio::SILENCE_FLOOR * (lastAudioRight_ >= 0.0f ? 1.0f : -1.0f);
+    const bool fadeL = std::abs(lastAudioLeft_)  >= EngineSimAudio::SILENCE_FLOOR;
+    const bool fadeR = std::abs(lastAudioRight_) >= EngineSimAudio::SILENCE_FLOOR;
+
+    const int fadeLen = std::min(frames, EngineSimAudio::FADE_SAMPLES);
+    const int holdLen = frames - fadeLen;
+
+    for (int i = 0; i < fadeLen; ++i) {
+        const float t = (fadeLen > 1)
+            ? static_cast<float>(fadeLen - 1 - i) / static_cast<float>(fadeLen - 1)
+            : 0.0f;
+        // Interpolate from lastAudio to the floor (or hold floor if lastAudio
+        // was too small to fade meaningfully). Because both endpoints are
+        // >= SILENCE_FLOOR in magnitude, the ramp never crosses zero and never
+        // underflows to int16 0.
+        dst[i * 2]     = fadeL ? (floorL + (lastAudioLeft_  - floorL) * t) : floorL;
+        dst[i * 2 + 1] = fadeR ? (floorR + (lastAudioRight_ - floorR) * t) : floorR;
+    }
+    // Hold the floor for the remainder (if any).
+    for (int i = 0; i < holdLen; ++i) {
+        dst[(fadeLen + i) * 2]     = floorL;
+        dst[(fadeLen + i) * 2 + 1] = floorR;
+    }
+    // Once we've emitted the full fade tail, subsequent silence holds at the
+    // floor. Keep lastAudio synced to the floor so a long silence run doesn't
+    // re-fade from a stale value.
+    lastAudioLeft_ = floorL;
+    lastAudioRight_ = floorR;
+}
+
+void SyncPullStrategy::applyFadeIn(float* dst, int frames) {
+    // Ramp the first FADE_SAMPLES of a resumed audio chunk from SILENCE_FLOOR
+    // to full scale so the silence->audio edge is continuous. The fade starts
+    // from the floor value (not zero) because the preceding silence holds at
+    // the floor — ramping from the floor to the audio's natural level keeps
+    // the transition continuous. fadeInProgress_ counts down the remaining
+    // fade-in samples across chunk boundaries (a single chunk may be shorter
+    // than the full fade).
+    int remaining = fadeInProgress_;
+    const int fadeLen = std::min(frames, remaining);
+    for (int i = 0; i < fadeLen; ++i) {
+        // Gain ramps from ~0.0 up to ~1.0 over the fade. (FADE_SAMPLES - remaining + i)
+        // goes 0..fadeLen-1; dividing by FADE_SAMPLES-1 gives 0..1.
+        const float gain = (EngineSimAudio::FADE_SAMPLES > 1)
+            ? static_cast<float>(EngineSimAudio::FADE_SAMPLES - remaining + i) / static_cast<float>(EngineSimAudio::FADE_SAMPLES - 1)
+            : 1.0f;
+        // Interpolate from the floor to the actual audio sample.
+        const float floorL = EngineSimAudio::SILENCE_FLOOR * (dst[i * 2] >= 0.0f ? 1.0f : -1.0f);
+        const float floorR = EngineSimAudio::SILENCE_FLOOR * (dst[i * 2 + 1] >= 0.0f ? 1.0f : -1.0f);
+        dst[i * 2]     = floorL + (dst[i * 2]     - floorL) * gain;
+        dst[i * 2 + 1] = floorR + (dst[i * 2 + 1] - floorR) * gain;
+    }
+    remaining -= fadeLen;
+    fadeInProgress_ = (remaining > 0) ? remaining : 0;
+}
 
 void SyncPullStrategy::applyCrossfade(float* dst, int framesRendered) {
     // Apply crossfade if hot-swap is in progress

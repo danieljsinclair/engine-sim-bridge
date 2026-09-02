@@ -206,6 +206,21 @@ inline void fillSilence(float* buffer, int32_t frames) {
     std::memset(buffer, 0, frames * STEREO * sizeof(float));
 }
 
+// Inaudible non-zero floor for startup-crackle fades. float 0.0003 maps to
+// int16 +9 (~-88 dBFS). Chosen so that:
+//   (a) every silence-transition frame is inaudible, AND
+//   (b) the linear fade from a real sample to this floor never produces an
+//       intermediate float whose int16 quantization collapses to exactly 0
+//       (the knock detector's zero-sample proxy). At 0.0001f the fade from a
+//       near-zero sample dipped below 1 LSB (int16 0) during cranking
+//       startup — the residual zero_samples. 0.0003 keeps the fade band
+//       comfortably above the int16 quantization step.
+// Shared by audioRenderCallback (not-playing fill) and SyncPullStrategy
+// (fillSilenceFaded / applyFadeIn) so the not-playing -> playing handoff
+// stays continuous.
+constexpr float SILENCE_FLOOR = 0.0003f;
+constexpr int FADE_SAMPLES = 256; // ~5.8ms at 44100Hz
+
 } // namespace EngineSimAudio
 
 inline const char* EngineSimGetVersion() {
