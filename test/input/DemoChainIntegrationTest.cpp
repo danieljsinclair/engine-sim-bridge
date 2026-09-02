@@ -99,13 +99,18 @@ TEST_F(DemoChainIntegrationTest, Throttle_PreservedThroughEnhancer) {
     EXPECT_DOUBLE_EQ(input.throttle, baselineThrottle + 0.05);
 }
 
-// PROVE: ignition toggle works through the unified chain
+// PROVE: 'i' requests an ignition toggle through the shared start/ignition
+// state machine (composable primitive) — NOT a direct flip of
+// EngineInput.ignition. The intent arrives as an ignitionRequest event that
+// SimulationLoop forwards to VehicleStartController (owner spec 2026-09-02).
+// Default ignition is ON, so the first 'i' requests OFF.
 TEST_F(DemoChainIntegrationTest, IgnitionToggle_PropagatesThroughChain) {
     EngineInput input1 = tick();
     EXPECT_TRUE(input1.ignition);
 
     EngineInput input2 = pressAndTick('i');
-    EXPECT_FALSE(input2.ignition);
+    ASSERT_TRUE(input2.ignitionRequest.has_value());
+    EXPECT_FALSE(input2.ignitionRequest.value());
 }
 
 // PROVE: gear shift through keyboard produces gearDelta in output
