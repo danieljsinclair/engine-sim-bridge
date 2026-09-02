@@ -96,13 +96,21 @@ void SimulationLoop::applyStartStopDecision(LoopState& state, bool lightReported
     // authority (e.g. replay autoStart's frame-0 starter pulse). Once any
     // opinion is seen the controller keeps authority: it is a state machine
     // (crank delay, stop latch) that must not be suspended mid-decision.
+    //
+    // EXCEPTION: a pending crank (requestStarter armed crankPending_) MUST
+    // advance even without opinion — the McLaren starter-then-ignition delay
+    // is driven by advanceCrank()'s accumulator, which only ticks inside
+    // update(). Without this, the explicit 'S'-key crank would hang forever
+    // in Cranking with no auto-ignite (the owner's "not hearing it" symptom).
     const auto gear = static_cast<bridge::GearSelector>(state.engineInput.gearSelector);
+    const bool hasPendingCrank = startStopController_.isCrankPending();
     if (const bool driveSelected =
             gear == bridge::GearSelector::DRIVE || gear == bridge::GearSelector::REVERSE;
         !startStopEngaged_ &&
         !lightReportedByTelemetry &&
         state.engineInput.brakeLevel <= 0.0 &&
-        !driveSelected) {
+        !driveSelected &&
+        !hasPendingCrank) {
         return;
     }
     startStopEngaged_ = true;

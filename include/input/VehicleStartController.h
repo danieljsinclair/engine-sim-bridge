@@ -107,6 +107,12 @@ public:
 
     bool isEngineOn() const { return engineOn_; }
     bool isStopLatched() const { return stopLatch_; }
+    // True while a crank is armed (requestStarter / brake-start) and the
+    // starter-then-ignition delay is counting down. The SimulationLoop uses
+    // this to keep ticking update() (which advances the crank accumulator)
+    // even without brake/gear opinion — otherwise the explicit 'S'-key crank
+    // would hang in Cranking forever, waiting for a press that never comes.
+    bool isCrankPending() const { return crankPending_; }
 
 private:
     void beginStart(bool driveSelected);

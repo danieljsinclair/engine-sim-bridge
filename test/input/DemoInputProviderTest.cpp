@@ -97,6 +97,61 @@ TEST_F(DemoInputProviderTest, ClutchPressure_InValidRange) {
     }
 }
 
+// D1-D3: the demo path must accept the SAME coupling flags as the live/replay
+// telemetry paths. This is a compile-time + intent check: the setters exist and
+// are invocable with the same signatures TelemetryProviderFactory uses.
+TEST_F(DemoInputProviderTest, CouplingFlags_AcceptedPreInit) {
+    // Pre-Initialize: flags must be stored (no crash, no throw) and survive
+    // to Initialize() via the store + re-apply contract.
+    provider_->setWheelCouplingMode(twin::WheelCouplingMode::Free);
+    provider_->setCouplingModel(twin::CouplingModelKind::ClutchMap);
+    provider_->setPinTauMs(150.0);
+    twin::EffectiveThrottleConfig etc;
+    etc.enabled = true;
+    provider_->setEffectiveThrottleConfig(etc);
+    twin::TorqueInformedGearboxConfig tigc;
+    tigc.enabled = true;
+    provider_->setTorqueInformedGearboxConfig(tigc);
+
+    ASSERT_TRUE(provider_->Initialize());
+    EXPECT_TRUE(provider_->IsConnected());
+}
+
+// D2: the demo path must APPLY --coupling-model to the twin, not just store
+// it. The twin surfaces the chosen model via EngineInput.couplingIsTorqueConverter
+// (true only for TorqueConverter). The demo's DEFAULT coupling model is
+// TorqueConverter (DemoInputProvider.h) -> flag true; after selecting ClutchMap
+// the flag flips to false. This is the same observable the live/replay telemetry
+// paths produce via applyTwinCouplingFlags — proving the demo setters reach the
+// twin the same way.
+TEST_F(DemoInputProviderTest, CouplingModel_AppliedToTwin) {
+    ASSERT_TRUE(provider_->Initialize());
+    // Default demo twin is TorqueConverter.
+    EngineInput in = provider_->OnUpdateSimulation(0.016);
+    EXPECT_TRUE(in.couplingIsTorqueConverter);
+
+    // Selecting clutch-map must reach the twin and flip the flag off.
+    provider_->setCouplingModel(twin::CouplingModelKind::ClutchMap);
+    in = provider_->OnUpdateSimulation(0.016);
+    EXPECT_FALSE(in.couplingIsTorqueConverter)
+        << "--coupling-model=clutch-map must reach the demo twin";
+}
+
+TEST_F(DemoInputProviderTest, CouplingFlags_AcceptedPostInit) {
+    ASSERT_TRUE(provider_->Initialize());
+    // Post-Initialize: flags forward straight through to the twin.
+    provider_->setWheelCouplingMode(twin::WheelCouplingMode::Torque);
+    provider_->setCouplingModel(twin::CouplingModelKind::Legacy);
+    provider_->setPinTauMs(75.0);
+    twin::EffectiveThrottleConfig etc;
+    etc.enabled = false;
+    provider_->setEffectiveThrottleConfig(etc);
+    twin::TorqueInformedGearboxConfig tigc;
+    tigc.enabled = false;
+    provider_->setTorqueInformedGearboxConfig(tigc);
+    EXPECT_TRUE(provider_->IsConnected());
+}
+
 TEST_F(DemoInputProviderTest, RequestExit_ViaIDemoControls_NoCrash) {
     ASSERT_TRUE(provider_->Initialize());
     provider_->requestExit();
