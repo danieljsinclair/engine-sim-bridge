@@ -55,7 +55,14 @@ protected:
     // press of the same key is detected as a new edge (KeyHoldBridge treats
     // a key still-down as a repeat, not a press).
     void releaseKeys(double dt = 16.0) {
-        drainFrame(dt);
+        // Drain enough no-key frames to exceed KeyHoldBridge's INITIAL_TIMEOUT
+        // (250ms) so the previously-pressed key is aged out and marked
+        // released. Without this, a same-key press within the timeout is
+        // treated as an OS repeat (no new edge) and the handler won't fire
+        // again. 20 frames × 16ms = 320ms > 250ms.
+        for (int i = 0; i < 20; ++i) {
+            drainFrame(dt);
+        }
     }
 
     // Convenience: enqueue multiple keys (one per frame) and drain all
