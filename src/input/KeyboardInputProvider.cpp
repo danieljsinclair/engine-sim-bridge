@@ -99,12 +99,12 @@ void KeyboardInputProvider::processGearAndIgnition() {
 
     // Ignition: edge-triggered
     if (keyHold_.isKeyPressed('i') || keyHold_.isKeyPressed('I')) {
-        target_->toggleIgnition();
+        ignitionOn_ = !ignitionOn_;
+        target_->requestIgnition(ignitionOn_);
     }
 
-    // Starter: edge-triggered
     if (keyHold_.isKeyPressed('s') || keyHold_.isKeyPressed('S')) {
-        target_->setStarter();
+        target_->requestStarter();
     }
 }
 

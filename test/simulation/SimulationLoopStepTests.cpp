@@ -374,19 +374,18 @@ TEST_F(SimulationLoopStepTest, NormalTickFillsAudioBuffer) {
     EXPECT_GT(audioCalls_->fillBufferFromEngineCount, 0);
 }
 
-// step() returns Stop when duration is exhausted
+// step() returns Stop when tickCount exceeds requiredTicks_
 TEST_F(SimulationLoopStepTest, DurationExhaustedReturnsStop) {
     SimulationLoop loop(*simulator_, simConfig_, deps_);
 
     LoopState state;
-    state.currentTime = simConfig_.duration;  // Already at duration limit
+    state.tickCount = 61;  // Exceeds requiredTicks_ (60 for 1s duration at 60 Hz)
     state.isFirstTick = true;
     state.combustionEngine = dynamic_cast<ICombustionEngine*>(simulator_.get());
 
     StepResult result = loop.step(state);
 
-    // EXPECTED: duration exhausted → Stop
-    // This will FAIL against the stub (returns Continue)
+    // EXPECTED: tickCount > requiredTicks_ → Stop
     EXPECT_EQ(result, StepResult::Stop);
 }
 

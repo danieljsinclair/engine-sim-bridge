@@ -57,19 +57,60 @@ constexpr double ARRIVAL_SETTLE_SECONDS = 4.0;
 // ============================================================================
 
 void SimulationLoop::applyStartStopDecision(LoopState& state, bool lightReportedByTelemetry) {
+    // Composable-primitive requests (owner spec 2026-09-02): the keyboard 'S'
+    // key, the 'I' key, and the --start flag each request a start/ignition
+    // action through EngineInput's intent events. Forward them to the
+    // VehicleStartController — the single authority for start/ignition
+    // decisions — BEFORE the gear/brake-driven update so an explicit command
+    // takes precedence over the passive gear/brake opinion.
+    const bool hadPrimitiveRequest =
+        state.engineInput.combinedStartRequested ||
+        state.engineInput.starterRequested ||
+        state.engineInput.ignitionRequest.has_value();
+
+    if (state.engineInput.combinedStartRequested) {
+        startStopController_.requestCombinedStart();
+    }
+    if (state.engineInput.starterRequested) {
+        startStopController_.requestStarter();
+    }
+    if (state.engineInput.ignitionRequest.has_value()) {
+        startStopController_.requestIgnition(state.engineInput.ignitionRequest.value());
+    }
+
+    // Manual ignition toggle is unconditional (owner spec 2026-09-02): 'I'
+    // must flip ignition in ANY phase — off while Running kills the engine;
+    // on while Stopped energizes without cranking. When a primitive was
+    // requested, flatten the controller's resulting levels into engineInput
+    // NOW — without this, the early-return (no brake/gear opinion in a bare
+    // interactive run) would skip the flatten and the 'I' key's state change
+    // would be acknowledged by VSC but never reach CrankingController.
+    if (hadPrimitiveRequest) {
+        state.engineInput.ignition = startStopObserver_.ignition_;
+        state.engineInput.starterButton = starterPulseFromLevel(startStopObserver_.starter_);
+    }
+
     // Opinion = a vehicle-control signal exists this frame: telemetry reported
     // the brake light, the keyboard brake level is non-zero, or a drive gear
     // (D/R) is selected. With no opinion the provider keeps start/stop
     // authority (e.g. replay autoStart's frame-0 starter pulse). Once any
     // opinion is seen the controller keeps authority: it is a state machine
     // (crank delay, stop latch) that must not be suspended mid-decision.
+    //
+    // EXCEPTION: a pending crank (requestStarter armed crankPending_) MUST
+    // advance even without opinion — the McLaren starter-then-ignition delay
+    // is driven by advanceCrank()'s accumulator, which only ticks inside
+    // update(). Without this, the explicit 'S'-key crank would hang forever
+    // in Cranking with no auto-ignite (the owner's "not hearing it" symptom).
     const auto gear = static_cast<bridge::GearSelector>(state.engineInput.gearSelector);
+    const bool hasPendingCrank = startStopController_.isCrankPending();
     if (const bool driveSelected =
             gear == bridge::GearSelector::DRIVE || gear == bridge::GearSelector::REVERSE;
         !startStopEngaged_ &&
         !lightReportedByTelemetry &&
         state.engineInput.brakeLevel <= 0.0 &&
-        !driveSelected) {
+        !driveSelected &&
+        !hasPendingCrank) {
         return;
     }
     startStopEngaged_ = true;
@@ -130,6 +171,12 @@ input::EngineInput SimulationLoop::pollInput(double currentTime, double updateIn
 bool SimulationLoop::settleTick(LoopState& state) {
     if (stopRequested_->load(std::memory_order_seq_cst)) return false;
     if (!inputProvider_->IsConnected()) return false;
+    // Count against the SAME duration budget as the main loop (pre-increment,
+    // mirroring run()): a --duration shorter than the settle window must Stop
+    // the settle through step()'s tick check, exactly as the retired
+    // currentTime comparison did — otherwise the settle spins its full window
+    // on a run that has nothing to emit.
+    ++state.tickCount;
     if (step(state) != StepResult::Continue) return false;
     state.engineInput = pollInput(state.currentTime, config_.updateInterval(), state.isFirstTick);
     state.isFirstTick = false;
@@ -169,6 +216,14 @@ void SimulationLoop::settleAtArrivalPoint(LoopState& state,
     //     handoff acts to the retired warm-start prefix.
     primer.releaseArrivalHold();
     state.currentTime = offsetS;
+    // Re-anchor the tick counter at the offset. requiredTicks_ comes from the
+    // ABSOLUTE duration, and the settle's ticks are free (they ran off the
+    // recording clock), so the main loop must charge the recording-relative
+    // ticks it skipped — otherwise tickCount starts at 0, termination never
+    // fires, and the loop emits the provider's whole tail: the unbounded-tail
+    // regression the instant-start contract exists to prevent.
+    state.tickCount = static_cast<int>(
+        std::round(offsetS / config_.updateInterval()));
     emitCsv_ = true;
     emitAudio_ = true;
     audioBuffer_.resetBufferAfterWarmup();
@@ -619,6 +674,12 @@ SimulationLoop::SimulationLoop(
         if (!clock_) {
             clock_ = steadyClock_.get();
         }
+
+        // Deterministic duration: pre-compute required tick count from config.
+        // Replaces FP-accumulated time comparison to eliminate row-count jitter.
+        requiredTicks_ = config_.duration > 0.0
+            ? static_cast<int>(std::round(config_.duration / config_.updateInterval()))
+            : 0;
     }
 
 int SimulationLoop::run() {
@@ -685,8 +746,26 @@ int SimulationLoop::run() {
         }
     }
 
+    // --start: apply the combined start through the shared state machine
+    // (VehicleStartController::requestCombinedStart) on the first tick. This
+    // routes --start through the SAME path as the CSV auto path and the iOS
+    // app button — the old path bypassed VSC via a one-shot setStarter pulse.
+    // requestCombinedStart() fires starter+ignition via the ObserverActuator;
+    // flatten the resulting levels into engineInput so CrankingController sees
+    // the starter pulse + ignition on this very first tick.
+    if (config_.startRequested && !startApplied_) {
+        startStopController_.requestCombinedStart();
+        state.engineInput.ignition = startStopObserver_.ignition_;
+        state.engineInput.starterButton = starterPulseFromLevel(startStopObserver_.starter_);
+        startApplied_ = true;
+    }
+
     // Main loop: thin wrapper calling step()
     for (;;) {
+        // Deterministic tick counter: pre-increment before step() so termination
+        // in step() can compare against requiredTicks_ without FP time.
+        ++state.tickCount;
+
         // Execute one simulation tick
         StepResult result = step(state);
 
@@ -730,8 +809,10 @@ int SimulationLoop::run() {
 // ============================================================================
 
 StepResult SimulationLoop::step(LoopState& state) {
-    // Duration check: stop when currentTime reaches or exceeds duration
-    if (config_.duration > 0.0 && state.currentTime >= config_.duration) {
+    // Deterministic duration check: stop when tickCount exceeds requiredTicks_.
+    // This replaces the previous FP-accumulated time comparison which caused
+    // row-count jitter across identical runs.
+    if (requiredTicks_ > 0 && state.tickCount >= requiredTicks_) {
         return StepResult::Stop;
     }
 

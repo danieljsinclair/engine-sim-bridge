@@ -17,6 +17,9 @@ public:
     double lastDynoDelta = 0.0;
     bool quitCalled = false;
     bool starterCalled = false;
+    bool starterRequested = false;
+    bool combinedStartRequested = false;
+    std::vector<bool> ignitionRequests;
     bool presetCalled = false;
     int shiftUpCount = 0;
     int shiftDownCount = 0;
@@ -58,6 +61,24 @@ public:
     void setStarter() override {
         starterCalled = true;
         calls.push_back("setStarter");
+    }
+
+    // Start/ignition intent events (composable primitive requests through the
+    // shared VehicleStartController). Tracked so keyboard-dispatch tests can
+    // verify the 'S'/'I' keys route through the shared state machine.
+    void requestStarter() override {
+        starterRequested = true;
+        calls.push_back("requestStarter");
+    }
+
+    void requestIgnition(bool on) override {
+        ignitionRequests.push_back(on);
+        calls.push_back("requestIgnition(" + std::to_string(on) + ")");
+    }
+
+    void requestCombinedStart() override {
+        combinedStartRequested = true;
+        calls.push_back("requestCombinedStart");
     }
 
     void cyclePreset() override {

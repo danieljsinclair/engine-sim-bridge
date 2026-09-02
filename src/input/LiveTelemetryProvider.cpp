@@ -1,6 +1,7 @@
 // LiveTelemetryProvider.cpp - Live telemetry input provider for engine-sim
 
 #include "input/LiveTelemetryProvider.h"
+#include "input/CsvGearCoercion.h"
 #include "input/WarmBoot.h"
 #include "common/PresetExceptions.h"
 
@@ -12,17 +13,6 @@
 
 namespace input {
 
-// A reverse gear is only honoured when the vehicle is genuinely reversing —
-// i.e. road speed is clearly negative (below this threshold). em-dinner.csv
-// A reverse gear is only honoured when the vehicle is GENUINELY reversing —
-// i.e. road speed is clearly negative (below this threshold). em-dinner.csv
-// carries 'R' rows whose speeds bottom out at ~-3.2 km/h: that is spurious
-// near-standstill reverse noise, NOT real backing-up, so it must be coerced to
-// PARK/NEUTRAL (the RAR fix). Only a firmly-reversing speed (e.g. -8 km/h, a
-// real backing maneuver) keeps REVERSE. Everything at or above the threshold
-// (standstill, forward creep, contradictory forward 'R') is coerced.
-constexpr double kReverseActiveSpeedKmh = -3.5;
-
 
 LiveTelemetryProvider::LiveTelemetryProvider(const twin::IceVehicleProfile& profile)
     : ownedProfile_(profile)
@@ -31,10 +21,14 @@ LiveTelemetryProvider::LiveTelemetryProvider(const twin::IceVehicleProfile& prof
     , initialized_(false) {
 }
 
-LiveTelemetryProvider::LiveTelemetryProvider(std::istream& stream, bool autoStart)
+LiveTelemetryProvider::LiveTelemetryProvider(std::istream& stream, bool autoStart,
+                                             std::function<bool()> streamDataReady)
     : ownedProfile_(twin::IceVehicleProfile::zf8hp45())
     , profile_(ownedProfile_)
-    , stream_(&stream) {
+    , initialized_(false)
+    , stream_(&stream)
+    , streamDataReady_(std::move(streamDataReady)) {
+    (void)autoStart;
     // NOTE: zf8hp45 is ONLY a construction-time default. The LIVE path must have
     // its geometry supplied by the loaded .mr — CLIMain::reconfigureGearboxProviders
     // FAILS FAST (throws CliException) if the script lacks a transmission/vehicle
@@ -224,15 +218,12 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
         // near-standstill negative speeds (-2..-1 km/h) that the 1 km/h window
         // failed to catch. Only a clearly-reversing speed (< kReverseActiveSpeedKmh)
         // keeps REVERSE.
-        bridge::GearSelector sel = csvGearSelector();
-        if (sel == bridge::GearSelector::REVERSE &&
-            currentSample_.roadSpeedKmh >= kReverseActiveSpeedKmh) {
-            // Not genuinely reversing: a forward 'R' (speed > 0) is a contradictory
-            // signal -> NEUTRAL; standstill / sentinel 'R' -> PARK. Never REVERSE.
-            sel = (currentSample_.roadSpeedKmh > 0.0)
-                      ? bridge::GearSelector::NEUTRAL
-                      : bridge::GearSelector::PARK;
-        }
+        // Reverse coercion shared with the replay path (CsvGearCoercion.h):
+        // a recorded 'R' only keeps REVERSE while genuinely reversing; a
+        // standstill/contradictory 'R' maps to PARK or NEUTRAL. Extracted so
+        // live and replay of the same capture select the SAME gear.
+        bridge::GearSelector sel =
+            coerceCsvReverseGear(csvGearSelector(), currentSample_.roadSpeedKmh);
         twinProvider_->setGearSelector(static_cast<int>(sel));
         EngineInput input = twinProvider_->OnUpdateSimulation(dt);
         // Surface the live sim/CSV elapsed time so each per-frame console line
@@ -545,6 +536,19 @@ void LiveTelemetryProvider::refillRowBuffer(double simElapsedS) {
     while (true) {
         if (!rowBuffer_.empty() &&
             (rowBuffer_.back().timeS - baselineTimeS_) > simElapsedS + kLevelLookaheadS) {
+            break;
+        }
+        // Live-pipe guard: a std::getline on an empty pipe PARKS this (loop)
+        // thread until the writer emits the next row. While parked the loop
+        // stops stepping the engine, the synthesizer input stops, and the
+        // audio ring drains — surfacing as short reads and single-sample
+        // waveform steps at device-buffer boundaries (the audible
+        // thump/knock in sync-pull mode). With a readiness probe injected we
+        // only read when a row is already waiting; otherwise return short and
+        // let the sim continue on wall clock with the telemetry it holds.
+        // Pipes deliver whole rows atomically (< PIPE_BUF), so "any bytes
+        // ready" implies a complete getline without blocking.
+        if (streamDataReady_ && !streamDataReady_()) {
             break;
         }
         std::string line;

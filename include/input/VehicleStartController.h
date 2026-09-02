@@ -1,12 +1,34 @@
 #ifndef VEHICLE_START_CONTROLLER_H
 #define VEHICLE_START_CONTROLLER_H
 
-// VehicleStartController.h - vehicle-driven start/stop DECISION layer.
+// VehicleStartController.h - the SINGLE shared start/ignition state machine.
 //
 // SRP: owns exactly two decision bits (engineOn, stopLatch) plus the crank
 // delay timer, and drives an injected IEngineActuator. It does NOT reimplement
 // the RPM-catch phase logic of CrankingController (a lower layer), nor does it
-// reach into gearbox / twin internals, nor the manual input path.
+// reach into gearbox / twin internals.
+//
+// This is the seam every frontend calls through (owner spec 2026-09-02):
+//   - iOS app start button            -> requestCombinedStart / requestIgnition
+//   - CLI keyboard S (starter)        -> requestStarter
+//   - CLI keyboard I (ignition)       -> requestIgnition
+//   - CLI --start flag                -> requestCombinedStart
+//   - CSV auto path (live/replay)     -> update(brake, gear)  [gear-driven]
+// Each frontend is a thin caller; the decision logic lives ONLY here.
+//
+// Composable primitives (the three atomic operations every caller uses):
+//   requestIgnition(bool on)  - set ignition ON/OFF directly (CLI/iOS separate
+//                               ignition control: the user can elongate cranking
+//                               for as long as they want, crank without ignition).
+//   requestStarter(bool on)   - engage/release the starter motor (the McLaren
+//                               mod: engage starter a moment BEFORE ignition —
+//                               starter-then-ignition sequencing, not assumed
+//                               combined-only).
+//   requestCombinedStart()    - the combined operation the CSV path uses by
+//                               design: fire starter+ignition together (a drive
+//                               gear or --start is a one-shot "start the engine"
+//                               demand). Brake-initiated cranks still honor the
+//                               crank delay (starter-then-ignition with delay).
 //
 // Decision rules (derived from VEHICLE_START_STOP_PLAN.md + the test cases):
 //   START  (only if engine off AND not latched):
@@ -35,6 +57,7 @@
 //            not a stay-off.
 
 #include "input/IEngineActuator.h"
+#include "input/IStartController.h"
 #include "simulator/GearConventions.h"
 
 namespace input {
@@ -53,7 +76,7 @@ public:
     bool starter_ = false;
 };
 
-class VehicleStartController {
+class VehicleStartController : public IStartController {
 public:
     // Default crank delay (seconds) between starter engagement and ignition.
     static constexpr double kDefaultCrankDelayS = 0.5;
@@ -67,8 +90,29 @@ public:
     // position.
     void update(double dt, bool brakePressed, bridge::GearSelector gear);
 
+    // ---- Composable primitives (the single seam every frontend calls) ----
+    // Direct ignition control (CLI/iOS separate ignition: the user can elongate
+    // cranking, crank with ignition OFF). Sets the ignition level and clears
+    // any pending crank timer (an explicit ignition command resolves the crank).
+    void requestIgnition(bool on);
+
+    // Direct starter control (McLaren mod: engage starter a moment BEFORE
+    // ignition — starter-then-ignition sequencing). Engages the starter motor;
+    // does NOT fire ignition (the combined path is requestCombinedStart).
+    void requestStarter();
+
+    // Combined start (the CSV path's by-design operation, and --start): fire
+    // starter+ignition together as a one-shot "start the engine" demand.
+    void requestCombinedStart();
+
     bool isEngineOn() const { return engineOn_; }
     bool isStopLatched() const { return stopLatch_; }
+    // True while a crank is armed (requestStarter / brake-start) and the
+    // starter-then-ignition delay is counting down. The SimulationLoop uses
+    // this to keep ticking update() (which advances the crank accumulator)
+    // even without brake/gear opinion — otherwise the explicit 'S'-key crank
+    // would hang in Cranking forever, waiting for a press that never comes.
+    bool isCrankPending() const { return crankPending_; }
 
 private:
     void beginStart(bool driveSelected);

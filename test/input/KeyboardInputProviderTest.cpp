@@ -51,6 +51,20 @@ protected:
         drainFrame(dt);
     }
 
+    // Drain a frame with no key event — releases any held key so the next
+    // press of the same key is detected as a new edge (KeyHoldBridge treats
+    // a key still-down as a repeat, not a press).
+    void releaseKeys(double dt = 16.0) {
+        // Drain enough no-key frames to exceed KeyHoldBridge's INITIAL_TIMEOUT
+        // (250ms) so the previously-pressed key is aged out and marked
+        // released. Without this, a same-key press within the timeout is
+        // treated as an OS repeat (no new edge) and the handler won't fire
+        // again. 20 frames × 16ms = 320ms > 250ms.
+        for (int i = 0; i < 20; ++i) {
+            drainFrame(dt);
+        }
+    }
+
     // Convenience: enqueue multiple keys (one per frame) and drain all
     void pressKeys(const std::vector<int>& keys, double dt = 16.0) {
         for (int key : keys) {
@@ -180,20 +194,37 @@ TEST_F(KeyboardDispatchTest, OpenBracket_ShiftsDown) {
 // Test 9: Ignition toggle
 // ============================================================================
 
-TEST_F(KeyboardDispatchTest, IKey_TogglesIgnition) {
+TEST_F(KeyboardDispatchTest, IKey_RequestsIgnitionThroughSharedMachine) {
+    // 'I' routes through requestIgnition (composable primitive) — explicit
+    // ON/OFF through the shared VehicleStartController — not the old
+    // toggleIgnition bypass. First press: ignition defaults ON, so 'I' requests OFF.
     createProvider();
     pressKey('i');
-    EXPECT_TRUE(mockTargetPtr->ignitionToggled);
+    ASSERT_EQ(mockTargetPtr->ignitionRequests.size(), 1u);
+    EXPECT_FALSE(mockTargetPtr->ignitionRequests.back());
+    // KeyHoldBridge dedups: a second 'i' while the key is still logically
+    // "down" is a repeat, not a fresh press. Let the key time out so the
+    // next 'i' is seen as a fresh edge. INITIAL_TIMEOUT_MS is 250ms; each
+    // tick is 16ms, so 20 ticks clears it.
+    for (int i = 0; i < 20; i++) { drainFrame(); }
+    // Second press (after timeout) requests ON again.
+    pressKey('i');
+    ASSERT_EQ(mockTargetPtr->ignitionRequests.size(), 2u);
+    EXPECT_TRUE(mockTargetPtr->ignitionRequests.back());
 }
 
 // ============================================================================
 // Test 10: Starter (momentary)
 // ============================================================================
 
-TEST_F(KeyboardDispatchTest, SKey_SetsStarter) {
+TEST_F(KeyboardDispatchTest, SKey_RequestsStarterThroughSharedMachine) {
+    // 'S' routes through requestStarter (composable primitive) — engage starter
+    // WITHOUT firing ignition through the shared VehicleStartController — not
+    // the old setStarter bypass. The McLaren mod's starter-then-ignition
+    // sequencing.
     createProvider();
     pressKey('s');
-    EXPECT_TRUE(mockTargetPtr->starterCalled);
+    EXPECT_TRUE(mockTargetPtr->starterRequested);
 }
 
 // ============================================================================

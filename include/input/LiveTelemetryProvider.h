@@ -33,6 +33,7 @@
 
 #include <atomic>
 #include <deque>
+#include <functional>
 #include <istream>
 #include <memory>
 #include <string>
@@ -66,7 +67,16 @@ public:
     /// lookahead drained) disconnects the provider on EVERY construction path
     /// (owner 2026-08-30: EOF = immediate termination — the whole CLI stops at
     /// capture end); a genuinely open live feed simply never reaches EOF.
-    LiveTelemetryProvider(std::istream& stream, bool autoStart);
+    ///
+    /// streamDataReady: non-blocking readiness probe consulted before each
+    /// would-block row read (see refillRowBuffer). When it returns false the
+    /// refill returns short and the simulation continues on wall clock with the
+    /// telemetry it already holds — the loop thread NEVER parks on a lagging
+    /// writer. Injected by callers whose stream is a live pipe (poll on the
+    /// fd); absent (nullptr) the read blocks, preserving the deterministic
+    /// in-memory-stream behaviour the unit tests rely on.
+    LiveTelemetryProvider(std::istream& stream, bool autoStart,
+                          std::function<bool()> streamDataReady = nullptr);
 
     ~LiveTelemetryProvider() override;
 
@@ -265,6 +275,9 @@ private:
 
     /// CSV stdin members (unused in JSON mode)
     std::istream* stream_ = nullptr;
+    /// Non-blocking readiness probe for the live pipe (see the stream ctor).
+    /// Null on deterministic in-memory streams: refill then blocks as before.
+    std::function<bool()> streamDataReady_;
     CsvTelemetryParser csvParser_;
     CsvSample currentSample_{};
     bool hasSample_ = false;

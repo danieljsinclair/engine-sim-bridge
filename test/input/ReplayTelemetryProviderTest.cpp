@@ -380,6 +380,45 @@ TEST_F(ReplayTelemetryProviderTest, AutoGearboxParkHoldsNeutral) {
     EXPECT_FALSE(input.gearAutoMode);
 }
 
+// D10: reverse coercion shared with the live path (CsvGearCoercion.h). A
+// recorded 'R' row only keeps REVERSE while genuinely reversing; a standstill
+// 'R' coerces to PARK and a forward 'R' to NEUTRAL. Previously the replay path
+// forwarded the raw selector, so a replay of the same capture could select
+// REVERSE where the live path coerced to PARK/NEUTRAL.
+TEST_F(ReplayTelemetryProviderTest, StandstillReverse_CoercesToPark) {
+    // 'R' at standstill (speed 0) must NOT select REVERSE -> coerced to PARK.
+    makeProvider("time_s,speed_kmh,gear_selector\n0.0,0.0,R\n", true, true);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_EQ(input.gearSelector, static_cast<int>(bridge::GearSelector::PARK))
+        << "standstill 'R' must coerce to PARK, never REVERSE";
+    EXPECT_FALSE(input.gearAutoMode);
+}
+
+TEST_F(ReplayTelemetryProviderTest, ForwardReverse_CoercesToNeutral) {
+    // 'R' while moving forward (speed > 0) is a contradictory signal -> NEUTRAL.
+    makeProvider("time_s,speed_kmh,gear_selector\n0.0,10.0,R\n", true, true);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_EQ(input.gearSelector, static_cast<int>(bridge::GearSelector::NEUTRAL))
+        << "forward 'R' must coerce to NEUTRAL, never REVERSE";
+}
+
+TEST_F(ReplayTelemetryProviderTest, GenuineReverse_Kept) {
+    // 'R' while genuinely reversing (speed < -3.5 km/h) keeps REVERSE.
+    makeProvider("time_s,speed_kmh,gear_selector\n0.0,-8.0,R\n", true, true);
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+
+    EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_EQ(input.gearSelector, static_cast<int>(bridge::GearSelector::REVERSE))
+        << "genuinely-reversing 'R' must keep REVERSE";
+}
+
 TEST_F(ReplayTelemetryProviderTest, ManualGearPropagatesCsvGear) {
     // autoGearbox=false: the CSV 'gear' field sets gearAbsolute directly.
     makeProvider("time_s,gear\n0.0,3\n", true, false);

@@ -78,6 +78,62 @@ void VehicleStartController::update(double dt,
     }
 }
 
+void VehicleStartController::requestIgnition(bool on) {
+    // Direct ignition control (composable primitive). Resolves any pending crank
+    // timer: an explicit ignition command is authoritative — if turning ignition
+    // ON, fire it immediately and cancel the pending crank; if OFF, just release
+    // it (the engine coasts down via CrankingController::step). Turning ignition
+    // OFF ends the current engine run: engineOn_ clears so a future start demand
+    // can re-crank, and the stop latch re-arms the per-run drive gate.
+    if (on) {
+        fireIgnition();
+    } else {
+        actuator_.setIgnition(false);
+        engineOn_ = false;
+        stopLatch_ = false;
+        crankPending_ = false;
+        crankAccumS_ = 0.0;
+        crankFromBrakeOnly_ = false;
+        driveSelectedSinceStart_ = false;
+    }
+}
+
+void VehicleStartController::requestStarter() {
+    // Direct starter control (composable primitive). Engages the starter motor
+    // WITHOUT firing ignition — the McLaren mod's starter-then-ignition
+    // sequencing: the user cranks first, then calls requestIgnition(true) a
+    // moment later. Arms a pending crank so the starter is physically engaged;
+    // ignition only fires via requestIgnition or requestCombinedStart.
+    if (!engineOn_) {
+        actuator_.setStarterMotor(true);
+    }
+    engineOn_ = true;
+    // A standalone starter request is treated as a brake-style pending crank:
+    // it engages the starter now and waits for an explicit ignition command
+    // (requestIgnition(true)) rather than auto-firing after a delay. This
+    // preserves the elongated-crank capability (crank as long as desired).
+    if (!crankPending_) {
+        crankPending_ = true;
+        crankAccumS_ = 0.0;
+        crankFromBrakeOnly_ = true;
+    }
+}
+
+void VehicleStartController::requestCombinedStart() {
+    // Combined start (composable primitive): the CSV path's by-design operation
+    // and the --start flag. Fire starter+ignition together on this update
+    // (t=0, no crank delay) — a one-shot "start the engine" demand. Idempotent
+    // when already running: the engine is ON, so re-calling must not re-pulse
+    // the starter or re-fire ignition (that would artefacts like a second
+    // ignition edge mid-run).
+    if (engineOn_) {
+        return;
+    }
+    actuator_.setStarterMotor(true);
+    engineOn_ = true;
+    fireIgnition();
+}
+
 void VehicleStartController::beginStart(bool driveSelected) {
     if (!engineOn_) {
         actuator_.setStarterMotor(true);

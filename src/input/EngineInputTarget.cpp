@@ -84,6 +84,19 @@ void EngineInputTarget::shiftDown() {
 }
 void EngineInputTarget::toggleIgnition() { ignition_ = !ignition_; }
 void EngineInputTarget::setStarter() { starterButton_ = true; }
+void EngineInputTarget::requestStarter() { starterRequested_ = true; }
+void EngineInputTarget::requestIgnition(bool on) {
+    // Update both the one-shot event (routed to VSC this frame) and the held
+    // level ignition_. The event drives the state-machine decision; the level
+    // must stay in sync so the NEXT tick's pollInput() — which copies ignition_
+    // into EngineInput.ignition BEFORE step() processes it — reflects the new
+    // state. Without this, VSC acknowledges the toggle but the level never
+    // changes, so the display and CrankingController keep seeing the old value
+    // every subsequent frame (the I-key regression).
+    ignitionRequest_ = on;
+    ignition_ = on;
+}
+void EngineInputTarget::requestCombinedStart() { combinedStartRequested_ = true; }
 void EngineInputTarget::cyclePreset() { presetCycle_ = true; }
 void EngineInputTarget::adjustDynoTorque(double delta) {
     if (dynoTorqueScale_ < 0.0) dynoTorqueScale_ = 0.0;
@@ -120,11 +133,17 @@ EngineInput EngineInputTarget::buildInput() {
     input.presetCycle = presetCycle_;
     input.gearAutoMode = gearAutoMode_;
     input.roadSpeedKmh = roadSpeedKmh_;
+    input.starterRequested = starterRequested_;
+    input.ignitionRequest = ignitionRequest_;
+    input.combinedStartRequested = combinedStartRequested_;
 
     gearDelta_ = 0;
     starterButton_ = false;
     presetCycle_ = false;
     throttleTouched_ = false;
+    starterRequested_ = false;
+    ignitionRequest_.reset();
+    combinedStartRequested_ = false;
 
     return input;
 }

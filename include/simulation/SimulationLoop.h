@@ -77,6 +77,7 @@ struct LoopState {
     EngineSimStats previousStats = {};
     bool isFirstTick = true;
     ICombustionEngine* combustionEngine = nullptr;
+    int tickCount = 0;  // Deterministic tick counter for duration termination
 };
 
 // ============================================================================
@@ -111,6 +112,12 @@ struct SimulationConfig {
     // ignition on a brake-initiated start. Owned here so the loop constructs
     // its VehicleStartController from config — no per-provider wiring.
     double startStopCrankDelayS = input::VehicleStartController::kDefaultCrankDelayS;
+
+    // --start flag: request a combined start (starter+ignition) on the first
+    // tick. The loop routes this through VehicleStartController's
+    // requestCombinedStart() primitive so --start uses the SAME state machine
+    // as the CSV auto path and the iOS app button — not a bypass.
+    bool startRequested = false;
 
     // Optional display label for logging (e.g. ANSI-colored by CLI). Empty = auto-derive.
     std::string simulatorLabel;
@@ -248,6 +255,12 @@ private:
     bool startStopEngaged_ = false;   // authority latch: once a vehicle-control
                                       // signal is seen, the controller keeps it
     bool prevStarterLevel_ = false;   // edge detection for the starter pulse
+    bool startApplied_ = false;       // --start latch: requestCombinedStart fires once
+
+    // Deterministic duration termination: pre-computed tick count from config
+    // duration. Replaces FP-accumulated time comparison to eliminate row-count
+    // jitter across identical runs.
+    int requiredTicks_ = 0;
 };
 
 // ============================================================================

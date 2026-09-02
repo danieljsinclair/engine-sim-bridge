@@ -1147,4 +1147,65 @@ TEST(LiveTelemetryStreamTest, SteeringAngleColumn_BlankCell_StaysNullopt) {
         << "blank steering cell must stay nullopt (no fake zero)";
 }
 
+// ============================================================================
+// POLL-PROBE (streamDataReady readiness probe): the live-pipe half of the
+// sync-pull boundary fix. A std::getline on an empty pipe PARKS the loop thread
+// until the writer emits a row; while parked the engine stops stepping and the
+// audio ring drains into short reads (the sync-pull buffer-boundary thump). With
+// a readiness probe injected, refillRowBuffer returns SHORT instead of parking
+// when the probe reports "no row waiting" — the sim continues on wall clock with
+// the telemetry it holds. Deterministic in-memory streams pass NO probe (nullptr)
+// and keep the blocking behaviour these other tests rely on.
+// ============================================================================
+
+// StreamHarness variant that injects a streamDataReady probe. The probe's
+// return value is toggled by hand in each test so we can assert both branches
+// (ready -> row consumed; not-ready -> refill returns short, row left in stream).
+struct ProbedStreamHarness {
+    std::istringstream stream;
+    std::unique_ptr<input::LiveTelemetryProvider> provider;
+    bool* probeResult = nullptr;
+    explicit ProbedStreamHarness(const std::string& csv, bool& probeResult_,
+                                 bool autoStart = true)
+        : stream(csv)
+        , probeResult(&probeResult_) {
+        provider = std::make_unique<input::LiveTelemetryProvider>(
+            stream, autoStart,
+            [&probeResult_]() { return probeResult_; });
+    }
+};
+
+// Probe reports "no row waiting": refillRowBuffer must return short WITHOUT
+// consuming the stream, so the row is still readable afterwards (the loop
+// continues on wall clock instead of parking).
+TEST(LiveTelemetryStreamTest, ProbeNotReady_ReturnsShortWithoutConsuming) {
+    bool probeResult = false;  // pipe "empty" — no row waiting
+    ProbedStreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,50,30\n", probeResult);
+    ASSERT_TRUE(h.provider->Initialize()) << h.provider->GetLastError();
+
+    // With the probe reporting not-ready, OnUpdateSimulation must NOT park
+    // reading the stream. The single CSV row must remain unread.
+    h.provider->OnUpdateSimulation(0.05);
+    // The stream must still carry its row (getline was never called on it).
+    std::string leftover;
+    EXPECT_TRUE(std::getline(h.stream, leftover))
+        << "probe not-ready: the row must remain in the stream, unread";
+    EXPECT_EQ(leftover, "0.0,50,30")
+        << "probe not-ready: the unread row must be intact";
+}
+
+// Probe reports "row waiting": refillRowBuffer consumes the row exactly as the
+// blocking path does — the probe is transparent when data is ready.
+TEST(LiveTelemetryStreamTest, ProbeReady_ConsumesRow) {
+    bool probeResult = true;  // pipe "has data"
+    ProbedStreamHarness h("time_s,throttle_pct,road_speed_kmh\n0.0,50,30\n", probeResult);
+    ASSERT_TRUE(h.provider->Initialize());
+
+    h.provider->OnUpdateSimulation(0.05);
+    // The stream must now be drained (the single row was consumed).
+    std::string leftover;
+    EXPECT_FALSE(std::getline(h.stream, leftover))
+        << "probe ready: the row must be consumed (stream drained)";
+}
+
 }  // namespace
