@@ -24,6 +24,15 @@ struct EngineInput {
     bool ignition = true;        // true = on (from keyboard/upstream)
     bool starterButton = false;  // momentary: true for one frame when pressed
 
+    // Mirrors UpstreamSignal::traceDriven (set by the twin providers): the
+    // throttle field is the recorded/real vehicle trace, not a scripted driver.
+    // Consumed by SimulationLoop::applyCrankingDecision to clamp the crank
+    // controller's effective throttle to the trace — a telemetry-defined run
+    // must not synthesize a start character (crank-throttle flare) the
+    // recording never contained. Default false = scripted/keyboard behavior
+    // unchanged.
+    bool traceDrivenThrottle = false;
+
     // Gear control
     int gearDelta = 0;           // +1 = shift up, -1 = shift down, 0 = no change
 

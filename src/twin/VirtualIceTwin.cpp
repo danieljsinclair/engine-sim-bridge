@@ -10,6 +10,23 @@
 
 namespace twin {
 
+namespace {
+
+// Crank-path throttle floor, trace-aware (startup flare, 2026-09-03). The
+// crank needs throttle to guarantee a catch on scripted/keyboard runs, where
+// the absolute CRANKING_THROTTLE stands unchanged. But on a TRACE-DRIVEN run
+// (replay CSV / live attach) the trace is ground truth: the recording never
+// contained a 60% crank, and flooring over the trace's 0.00 made the unloaded
+// ignition catch flare to full scale (the owner-reported startup crackle).
+// With traceDriven the floor is capped at the trace's own throttle.
+double crankThrottleFloorFor(const input::UpstreamSignal& signal) {
+    return signal.traceDriven
+        ? std::min(EngineSimDefaults::CRANKING_THROTTLE, signal.throttleFraction)
+        : EngineSimDefaults::CRANKING_THROTTLE;
+}
+
+}  // namespace
+
 VirtualIceTwin::VirtualIceTwin(IceVehicleProfile profile)
     : profile_(std::move(profile)),
       gearbox_(std::make_unique<AutomaticGearbox>(profile_)),
@@ -239,7 +256,9 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
 
         case TwinState::CRANKING: {
             crankingTimerS_ += dt;
-            output.throttle = EngineSimDefaults::CRANKING_THROTTLE;
+            // Trace-aware (see crankThrottleFloorFor): a trace-driven crank
+            // commands the trace's own throttle, not the synthesized floor.
+            output.throttle = crankThrottleFloorFor(signal);
             // Starter is NOT held here. The twin emits starterMotor as a one-tick
             // EDGE on the OFF->CRANKING transition (the OFF case above pulses it);
             // it must not hold it through CRANKING. The bridge's
@@ -310,7 +329,7 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             // restart-on-stall guard RUNNING uses (one-tick edge + retry
             // cooldown); when stalled it also raises the throttle floor above
             // to cranking level.
-            restartIfStalled(output, dt);
+            restartIfStalled(output, dt, signal);
             output.ignition = true;
             output.gear = static_cast<int>(bridge::BridgeGear::NEUTRAL);
             clutchPressure_ = 0.0;
@@ -383,7 +402,7 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
             // the retry cooldown then blanks the starter for its full 3 s past
             // the moment the phase does latch. The feedback signal is one step
             // in arrears of the latch, which keeps the ordering safe by one tick.
-            if (restartIfStalled(output, dt)) {
+            if (restartIfStalled(output, dt, signal)) {
                 // Stalled: the guard pulsed the starter edge, flushed the
                 // idle-hold controller and floored the throttle at cranking
                 // level (see restartIfStalled for the edge/cooldown contract).
@@ -633,7 +652,8 @@ TwinOutput VirtualIceTwin::update(double dt, const input::UpstreamSignal& signal
     return output;
 }
 
-bool VirtualIceTwin::restartIfStalled(TwinOutput& output, double dt) {
+bool VirtualIceTwin::restartIfStalled(TwinOutput& output, double dt,
+                                      const input::UpstreamSignal& signal) {
     // Re-crank period: a crank attempt gets the same 3s budget as the
     // initial OFF->CRANK crank (CRANK_FALLBACK_DURATION_S). The bridge's
     // CrankingController::engageStarter is a momentary TOGGLE -- calling
@@ -674,8 +694,13 @@ bool VirtualIceTwin::restartIfStalled(TwinOutput& output, double dt) {
     idleHoldIntegralPct_ = 0.0;
     idleHoldOutputPct_ = 0.0;
     idleHoldActive_ = false;
+    // Trace-aware crank floor (see crankThrottleFloorFor): on a trace-driven
+    // run the re-crank commands the trace's throttle (the recording is ground
+    // truth — the startup-flare bug floored 0.6 over a trace 0.00 and the
+    // unloaded catch clipped); the IDLE_SUSTAIN floor still holds so the
+    // catch does not coast straight back through the Stopped latch.
     output.throttle = std::max(
-        std::max(output.throttle, EngineSimDefaults::CRANKING_THROTTLE),
+        std::max(output.throttle, crankThrottleFloorFor(signal)),
         EngineSimDefaults::IDLE_SUSTAIN_THROTTLE);
     return true;
 }

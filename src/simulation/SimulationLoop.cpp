@@ -338,6 +338,16 @@ CrankingController::State SimulationLoop::applyCrankingDecision(
 
         crankingDecision = crankingController_.step(*combustionEngine, engineInput.throttle, engineInput.ignition);
         applyDecision(combustionEngine, crankingDecision);
+
+        // Trace-driven throttle (replay CSV / live attach): the recording is
+        // ground truth — the crank controller's 0.55 floor must not override
+        // the trace's own throttle, or the unloaded ignition catch flares to
+        // full scale (the owner-reported startup crackle). Scripted/keyboard
+        // runs (flag unset) keep the floor byte-identical.
+        if (engineInput.traceDrivenThrottle) {
+            crankingDecision.effectiveThrottle =
+                std::min(crankingDecision.effectiveThrottle, engineInput.throttle);
+        }
     }
 
     return CrankingController::State{crankingDecision.effectiveThrottle, combustionEngine && crankingDecision.starterMotor, crankingDecision.targetPhase};

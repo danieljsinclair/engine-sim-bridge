@@ -295,6 +295,10 @@ EngineInput ReplayTelemetryProvider::driveThroughTwin(const Sample& s, double dt
     signal.motorTorqueNm = s.motorTorqueNm;
     signal.brakeLight = s.brakeLight;
     signal.isValid = true;
+    // The throttle below is the RECORDING's, not a scripted driver's: the
+    // crank path must not synthesize a start character over it (startup
+    // flare — see UpstreamSignal::traceDriven).
+    signal.traceDriven = true;
     // Monotonic non-zero timestamp (the twin treats 0 as invalid + times out).
     signal.timestampUtcMs = std::max<uint64_t>(1, static_cast<uint64_t>(elapsedS_ * 1000.0));
     // The CSV stalk (D/R/N/P) drives the twin's selector. A missing/blank selector
@@ -437,6 +441,7 @@ void ReplayTelemetryProvider::primeArrivalState() {
         signal.throttleFraction = arrival.throttle;
         signal.speedKmh = arrival.roadSpeedKmh;
         signal.isValid = true;
+        signal.traceDriven = true;  // the arrival row IS the trace
         signal.timestampUtcMs = std::max<uint64_t>(
             1, static_cast<uint64_t>(startFromS_ * 1000.0));
         twinProvider_->setGearSelector(static_cast<int>(sel));

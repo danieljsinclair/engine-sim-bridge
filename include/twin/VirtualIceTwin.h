@@ -201,7 +201,8 @@ private:
     // A real car cranks and idles in PARK too, so IDLE needs the same guard
     // RUNNING has — without it a PARK-start trace (engine core Stopped, twin
     // primed to IDLE) sat dead until the driver selected D.
-    bool restartIfStalled(TwinOutput& output, double dt);
+    bool restartIfStalled(TwinOutput& output, double dt,
+                          const input::UpstreamSignal& signal);
 
     void updateShiftExecution(double dt);
 };

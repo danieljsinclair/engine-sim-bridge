@@ -157,6 +157,13 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
         }
 
         UpstreamSignal signal;
+        // The live stream's throttle is the VEHICLE's, not a scripted
+        // driver's: the crank path must not synthesize a start character
+        // over it at a standstill attach (startup flare — see
+        // UpstreamSignal::traceDriven). Covers both the warm-boot seed and
+        // the sample branches below. (The iOS JSON submitSignal path keeps
+        // the default — not this scenario.)
+        signal.traceDriven = true;
         if (!hasSample_ && primed_ && startFromS_ > 0.0) {
             // Post-offset rows have not arrived yet (pipe still draining the
             // discarded prefix, or a paced source catching up). An invalid

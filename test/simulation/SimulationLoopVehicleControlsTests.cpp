@@ -879,3 +879,47 @@ TEST_F(SimulationLoopVehicleControlsTest, PresentationAbsentStillTicks) {
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// Crank-throttle trace clamp (startup flare, 2026-09-03)
+//
+// CrankingController::step floors its effective throttle at 0.55 while the
+// engine is in the Cranking phase, regardless of the commanded throttle. On a
+// trace-driven run (replay CSV / live attach) the trace's own throttle is
+// ground truth — the recording never contained a 55% crank — and the catch on
+// an unloaded engine flared to full scale (owner-reported startup crackle).
+// applyCrankingDecision clamps the controller's floor to the trace when
+// EngineInput.traceDrivenThrottle is set; scripted/keyboard runs are clamped
+// by nothing and stay byte-identical.
+// ---------------------------------------------------------------------------
+
+TEST_F(SimulationLoopVehicleControlsTest, CrankingThrottleClampedToTraceWhenTraceDriven) {
+    // Put the engine core INTO the Cranking phase (phase lives on the engine).
+    simulator_->applyTransition({EnginePhase::Cranking, true, 0.0, true});
+
+    input::EngineInput input;
+    input.ignition = true;
+    input.throttle = 0.02;             // the trace's own standstill-start value
+    input.traceDrivenThrottle = true;
+
+    SimulationLoop loop(*simulator_, simConfig_, buildDeps());
+    loop.step(makeStateRef(input));
+
+    // The controller's 0.55 crank floor must not override a valid trace
+    // throttle; the flare came from catching an unloaded engine at 55%.
+    EXPECT_LT(calls_->lastThrottle, 0.10);
+}
+
+TEST_F(SimulationLoopVehicleControlsTest, CrankingThrottleKeepsControllerFloorWhenNotTraceDriven) {
+    simulator_->applyTransition({EnginePhase::Cranking, true, 0.0, true});
+
+    input::EngineInput input;
+    input.ignition = true;
+    input.throttle = 0.02;             // scripted driver at 2%
+
+    SimulationLoop loop(*simulator_, simConfig_, buildDeps());
+    loop.step(makeStateRef(input));
+
+    // Byte-identity lock: without the trace flag the crank floor stands.
+    EXPECT_NEAR(calls_->lastThrottle, 0.55, 1e-9);
+}
