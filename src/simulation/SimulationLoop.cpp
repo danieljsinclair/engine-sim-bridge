@@ -171,6 +171,12 @@ input::EngineInput SimulationLoop::pollInput(double currentTime, double updateIn
 bool SimulationLoop::settleTick(LoopState& state) {
     if (stopRequested_->load(std::memory_order_seq_cst)) return false;
     if (!inputProvider_->IsConnected()) return false;
+    // Count against the SAME duration budget as the main loop (pre-increment,
+    // mirroring run()): a --duration shorter than the settle window must Stop
+    // the settle through step()'s tick check, exactly as the retired
+    // currentTime comparison did — otherwise the settle spins its full window
+    // on a run that has nothing to emit.
+    ++state.tickCount;
     if (step(state) != StepResult::Continue) return false;
     state.engineInput = pollInput(state.currentTime, config_.updateInterval(), state.isFirstTick);
     state.isFirstTick = false;
@@ -210,6 +216,14 @@ void SimulationLoop::settleAtArrivalPoint(LoopState& state,
     //     handoff acts to the retired warm-start prefix.
     primer.releaseArrivalHold();
     state.currentTime = offsetS;
+    // Re-anchor the tick counter at the offset. requiredTicks_ comes from the
+    // ABSOLUTE duration, and the settle's ticks are free (they ran off the
+    // recording clock), so the main loop must charge the recording-relative
+    // ticks it skipped — otherwise tickCount starts at 0, termination never
+    // fires, and the loop emits the provider's whole tail: the unbounded-tail
+    // regression the instant-start contract exists to prevent.
+    state.tickCount = static_cast<int>(
+        std::round(offsetS / config_.updateInterval()));
     emitCsv_ = true;
     emitAudio_ = true;
     audioBuffer_.resetBufferAfterWarmup();
