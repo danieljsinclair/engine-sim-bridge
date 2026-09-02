@@ -116,7 +116,6 @@ bool BridgeSimulator::renderDrainedAudio(float* buffer, int32_t frames, int32_t*
     }
 
     if (totalRead < frames) {
-        fprintf(stderr, "[FILL] D drained-tail totalRead=%d frames=%d\n", totalRead, frames);
         EngineSimAudio::fillSilence(buffer + totalRead * 2, frames - totalRead);
     }
     if (written) *written = totalRead;

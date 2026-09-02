@@ -243,7 +243,6 @@ bool SyncPullStrategy::attemptRender(float* dst, int offset, int framesNeeded,
                 __ilog_format("SyncPullStrategy::attemptRender: partial drain %d/%d, fading %d tail frames (lastL=%.4f lastR=%.4f)",
                 framesWritten, framesNeeded, silenceFrames, lastAudioLeft_, lastAudioRight_));
         }
-        fprintf(stderr, "[FADE] attemptRender tail written=%d need=%d\n", framesWritten, framesNeeded);
         fillSilenceFaded(dst + (offset + framesWritten) * 2, silenceFrames);
         framesWritten = framesNeeded;
     }
@@ -261,7 +260,6 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
     }
 
     if (!simulator_ || shuttingDown_.load()) {
-        fprintf(stderr, "[FILL] A teardown frames=%d\n", buffer.frameCount);
         EngineSimAudio::fillSilence(dst, buffer.frameCount);
         return true;
     }
@@ -287,7 +285,6 @@ int SyncPullStrategy::renderChunked(float* dst, int framesToGenerate) {
     while (remainingFrames > 0 && framesRendered < framesToGenerate && !shuttingDown_.load()) {
         int32_t framesWritten = 0;
         if (!attemptRender(dst, framesRendered, remainingFrames, framesWritten)) {
-            fprintf(stderr, "[FILL] B attemptfail frames=%d\n", framesToGenerate);
             EngineSimAudio::fillSilence(dst, framesToGenerate);
             return framesRendered;
         }
@@ -303,7 +300,6 @@ int SyncPullStrategy::renderChunked(float* dst, int framesToGenerate) {
             int32_t retryFrames = 0;
             if (bool retryOk = retryRender(dst, framesRendered, remainingFrames, retryFrames, MAX_RETRIES); !retryOk) {
                 logger_->error(LogMask::AUDIO, __ilog_format("SyncPullStrategy::render: renderOnDemand failed during retry, filling silence"));
-                fprintf(stderr, "[FILL] C retryfail frames=%d\n", framesToGenerate);
                 EngineSimAudio::fillSilence(dst, framesToGenerate);
                 return framesRendered;
             }
