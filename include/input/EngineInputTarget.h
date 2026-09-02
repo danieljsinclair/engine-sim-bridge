@@ -32,6 +32,9 @@ public:
     void shiftDown() override;
     void toggleIgnition() override;
     void setStarter() override;
+    void requestStarter() override;
+    void requestIgnition(bool on) override;
+    void requestCombinedStart() override;
     void cyclePreset() override;
     void adjustDynoTorque(double delta) override;
     void releaseDynoTorque() override;
@@ -85,6 +88,9 @@ private:
     ILogging* logger_;
     IDemoSpeedEnhancer* speedEnhancer_ = nullptr;  // Optional speed enhancer for demo mode
     IDemoControls* demoControls_ = nullptr;        // Optional demo PRNDL control surface
+    bool starterRequested_ = false;
+    std::optional<bool> ignitionRequest_;
+    bool combinedStartRequested_ = false;
 };
 
 } // namespace input

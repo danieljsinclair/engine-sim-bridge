@@ -48,6 +48,7 @@ private:
     KeyHoldBridge keyHold_;
     ISimulatorSession* session_ = nullptr;
     std::string lastError_;
+    bool ignitionOn_ = true;
 };
 
 } // namespace input

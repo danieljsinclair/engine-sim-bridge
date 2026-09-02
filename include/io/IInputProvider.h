@@ -81,6 +81,19 @@ struct EngineInput {
     // Simulator auto-disengages starter when RPM > threshold
     // Preset cycling
     bool presetCycle = false;       // true = cycle to next preset engine configuration
+
+    // ---- Start/ignition intent events (composable primitive requests) ----
+    // Frontends (CLI keyboard S/I, --start flag, iOS app button) request
+    // start/ignition actions through these flags; SimulationLoop's
+    // applyStartStopDecision forwards them to its VehicleStartController —
+    // the single authority for start/ignition decisions (owner spec
+    // 2026-09-02). One-shot: copied into EngineInput by the producer, then
+    // reset. This keeps every frontend a thin caller of the shared state
+    // machine while the gear/brake-driven CSV path continues to call
+    // update(dt, brake, gear) directly.
+    bool starterRequested = false;        // requestStarter(): engage starter, no ignition
+    std::optional<bool> ignitionRequest;  // requestIgnition(on): explicit ON/OFF (nullopt = no change)
+    bool combinedStartRequested = false;  // requestCombinedStart(): starter+ignition together
 };
 
 // ============================================================================
