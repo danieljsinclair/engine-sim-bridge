@@ -180,20 +180,32 @@ TEST_F(KeyboardDispatchTest, OpenBracket_ShiftsDown) {
 // Test 9: Ignition toggle
 // ============================================================================
 
-TEST_F(KeyboardDispatchTest, IKey_TogglesIgnition) {
+TEST_F(KeyboardDispatchTest, IKey_RequestsIgnitionThroughSharedMachine) {
+    // 'I' routes through requestIgnition (composable primitive) — explicit
+    // ON/OFF through the shared VehicleStartController — not the old
+    // toggleIgnition bypass. First press: ignition defaults ON, so 'I' requests OFF.
     createProvider();
     pressKey('i');
-    EXPECT_TRUE(mockTargetPtr->ignitionToggled);
+    ASSERT_EQ(mockTargetPtr->ignitionRequests.size(), 1u);
+    EXPECT_FALSE(mockTargetPtr->ignitionRequests.back());
+    // Second press requests ON again.
+    pressKey('i');
+    ASSERT_EQ(mockTargetPtr->ignitionRequests.size(), 2u);
+    EXPECT_TRUE(mockTargetPtr->ignitionRequests.back());
 }
 
 // ============================================================================
 // Test 10: Starter (momentary)
 // ============================================================================
 
-TEST_F(KeyboardDispatchTest, SKey_SetsStarter) {
+TEST_F(KeyboardDispatchTest, SKey_RequestsStarterThroughSharedMachine) {
+    // 'S' routes through requestStarter (composable primitive) — engage starter
+    // WITHOUT firing ignition through the shared VehicleStartController — not
+    // the old setStarter bypass. The McLaren mod's starter-then-ignition
+    // sequencing.
     createProvider();
     pressKey('s');
-    EXPECT_TRUE(mockTargetPtr->starterCalled);
+    EXPECT_TRUE(mockTargetPtr->starterRequested);
 }
 
 // ============================================================================
