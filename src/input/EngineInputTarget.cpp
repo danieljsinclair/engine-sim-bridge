@@ -84,6 +84,9 @@ void EngineInputTarget::shiftDown() {
 }
 void EngineInputTarget::toggleIgnition() { ignition_ = !ignition_; }
 void EngineInputTarget::setStarter() { starterButton_ = true; }
+void EngineInputTarget::requestStarter() { starterRequested_ = true; }
+void EngineInputTarget::requestIgnition(bool on) { ignitionRequest_ = on; }
+void EngineInputTarget::requestCombinedStart() { combinedStartRequested_ = true; }
 void EngineInputTarget::cyclePreset() { presetCycle_ = true; }
 void EngineInputTarget::adjustDynoTorque(double delta) {
     if (dynoTorqueScale_ < 0.0) dynoTorqueScale_ = 0.0;
@@ -120,11 +123,17 @@ EngineInput EngineInputTarget::buildInput() {
     input.presetCycle = presetCycle_;
     input.gearAutoMode = gearAutoMode_;
     input.roadSpeedKmh = roadSpeedKmh_;
+    input.starterRequested = starterRequested_;
+    input.ignitionRequest = ignitionRequest_;
+    input.combinedStartRequested = combinedStartRequested_;
 
     gearDelta_ = 0;
     starterButton_ = false;
     presetCycle_ = false;
     throttleTouched_ = false;
+    starterRequested_ = false;
+    ignitionRequest_.reset();
+    combinedStartRequested_ = false;
 
     return input;
 }

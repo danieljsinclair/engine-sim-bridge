@@ -20,6 +20,14 @@ public:
     virtual void shiftDown() {}
     virtual void toggleIgnition() {}
     virtual void setStarter() {}
+    // Composable start/ignition primitives (owner spec 2026-09-02): the single
+    // seam every frontend calls through. Concrete targets (EngineInputTarget)
+    // override these to route the request into the shared VehicleStartController;
+    // the default no-op lets targets that don't participate (DemoControlsTarget)
+    // ignore them harmlessly.
+    virtual void requestStarter() {}
+    virtual void requestIgnition(bool /*on*/) {}
+    virtual void requestCombinedStart() {}
     virtual void cyclePreset() {}
     virtual void adjustDynoTorque(double) {}
     virtual void releaseDynoTorque() {}

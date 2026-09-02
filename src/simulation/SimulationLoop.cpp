@@ -57,6 +57,39 @@ constexpr double ARRIVAL_SETTLE_SECONDS = 4.0;
 // ============================================================================
 
 void SimulationLoop::applyStartStopDecision(LoopState& state, bool lightReportedByTelemetry) {
+    // Composable-primitive requests (owner spec 2026-09-02): the keyboard 'S'
+    // key, the 'I' key, and the --start flag each request a start/ignition
+    // action through EngineInput's intent events. Forward them to the
+    // VehicleStartController — the single authority for start/ignition
+    // decisions — BEFORE the gear/brake-driven update so an explicit command
+    // takes precedence over the passive gear/brake opinion.
+    const bool hadPrimitiveRequest =
+        state.engineInput.combinedStartRequested ||
+        state.engineInput.starterRequested ||
+        state.engineInput.ignitionRequest.has_value();
+
+    if (state.engineInput.combinedStartRequested) {
+        startStopController_.requestCombinedStart();
+    }
+    if (state.engineInput.starterRequested) {
+        startStopController_.requestStarter();
+    }
+    if (state.engineInput.ignitionRequest.has_value()) {
+        startStopController_.requestIgnition(state.engineInput.ignitionRequest.value());
+    }
+
+    // Manual ignition toggle is unconditional (owner spec 2026-09-02): 'I'
+    // must flip ignition in ANY phase — off while Running kills the engine;
+    // on while Stopped energizes without cranking. When a primitive was
+    // requested, flatten the controller's resulting levels into engineInput
+    // NOW — without this, the early-return (no brake/gear opinion in a bare
+    // interactive run) would skip the flatten and the 'I' key's state change
+    // would be acknowledged by VSC but never reach CrankingController.
+    if (hadPrimitiveRequest) {
+        state.engineInput.ignition = startStopObserver_.ignition_;
+        state.engineInput.starterButton = starterPulseFromLevel(startStopObserver_.starter_);
+    }
+
     // Opinion = a vehicle-control signal exists this frame: telemetry reported
     // the brake light, the keyboard brake level is non-zero, or a drive gear
     // (D/R) is selected. With no opinion the provider keeps start/stop
@@ -671,6 +704,20 @@ int SimulationLoop::run() {
                            "IArrivalStatePrimer (instant arrival-state prime)");
             settleAtArrivalPoint(state, *primer, timeline->getStartFromS());
         }
+    }
+
+    // --start: apply the combined start through the shared state machine
+    // (VehicleStartController::requestCombinedStart) on the first tick. This
+    // routes --start through the SAME path as the CSV auto path and the iOS
+    // app button — the old path bypassed VSC via a one-shot setStarter pulse.
+    // requestCombinedStart() fires starter+ignition via the ObserverActuator;
+    // flatten the resulting levels into engineInput so CrankingController sees
+    // the starter pulse + ignition on this very first tick.
+    if (config_.startRequested && !startApplied_) {
+        startStopController_.requestCombinedStart();
+        state.engineInput.ignition = startStopObserver_.ignition_;
+        state.engineInput.starterButton = starterPulseFromLevel(startStopObserver_.starter_);
+        startApplied_ = true;
     }
 
     // Main loop: thin wrapper calling step()

@@ -438,3 +438,91 @@ TEST(VehicleStartControllerTest, ManualPathIndependence) {
     EXPECT_TRUE(mtp.isIgnitionRequested());
     EXPECT_TRUE(mtp.isStarterRequested());
 }
+
+// ---- Composable primitives (owner spec 2026-09-02: single shared state
+// machine, every frontend a thin caller). ----
+
+// 9. requestCombinedStart fires starter+ignition together on the first call
+// (t=0, no crank delay) — the CSV path's by-design operation and --start.
+TEST(VehicleStartControllerTest, CombinedStart_FiresStarterAndIgnitionTogether) {
+    SpyActuator spy;
+    VehicleStartController vsc(spy);
+
+    vsc.requestCombinedStart();
+    EXPECT_TRUE(spy.starter_);
+    EXPECT_TRUE(spy.ignition_);
+    EXPECT_TRUE(vsc.isEngineOn());
+    EXPECT_FALSE(vsc.isStopLatched());
+}
+
+// 10. requestStarter engages the starter WITHOUT firing ignition — the McLaren
+// mod's starter-then-ignition sequencing (crank first, ignite a moment later).
+TEST(VehicleStartControllerTest, RequestStarter_EngagesStarterWithoutIgnition) {
+    SpyActuator spy;
+    VehicleStartController vsc(spy);
+
+    vsc.requestStarter();
+    EXPECT_TRUE(spy.starter_);
+    EXPECT_FALSE(spy.ignition_);  // ignition NOT fired by starter-only
+    EXPECT_TRUE(vsc.isEngineOn());
+}
+
+// 11. requestStarter then requestIgnition(true) a moment later: the
+// starter-then-ignition sequence completes the start (McLaren mod).
+TEST(VehicleStartControllerTest, StarterThenIgnition_SequencesStart) {
+    SpyActuator spy;
+    VehicleStartController vsc(spy);
+
+    vsc.requestStarter();
+    EXPECT_TRUE(spy.starter_);
+    EXPECT_FALSE(spy.ignition_);
+
+    vsc.requestIgnition(true);  // ignite a moment later
+    EXPECT_TRUE(spy.ignition_);
+    EXPECT_TRUE(vsc.isEngineOn());
+}
+
+// 12. requestIgnition(false) turns ignition off (engine coasts down) without
+// touching the starter — the separate ignition control the CLI/iOS need.
+TEST(VehicleStartControllerTest, RequestIgnitionOff_CoastsDown) {
+    SpyActuator spy;
+    VehicleStartController vsc(spy);
+
+    vsc.requestCombinedStart();
+    ASSERT_TRUE(spy.ignition_);
+
+    vsc.requestIgnition(false);
+    EXPECT_FALSE(spy.ignition_);
+    EXPECT_FALSE(vsc.isEngineOn());
+}
+
+// 13. requestIgnition(true) resolves a pending crank immediately — an explicit
+// ignition command is authoritative and cancels the pending timer.
+TEST(VehicleStartControllerTest, RequestIgnitionResolvesPendingCrank) {
+    SpyActuator spy;
+    VehicleStartController vsc(spy);
+
+    vsc.requestStarter();  // starter engaged, crank pending
+    EXPECT_TRUE(spy.starter_);
+    EXPECT_FALSE(spy.ignition_);
+
+    vsc.requestIgnition(true);  // resolves immediately, no delay wait
+    EXPECT_TRUE(spy.ignition_);
+    EXPECT_TRUE(vsc.isEngineOn());
+}
+
+// 14. A second requestCombinedStart while already running is a no-op (engine
+// already on) — idempotent, no starter re-pulse artefact.
+TEST(VehicleStartControllerTest, CombinedStart_IdempotentWhenRunning) {
+    SpyActuator spy;
+    VehicleStartController vsc(spy);
+
+    vsc.requestCombinedStart();
+    ASSERT_TRUE(spy.ignition_);
+    const int ignitionCallsAtStart = spy.ignitionCalls_;
+
+    vsc.requestCombinedStart();  // already running
+    EXPECT_TRUE(vsc.isEngineOn());
+    EXPECT_TRUE(spy.ignition_);
+    EXPECT_EQ(spy.ignitionCalls_, ignitionCallsAtStart);  // no re-fire
+}

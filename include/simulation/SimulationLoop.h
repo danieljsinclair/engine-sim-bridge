@@ -112,6 +112,12 @@ struct SimulationConfig {
     // its VehicleStartController from config — no per-provider wiring.
     double startStopCrankDelayS = input::VehicleStartController::kDefaultCrankDelayS;
 
+    // --start flag: request a combined start (starter+ignition) on the first
+    // tick. The loop routes this through VehicleStartController's
+    // requestCombinedStart() primitive so --start uses the SAME state machine
+    // as the CSV auto path and the iOS app button — not a bypass.
+    bool startRequested = false;
+
     // Optional display label for logging (e.g. ANSI-colored by CLI). Empty = auto-derive.
     std::string simulatorLabel;
 
@@ -248,6 +254,7 @@ private:
     bool startStopEngaged_ = false;   // authority latch: once a vehicle-control
                                       // signal is seen, the controller keeps it
     bool prevStarterLevel_ = false;   // edge detection for the starter pulse
+    bool startApplied_ = false;       // --start latch: requestCombinedStart fires once
 };
 
 // ============================================================================
