@@ -188,7 +188,12 @@ TEST_F(KeyboardDispatchTest, IKey_RequestsIgnitionThroughSharedMachine) {
     pressKey('i');
     ASSERT_EQ(mockTargetPtr->ignitionRequests.size(), 1u);
     EXPECT_FALSE(mockTargetPtr->ignitionRequests.back());
-    // Second press requests ON again.
+    // KeyHoldBridge dedups: a second 'i' while the key is still logically
+    // "down" is a repeat, not a fresh press. Let the key time out so the
+    // next 'i' is seen as a fresh edge. INITIAL_TIMEOUT_MS is 250ms; each
+    // tick is 16ms, so 20 ticks clears it.
+    for (int i = 0; i < 20; i++) { drainFrame(); }
+    // Second press (after timeout) requests ON again.
     pressKey('i');
     ASSERT_EQ(mockTargetPtr->ignitionRequests.size(), 2u);
     EXPECT_TRUE(mockTargetPtr->ignitionRequests.back());
