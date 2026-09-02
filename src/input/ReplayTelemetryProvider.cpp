@@ -1,5 +1,6 @@
 // ReplayTelemetryProvider.cpp
 #include "input/ReplayTelemetryProvider.h"
+#include "input/CsvGearCoercion.h"
 #include "input/VirtualIceInputProvider.h"
 #include "input/WarmBoot.h"
 #include "twin/IceVehicleProfile.h"
@@ -299,8 +300,17 @@ EngineInput ReplayTelemetryProvider::driveThroughTwin(const Sample& s, double dt
     // The CSV stalk (D/R/N/P) drives the twin's selector. A missing/blank selector
     // defaults to DRIVE so the bench-driving run engages and exercises the coupling
     // model (mirrors the live CSV path's default-selector contract).
-    const bridge::GearSelector sel = s.gearSelector.empty()
-        ? bridge::GearSelector::DRIVE : parseGearSelector(s.gearSelector);
+    //
+    // Reverse coercion shared with the live path (CsvGearCoercion.h): a recorded
+    // 'R' only keeps REVERSE while genuinely reversing; a standstill/
+    // contradictory 'R' maps to PARK or NEUTRAL. Applied here so a replay of the
+    // same capture selects the SAME gear the live path coerces to (previously the
+    // replay path forwarded the raw selector and could select REVERSE where live
+    // coerced to PARK/NEUTRAL).
+    const bridge::GearSelector sel = coerceCsvReverseGear(
+        s.gearSelector.empty() ? bridge::GearSelector::DRIVE
+                               : parseGearSelector(s.gearSelector),
+        s.roadSpeedKmh);
     twinProvider_->setGearSelector(static_cast<int>(sel));
     // Replay owns its ignition (ignitionOn_, default ON, 'I' toggles): forward
     // the LEVEL to the twin every frame. The twin defaults ignition OFF and

@@ -44,6 +44,14 @@ bool DemoInputProvider::Initialize() {
         return false;
     }
 
+    // Re-apply any coupling flags that arrived before Initialize() (store +
+    // re-apply): the twin now exists, so seed it with the stored values.
+    twinProvider_.setWheelCouplingMode(wheelCouplingMode_);
+    twinProvider_.setCouplingModel(couplingModelKind_);
+    twinProvider_.setPinTauMs(pinTauMs_);
+    twinProvider_.setEffectiveThrottleConfig(effectiveThrottleConfig_);
+    twinProvider_.setTorqueInformedGearboxConfig(torqueInformedGearboxConfig_);
+
     initialized_ = true;
     return true;
 }
@@ -187,6 +195,32 @@ void DemoInputProvider::setGearboxLogger(twin::IGearboxLogger* logger) {
 void DemoInputProvider::reconfigureProfile(const std::vector<double>& gearRatios,
                                             double diffRatio, double tireRadiusM) {
     twinProvider_.reconfigureProfile(gearRatios, diffRatio, tireRadiusM);
+}
+
+void DemoInputProvider::setWheelCouplingMode(twin::WheelCouplingMode mode) {
+    wheelCouplingMode_ = mode;
+    twinProvider_.setWheelCouplingMode(mode);
+}
+
+void DemoInputProvider::setPinTauMs(double tauMs) {
+    pinTauMs_ = tauMs;
+    twinProvider_.setPinTauMs(tauMs);
+}
+
+void DemoInputProvider::setEffectiveThrottleConfig(const twin::EffectiveThrottleConfig& config) {
+    effectiveThrottleConfig_ = config;
+    twinProvider_.setEffectiveThrottleConfig(config);
+}
+
+void DemoInputProvider::setTorqueInformedGearboxConfig(
+    const twin::TorqueInformedGearboxConfig& config) {
+    torqueInformedGearboxConfig_ = config;
+    twinProvider_.setTorqueInformedGearboxConfig(config);
+}
+
+void DemoInputProvider::setCouplingModel(twin::CouplingModelKind kind) {
+    couplingModelKind_ = kind;
+    twinProvider_.setCouplingModel(kind);
 }
 
 void DemoInputProvider::setBrake(double level) {

@@ -13,7 +13,9 @@
 #include "input/BrakeInput.h"
 #include "input/DemoVehiclePhysics.h"
 #include "input/VirtualIceInputProvider.h"
+#include "twin/CouplingModelSelector.h"
 #include "twin/IceVehicleProfile.h"
+#include "twin/WheelCoupling.h"
 
 #include <memory>
 #include <string>
@@ -69,6 +71,18 @@ public:
     void reconfigureProfile(const std::vector<double>& gearRatios,
                              double diffRatio, double tireRadiusM);
 
+    // --coupling-model / --wheel-coupling / --pin-tau-ms / --effective-throttle
+    // / --torque-informed-gearbox: mirror LiveTelemetryProvider/
+    // ReplayTelemetryProvider so the D1-D3 flags take effect on the demo path
+    // (not only the telemetry paths). Store + re-forward: the CLI may set them
+    // BEFORE Initialize() creates the twin, so the stored value survives twin
+    // creation and is re-applied there.
+    void setWheelCouplingMode(twin::WheelCouplingMode mode);
+    void setPinTauMs(double tauMs);
+    void setEffectiveThrottleConfig(const twin::EffectiveThrottleConfig& config);
+    void setTorqueInformedGearboxConfig(const twin::TorqueInformedGearboxConfig& config);
+    void setCouplingModel(twin::CouplingModelKind kind);
+
 private:
     void doShutdown();
     const twin::IceVehicleProfile profile_;
@@ -84,6 +98,14 @@ private:
     int currentGear_ = 0;
     int lastForwardedSelector_ = 0;
     class DemoThrottleSource* demoThrottle_;  // non-owning, set from throttleSource_.get()
+
+    // Pending coupling flags (store + re-apply on Initialize). Defaults mirror
+    // the CLI defaults (pin + torque-converter, rigid tau, torque features off).
+    twin::WheelCouplingMode wheelCouplingMode_ = twin::WheelCouplingMode::Pin;
+    twin::CouplingModelKind couplingModelKind_ = twin::CouplingModelKind::TorqueConverter;
+    double pinTauMs_ = 0.0;
+    twin::EffectiveThrottleConfig effectiveThrottleConfig_;
+    twin::TorqueInformedGearboxConfig torqueInformedGearboxConfig_;
 };
 
 }
