@@ -19,8 +19,14 @@ FILE* ConsoleLogger::getStream(uint32_t level) const {
 bool ConsoleLogger::shouldLog(uint32_t mask) const {
     uint32_t category = mask & 0x0000FFFF;
     uint32_t level = mask & 0xFFFF0000;
-    return ((category & mask_) || (mask_ & LogMask::ALL_CATS)) &&
-           ((level & mask_) || (mask_ & LogMask::ALL_LEVELS));
+    // A half (categories / levels) passes when the mask names the message's
+    // bit OR carries the FULL wildcard for that half. The wildcard must test
+    // the whole half: a bare AND (mask_ & ALL_LEVELS) is true for ANY level
+    // bit, which would make e.g. INFO|WARN|ERROR act as all-levels and defeat
+    // level filtering entirely (runMask(false) could never hide DBG).
+    bool catOk = (category & mask_) != 0 || (mask_ & 0x0000FFFF) == LogMask::ALL_CATS;
+    bool levelOk = (level & mask_) != 0 || (mask_ & 0xFFFF0000) == LogMask::ALL_LEVELS;
+    return catOk && levelOk;
 }
 
 void ConsoleLogger::_write(uint32_t mask, const std::string& msg) {

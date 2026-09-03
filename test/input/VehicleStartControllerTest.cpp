@@ -526,3 +526,52 @@ TEST(VehicleStartControllerTest, CombinedStart_IdempotentWhenRunning) {
     EXPECT_TRUE(spy.ignition_);
     EXPECT_EQ(spy.ignitionCalls_, ignitionCallsAtStart);  // no re-fire
 }
+
+// ===========================================================================
+// Crank-delay scale locks (owner 2026-09-03: --starter-delay must behave as
+// honest milliseconds at the controller seam — time-to-ignition scales
+// linearly with the configured delay, zero fires immediately).
+// ===========================================================================
+
+namespace {
+// Tick the controller with the brake held in PARK until ignition fires (or
+// maxTicks); returns the tick count at the ignition edge (0 = never).
+int ticksToIgnition(VehicleStartController& vsc, SpyActuator& spy,
+                    double dt, int maxTicks = 10000) {
+    spy.ignition_ = false;
+    for (int i = 1; i <= maxTicks; ++i) {
+        vsc.update(dt, /*brakePressed=*/true, GearSelector::PARK);
+        if (spy.ignition_) return i;
+    }
+    return 0;
+}
+} // namespace
+
+TEST(VehicleStartControllerTest, CrankDelayScalesLinearlyWithConfiguredDelay) {
+    // The delay accumulates dt per tick and nothing caps or truncates it, so
+    // ignition fires at ceil(delay/dt) ticks — within 1 tick either side (dt
+    // is not exactly representable in binary, so the accumulated sum can land
+    // a hair under/over the delay at the boundary; the exact tick is a float
+    // artifact, not the contract).
+    SpyActuator spyA;
+    VehicleStartController vscA(spyA, 0.5);
+    const int ticksA = ticksToIgnition(vscA, spyA, 0.05);
+    EXPECT_NEAR(ticksA, 10, 1);
+
+    SpyActuator spyB;
+    VehicleStartController vscB(spyB, 1.0);
+    const int ticksB = ticksToIgnition(vscB, spyB, 0.05);
+    EXPECT_NEAR(ticksB, 20, 1);
+
+    // Monotone: doubling the delay never SHORTENS the crank.
+    EXPECT_GE(ticksB, ticksA);
+}
+
+TEST(VehicleStartControllerTest, CrankDelayZeroFiresIgnitionOnFirstTick) {
+    // Explicit zero delay: the first accumulated dt (>= 0.0) satisfies the
+    // timer immediately — no default fallback at the controller seam.
+    SpyActuator spy;
+    VehicleStartController vsc(spy, 0.0);
+    const int ticks = ticksToIgnition(vsc, spy, 0.05);
+    EXPECT_EQ(ticks, 1);
+}

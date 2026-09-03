@@ -240,7 +240,7 @@ EngineInput ReplayTelemetryProvider::OnUpdateSimulation(double dt) {
     // clock would otherwise floor to the PRE-offset row when the offset falls
     // between rows).
 
-    const Sample& s = arrivalHoldActive_ ? firstSampleAtOrAfter(startFromS_)
+    const Sample& s = arrivalHoldActive_ ? arrivalSample()
                                          : sampleAt(elapsedS_);
     currentTimestampS_ = s.timeS;
     buildBaseEngineInput(input, s);
@@ -405,6 +405,26 @@ bool ReplayTelemetryProvider::applyTimeSlicing(EngineInput& input, double dt) {
     return false;
 }
 
+const CsvSample& ReplayTelemetryProvider::arrivalSample() const {
+    // Arrival row for the prime/hold: the first row at/after the offset that
+    // carries engine data — blank USB-settle stalk rows are skipped forward
+    // (a blank row holds no operating point to warm-boot from). Falls back to
+    // the plain first-at-or-after row when no populated row exists past the
+    // offset (degenerate trace) — never returns the pre-offset floor.
+    if (startFromS_ <= 0.0 || samples_.empty()) {
+        return samples_.empty() ? firstSampleAtOrAfter(0.0) : firstSampleAtOrAfter(startFromS_);
+    }
+    const Sample& plain = firstSampleAtOrAfter(startFromS_);
+    if (plain.engineDataPresent) return plain;
+    // Walk forward to the first populated row at/after the plain row.
+    for (size_t i = 0; i < samples_.size(); ++i) {
+        if (samples_[i].timeS >= plain.timeS && samples_[i].engineDataPresent) {
+            return samples_[i];
+        }
+    }
+    return plain;
+}
+
 void ReplayTelemetryProvider::primeArrivalState() {
     // Instant --start-from: synthesize the provider-side arrival state from
     // the FIRST row at/after the offset — no pre-offset row is ever sampled.
@@ -412,7 +432,7 @@ void ReplayTelemetryProvider::primeArrivalState() {
     // and byte-identical behavior).
     if (startFromS_ <= 0.0 || samples_.empty()) return;
 
-    const Sample& arrival = firstSampleAtOrAfter(startFromS_);
+    const Sample& arrival = arrivalSample();
     arrivalHoldActive_ = true;
     // Clock cold-jump onto the arrival row's TRUE timecode (mirrors the live
     // path's instant anchor): the first emitted frame reads [mm:ss] at the

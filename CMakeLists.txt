@@ -383,6 +383,7 @@ if(BUILD_BRIDGE_TESTS)
 
     add_executable(bridge_unit_tests
         test/BridgeUnitTests.cpp
+        test/LogMaskTest.cpp
         test/CrankingControllerTests.cpp
         test/simulator/BrakeConstraintTest.cpp
         test/simulator/SpeedTrackingTest.cpp

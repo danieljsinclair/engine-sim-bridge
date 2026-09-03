@@ -38,6 +38,14 @@ namespace LogMask {
 
     // Everything
     constexpr uint32_t ALL         = 0xFFFFFFFF;
+
+    // Run-time mask for the CLI's console logger: the default run keeps every
+    // category at INFO and above (DBG suppressed — the SyncPullStrategy
+    // startup diagnostics are diagnostic gold but noise in default output);
+    // --verbose re-enables everything.
+    inline uint32_t runMask(bool verbose) {
+        return verbose ? ALL : (ALL_CATS | INFO | WARN | ERROR);
+    }
 }
 
 // Format a printf-style message into a std::string.
@@ -89,8 +97,12 @@ private:
     uint32_t mask_;
     const char* levelToString(uint32_t level) const;
     FILE* getStream(uint32_t level) const;
-    bool shouldLog(uint32_t mask) const;
     void _write(uint32_t mask, const std::string& msg) override;
+
+public:
+    // Pure mask predicate (public so tests can assert filtering without
+    // capturing stdout): does a message with this category|level pass?
+    bool shouldLog(uint32_t mask) const;
 };
 
 #endif // ILOGGING_H
