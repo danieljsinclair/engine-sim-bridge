@@ -424,6 +424,7 @@ if(BUILD_BRIDGE_TESTS)
         test/simulator/ISimulatorVersionTest.cpp
         test/input/DemoControlsTargetTest.cpp
         test/input/LiveTelemetryProviderTest.cpp
+        test/input/OverlayInputProviderTest.cpp
         test/input/VehicleStartControllerTest.cpp
         test/twin/GearboxCsvLoggerTest.cpp
     )

@@ -244,6 +244,45 @@ protected:
     std::unique_ptr<CountingLoopClock> clock_;
 };
 
+// ===========================================================================
+// Arrival primer injection (#66): a WRAPPING provider (keyboard overlay over
+// a replay core) carries the IReplayTimeline offset but may not implement
+// IArrivalStatePrimer itself. The loop must accept the core's primer through
+// SessionDependencies instead of demanding the cast — and still fail fast
+// when NEITHER route provides one.
+// ===========================================================================
+
+// Timeline-only provider: implements IReplayTimeline but NOT
+// IArrivalStatePrimer — the exact pre-fix shape of the overlay wrap.
+class TimelineOnlyProvider : public IInputProvider, public IReplayTimeline {
+public:
+    EngineInput OnUpdateSimulation(double) override { ++polls_; return EngineInput{}; }
+    void provideFeedback(const EngineSimStats&) override {}
+    bool Initialize() override { return true; }
+    void Shutdown() override {}
+    bool IsConnected() const override { return true; }
+    std::string GetProviderName() const override { return "TimelineOnlyProvider"; }
+    std::string GetLastError() const override { return ""; }
+
+    // IReplayTimeline
+    double durationS() const override { return 600.0; }
+    void setEndAtS(double) override {}
+    double getStartFromS() const override { return startFromS_; }
+
+    double startFromS_ = -1.0;
+    int polls_ = 0;
+};
+
+// Standalone counting primer: injected via SessionDependencies.
+class CountingPrimer : public IArrivalStatePrimer {
+public:
+    void primeArrivalState() override { ++primeCalls_; }
+    void releaseArrivalHold() override { ++releaseCalls_; }
+
+    int primeCalls_ = 0;
+    int releaseCalls_ = 0;
+};
+
 // The core owner contract: the number of simulated ticks must NOT grow with
 // the offset. A 90s offset and a 5s offset with the same emission window
 // simulate the SAME number of ticks (settle + emission), which is bounded —
@@ -373,6 +412,58 @@ TEST_F(SimulationLoopStartFromTest, ShortDurationWithOffsetTerminatesCleanly) {
     EXPECT_TRUE(telemetryWriter_->metricTimestamps_.empty());
     // Bounded stepping: ~2s at 60Hz — NOT an unbounded settle spin.
     EXPECT_LE(audioBuffer_->updateCount_, 130);
+}
+
+// #66: a provider with an offset but NO provider-side primer must complete
+// when the primer is injected through SessionDependencies — the wrapping
+// provider's core primer, threaded explicitly by the session owner. Today
+// the loop ignores deps.arrivalPrimer and the cast fails -> ASSERT throw.
+TEST_F(SimulationLoopStartFromTest, InjectedPrimerUsedWhenProviderDoesNotImplementOne) {
+    TimelineOnlyProvider provider;
+    provider.startFromS_ = 5.0;
+    CountingPrimer primer;
+    SimulationConfig cfg;
+    cfg.duration = 5.0 + 0.1;
+    auto deps = buildDeps(&provider);
+    deps.arrivalPrimer = &primer;
+
+    SimulationLoop loop(*simulator_, cfg, deps);
+    EXPECT_EQ(loop.run(), 0);
+    EXPECT_EQ(primer.primeCalls_, 1);
+    EXPECT_EQ(primer.releaseCalls_, 1);
+    // The settle polled the (primer-less) provider for held input.
+    EXPECT_GT(provider.polls_, 0);
+}
+
+// DI precedence: when BOTH an injected primer and a provider-side primer
+// exist, the INJECTED one wins — explicit wiring beats interface sniffing.
+// (In production both are the same object: the overlay delegates to the
+// core the deps pointer already names.)
+TEST_F(SimulationLoopStartFromTest, InjectedPrimerWinsOverProviderCast) {
+    FakeStartFromProvider provider;
+    provider.configure(5.0, 5.0, 0.5);
+    CountingPrimer primer;
+    SimulationConfig cfg;
+    cfg.duration = 5.0 + 0.1;
+    auto deps = buildDeps(&provider);
+    deps.arrivalPrimer = &primer;
+
+    SimulationLoop loop(*simulator_, cfg, deps);
+    EXPECT_EQ(loop.run(), 0);
+    EXPECT_EQ(primer.primeCalls_, 1);
+    EXPECT_EQ(provider.primeCalls_, 0);
+}
+
+// Fail-fast survives the injection route: NO primer from either route still
+// aborts the run loudly — never a silent warm-start fallback.
+TEST_F(SimulationLoopStartFromTest, MissingPrimerEverywhereStillThrows) {
+    TimelineOnlyProvider provider;
+    provider.startFromS_ = 5.0;
+    SimulationConfig cfg;
+    cfg.duration = 5.2;
+
+    SimulationLoop loop(*simulator_, cfg, buildDeps(&provider));
+    EXPECT_THROW(loop.run(), std::runtime_error);
 }
 
 }  // namespace
