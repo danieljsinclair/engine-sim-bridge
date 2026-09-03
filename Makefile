@@ -27,8 +27,12 @@ BRIDGE_TEST_CORE_EXCLUDE := $(BRIDGE_TEST_EXCLUDE)|($(BRIDGE_TEST_ISOMORPHISM_MA
 CTEST_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 BUILD_PARALLEL_LEVEL ?= $(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 CMAKE_BUILD_PARALLEL_FLAG := $(if $(strip $(BUILD_PARALLEL_LEVEL)),--parallel $(BUILD_PARALLEL_LEVEL),)
-BUILD_STAMP := $(BUILD_DIR)/.build-ready.stamp
-BUILD_COV_STAMP := $(BUILD_COV_DIR)/.build-cov-ready.stamp
+# Real artefact dependencies replace .stamp files (KISS — Make's natural
+# mtime check is sufficient; no .stamp bookkeeping required). The library
+# archives are the real artefacts produced by `cmake --build`; the
+# isomorphism test artefact is the test binary (ctest runs it with -R).
+BUILD_STAMP := $(BUILD_DIR)/libenginesim.a
+BUILD_COV_STAMP := $(BUILD_COV_DIR)/libenginesim.a
 SONAR_PROJECT_PROPERTIES := sonar-project.properties
 COMPILE_DB := $(BUILD_COV_DIR)/compile_commands.json
 COVERAGE_REPORT := $(BUILD_COV_DIR)/coverage.txt
@@ -46,7 +50,7 @@ TEST_SUMMARY_LOG := $(BUILD_DIR)/test-summary.log
 # when bridge or engine-sim sources change, so rebuilds happen when necessary.
 BUILD_INPUTS := Makefile CMakeLists.txt $(shell find src include test tools engine-sim -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' -o -name '*.h' -o -name '*.hh' -o -name '*.hpp' -o -name '*.cmake' \) | sort)
 
-ISOMORPHISM_STAMP := $(BUILD_DIR)/.test-isomorphism.stamp
+ISOMORPHISM_STAMP := $(BUILD_DIR)/bridge_unit_tests
 
 define build_bridge_targets
 	cmake --build $(BUILD_DIR) $(CMAKE_BUILD_PARALLEL_FLAG)
@@ -112,15 +116,19 @@ remove-orphans:
 	@find . -path ./build -prune -o -name "*.a" -type f -print -delete 2>/dev/null || true
 	@find . -path ./build -prune -o -name "_deps" -type d -print -exec rm -rf {} + 2>/dev/null || true
 
-# Clean build artifacts (cascades to engine-sim via cmake)
+# Clean build artifacts (cascades to engine-sim via cmake).
+# No .stamp files to remove — the real artefact (libenginesim.a) is removed
+# by `cmake --build clean` above.
 clean: remove-orphans clean-presets clean-test-fixtures sonar-clean coverage-clean
 	@if [ -d $(BUILD_DIR) ]; then cmake --build $(BUILD_DIR) --target clean >/dev/null 2>&1 || true; fi
-	@rm -f $(BUILD_DIR)/*.stamp
 	@rm -rf tmp $(BUILD_COV_DIR)/.scannerwork
 
 # Remove only stamp files so tests can be rerun without full clean.
+# No-op now that .stamp files are gone — the ctest/CLI artefact mtimes drive
+# the cache, so tests re-run naturally when their inputs change. Kept as a
+# target for callers that still invoke it; nothing to delete here.
 clean-test:
-	@rm -f $(BUILD_DIR)/.*.stamp $(BUILD_DIR)/*.stamp
+	@:
 
 # Full clean - remove entire build directory (superset of clean)
 scrub: clean
@@ -198,7 +206,8 @@ $(BUILD_COV_DIR)/CMakeCache.txt: CMakeLists.txt
 $(BUILD_COV_STAMP): $(BUILD_INPUTS) $(BUILD_COV_DIR)/CMakeCache.txt
 	@echo "=== [engine-sim-bridge] Building coverage (build-cov, RelWithDebInfo+instr) ==="
 	@cmake --build $(BUILD_COV_DIR) $(CMAKE_BUILD_PARALLEL_FLAG)
-	@touch $@
+	# `cmake --build` updates the libenginesim.a mtime above; that IS the
+	# artefact Make tracks (no separate .stamp file needed).
 
 # coverage-run: run tests on coverage-instrumented build, merge profdata, export lcov
 # File-artefact target: re-runs only when build-cov, preset JSONs, source inputs, or
@@ -378,6 +387,9 @@ PRESET_JSONS := $(foreach engine,$(ENGINES),$(PRESET_DIR)/$(engine).json)
 
 ISOMORPHISM_MR_INPUTS := $(shell find es -type f -name '*.mr' -print 2>/dev/null | sed 's/ /\\ /g')
 ISOMORPHISM_CODE_INPUTS := $(shell find src/common src/preset include/common include/preset include/simulator -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) -print 2>/dev/null | sed 's/ /\\ /g')
+# bridge_unit_tests is the gtest binary ctest invokes with the -R selector
+# (ctest uses gtest filter matching; there is no separate preset_isomorphism_tests
+# binary on disk). It IS the artefact whose mtime we check.
 ISOMORPHISM_INPUTS = \
 	$(PRESET_JSONS) \
 	$(ISOMORPHISM_MR_INPUTS) \
@@ -385,18 +397,20 @@ ISOMORPHISM_INPUTS = \
 	CMakeLists.txt \
 	test/PresetIsomorphismTests.cpp \
 	tools/preset_compiler.cpp \
-	$(BUILD_DIR)/preset_isomorphism_tests
+	$(BUILD_DIR)/bridge_unit_tests
 
+# If ctest fails the recipe exits non-zero -> Make will retry on the next
+# invocation. If ctest passes the recipe's exit code is success -> the binary
+# is the artefact; the mtime check determines when to re-run. No .stamp
+# bookkeeping required.
 $(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets test-reset
 	@set -o pipefail; \
-	mkdir -p $(dir $@); \
 	echo "$(BLOCK_START_MESSAGE)"; \
 	$(call bridge_print_hint) \
 	if cd $(BUILD_DIR) && ctest $(CTEST_UI_FLAGS) --output-on-failure -j$(CTEST_PARALLEL_LEVEL) -R '$(BRIDGE_TEST_ISOMORPHISM_MATCH)' 2>&1 | tee -a $(abspath $(TEST_SUMMARY_LOG)); then \
 		echo "=== [engine-sim-bridge] SUMMARY: PASS (isomorphism) ==="; \
 		$(call bridge_print_result,32,PASSED); \
 		$(call bridge_print_hint) \
-		touch $(abspath $@); \
 	else \
 		echo "=== [engine-sim-bridge] SUMMARY: FAIL (isomorphism) ==="; \
 		$(call bridge_print_result,31,FAILED); \
