@@ -165,6 +165,11 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
 
     auto fields = split(trimmed, ',');
     CsvSample s;
+    // True once any engine-data field parses from a non-empty cell. A row
+    // where only the timestamp parses is a timecoded BLANK (vehicle-sim's
+    // USB-settle stalk) — accepted as a paced row but not an operating point
+    // (CsvSample::engineDataPresent; the arrival prime skips such rows).
+    bool engineData = false;
 
     double v = 0.0;
     if (header_.colTime >= 0 && header_.colTime < static_cast<int>(fields.size()) &&
@@ -205,6 +210,7 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
     if (header_.colThrottle >= 0 && header_.colThrottle < static_cast<int>(fields.size()) &&
         parseDouble(fields[header_.colThrottle], v)) {
         s.throttle = std::clamp(v / 100.0, 0.0, 1.0);
+        engineData = true;
     }
 
     if (header_.colRoad >= 0 && header_.colRoad < static_cast<int>(fields.size()) &&
@@ -216,25 +222,33 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
         // leak through as REVERSE (RAR). A blank/unparseable road column still
         // leaves the -2.0 "not commanded" sentinel intact.
         s.roadSpeedKmh = v;
+        engineData = true;
     }
 
     if (int gi; header_.colGear >= 0 && header_.colGear < static_cast<int>(fields.size()) &&
         parseInt(fields[header_.colGear], gi)) {
         s.gear = gi;
+        engineData = true;
     }
 
     if (header_.colGearSelector >= 0 && header_.colGearSelector < static_cast<int>(fields.size())) {
-        s.gearSelector = trim(fields[header_.colGearSelector]);
+        const std::string selector = trim(fields[header_.colGearSelector]);
+        if (!selector.empty()) {
+            s.gearSelector = selector;
+            engineData = true;
+        }
     }
 
     if (header_.colClutch >= 0 && header_.colClutch < static_cast<int>(fields.size()) &&
         parseDouble(fields[header_.colClutch], v) && v >= 0.0) {
         s.clutchPct = std::clamp(v / 100.0, 0.0, 1.0);
+        engineData = true;
     }
 
     if (header_.colMotorTorque >= 0 && header_.colMotorTorque < static_cast<int>(fields.size()) &&
         parseDouble(fields[header_.colMotorTorque], v)) {
         s.motorTorqueNm = v;
+        engineData = true;
     }
 
     // brake_light: a binary column. "1" = on, "0" = off; blank/unparseable/
@@ -245,6 +259,7 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
         if (parseInt(fields[header_.colBrakeLight], brakeLight)) {
             if (brakeLight == 1)      s.brakeLight = true;
             else if (brakeLight == 0) s.brakeLight = false;
+            engineData = true;
         }
     }
 
@@ -258,6 +273,7 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
         }
     }
 
+    s.engineDataPresent = engineData;
     out = s;
     return true;
 }

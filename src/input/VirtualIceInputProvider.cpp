@@ -64,6 +64,10 @@ EngineInput VirtualIceInputProvider::OnUpdateSimulation(double dt) {
 
     // Translate twin output to engine input
     input.throttle = output.throttle;
+    // Propagate the trace contract (UpstreamSignal::traceDriven) so the
+    // simulation loop's crank decision can clamp its effective throttle to
+    // the trace — the twin already honors it internally for its own floors.
+    input.traceDrivenThrottle = currentSignal_.traceDriven;
     input.gearAbsolute = output.gear;
     input.clutchPressure = output.clutchPressure;
     input.ignition = output.ignition;

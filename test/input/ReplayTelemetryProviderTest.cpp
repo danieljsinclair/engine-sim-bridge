@@ -1035,3 +1035,49 @@ TEST_F(ReplayTelemetryProviderTest, PrimeSeedsTwinWithArrivalRowValues) {
     // PIN coupling surfaces the CSV road speed as the vehicle-speed target.
     EXPECT_NEAR(input.vehicleSpeedTargetKmh, 60.0, 1e-6);
 }
+
+// ===========================================================================
+// Arrival selection vs the blank USB-settle stalk: a capture's leading rows
+// can be timecoded but engine-blank (vehicle-sim USB settle). The arrival
+// prime must anchor on the first row at/after the offset that carries ENGINE
+// DATA — warm-booting from a blank row primes the twin from nothing.
+// ===========================================================================
+
+TEST_F(ReplayTelemetryProviderTest, ArrivalSkipsBlankSettleRows) {
+    // Rows at 0.0/10.0 are blank (timecoded, engine columns empty); 10.5 is
+    // the first populated row at/after the 10.0 offset.
+    makeProvider("time_s,throttle_pct\n0.0,\n10.0,\n10.5,60.0\n11.0,70.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(10.0);
+    provider_->primeArrivalState();
+
+    EXPECT_TRUE(provider_->arrivalHoldActive());
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 10.5);
+    EXPECT_DOUBLE_EQ(input.throttle, 0.60);
+}
+
+TEST_F(ReplayTelemetryProviderTest, ArrivalRowAccessorSkipsBlanks) {
+    makeProvider("time_s,throttle_pct\n0.0,\n10.0,\n10.5,60.0\n11.0,70.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(10.0);
+
+    EXPECT_DOUBLE_EQ(provider_->arrivalSample().timeS, 10.5);
+    EXPECT_DOUBLE_EQ(provider_->arrivalSample().throttle, 0.60);
+}
+
+TEST_F(ReplayTelemetryProviderTest, ArrivalKeepsPopulatedRowAtOffset) {
+    // Regression guard: an offset that lands on a POPULATED row anchors there
+    // — the blank-skip must not walk past valid data.
+    makeProvider("time_s,throttle_pct\n0.0,\n10.0,60.0\n10.5,65.0\n11.0,70.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(10.0);
+    provider_->primeArrivalState();
+
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 10.0);
+    EXPECT_DOUBLE_EQ(input.throttle, 0.60);
+}

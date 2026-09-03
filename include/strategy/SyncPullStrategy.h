@@ -95,6 +95,15 @@ private:
     bool attemptRender(float* dst, int offset, int framesNeeded, int32_t& framesWritten);
     void applyCrossfade(float* dst, int framesRendered);
     void fillRemainingSilence(float* dst, int framesRendered, int framesToGenerate, int remainingFrames);
+
+    // Startup-crackle fade helpers. fillSilenceFaded ramps from the last real
+    // synthesized sample to zero over FADE_SAMPLES (then holds zero) so the
+    // audio->silence edge is continuous. applyFadeIn ramps the first
+    // FADE_SAMPLES of a resumed audio chunk from zero to full scale so the
+    // silence->audio edge is continuous. Both eliminate the hard-cut
+    // discontinuity that the ear hears as a crackle during cranking startup.
+    void fillSilenceFaded(float* dst, int frames);
+    void applyFadeIn(float* dst, int frames);
     void resetFrameRender(int framesToGenerate, int framesRendered, const float* dst, std::chrono::high_resolution_clock::time_point callbackStart);
     void updateTelemetry();
 
@@ -103,6 +112,33 @@ private:
     float lastRightSample_ = 0.0f;
     int crossfadeSamplesRemaining_ = 0;
     static constexpr int CROSSFADE_SAMPLES = 176; // ~4ms at 44100Hz
+
+    // Startup-crackle fade state. During cranking the synth ring runs empty
+    // between main-thread ticks, so attemptRender hard-cuts between synthesized
+    // audio and 512-frame silence blocks — each transition is a discontinuity
+    // heard as a crackle. The fade ramps every audio->silence and
+    // silence->audio transition to continuity so the waveform never jumps.
+    // lastAudioLeft_/lastAudioRight_: the last REAL synthesized sample we
+    // output (not silence). When we must fill silence we ramp from this value
+    // to SILENCE_FLOOR over FADE_SAMPLES instead of a hard zero-fill.
+    // fadeInProgress_: when >0 counts down the fade-in ramp at the start of a
+    // freshly-resumed audio chunk (silence->audio edge).
+    float lastAudioLeft_ = 0.0f;
+    float lastAudioRight_ = 0.0f;
+    int fadeInProgress_ = 0;
+
+    // Startup zero-drain guard. The synthesizer ring is zero-initialized, so
+    // before the engine produces its first sample renderDrainedAudio() can
+    // return FULL chunks of exact-zero frames that read as genuine audio —
+    // consuming the startup fade-in on silence and leaving the first real
+    // sample to arrive as a hard edge (the startup crackle), while the WAV
+    // records a long exact-zero block. Until the first chunk containing a
+    // non-zero sample is seen, all-zero drained chunks are discarded to the
+    // dry path (faded floor fill) and fadeInProgress_ stays armed for the
+    // first REAL audio. Flips to true permanently at first real audio.
+    bool seenRealAudio_ = false;
+    // FADE_SAMPLES and SILENCE_FLOOR live in EngineSimAudio (EngineSimTypes.h)
+    // so audioRenderCallback and SyncPullStrategy share one definition.
 };
 
 #endif // SYNC_PULL_STRATEGY_H

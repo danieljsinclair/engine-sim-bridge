@@ -143,6 +143,7 @@ bool BridgeSimulator::start() {
     return true;
 }
 
+
 void BridgeSimulator::stop() {
     m_simulator->endAudioRenderingThread();
 }

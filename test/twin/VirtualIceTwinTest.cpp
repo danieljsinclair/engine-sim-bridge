@@ -1582,3 +1582,76 @@ TEST_F(VirtualIceTwinTest, StandstillInDrive_TCIdlesOnReducedCreep_EngineSustain
     // DA1 for essentially the whole window, not a stray neutral).
     EXPECT_GE(inGearFrames, totalFrames * 95 / 100);
 }
+
+// ---------------------------------------------------------------------------
+// Trace-faithful crank throttle (startup flare, 2026-09-03)
+//
+// The crank path used to synthesize CRANKING_THROTTLE (0.6) regardless of
+// where the throttle came from. On a trace-driven run (replay CSV / live
+// attach) that overrode the trace's own throttle — a standstill start
+// records 0.00 — and the ignition catch on the unloaded engine flared to
+// full scale until the trace pinned again (the owner-reported startup
+// crackle). With traceDriven the crank throttle is floored at the trace;
+// a scripted driver (traceDriven=false, the default) keeps the absolute
+// catch-guarantee floor unchanged.
+// ---------------------------------------------------------------------------
+
+TEST_F(VirtualIceTwinTest, CrankingThrottleIsTraceFlooredWhenTraceDriven) {
+    auto sig = makeValidSignal(0.02, 0.0);
+    sig.traceDriven = true;
+    (void)twin_->update(0.016, sig);  // OFF -> CRANKING (starter edge)
+    ASSERT_EQ(twin_->getState(), TwinState::CRANKING);
+    twin_->setEngineRpmFeedback(0.0);  // not caught yet
+
+    const auto output = twin_->update(0.016, sig);
+
+    // Trace says 2%: the crank must not command the 0.6 synthesized floor.
+    EXPECT_LT(output.throttle, 0.10);
+}
+
+TEST_F(VirtualIceTwinTest, CrankingThrottleKeepsFloorForScriptedDriver) {
+    auto sig = makeValidSignal(0.02, 0.0);  // scripted: traceDriven=false
+    (void)twin_->update(0.016, sig);  // OFF -> CRANKING (starter edge)
+    ASSERT_EQ(twin_->getState(), TwinState::CRANKING);
+    twin_->setEngineRpmFeedback(0.0);
+
+    const auto output = twin_->update(0.016, sig);
+
+    // Scripted/keyboard runs keep the absolute catch-guarantee floor.
+    EXPECT_GE(output.throttle, EngineSimDefaults::CRANKING_THROTTLE - 1e-9);
+}
+
+TEST_F(VirtualIceTwinTest, StallGuardThrottleIsTraceFlooredWhenTraceDriven) {
+    // Drive the whole lifecycle with TRACE signals (throttle 0.00 — the
+    // standstill-start recording), so the throttle smoother carries no
+    // scripted-throttle residue into the stall frame.
+    auto sig = makeValidSignal(0.0, 0.0);
+    sig.traceDriven = true;
+    (void)twin_->update(0.016, sig);  // OFF -> CRANKING (starter edge)
+    twin_->setEngineRpmFeedback(800.0);
+    (void)twin_->update(0.016, sig);  // CRANKING -> IDLE
+    twin_->setGearSelector(bridge::GearSelector::DRIVE);
+    (void)twin_->update(0.016, sig);  // IDLE -> RUNNING (selector DRIVE)
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+    twin_->setEngineRpmFeedback(0.0);  // engine stalled
+
+    const auto output = twin_->update(0.016, sig);  // stall guard fires
+
+    // The starter one-tick edge still pulses (the re-crank contract), but the
+    // throttle stays near the trace's 0.00, not the synthesized 0.6.
+    EXPECT_TRUE(output.starterMotor);
+    EXPECT_LT(output.throttle, 0.10);
+}
+
+TEST_F(VirtualIceTwinTest, StallGuardThrottleKeepsFloorForScriptedDriver) {
+    advanceThroughCranking();
+    auto sig = makeValidSignal(0.0, 0.0);  // scripted
+    (void)twin_->update(0.016, sig);
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
+    twin_->setEngineRpmFeedback(0.0);
+
+    const auto output = twin_->update(0.016, sig);
+
+    EXPECT_TRUE(output.starterMotor);
+    EXPECT_GE(output.throttle, EngineSimDefaults::CRANKING_THROTTLE - 1e-9);
+}

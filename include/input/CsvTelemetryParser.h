@@ -57,6 +57,13 @@ struct CsvSample {
     // vehicle-sim's steering_angle_deg column). nullopt = not reported by this
     // source (column absent, blank, or unparseable) — display-only signal.
     std::optional<double> steeringAngleDeg;
+
+    // True when the row carried ANY engine-data field (throttle, road speed,
+    // gear, selector, brake light, motor torque) from a non-empty cell.
+    // vehicle-sim captures open with a USB-settle stalk of timecoded rows
+    // whose engine columns are ALL blank — those are not telemetry, and the
+    // arrival prime must skip them rather than warm-boot from an empty row.
+    bool engineDataPresent = false;
 };
 
 class CsvTelemetryParser {

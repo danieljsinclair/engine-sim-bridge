@@ -101,6 +101,11 @@ public:
     void releaseArrivalHold() override;
     bool arrivalHoldActive() const { return arrivalHoldActive_; }
 
+    // The row the arrival prime selected: the first row at/after the
+    // --start-from offset that carries ENGINE DATA (blank USB-settle rows are
+    // skipped forward — they hold no operating point to warm-boot from).
+    const CsvSample& arrivalSample() const;
+
     // Current replay timestamp (absolute, from CSV). -1 before first sample.
     double currentTimestampS() const { return currentTimestampS_; }
 

@@ -611,3 +611,47 @@ TEST_F(CsvTelemetryParserTest, ParseHeader_WithoutSteeringColumn_Unchanged) {
     ASSERT_TRUE(parser.parseRow("1.0,50.0,80.0", 1.0, sample, error));
     EXPECT_FALSE(sample.steeringAngleDeg.has_value());
 }
+
+// ===========================================================================
+// engineDataPresent — the blank USB-settle stalk (vehicle-sim captures open
+// with ~1.5k timecoded rows whose engine columns are all blank; those rows
+// are not telemetry and the arrival prime must skip them).
+// ===========================================================================
+
+TEST_F(CsvTelemetryParserTest, ParseRow_BlankSettleRowHasNoEngineData) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("time_s,throttle_pct,road_speed_kmh,gear_selector", error));
+
+    CsvSample s;
+    std::string parseError;
+    // Real first row of PinFixDrive3_2026-08-29-1728.csv: timestamp + vehicle
+    // id only, every engine column empty.
+    ASSERT_TRUE(parser.parseRow("0.0,,,", 1.0, s, parseError));
+    EXPECT_FALSE(s.engineDataPresent);
+}
+
+TEST_F(CsvTelemetryParserTest, ParseRow_PopulatedRowHasEngineData) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("time_s,throttle_pct,road_speed_kmh,gear_selector", error));
+
+    CsvSample s;
+    std::string parseError;
+    // Real row ~1458 of the same capture: speed 0.00 + selector P — partially
+    // populated is enough; the row carries an operating point.
+    ASSERT_TRUE(parser.parseRow("3.26,0.00,0.00,P", 1.0, s, parseError));
+    EXPECT_TRUE(s.engineDataPresent);
+}
+
+TEST_F(CsvTelemetryParserTest, ParseRow_ThrottleOnlyRowHasEngineData) {
+    std::string error;
+    ASSERT_TRUE(parser.parseHeader("time_s,throttle_pct", error));
+
+    CsvSample s;
+    std::string parseError;
+    ASSERT_TRUE(parser.parseRow("10.5,60.0", 1.0, s, parseError));
+    EXPECT_TRUE(s.engineDataPresent);
+    // Its blank sibling does not.
+    CsvSample blank;
+    ASSERT_TRUE(parser.parseRow("10.0,", 1.0, blank, parseError));
+    EXPECT_FALSE(blank.engineDataPresent);
+}
