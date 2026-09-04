@@ -265,6 +265,13 @@ private:
     // twin-provider creation and is re-applied there.
     twin::EffectiveThrottleConfig effectiveThrottleConfig_;
     twin::TorqueInformedGearboxConfig torqueInformedGearboxConfig_;
+    // Coupling configs (--wheel-coupling / --coupling-model). Stored the same way:
+    // the CLI calls setWheelCouplingMode/setCouplingModel BEFORE Initialize(), so
+    // without these members the live twin would silently run on the default
+    // coupling (free) instead of the requested pin — the sim speed would not
+    // track the CSV target (regression 2026-09-04: 12 mph sim vs 9 mph target).
+    twin::WheelCouplingMode wheelCouplingMode_ = twin::WheelCouplingMode::Pin;
+    twin::CouplingModelKind couplingModelKind_ = twin::CouplingModelKind::TorqueConverter;
     std::atomic<UpstreamSignal> currentSignal_;
     std::atomic<bool> signalReceived_;
     std::atomic<bool> initialized_;

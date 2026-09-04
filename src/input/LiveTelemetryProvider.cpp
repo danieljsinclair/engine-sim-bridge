@@ -80,8 +80,12 @@ bool LiveTelemetryProvider::initTwinProvider() {
             twinProvider_.reset();
             return false;
         }
-        // Re-apply any torque-feature configs that arrived before Initialize()
-        // (defaults are inert no-ops on the twin).
+        // Re-apply any configs that arrived before Initialize() (defaults are inert
+        // no-ops on the twin). Without this the live twin silently runs on the
+        // default coupling (free) instead of the requested pin — the sim speed
+        // would not track the CSV target (regression: 12 mph sim vs 9 mph target).
+        twinProvider_->setWheelCouplingMode(wheelCouplingMode_);
+        twinProvider_->setCouplingModel(couplingModelKind_);
         twinProvider_->setEffectiveThrottleConfig(effectiveThrottleConfig_);
         twinProvider_->setTorqueInformedGearboxConfig(torqueInformedGearboxConfig_);
         return true;
@@ -328,6 +332,7 @@ void LiveTelemetryProvider::setIgnition(bool on) {
 }
 
 void LiveTelemetryProvider::setWheelCouplingMode(twin::WheelCouplingMode mode) {
+    wheelCouplingMode_ = mode;
     if (twinProvider_) {
         twinProvider_->setWheelCouplingMode(mode);
     }
@@ -360,6 +365,7 @@ void LiveTelemetryProvider::setTorqueInformedGearboxConfig(
 }
 
 void LiveTelemetryProvider::setCouplingModel(twin::CouplingModelKind kind) {
+    couplingModelKind_ = kind;
     if (twinProvider_) {
         twinProvider_->setCouplingModel(kind);
     }
