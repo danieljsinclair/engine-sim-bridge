@@ -562,8 +562,7 @@ void LiveTelemetryProvider::refillRowBuffer(double simElapsedS) {
         if (!std::getline(*stream_, line)) break;  // EOF / error: stop refilling
         if (isBlankLine(line)) continue;
         CsvSample sample;
-        std::string parseError;
-        if (!csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;  // malformed
+        if (std::string parseError; !csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;  // malformed
         if (isSampleBlank(sample)) continue;
         // Anchor the recording clock on the FIRST parsed row. With a source
         // skip hint the recording's TRUE t0 is that row's epoch minus the
