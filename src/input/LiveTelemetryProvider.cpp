@@ -454,9 +454,9 @@ bool LiveTelemetryProvider::tryParseSourceSkipHint(std::string_view line) {
     char* end = nullptr;
     const double seconds = std::strtod(value.c_str(), &end);
     const std::string_view rest(end);
-    const auto* trailingJunk = std::find_if_not(rest.begin(), rest.end(),
-                                                [](unsigned char c) { return std::isspace(c) != 0; });
-    if (end == value.c_str() || trailingJunk != rest.end() || seconds < 0.0) {
+    if (const auto trailingJunk = std::find_if_not(rest.begin(), rest.end(),
+                                                   [](unsigned char c) { return std::isspace(c) != 0; });
+        end == value.c_str() || trailingJunk != rest.end() || seconds < 0.0) {
         // Malformed hint: consume nothing further, treat as absent (the line
         // then fails header parsing; the retry loop steps past it and the run
         // degrades to the legacy local timecode rather than aborting).
