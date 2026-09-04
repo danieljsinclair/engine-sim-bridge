@@ -427,9 +427,9 @@ const CsvSample& ReplayTelemetryProvider::arrivalSample() const {
     // forward past the USB-settle stalk.
     if (!blankSkipEnabled_) return plain;
     // Walk forward to the first populated row at/after the plain row.
-    for (size_t i = 0; i < samples_.size(); ++i) {
-        if (samples_[i].timeS >= plain.timeS && samples_[i].engineDataPresent) {
-            return samples_[i];
+    for (const Sample& s : samples_) {
+        if (s.timeS >= plain.timeS && s.engineDataPresent) {
+            return s;
         }
     }
     return plain;
