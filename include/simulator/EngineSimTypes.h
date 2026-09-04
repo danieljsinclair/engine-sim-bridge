@@ -124,6 +124,13 @@ struct ISimulatorConfig {
     // parameterization (soft-knee compressor + makeup + safety soft-clip,
     // applied just before the int16 conversion in renderAudio).
     float spanTame = 0.0f;
+    // Output-stage volume leveling (--volume-tame CLI arg, [0,1], default 0
+    // = OFF = fully bypassed = bit-identical audio). Applied at the mono
+    // int16 -> stereo float conversion seam by BridgeSimulator's VolumeTamer
+    // (see simulator/OutputStageDynamics.h): quiet-on-decel sections lift
+    // toward the session average, loud sections sit back, gain moves are
+    // smoothed so the processor itself never steps the amplitude.
+    float volumeTame = 0.0f;
     // When true the simulation is paced to a recording (deterministic replay or
     // live/replay telemetry with a warm-start prefix) rather than free-running
     // real-time audio. In paced mode the loop thread owns core advancement at a

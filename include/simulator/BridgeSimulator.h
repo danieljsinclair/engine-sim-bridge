@@ -15,9 +15,11 @@
 #include "telemetry/NullTelemetryWriter.h"
 #include "engine-sim/include/simulator.h"
 #include "simulator/BrakeConstraint.h"
+#include "simulator/OutputStageDynamics.h"
 #include "input/IEngineActuator.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -161,6 +163,14 @@ private:
 
     int16_t* ensureAudioConversionBufferSize(size_t requiredSize);
 
+    // Mono int16 -> stereo float conversion with the output-stage dynamics
+    // applied (EmissionOnsetEnvelope always; VolumeTamer when volumeTame > 0).
+    // Single seam shared by every audio consumer (playback strategies, the
+    // --output WAV tap, iOS render). Gain is exactly 1.0 outside an envelope
+    // attack, and the tamer is bypassed entirely when disabled, so the OFF /
+    // steady-state path is bit-identical to the raw conversion.
+    void convertWithOutputDynamics(const int16_t* source, int samples, float* destination);
+
     std::unique_ptr<Simulator> m_simulator;
     BrakeConstraint m_brakeConstraint;
     std::string m_lastError;
@@ -181,6 +191,12 @@ private:
     // Audio config
     std::vector<int16_t> m_audioConversionBuffer;
     ISimulatorConfig engineConfig_;
+
+    // Output-stage dynamics, constructed in initAudioConfig (they need the
+    // finalized sample rate). Threading: exactly one thread pulls audio per
+    // strategy instance, so these are deliberately unsynchronized.
+    std::optional<bridge_audio::EmissionOnsetEnvelope> onsetEnvelope_;
+    std::optional<bridge_audio::VolumeTamer> volumeTamer_;
 
     // Whether the fluid-coupling torque converter (proper SCS direct-torque
     // model) is installed on the live transmission.

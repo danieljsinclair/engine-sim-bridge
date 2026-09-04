@@ -74,7 +74,7 @@ bool BridgeSimulator::renderOnDemand(float* buffer, int32_t frames, int32_t* wri
 
     int16_t* conversionBuffer = ensureAudioConversionBufferSize(frames);
     int samplesRead = m_simulator->readAudioOutput(frames, conversionBuffer);
-    EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, samplesRead, buffer, engineConfig_.volume, engineConfig_.convolutionLevel);
+    convertWithOutputDynamics(conversionBuffer, samplesRead, buffer);
 
     if (samplesRead < frames) {
         EngineSimAudio::fillSilence(buffer + samplesRead * 2, frames - samplesRead);
@@ -109,9 +109,7 @@ bool BridgeSimulator::renderDrainedAudio(float* buffer, int32_t frames, int32_t*
         if (samplesRead <= 0) {
             break; // Producer stalled — no more audio this callback.
         }
-        EngineSimAudio::convertInt16ToStereoFloat(
-            conversionBuffer, samplesRead,
-            buffer + totalRead * 2, engineConfig_.volume, engineConfig_.convolutionLevel);
+        convertWithOutputDynamics(conversionBuffer, samplesRead, buffer + totalRead * 2);
         totalRead += samplesRead;
     }
 
@@ -129,7 +127,7 @@ bool BridgeSimulator::readAudioBuffer(float* buffer, int32_t framesToRead, int32
     if (framesToRead > 0) {
         int16_t* conversionBuffer = ensureAudioConversionBufferSize(framesToRead);
         int samplesRead = m_simulator->readAudioOutput(framesToRead, conversionBuffer);
-        EngineSimAudio::convertInt16ToStereoFloat(conversionBuffer, samplesRead, buffer, engineConfig_.volume, engineConfig_.convolutionLevel);
+        convertWithOutputDynamics(conversionBuffer, samplesRead, buffer);
         *read = samplesRead;
         return true;
     }
@@ -585,6 +583,17 @@ void BridgeSimulator::initAudioConfig(const ISimulatorConfig& config) {
         }
     }
     ensureAudioConversionBufferSize(engineConfig_.maxChunkFrames);
+
+    // Output-stage dynamics need the finalized sample rate, so they are built
+    // here rather than in the member initializer list. The onset envelope is
+    // always on (the attach-crackle fix); the tamer exists only when enabled —
+    // a disabled tamer is never fed, keeping --volume-tame 0 / absent fully
+    // bypassed and bit-identical.
+    onsetEnvelope_.emplace(engineConfig_.sampleRate);
+    volumeTamer_.reset();
+    if (engineConfig_.volumeTame > 0.0f) {
+        volumeTamer_.emplace(engineConfig_.sampleRate, engineConfig_.volumeTame);
+    }
 }
 
 void BridgeSimulator::pushTelemetry(const EngineSimStats& stats) {
@@ -627,4 +636,24 @@ int16_t* BridgeSimulator::ensureAudioConversionBufferSize(size_t requiredSize) {
         m_audioConversionBuffer.resize(requiredSize);
     }
     return m_audioConversionBuffer.data();
+}
+
+void BridgeSimulator::convertWithOutputDynamics(const int16_t* source, int samples, float* destination) {
+    EngineSimAudio::convertInt16ToStereoFloat(
+        source, samples, destination, engineConfig_.volume, engineConfig_.convolutionLevel);
+    if (samples <= 0 || (!onsetEnvelope_ && !volumeTamer_)) {
+        return;
+    }
+    for (int i = 0; i < samples; ++i) {
+        float gain = onsetEnvelope_->frameGain(source[i]);
+        if (volumeTamer_) {
+            gain *= volumeTamer_->frameGain(source[i]);
+        }
+        // Unity gain skips the multiply entirely (and x * 1.0f is bit-exact
+        // anyway), so steady state / tamer-off is byte-identical.
+        if (gain != 1.0f) {
+            destination[i * EngineSimAudio::STEREO] *= gain;
+            destination[i * EngineSimAudio::STEREO + 1] *= gain;
+        }
+    }
 }
