@@ -75,8 +75,13 @@ public:
     /// writer. Injected by callers whose stream is a live pipe (poll on the
     /// fd); absent (nullptr) the read blocks, preserving the deterministic
     /// in-memory-stream behaviour the unit tests rely on.
+    ///
+    /// liveStream: when true, bypasses timestamp pacing in tryReadNextRow()
+    /// and surfaces the latest available row each frame — the 1–2s
+    /// throttle-delay fix on sparse live recordings.
     LiveTelemetryProvider(std::istream& stream, bool autoStart,
-                          std::function<bool()> streamDataReady = nullptr);
+                          std::function<bool()> streamDataReady = nullptr,
+                          bool liveStream = false);
 
     ~LiveTelemetryProvider() override;
 
@@ -181,6 +186,13 @@ private:
     // simElapsedS is the current simulation elapsed seconds; used to pace row
     // consumption by recording timestamp so that 1s of sim time = 1s of recording.
     bool tryReadNextRow(double simElapsedS);
+
+    // Live pipe path: bypass timestamp pacing and surface the latest
+    // available row every frame. No row is held back to wait for the
+    // sim clock — the sparse live recording delivers rows as they
+    // arrive, and the engine runs on the freshest data instead of
+    // stalling until the old rows catch up (the 1–2s throttle delay).
+    bool tryReadNextRowLive();
 
     /// Phase 1 of tryReadNextRow: refill rowBuffer_ from the stream until its
     /// tail is far enough ahead of the sim clock (or EOF). Skips blank,
@@ -288,6 +300,7 @@ private:
     double endAtS_ = -1.0;       // stop at this time (-1 = play to end); IReplayTimeline
     bool endAtReached_ = false;  // eofSeen_ came from the --end-at bound, not stream EOF
     bool liveOffsetAnchored_ = false;  // elapsedS_ has cold-jumped to the effective offset (once)
+    bool liveStream_ = false;          // true: bypass timestamp pacing, surface latest row (live pipe)
     // In-band skip hint: seconds the SOURCE already dropped before the first
     // delivered row (0 = no hint). baselineTimeS_ anchors at first-row-epoch
     // minus this, so display/--end-at stay true-recording-relative.

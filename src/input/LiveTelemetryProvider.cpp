@@ -22,12 +22,14 @@ LiveTelemetryProvider::LiveTelemetryProvider(const twin::IceVehicleProfile& prof
 }
 
 LiveTelemetryProvider::LiveTelemetryProvider(std::istream& stream, bool autoStart,
-                                             std::function<bool()> streamDataReady)
+                                             std::function<bool()> streamDataReady,
+                                             bool liveStream)
     : ownedProfile_(twin::IceVehicleProfile::zf8hp45())
     , profile_(ownedProfile_)
     , initialized_(false)
     , stream_(&stream)
-    , streamDataReady_(std::move(streamDataReady)) {
+    , streamDataReady_(std::move(streamDataReady))
+    , liveStream_(liveStream) {
     (void)autoStart;
     // NOTE: zf8hp45 is ONLY a construction-time default. The LIVE path must have
     // its geometry supplied by the loaded .mr — CLIMain::reconfigureGearboxProviders
@@ -588,8 +590,60 @@ void LiveTelemetryProvider::refillRowBuffer(double simElapsedS) {
     }
 }
 
+bool LiveTelemetryProvider::tryReadNextRowLive() {
+    // Live pipe path: drain every available row and keep the LATEST one.
+    // No timestamp pacing, no lookahead buffer — the engine runs on the
+    // freshest data the producer has emitted. Skips blank/malformed rows.
+    bool found = false;
+    CsvSample latest{};
+    bool haveLatest = false;
+    const double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
+    while (true) {
+        // Respect the non-blocking readiness probe: don't park on a lagging
+        // writer. If a row is ready, take it; otherwise surface what we have.
+        if (streamDataReady_ && !streamDataReady_()) break;
+        std::string line;
+        if (!std::getline(*stream_, line)) break;  // EOF
+        if (isBlankLine(line)) continue;
+        CsvSample sample;
+        std::string parseError;
+        if (!csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;
+        if (isSampleBlank(sample)) continue;
+        // Anchor the recording clock on the first delivered row.
+        if (streamAnchorTimeS_ < 0.0) {
+            streamAnchorTimeS_ = sample.timeS;
+            baselineTimeS_ = sample.timeS - sourceSkipHintS_;
+        }
+        // Discard pre-start-from rows (stacked-skip: own skip on top of source skip).
+        if (startFromS_ > 0.0 && (sample.timeS - streamAnchorTimeS_) < startFromS_) {
+            continue;
+        }
+        latest = sample;
+        haveLatest = true;
+    }
+    if (haveLatest) {
+        const double relT = latest.timeS - baselineTimeS_;
+        currentSample_ = latest;
+        hasSample_ = true;
+        found = true;
+        updateCurrentSpeedLevel(relT, currentSample_.roadSpeedKmh);
+        // No lookahead — we have no future row, so next-level interp is unknown.
+        hasNextSpeedLevel_ = false;
+    }
+    if (stream_->eof() && !haveLatest) {
+        if (!eofSeen_) csvParser_.emitRejectionSummary();
+        eofSeen_ = true;
+    }
+    return found;
+}
+
 bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
     if (eofSeen_ || !stream_ || !ensureHeaderParsed()) return false;
+
+    // Live pipe: surface the latest row immediately, no timestamp pacing.
+    // This is the 1–2s throttle-delay fix — sparse live recordings under
+    // pacing add lag that the engine has no way to hide.
+    if (liveStream_) return tryReadNextRowLive();
 
     // 1) Refill the lookahead buffer until its tail is far enough ahead (or EOF).
     refillRowBuffer(simElapsedS);
