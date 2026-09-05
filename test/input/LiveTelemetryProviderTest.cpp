@@ -1209,3 +1209,145 @@ TEST(LiveTelemetryStreamTest, ProbeReady_ConsumesRow) {
 }
 
 }  // namespace
+
+// ============================================================================
+// LATENCY FIX: liveStream_=true bypasses timestamp pacing. The live pipe path
+// (tryReadNextRowLive) drains every available row and surfaces the LATEST —
+// no sim-clock gating, no 1–2s throttle delay on sparse live recordings. The
+// paced path (tryReadNextRow) gates consumption by sim elapsed time: rows far
+// ahead of the clock are held in the lookahead buffer until the sim catches up.
+//
+// Deterministic observable: a sparse CSV with rows at t=2, 3.5, 4, 8
+// (selectors P, R, N, D). On frame 1 (simElapsedS=0.05):
+//   - Unpaced (liveStream=true):  ALL rows drained → latest = t=8 (D)
+//   - Paced  (liveStream=false): ALL rows buffered; pop loop pops rows whose
+//     relT <= simElapsedS → only first row's relT (0.0) <= 0.05 → surfaces P
+//
+// This proves the fix: live jumps to the latest row immediately, paced waits
+// for the sim clock to reach each row's timestamp.
+// ============================================================================
+
+// Proper live-stream harness: passes liveStream=true so tryReadNextRow() delegates
+// to tryReadNextRowLive() (no timestamp pacing).
+struct UnpacedLiveHarness {
+    std::istringstream stream;
+    std::unique_ptr<input::LiveTelemetryProvider> provider;
+    explicit UnpacedLiveHarness(const std::string& csv)
+        : stream(csv) {
+        provider = std::make_unique<input::LiveTelemetryProvider>(
+            stream, /*autoStart=*/true, /*streamDataReady=*/nullptr, /*liveStream=*/true);
+    }
+};
+
+// Paced harness: explicit liveStream=false for a fair byte-for-byte comparison.
+struct PacedStreamHarness {
+    std::istringstream stream;
+    std::unique_ptr<input::LiveTelemetryProvider> provider;
+    explicit PacedStreamHarness(const std::string& csv)
+        : stream(csv) {
+        provider = std::make_unique<input::LiveTelemetryProvider>(
+            stream, /*autoStart=*/true, /*streamDataReady=*/nullptr, /*liveStream=*/false);
+    }
+};
+
+// T16: liveStream_=true surfaces the LATEST row on frame 1 — no timestamp gating.
+// T16b: liveStream_=false surfaces the FIRST buffered row — timestamp pacing holds
+// later rows until the sim clock reaches them.
+// The contrast: same sparse CSV, same single frame. Unpaced→D (80km/h),
+// Paced→P (5km/h).
+TEST(LiveTelemetryStreamTest, LiveStream_BypassesTimestampPacing_SurfacesLatest) {
+    std::ostringstream csv;
+    csv << "time_s,throttle_pct,road_speed_kmh,gear_selector\n";
+    csv << "2.0,10,5,P\n";    // relT=0.0 (first row)
+    csv << "3.5,20,10,R\n";   // relT=1.5
+    csv << "4.0,30,15,N\n";   // relT=2.0
+    csv << "8.0,100,80,D\n";  // relT=6.0 (last row)
+    const std::string sharedCsv = csv.str();
+
+    const int kD = static_cast<int>(bridge::GearSelector::DRIVE);
+
+    // Unpaced (liveStream=true): drains all rows, surfaces latest (t=8, D, 80km/h).
+    {
+        UnpacedLiveHarness h(sharedCsv);
+        ASSERT_TRUE(h.provider->Initialize());
+        h.provider->setIgnition(true);
+        h.provider->setGearSelector(kD);
+        h.provider->provideFeedback(EngineSimStats{});
+        h.provider->OnUpdateSimulation(0.05);  // simElapsedS=0.05
+        input::UpstreamSignal sig = h.provider->getCurrentSignal();
+        EXPECT_TRUE(sig.isValid);
+        EXPECT_EQ(sig.gearSelector, bridge::GearSelector::DRIVE)
+            << "Unpaced frame 1: latest row (t=8, D) surfaces immediately — "
+               "tryReadNextRowLive() drains all and keeps the last";
+        EXPECT_DOUBLE_EQ(sig.speedKmh, 80.0);
+    }
+
+    // Paced (liveStream=false): refills buffer, pops rows with relT<=simElapsedS.
+    // All 4 rows land in the buffer (all within 0.3s lookahead). Pop loop: only
+    // the first row (relT=0.0) is <= 0.05 → surfaces P (5km/h). R,N,D are future.
+    {
+        PacedStreamHarness h(sharedCsv);
+        ASSERT_TRUE(h.provider->Initialize());
+        h.provider->setIgnition(true);
+        h.provider->setGearSelector(kD);
+        h.provider->provideFeedback(EngineSimStats{});
+        h.provider->OnUpdateSimulation(0.05);  // simElapsedS=0.05
+        input::UpstreamSignal sig = h.provider->getCurrentSignal();
+        EXPECT_TRUE(sig.isValid);
+        EXPECT_EQ(sig.gearSelector, bridge::GearSelector::PARK)
+            << "Paced frame 1: first row (t=2, P) surfaces — only its relT (0.0) "
+               "is <= simElapsedS (0.05); later rows (R,N,D) are still future";
+        EXPECT_DOUBLE_EQ(sig.speedKmh, 5.0);
+    }
+}
+
+// T16b: advancing the paced sim clock past all rows correctly surfaces the last
+// row — timestamp pacing is correct for replay. This proves the paced path is
+// not broken, just wrong for live telemetry (where you want latest immediately).
+TEST(LiveTelemetryStreamTest, PacedPath_WalksRowsWhenClockAdvances) {
+    std::ostringstream csv;
+    csv << "time_s,throttle_pct,road_speed_kmh,gear_selector\n";
+    csv << "2.0,10,5,P\n";
+    csv << "3.5,20,10,R\n";
+    csv << "4.0,30,15,N\n";
+    csv << "8.0,100,80,D\n";
+    PacedStreamHarness h(csv.str());
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);
+    h.provider->setGearSelector(static_cast<int>(bridge::GearSelector::DRIVE));
+    h.provider->provideFeedback(EngineSimStats{});
+
+    const int kD = static_cast<int>(bridge::GearSelector::DRIVE);
+    // Advance sim clock to 10s (well past all rows at t=2..8).
+    input::EngineInput in = h.provider->OnUpdateSimulation(10.0);
+    EXPECT_EQ(in.gearSelector, kD)
+        << "Paced at simElapsedS=10: all rows in the past → last row (D) surfaces";
+    EXPECT_GT(in.roadSpeedKmh, 0.0);
+}
+
+// T16c: the unpaced path holds the last row at EOF (correct live semantics:
+// no new data = keep feeding the last sample). This contrasts with the
+// EOF-drain bug which permanently froze currentSample_ at the capture's last row.
+TEST(LiveTelemetryStreamTest, UnpacedLive_HoldsLastRowAtEof) {
+    std::ostringstream csv;
+    csv << "time_s,throttle_pct,road_speed_kmh,gear_selector\n";
+    csv << "2.0,10,5,P\n";
+    csv << "8.0,100,80,D\n";
+    UnpacedLiveHarness h(csv.str());
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);
+    h.provider->setGearSelector(static_cast<int>(bridge::GearSelector::DRIVE));
+
+    const int kD = static_cast<int>(bridge::GearSelector::DRIVE);
+
+    // Frame 1: latest row is D (t=8).
+    h.provider->provideFeedback(EngineSimStats{});
+    input::EngineInput in1 = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_EQ(in1.gearSelector, kD) << "Unpaced frame 1: latest is D (t=8)";
+
+    // At EOF: hold last row — correct live hold semantics.
+    h.provider->provideFeedback(EngineSimStats{});
+    input::EngineInput in2 = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_EQ(in2.gearSelector, kD) << "Unpaced at EOF: hold last row (D)";
+    EXPECT_GT(in2.roadSpeedKmh, 0.0);
+}
