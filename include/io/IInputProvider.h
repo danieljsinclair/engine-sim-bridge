@@ -73,6 +73,13 @@ struct EngineInput {
     // Passed through to EngineState.drivetrain.replayTimestampS for display.
     double replayTimestampS = -1.0;
 
+    // Wall-clock epoch ms of the telemetry row this frame consumed
+    // (LiveTelemetryProvider stamps it from the CSV timestamp_ms column;
+    // -1 = source reports no timestamps). Passed through to
+    // EngineState.drivetrain.inputTimestampMs so presentations can compute
+    // pipe latency as now_ms - inputTimestampMs.
+    int64_t inputTimestampMs = -1;
+
     // MATCH (Torque) mode: recorded drivetrain torque (Nm) injected at the
     // transmission input each frame. 0.0 = no injection (FREE/PIN leave this at
     // 0; applying 0.0 Nm is a true no-op on the rotating mass).

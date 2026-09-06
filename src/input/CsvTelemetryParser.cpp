@@ -172,6 +172,7 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
     bool engineData = false;
 
     double v = 0.0;
+    int64_t rawTimeMs = -1;
     if (header_.colTime >= 0 && header_.colTime < static_cast<int>(fields.size()) &&
         parseDouble(fields[header_.colTime], v)) {
         // Epoch-scale timestamp_ms (e.g. vehicle-sim emits Unix epoch
@@ -183,6 +184,7 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
         // so the trace plays from the start exactly as a 0-based time_s capture
         // does. The header doc already promises "epoch ms -> auto-converted".
         if (header_.timeInMs && v >= kEpochMsThreshold) {
+            rawTimeMs = static_cast<int64_t>(v);  // preserve raw epoch ms
             if (firstRawTimestampMs_ < 0.0) {
                 firstRawTimestampMs_ = v;  // anchor t=0 on the first kept row
             }
@@ -274,6 +276,7 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
     }
 
     s.engineDataPresent = engineData;
+    s.timeMs = rawTimeMs;  // preserve raw epoch ms for latency calculation
     out = s;
     return true;
 }

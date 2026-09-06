@@ -248,6 +248,13 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
         // the JSON network path does the equivalent at line ~292. Absent column
         // => nullopt propagates => non-DBC sources render nothing.
         input.steeringAngleDeg = signal.steeringAngleDeg;
+        // Propagate the raw input row's epoch ms for CSV latency calculation
+        // (EngineInput.inputTimestampMs -> EngineState.drivetrain -> CSV
+        // latency_ms column). Only set when we have a valid parsed row with
+        // an epoch timestamp; otherwise the -1 default renders as -1.
+        if (hasSample_ && currentSample_.timeMs >= 0) {
+            input.inputTimestampMs = currentSample_.timeMs;
+        }
         return input;
     }
 

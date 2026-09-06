@@ -34,6 +34,10 @@ namespace presentation::builders {
             drivetrain.dynoTorque = stats.dynoTorque;
             drivetrain.dynoTargetRPM = stats.dynoTargetRPM;
             drivetrain.replayTimestampS = input.replayTimestampS;
+            // Wall-clock epoch ms of the telemetry row this frame consumed
+            // (-1 = source reports no timestamps). Feeds the CSV latency_ms
+            // column: wall_clock_ms - inputTimestampMs = pipe latency.
+            drivetrain.inputTimestampMs = input.inputTimestampMs;
             drivetrain.clutchPressure = input.clutchPressure;
             drivetrain.roadImpliedRpm = input.roadImpliedRpm;
             drivetrain.creepReliefFired = input.creepReliefFired;
