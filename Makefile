@@ -126,12 +126,12 @@ clean: remove-orphans clean-presets clean-test-fixtures sonar-clean coverage-cle
 	@if [ -d $(BUILD_DIR) ]; then cmake --build $(BUILD_DIR) --target clean >/dev/null 2>&1 || true; fi
 	@rm -rf tmp $(BUILD_COV_DIR)/.scannerwork
 
-# Remove only stamp files so tests can be rerun without full clean.
-# No-op now that .stamp files are gone — the ctest/CLI artefact mtimes drive
-# the cache, so tests re-run naturally when their inputs change. Kept as a
-# target for callers that still invoke it; nothing to delete here.
+# Remove any stray .stamp files left over from the pre-94f8baf Makefile.
+# The current build uses real artefact mtimes (libenginesim.a, bridge_unit_tests)
+# so these files are dead weight — clean them up here so a plain `make clean`
+# eradicates them without needing `make scrub`.
 clean-test:
-	@:
+	@find $(BUILD_DIR) -maxdepth 1 -name '*.stamp' -delete 2>/dev/null || true
 
 # Full clean - remove entire build directory (superset of clean)
 scrub: clean
@@ -154,7 +154,7 @@ clean-test-fixtures:
 # rc/audio keeps coverage in the default chain (owner directive 2026-09-06:
 # this tree has no outer app gate, so make test must generate the coverage
 # stats itself) on top of master's summary tooling (d90c1bf).
-test: test-core test-deep coverage-run coverage-summary summary
+test: test-core test-deep coverage-run coverage-summary sonar-scan summary
 
 # Order-only reset of the combined ctest summary log. Both ctest tiers depend
 # on this so the log is empty at the start of a `make test` regardless of
