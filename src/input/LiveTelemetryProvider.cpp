@@ -86,6 +86,15 @@ bool LiveTelemetryProvider::initTwinProvider() {
         // (defaults are inert no-ops on the twin).
         twinProvider_->setEffectiveThrottleConfig(effectiveThrottleConfig_);
         twinProvider_->setTorqueInformedGearboxConfig(torqueInformedGearboxConfig_);
+        // Re-apply the coupling flags the factory set before Initialize() —
+        // the store/re-apply contract ReplayTelemetryProvider already honors.
+        // Without this the pre-Initialize calls landed on the null twin and were
+        // silently dropped, defaulting the live twin to Free ("pin behaves like
+        // free", owner road test 2026-09-06). Stored defaults equal the twin's
+        // own, so an unset flag re-applies as a byte-identical no-op.
+        twinProvider_->setWheelCouplingMode(wheelCouplingMode_);
+        twinProvider_->setCouplingModel(couplingModelKind_);
+        twinProvider_->setPinTauMs(pinTauMs_);
         return true;
     } catch (const std::bad_alloc& e) {
         lastError_ = std::string("Out of memory creating twin provider: ") + e.what();
@@ -235,6 +244,21 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
             coerceCsvReverseGear(csvGearSelector(), currentSample_.roadSpeedKmh);
         twinProvider_->setGearSelector(static_cast<int>(sel));
         EngineInput input = twinProvider_->OnUpdateSimulation(dt);
+        // Warm-boot acknowledgement (owner road test 2026-09-06): warmBootToRunning()
+        // started the twin's engine OUTSIDE the VehicleStartController — the single
+        // start/ignition authority — so the controller's bookkeeping still says
+        // "never started". The first frame carrying a start/stop opinion (a
+        // brake_light column alone qualifies, even with brake=false in PARK at a
+        // standstill) latches startStopEngaged_ and the decision flatten then
+        // writes the observer's ignition=false over the running twin — the engine
+        // died ~2 s into the live road test with no pedal touched. Tell the
+        // authority about the warm-booted run on the first frame, exactly once:
+        // an ignition-only request (requestIgnition(true) fires ignition WITHOUT
+        // the starter, so the already-running engine is not re-cranked).
+        if (primed_ && !startAckFired_) {
+            input.ignitionRequest = true;
+            startAckFired_ = true;
+        }
         // Surface the live sim/CSV elapsed time so each per-frame console line
         // carries a [mm:ss.ms] timecode the user can read back as --start-from.
         // The replay path sets this from currentTimestampS_; the live path tracks
@@ -337,14 +361,19 @@ void LiveTelemetryProvider::setIgnition(bool on) {
 }
 
 void LiveTelemetryProvider::setWheelCouplingMode(twin::WheelCouplingMode mode) {
+    // Stored + re-applied at twin-provider creation, so the factory's
+    // pre-Initialize() ordering takes effect (the setter previously landed on a
+    // null twin and was dropped — the "pin behaves like free" regression).
+    wheelCouplingMode_ = mode;
     if (twinProvider_) {
         twinProvider_->setWheelCouplingMode(mode);
     }
 }
 
 void LiveTelemetryProvider::setPinTauMs(double tauMs) {
-    // The CLI forwards --pin-tau-ms AFTER Initialize() (the same ordering as
-    // setWheelCouplingMode), so the twin provider exists by this call.
+    // Stored + re-applied at twin-provider creation, the same ordering contract
+    // as setWheelCouplingMode (superset of the old post-Initialize-only call).
+    pinTauMs_ = tauMs;
     if (twinProvider_) {
         twinProvider_->setPinTauMs(tauMs);
     }
@@ -369,6 +398,9 @@ void LiveTelemetryProvider::setTorqueInformedGearboxConfig(
 }
 
 void LiveTelemetryProvider::setCouplingModel(twin::CouplingModelKind kind) {
+    // Stored + re-applied at twin-provider creation, the same ordering contract
+    // as setWheelCouplingMode.
+    couplingModelKind_ = kind;
     if (twinProvider_) {
         twinProvider_->setCouplingModel(kind);
     }

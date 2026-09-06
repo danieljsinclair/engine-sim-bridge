@@ -36,6 +36,7 @@
 #include <atomic>
 #include <cstring>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -834,6 +835,53 @@ TEST_F(SimulationLoopVehicleControlsTest, TwinIgnitionCommandedThroughSink_Nothi
     }
     EXPECT_EQ(provider->ignitionLevels.size(), sizeAtStop + 5u)
         << "the level is commanded every engaged frame";
+}
+
+// Owner road test 2026-09-06, symptom 1: standing still, the engine died ~2 s
+// in (console I:1 -> I:0 uncommanded, no pedal touched). Repro: the REAL
+// stream-mode LiveTelemetryProvider, warm-booted exactly as CLIMain wires it
+// for --live-telemetry, fed standstill rows that carry a brake_light column
+// (value 0) in PARK. The column alone is a start/stop opinion carrier, so the
+// decision site latches startStopEngaged_ on frame 1 — and unless the provider
+// has acknowledged the warm-booted run to the VehicleStartController, the
+// flatten writes the observer's ignition=false over the running twin. The
+// simulator must never be commanded ignition OFF.
+TEST_F(SimulationLoopVehicleControlsTest, LiveStreamWarmBoot_StandstillOpinionKeepsIgnition) {
+    const std::string csv =
+        "time_s,throttle_pct,road_speed_kmh,brake_light,gear_selector\n"
+        "0.10,0,0.0,0,P\n"
+        "0.20,0,0.0,0,P\n"
+        "0.30,0,0.0,0,P\n"
+        "0.40,0,0.0,0,P\n"
+        "0.50,0,0.0,0,P\n"
+        "0.60,0,0.0,0,P\n";
+    std::istringstream stream(csv);
+    auto live = std::make_unique<input::LiveTelemetryProvider>(stream, /*autoStart=*/true);
+    ASSERT_TRUE(live->Initialize());
+    live->warmBootToRunning();  // exactly what CLIMain does for --live-telemetry
+
+    // The live provider itself is the loop's input provider (IInputProvider +
+    // IVehicleControlSink), so the twin-ignition sink push is exercised too.
+    input::LiveTelemetryProvider* liveRaw = live.get();
+    SessionDependencies deps{
+        audioBuffer_.get(),
+        crankingController_.get(),
+        stopRequested_.get(),
+        liveRaw,
+        presentation_.get(),
+        telemetryWriter_.get(),
+        telemetryReader_.get(),
+        logger_.get()
+    };
+    SimulationLoop loop(*simulator_, simConfig_, deps);
+
+    for (int i = 0; i < 6; ++i) {
+        LoopState state = makeState(liveRaw->OnUpdateSimulation(simConfig_.updateInterval()));
+        loop.step(state);
+        EXPECT_TRUE(calls_->lastIgnition)
+            << "frame " << i << ": the warm-booted live engine must keep ignition ON "
+               "through standstill opinion frames (brake-light column, PARK, no pedal)";
+    }
 }
 
 // ---------------------------------------------------------------------------
