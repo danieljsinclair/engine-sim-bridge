@@ -139,7 +139,11 @@ public:
     // ========================================================================
 
     virtual bool Initialize(const PresentationConfig& config) = 0;
-    virtual void Shutdown() = 0;
+    // Teardown contract: Shutdown NEVER throws. Destructors call it (e.g.
+    // CsvPresentation::~CsvPresentation), so an escaping exception would
+    // terminate the process mid-cleanup. Implementations must stay no-throw
+    // (close/flag-flip/child dispatch only).
+    virtual void Shutdown() noexcept = 0;
 
     // ========================================================================
     // Output Methods
