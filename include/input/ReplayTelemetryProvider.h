@@ -131,6 +131,14 @@ public:
     // twin provider is created in Initialize() (the CLI sets it before).
     void setPinTauMs(double tauMs);
 
+    // Blank-row arrival skip toggle (--no-blank-skip). DEFAULT ON: the
+    // arrival prime anchors on the first row at/after the offset that
+    // carries ENGINE data (blank USB-settle rows hold no operating point to
+    // warm-boot from). Disabled, the arrival anchors on the plain first row
+    // at/after the offset exactly — a diagnostic escape hatch, not a
+    // correctness setting. Pure provider state; no twin interaction.
+    void setBlankSkipEnabled(bool enabled);
+
     // --effective-throttle / --torque-informed-gearbox configs (both DEFAULT
     // disabled = inert). Same store + re-forward contract as setPinTauMs.
     void setEffectiveThrottleConfig(const twin::EffectiveThrottleConfig& config);
@@ -217,6 +225,9 @@ private:
     // creation, same as pinTauMs_.
     twin::EffectiveThrottleConfig effectiveThrottleConfig_;
     twin::TorqueInformedGearboxConfig torqueInformedGearboxConfig_;
+
+    // Blank-row arrival skip (see setBlankSkipEnabled). Default ON.
+    bool blankSkipEnabled_ = true;
 
     // Keyboard input support for Q/P during replay
     IKeyboardInput* keyboard_ = nullptr;

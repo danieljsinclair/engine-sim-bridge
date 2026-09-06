@@ -79,9 +79,12 @@ PRESET_DIR := preset
 ENGINE_SIM_ROOT := engine-sim
 PRESET_COMPILER := $(BUILD_DIR)/engine-sim-preset-compiler
 
-# Default target - build + test + presets (complete pipeline). `summary` is
+# Default target - presets + build + test + summary. `summary` is
 # the LAST step so the end-of-make headline is the final build output.
-all: build test presets summary
+# presets must precede build so the preset JSON mtimes are older than the
+# binary; otherwise the isomorphism stamp (bridge_unit_tests) is always
+# stale and the isomorphism suite re-runs on every invocation.
+all: presets build test summary
 
 # Compile everything (cmake configure + build)
 build: $(BUILD_STAMP)
@@ -123,12 +126,12 @@ clean: remove-orphans clean-presets clean-test-fixtures sonar-clean coverage-cle
 	@if [ -d $(BUILD_DIR) ]; then cmake --build $(BUILD_DIR) --target clean >/dev/null 2>&1 || true; fi
 	@rm -rf tmp $(BUILD_COV_DIR)/.scannerwork
 
-# Remove only stamp files so tests can be rerun without full clean.
-# No-op now that .stamp files are gone — the ctest/CLI artefact mtimes drive
-# the cache, so tests re-run naturally when their inputs change. Kept as a
-# target for callers that still invoke it; nothing to delete here.
+# Remove any stray .stamp files left over from the pre-94f8baf Makefile.
+# The current build uses real artefact mtimes (libenginesim.a, bridge_unit_tests)
+# so these files are dead weight — clean them up here so a plain `make clean`
+# eradicates them without needing `make scrub`.
 clean-test:
-	@:
+	@find $(BUILD_DIR) -maxdepth 1 -name '*.stamp' -delete 2>/dev/null || true
 
 # Full clean - remove entire build directory (superset of clean)
 scrub: clean
@@ -148,7 +151,10 @@ clean-test-fixtures:
 # --label "[engine-sim-bridge]", sonar-summary prints its own === headers), so
 # no procedural echo/banner wrapper is needed under test: itself. `summary`
 # (the end-of-make headline) is the LAST prereq so it is the final output.
-test: test-core test-deep summary
+# rc/audio keeps coverage in the default chain (owner directive 2026-09-06:
+# this tree has no outer app gate, so make test must generate the coverage
+# stats itself) on top of master's summary tooling (d90c1bf).
+test: test-core test-deep coverage-run coverage-summary sonar-scan summary
 
 # Order-only reset of the combined ctest summary log. Both ctest tiers depend
 # on this so the log is empty at the start of a `make test` regardless of
@@ -294,7 +300,7 @@ $(SONAR_REPORT): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(
 $(COMPILE_DB): $(BUILD_COV_DIR)/CMakeCache.txt
 
 sonar-clean:
-	@rm -f $(SONAR_REPORT)
+	@rm -f $(SONAR_REPORT) $(SONAR_LIVE)
 	@rm -rf $(BUILD_COV_DIR)/.scannerwork
 
 coverage-clean:
@@ -338,16 +344,23 @@ SONAR_REMOVED_FACET := $(BUILD_COV_DIR)/sonar-removed-facet.json
 # build_summary.py reads the SAME headline coverage_block.py/coverage_summary.py
 # show -- no live re-query at summary time (fast, cached).
 SONAR_MEASURES := $(BUILD_COV_DIR)/sonar-measures.json
+# Summary-side LIVE cache. The summary GET must NEVER write $(SONAR_REPORT):
+# that file is the sonar-scan stamp, and a summary curl refreshing its mtime
+# made every later `make sonar-scan` a "Nothing to be done" no-op — the scan
+# silently stopped running in this tree (owner report 2026-09-06: "Sonar
+# hasn't been run, but it SHOULD; I've tried make clean"). Separate files:
+# the scan OWNS sonar-report.json; the summary owns its own live cache.
+SONAR_LIVE := $(BUILD_COV_DIR)/sonar-live.json
 sonar-summary:
 	@echo ""
 	@echo "=== [engine-sim-bridge] BEGIN: SonarCloud issues summary ==="
 	@TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}"; \
 	if [ -z "$$TOKEN" ]; then echo "  No token"; exit 0; fi; \
-	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500&statuses=OPEN&facets=impactSeverities" > $(SONAR_REPORT) 2>/dev/null || true; \
+	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500&statuses=OPEN&facets=impactSeverities" > $(SONAR_LIVE) 2>/dev/null || true; \
 	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=1&resolutions=REMOVED&facets=impactSeverities" > $(SONAR_REMOVED_FACET) 2>/dev/null || true; \
 	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/measures/component?component=danieljsinclair_engine-sim-bridge&metricKeys=coverage,lines_to_cover,uncovered_lines" > $(SONAR_MEASURES) 2>/dev/null || true
 	@echo ""
-	python3 scripts/sonar_summary.py $(SONAR_REPORT) --label "[engine-sim-bridge]" --removed-facet $(SONAR_REMOVED_FACET)
+	python3 scripts/sonar_summary.py $(SONAR_LIVE) --label "[engine-sim-bridge]" --removed-facet $(SONAR_REMOVED_FACET)
 	@echo "=== [engine-sim-bridge] END: SonarCloud issues summary ==="
 
 # summary: the end-of-make HEADLINE line (one coloured row) for the bridge.
@@ -369,7 +382,7 @@ summary: coverage-summary sonar-summary
 		--test-log $(TEST_SUMMARY_LOG) \
 		--cov-measures $(SONAR_MEASURES) \
 		--local-cov $(BUILD_COV_DIR)/lcov.info --local-type lcov \
-		--sonar-report $(SONAR_REPORT) \
+		--sonar-report $(SONAR_LIVE) \
 		--removed-facet $(SONAR_REMOVED_FACET)
 
 # Add/remove engines here — this is the ONLY list. Everything here is compiled, tested, and shipped.
@@ -419,6 +432,7 @@ $(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets test-reset
 		$(call bridge_print_hint) \
 		exit 1; \
 	fi
+	@touch $@
 # Build the preset compiler if it doesn't exist (e.g. after scrub)
 $(PRESET_COMPILER):
 	+@$(MAKE) build

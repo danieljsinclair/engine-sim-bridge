@@ -673,6 +673,7 @@ SimulationLoop::SimulationLoop(
         , crankingController_(*deps.crankingController)
         , stopRequested_(deps.stopRequested)
         , inputProvider_(deps.inputProvider)
+        , arrivalPrimer_(deps.arrivalPrimer)
         , presentation_(deps.presentation)
         , telemetryWriter_(deps.telemetryWriter)
         , telemetryReader_(deps.telemetryReader)
@@ -749,9 +750,18 @@ int SimulationLoop::run() {
         const auto* timeline = dynamic_cast<const input::IReplayTimeline*>(inputProvider_);
         if (timeline && timeline->getStartFromS() > 0.0
                 && timeline->durationS() >= 0.0) {
-            auto* primer = dynamic_cast<input::IArrivalStatePrimer*>(inputProvider_);
-            ASSERT(primer, "file-trace --start-from provider must implement "
-                           "IArrivalStatePrimer (instant arrival-state prime)");
+            // Primer resolution (#66): prefer the one injected through
+            // SessionDependencies (a WRAPPING provider — keyboard overlay
+            // over a replay core — has its core's primer threaded explicitly
+            // by the session owner); fall back to the provider's own
+            // implementation via capability cast. Fail fast only when BOTH
+            // routes are absent — never a silent warm-start fallback.
+            auto* primer = arrivalPrimer_
+                ? arrivalPrimer_
+                : dynamic_cast<input::IArrivalStatePrimer*>(inputProvider_);
+            ASSERT(primer, "file-trace --start-from needs an IArrivalStatePrimer "
+                           "(inject via SessionDependencies.arrivalPrimer or implement "
+                           "it on the input provider — instant arrival-state prime)");
             settleAtArrivalPoint(state, *primer, timeline->getStartFromS());
         }
     }

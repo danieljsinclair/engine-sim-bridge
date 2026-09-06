@@ -226,4 +226,27 @@ double OverlayInputProvider::getStartFromS() const {
     return -1.0;
 }
 
+// IArrivalStatePrimer delegation to core (#66): the loop's --start-from
+// settle asks the provider it was handed — the overlay. Forward the
+// arrival prime/hold to the wrapped core when it carries the surface; a
+// core without it (live/keyboard-ish) is a no-op, mirroring the timeline
+// delegation's null-safety. The loop's injected-primer route
+// (SessionDependencies.arrivalPrimer) names the same core in production —
+// both paths are equivalent by construction.
+void OverlayInputProvider::primeArrivalState() {
+    if (core_) {
+        if (IArrivalStatePrimer* primer = dynamic_cast<IArrivalStatePrimer*>(core_.get())) {
+            primer->primeArrivalState();
+        }
+    }
+}
+
+void OverlayInputProvider::releaseArrivalHold() {
+    if (core_) {
+        if (IArrivalStatePrimer* primer = dynamic_cast<IArrivalStatePrimer*>(core_.get())) {
+            primer->releaseArrivalHold();
+        }
+    }
+}
+
 } // namespace input

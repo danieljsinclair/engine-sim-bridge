@@ -49,6 +49,12 @@ struct SessionDependencies {
     telemetry::ITelemetryReader* telemetryReader = nullptr;
     ILogging* logger = nullptr;
     ILoopClock* clock = nullptr;  // Optional injected clock; null → SteadyClockLoopClock
+    // Optional arrival-state primer for instant --start-from (file traces).
+    // Null → the loop falls back to casting the input provider itself. This
+    // is the seam a WRAPPING provider (keyboard overlay over a replay core)
+    // needs: the wrapper may not implement the primer interface, so the
+    // session owner injects the core's primer explicitly (#66).
+    input::IArrivalStatePrimer* arrivalPrimer = nullptr;
 };
 
 // Exit code returned by SimulationLoop::run() when preset cycling is requested
@@ -214,6 +220,7 @@ private:
     CrankingController& crankingController_;
     const std::atomic<bool>* stopRequested_;
     input::IInputProvider* inputProvider_;
+    input::IArrivalStatePrimer* arrivalPrimer_ = nullptr;  // injected (SessionDependencies); null → provider cast
     presentation::IPresentation* presentation_;
     telemetry::ITelemetryWriter* telemetryWriter_;
     telemetry::ITelemetryReader* telemetryReader_;

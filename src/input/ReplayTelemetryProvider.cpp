@@ -120,6 +120,12 @@ void ReplayTelemetryProvider::setPinTauMs(double tauMs) {
     if (twinProvider_) twinProvider_->setPinTauMs(pinTauMs_);
 }
 
+void ReplayTelemetryProvider::setBlankSkipEnabled(bool enabled) {
+    // Pure provider state consulted by arrivalSample(); stored before or
+    // after Initialize() alike (the samples are parsed at Initialize).
+    blankSkipEnabled_ = enabled;
+}
+
 void ReplayTelemetryProvider::setEffectiveThrottleConfig(
     const twin::EffectiveThrottleConfig& config) {
     // Same store + re-forward contract as setPinTauMs.
@@ -416,6 +422,10 @@ const CsvSample& ReplayTelemetryProvider::arrivalSample() const {
     }
     const Sample& plain = firstSampleAtOrAfter(startFromS_);
     if (plain.engineDataPresent) return plain;
+    // --no-blank-skip (diagnostic escape hatch): anchor exactly on the plain
+    // first row at/after the offset — blank or not — instead of walking
+    // forward past the USB-settle stalk.
+    if (!blankSkipEnabled_) return plain;
     // Walk forward to the first populated row at/after the plain row.
     for (size_t i = 0; i < samples_.size(); ++i) {
         if (samples_[i].timeS >= plain.timeS && samples_[i].engineDataPresent) {

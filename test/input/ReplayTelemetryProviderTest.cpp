@@ -1068,6 +1068,39 @@ TEST_F(ReplayTelemetryProviderTest, ArrivalRowAccessorSkipsBlanks) {
     EXPECT_DOUBLE_EQ(provider_->arrivalSample().throttle, 0.60);
 }
 
+// --no-blank-skip (bridge-side toggle): the walk-forward past blank
+// USB-settle rows is a BEHAVIOUR choice, not a correctness invariant. The
+// owner may want the arrival anchored exactly on the first row at/after the
+// offset — blank or not — to A/B what the skip papers over.
+TEST_F(ReplayTelemetryProviderTest, ArrivalBlankSkipDisabledAnchorsBlankRow) {
+    makeProvider("time_s,throttle_pct\n0.0,\n10.0,\n10.5,60.0\n11.0,70.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setBlankSkipEnabled(false);
+    provider_->setStartFromS(10.0);
+    provider_->primeArrivalState();
+
+    EXPECT_TRUE(provider_->arrivalHoldActive());
+    EXPECT_DOUBLE_EQ(provider_->arrivalSample().timeS, 10.0);
+    const EngineInput input = provider_->OnUpdateSimulation(0.016);
+    EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 10.0);
+    // The blank row carries no engine data: the hold drives nothing.
+    EXPECT_DOUBLE_EQ(input.throttle, 0.0);
+}
+
+// The toggle is scoped OFF-switch-wise: re-enabling restores the
+// walk-forward (default behaviour pinned by ArrivalSkipsBlankSettleRows).
+TEST_F(ReplayTelemetryProviderTest, ArrivalBlankSkipReEnabledRestoresSkip) {
+    makeProvider("time_s,throttle_pct\n0.0,\n10.0,\n10.5,60.0\n11.0,70.0\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setBlankSkipEnabled(false);
+    provider_->setBlankSkipEnabled(true);
+    provider_->setStartFromS(10.0);
+
+    EXPECT_DOUBLE_EQ(provider_->arrivalSample().timeS, 10.5);
+}
+
 TEST_F(ReplayTelemetryProviderTest, ArrivalKeepsPopulatedRowAtOffset) {
     // Regression guard: an offset that lands on a POPULATED row anchors there
     // — the blank-skip must not walk past valid data.
