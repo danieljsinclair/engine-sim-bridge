@@ -235,7 +235,7 @@ double OverlayInputProvider::getStartFromS() const {
 // both paths are equivalent by construction.
 void OverlayInputProvider::primeArrivalState() {
     if (core_) {
-        if (IArrivalStatePrimer* primer = dynamic_cast<IArrivalStatePrimer*>(core_.get())) {
+        if (auto* primer = dynamic_cast<IArrivalStatePrimer*>(core_.get())) {
             primer->primeArrivalState();
         }
     }
@@ -243,7 +243,7 @@ void OverlayInputProvider::primeArrivalState() {
 
 void OverlayInputProvider::releaseArrivalHold() {
     if (core_) {
-        if (IArrivalStatePrimer* primer = dynamic_cast<IArrivalStatePrimer*>(core_.get())) {
+        if (auto* primer = dynamic_cast<IArrivalStatePrimer*>(core_.get())) {
             primer->releaseArrivalHold();
         }
     }
