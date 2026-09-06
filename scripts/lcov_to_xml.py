@@ -26,6 +26,7 @@ Usage:
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import sys
 import xml.etree.ElementTree as ET
@@ -79,8 +80,68 @@ def _under_any_root(rel_path: str, src_roots: Iterable[str]) -> bool:
     )
 
 
+def _normalize_glob(pattern: str) -> str | None:
+    """Normalize an Ant-style Sonar glob to an fnmatch-ready pattern.
+
+    Sonar/Ant patterns:
+      **  matches zero or more directories
+      *   matches anything except a path separator
+
+    fnmatch's ``*`` matches path separators too, so ``dir/**`` and ``dir/*`` are
+    equivalent — we normalize to ``dir/*`` (drop the redundant second ``*``).
+    Other patterns pass through verbatim; fnmatch handles ``**/`` prefixes
+    because ``*`` spans path separators.
+    """
+    pattern = pattern.strip()
+    if not pattern:
+        return None
+    if pattern.endswith('/**'):
+        pattern = pattern[:-2] + '*'
+    elif pattern.endswith('**'):
+        pattern = pattern[:-1] + '*'
+    return pattern
+
+
+def _load_exclusions(properties_path: str) -> list[str] | None:
+    """Load exclusion patterns from sonar-project.properties.
+
+    Reads ``sonar.exclusions`` and ``sonar.coverage.exclusions`` (comma
+    separated, Ant-style globs). Returns a list of fnmatch-ready patterns,
+    or ``None`` when the file is absent so callers skip exclusion filtering.
+    """
+    if not properties_path or not os.path.isfile(properties_path):
+        return None
+    patterns: list[str] = []
+    keys = ('sonar.exclusions', 'sonar.coverage.exclusions')
+    with open(properties_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, _, value = line.partition('=')
+            key = key.strip()
+            if key not in keys:
+                continue
+            for raw in value.split(','):
+                pat = raw.strip()
+                norm = _normalize_glob(pat)
+                if norm:
+                    patterns.append(norm)
+    return patterns
+
+
+def _matches_exclusions(rel_path: str, patterns: list[str]) -> bool:
+    """True if ``rel_path`` matches any exclusion pattern."""
+    if not patterns:
+        return False
+    return any(fnmatch.fnmatch(rel_path, pat) for pat in patterns)
+
+
 def build_coverage_xml(
-    lcov_text: str, project_root: str, src_roots: Iterable[str]
+    lcov_text: str,
+    project_root: str,
+    src_roots: Iterable[str],
+    exclusions: list[str] | None = None,
 ) -> ET.Element:
     """Build the ``<coverage>`` XML element from lcov text."""
     root = ET.Element("coverage", {"version": "1"})
@@ -97,6 +158,12 @@ def build_coverage_xml(
             continue
         rel = _relative_path(abs_path, project_root)
         if roots and not _under_any_root(rel, roots):
+            continue
+        # Apply sonar-project.properties exclusions so the XML matches the
+        # analysis scope SonarCloud ingests. This is the single source of truth
+        # for file inclusion/exclusion — the same file coverage_block.py reads
+        # for the local headline, so local and remote always agree on scope.
+        if exclusions and _matches_exclusions(rel, exclusions):
             continue
         # A file that survives the src filter but still cannot be relativised
         # to the project root would emit an absolute path the scanner cannot
@@ -130,7 +197,7 @@ def _parse_args(argv) -> tuple:
     if len(argv) < 3:
         print(
             "Usage: lcov_to_xml.py <input.lcov> <output.xml> "
-            "[--project-root DIR] [--src-root SRC]",
+            "[--project-root DIR] [--src-root SRC] [--exclusions FILE]",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -138,6 +205,7 @@ def _parse_args(argv) -> tuple:
     output_path = argv[2]
     project_root = os.getcwd()
     src_roots = ["src"]
+    exclusions_path = None
     rest = argv[3:]
     i = 0
     while i < len(rest):
@@ -150,12 +218,22 @@ def _parse_args(argv) -> tuple:
         elif rest[i] == "--no-src-filter":
             src_roots = []
             i += 1
+        elif rest[i] == "--exclusions" and i + 1 < len(rest):
+            exclusions_path = rest[i + 1]
+            i += 2
         else:
             i += 1
-    return input_path, output_path, project_root, src_roots
+    exclusions = _load_exclusions(exclusions_path) if exclusions_path else None
+    return input_path, output_path, project_root, src_roots, exclusions
 
 
-def convert(lcov_path: str, xml_path: str, project_root: str, src_roots) -> None:
+def convert(
+    lcov_path: str,
+    xml_path: str,
+    project_root: str,
+    src_roots,
+    exclusions: list[str] | None = None,
+) -> None:
     """Read lcov, write generic coverage XML, print a one-line summary."""
     try:
         with open(lcov_path, "r", encoding="utf-8") as handle:
@@ -164,7 +242,7 @@ def convert(lcov_path: str, xml_path: str, project_root: str, src_roots) -> None
         print(f"error: failed to read {lcov_path!r}: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    root = build_coverage_xml(lcov_text, project_root, src_roots)
+    root = build_coverage_xml(lcov_text, project_root, src_roots, exclusions)
     ET.indent(root, space="  ")
     payload = ET.tostring(root, encoding="utf-8", xml_declaration=True)
     # ElementTree single-quotes the XML declaration (<?xml version='1.0' ...?>),
@@ -197,10 +275,10 @@ def convert(lcov_path: str, xml_path: str, project_root: str, src_roots) -> None
 
 # Backwards-compatible module-level entry point.
 def main(argv=None) -> int:
-    input_path, output_path, project_root, src_roots = _parse_args(
+    input_path, output_path, project_root, src_roots, exclusions = _parse_args(
         sys.argv if argv is None else argv
     )
-    convert(input_path, output_path, project_root, src_roots)
+    convert(input_path, output_path, project_root, src_roots, exclusions)
     return 0
 
 

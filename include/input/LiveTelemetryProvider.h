@@ -112,10 +112,15 @@ public:
     /// ignition level (also usable directly, e.g. from a UI).
     void setIgnition(bool on) override;
 
-    /// Select the live clutch wheel-coupling strategy (FREE/PIN).
+    /// Select the live clutch wheel-coupling strategy (FREE/PIN). Stored +
+    /// re-applied when the twin provider is created in Initialize(), so the
+    /// factory's pre-Initialize() flag ordering (applyTwinCouplingFlags) takes
+    /// effect — the same contract ReplayTelemetryProvider honors.
     void setWheelCouplingMode(twin::WheelCouplingMode mode);
 
-    /// PIN-coupling compliance tau in ms (--pin-tau-ms): 0 = rigid pin.
+    /// PIN-coupling compliance tau in ms (--pin-tau-ms): 0 = rigid pin. Stored +
+    /// re-applied at twin creation, identical ordering contract to
+    /// setWheelCouplingMode.
     void setPinTauMs(double tauMs);
 
     /// --effective-throttle / --torque-informed-gearbox configs (both DEFAULT
@@ -127,14 +132,17 @@ public:
     /// Select the coupling MODEL (how the clutch pressure is derived): clutch-map
     /// (default — declarative smooth governor, no binary relief), torque-converter
     /// (fluid coupling), or legacy (historical slip-lock + binary relief, A/B).
+    /// Stored + re-applied at twin creation, identical ordering contract to
+    /// setWheelCouplingMode.
     void setCouplingModel(twin::CouplingModelKind kind);
 
     /// Bring the owned twin to RUNNING and settle the warm cruise basin BEFORE the
     /// first real frame — the warm-boot the live path was missing. Without it the
     /// twin + core start COLD and the first emitted frame blows massive negative
-    /// exhaust flow (reversion). Call AFTER setWheelCouplingMode/setCouplingModel
-    /// (the CLI sets them post-Initialize) so the twin primes with the chosen
-    /// coupling. Shares the replay prime path via warmBootTwinToRunning() (DRY).
+    /// exhaust flow (reversion). The coupling flags are stored + re-applied at
+    /// twin creation, so they are in force here regardless of whether they were
+    /// set before or after Initialize(). Shares the replay prime path via
+    /// warmBootTwinToRunning() (DRY).
     /// Live has no parsed samples at Initialize time, so it seeds from a
     /// running-baseline (light throttle / ~10 km/h, DRIVE). No-op when the twin is
     /// absent or already warmed (idempotent).
@@ -277,6 +285,20 @@ private:
     // twin-provider creation and is re-applied there.
     twin::EffectiveThrottleConfig effectiveThrottleConfig_;
     twin::TorqueInformedGearboxConfig torqueInformedGearboxConfig_;
+
+    // Twin coupling flags (--wheel-coupling / --coupling-model / --pin-tau-ms).
+    // Stored for the same reason: TelemetryProviderFactory applies them BEFORE
+    // the caller's Initialize(), so the setters must survive until the twin
+    // exists and initTwinProvider() re-applies them. Defaults mirror the twin's
+    // OWN defaults (VirtualIceTwin: Free + ClutchMap; PinTargetChase: tau 0) —
+    // NOT ReplayTelemetryProvider's Pin/TorqueConverter ladder defaults — so an
+    // unset flag re-applies as a no-op and live behaviour stays byte-identical.
+    // When these were forward-only, the pre-Initialize factory calls landed on a
+    // null twin and were silently dropped: the twin defaulted to Free and the
+    // pin "behaved like free" (owner road test 2026-09-06, 97 vs 57 mph).
+    twin::WheelCouplingMode wheelCouplingMode_ = twin::WheelCouplingMode::Free;
+    twin::CouplingModelKind couplingModelKind_ = twin::CouplingModelKind::ClutchMap;
+    double pinTauMs_ = 0.0;
     std::atomic<UpstreamSignal> currentSignal_;
     std::atomic<bool> signalReceived_;
     std::atomic<bool> initialized_;
@@ -315,6 +337,12 @@ private:
     double primeSeedThrottle_ = 0.0;
     double primeSeedSpeedKmh_ = 0.0;
     bool primed_ = false;
+    // One-shot warm-boot acknowledgement guard: primed_ records that the twin
+    // was brought to RUNNING outside the VehicleStartController; this flag
+    // records that the controller has been TOLD (via a single frame carrying
+    // ignitionRequest=true), so later frames never re-assert ignition over the
+    // authority's own stop decisions.
+    bool startAckFired_ = false;
     double baselineTimeS_ = -1.0;  // TRUE recording t0: first parsed row's epoch minus sourceSkipHintS_ (set on first success)
 
     /// Read-ahead buffer of parsed rows NOT yet past the sim clock. The CSV stream
