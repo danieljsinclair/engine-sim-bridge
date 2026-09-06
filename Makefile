@@ -79,9 +79,12 @@ PRESET_DIR := preset
 ENGINE_SIM_ROOT := engine-sim
 PRESET_COMPILER := $(BUILD_DIR)/engine-sim-preset-compiler
 
-# Default target - build + test + presets (complete pipeline). `summary` is
+# Default target - presets + build + test + summary. `summary` is
 # the LAST step so the end-of-make headline is the final build output.
-all: build test presets summary
+# presets must precede build so the preset JSON mtimes are older than the
+# binary; otherwise the isomorphism stamp (bridge_unit_tests) is always
+# stale and the isomorphism suite re-runs on every invocation.
+all: presets build test summary
 
 # Compile everything (cmake configure + build)
 build: $(BUILD_STAMP)
@@ -148,7 +151,7 @@ clean-test-fixtures:
 # --label "[engine-sim-bridge]", sonar-summary prints its own === headers), so
 # no procedural echo/banner wrapper is needed under test: itself. `summary`
 # (the end-of-make headline) is the LAST prereq so it is the final output.
-test: test-core test-deep coverage-summary summary
+test: test-core test-deep coverage-run coverage-summary summary
 
 # Order-only reset of the combined ctest summary log. Both ctest tiers depend
 # on this so the log is empty at the start of a `make test` regardless of
@@ -417,6 +420,7 @@ $(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets test-reset
 		$(call bridge_print_hint) \
 		exit 1; \
 	fi
+	@touch $@
 # Build the preset compiler if it doesn't exist (e.g. after scrub)
 $(PRESET_COMPILER):
 	+@$(MAKE) build
