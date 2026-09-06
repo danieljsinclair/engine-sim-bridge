@@ -156,7 +156,7 @@ public:
 class FakePresentation : public presentation::IPresentation {
 public:
     bool Initialize(const presentation::PresentationConfig&) override { return true; }
-    void Shutdown() override {}
+    void Shutdown() noexcept override {}
     void ShowMessage(const std::string&) override {}
     void ShowError(const std::string&) override {}
     void ShowProgress(double, double) override {}
