@@ -22,12 +22,14 @@ LiveTelemetryProvider::LiveTelemetryProvider(const twin::IceVehicleProfile& prof
 }
 
 LiveTelemetryProvider::LiveTelemetryProvider(std::istream& stream, bool autoStart,
-                                             std::function<bool()> streamDataReady)
+                                             std::function<bool()> streamDataReady,
+                                             bool liveStream)
     : ownedProfile_(twin::IceVehicleProfile::zf8hp45())
     , profile_(ownedProfile_)
     , initialized_(false)
     , stream_(&stream)
-    , streamDataReady_(std::move(streamDataReady)) {
+    , streamDataReady_(std::move(streamDataReady))
+    , liveStream_(liveStream) {
     (void)autoStart;
     // NOTE: zf8hp45 is ONLY a construction-time default. The LIVE path must have
     // its geometry supplied by the loaded .mr — CLIMain::reconfigureGearboxProviders
@@ -84,6 +86,15 @@ bool LiveTelemetryProvider::initTwinProvider() {
         // (defaults are inert no-ops on the twin).
         twinProvider_->setEffectiveThrottleConfig(effectiveThrottleConfig_);
         twinProvider_->setTorqueInformedGearboxConfig(torqueInformedGearboxConfig_);
+        // Re-apply the coupling flags the factory set before Initialize() —
+        // the store/re-apply contract ReplayTelemetryProvider already honors.
+        // Without this the pre-Initialize calls landed on the null twin and were
+        // silently dropped, defaulting the live twin to Free ("pin behaves like
+        // free", owner road test 2026-09-06). Stored defaults equal the twin's
+        // own, so an unset flag re-applies as a byte-identical no-op.
+        twinProvider_->setWheelCouplingMode(wheelCouplingMode_);
+        twinProvider_->setCouplingModel(couplingModelKind_);
+        twinProvider_->setPinTauMs(pinTauMs_);
         return true;
     } catch (const std::bad_alloc& e) {
         lastError_ = std::string("Out of memory creating twin provider: ") + e.what();
@@ -233,6 +244,21 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
             coerceCsvReverseGear(csvGearSelector(), currentSample_.roadSpeedKmh);
         twinProvider_->setGearSelector(static_cast<int>(sel));
         EngineInput input = twinProvider_->OnUpdateSimulation(dt);
+        // Warm-boot acknowledgement (owner road test 2026-09-06): warmBootToRunning()
+        // started the twin's engine OUTSIDE the VehicleStartController — the single
+        // start/ignition authority — so the controller's bookkeeping still says
+        // "never started". The first frame carrying a start/stop opinion (a
+        // brake_light column alone qualifies, even with brake=false in PARK at a
+        // standstill) latches startStopEngaged_ and the decision flatten then
+        // writes the observer's ignition=false over the running twin — the engine
+        // died ~2 s into the live road test with no pedal touched. Tell the
+        // authority about the warm-booted run on the first frame, exactly once:
+        // an ignition-only request (requestIgnition(true) fires ignition WITHOUT
+        // the starter, so the already-running engine is not re-cranked).
+        if (primed_ && !startAckFired_) {
+            input.ignitionRequest = true;
+            startAckFired_ = true;
+        }
         // Surface the live sim/CSV elapsed time so each per-frame console line
         // carries a [mm:ss.ms] timecode the user can read back as --start-from.
         // The replay path sets this from currentTimestampS_; the live path tracks
@@ -246,6 +272,13 @@ EngineInput LiveTelemetryProvider::OnUpdateSimulation(double dt) {
         // the JSON network path does the equivalent at line ~292. Absent column
         // => nullopt propagates => non-DBC sources render nothing.
         input.steeringAngleDeg = signal.steeringAngleDeg;
+        // Propagate the raw input row's epoch ms for CSV latency calculation
+        // (EngineInput.inputTimestampMs -> EngineState.drivetrain -> CSV
+        // latency_ms column). Only set when we have a valid parsed row with
+        // an epoch timestamp; otherwise the -1 default renders as -1.
+        if (hasSample_ && currentSample_.timeMs >= 0) {
+            input.inputTimestampMs = currentSample_.timeMs;
+        }
         return input;
     }
 
@@ -328,14 +361,19 @@ void LiveTelemetryProvider::setIgnition(bool on) {
 }
 
 void LiveTelemetryProvider::setWheelCouplingMode(twin::WheelCouplingMode mode) {
+    // Stored + re-applied at twin-provider creation, so the factory's
+    // pre-Initialize() ordering takes effect (the setter previously landed on a
+    // null twin and was dropped — the "pin behaves like free" regression).
+    wheelCouplingMode_ = mode;
     if (twinProvider_) {
         twinProvider_->setWheelCouplingMode(mode);
     }
 }
 
 void LiveTelemetryProvider::setPinTauMs(double tauMs) {
-    // The CLI forwards --pin-tau-ms AFTER Initialize() (the same ordering as
-    // setWheelCouplingMode), so the twin provider exists by this call.
+    // Stored + re-applied at twin-provider creation, the same ordering contract
+    // as setWheelCouplingMode (superset of the old post-Initialize-only call).
+    pinTauMs_ = tauMs;
     if (twinProvider_) {
         twinProvider_->setPinTauMs(tauMs);
     }
@@ -360,6 +398,9 @@ void LiveTelemetryProvider::setTorqueInformedGearboxConfig(
 }
 
 void LiveTelemetryProvider::setCouplingModel(twin::CouplingModelKind kind) {
+    // Stored + re-applied at twin-provider creation, the same ordering contract
+    // as setWheelCouplingMode.
+    couplingModelKind_ = kind;
     if (twinProvider_) {
         twinProvider_->setCouplingModel(kind);
     }
@@ -588,8 +629,60 @@ void LiveTelemetryProvider::refillRowBuffer(double simElapsedS) {
     }
 }
 
+bool LiveTelemetryProvider::tryReadNextRowLive() {
+    // Live pipe path: drain every available row and keep the LATEST one.
+    // No timestamp pacing, no lookahead buffer — the engine runs on the
+    // freshest data the producer has emitted. Skips blank/malformed rows.
+    bool found = false;
+    CsvSample latest{};
+    bool haveLatest = false;
+    const double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
+    while (true) {
+        // Respect the non-blocking readiness probe: don't park on a lagging
+        // writer. If a row is ready, take it; otherwise surface what we have.
+        if (streamDataReady_ && !streamDataReady_()) break;
+        std::string line;
+        if (!std::getline(*stream_, line)) break;  // EOF
+        if (isBlankLine(line)) continue;
+        CsvSample sample;
+        std::string parseError;
+        if (!csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;
+        if (isSampleBlank(sample)) continue;
+        // Anchor the recording clock on the first delivered row.
+        if (streamAnchorTimeS_ < 0.0) {
+            streamAnchorTimeS_ = sample.timeS;
+            baselineTimeS_ = sample.timeS - sourceSkipHintS_;
+        }
+        // Discard pre-start-from rows (stacked-skip: own skip on top of source skip).
+        if (startFromS_ > 0.0 && (sample.timeS - streamAnchorTimeS_) < startFromS_) {
+            continue;
+        }
+        latest = sample;
+        haveLatest = true;
+    }
+    if (haveLatest) {
+        const double relT = latest.timeS - baselineTimeS_;
+        currentSample_ = latest;
+        hasSample_ = true;
+        found = true;
+        updateCurrentSpeedLevel(relT, currentSample_.roadSpeedKmh);
+        // No lookahead — we have no future row, so next-level interp is unknown.
+        hasNextSpeedLevel_ = false;
+    }
+    if (stream_->eof() && !haveLatest) {
+        if (!eofSeen_) csvParser_.emitRejectionSummary();
+        eofSeen_ = true;
+    }
+    return found;
+}
+
 bool LiveTelemetryProvider::tryReadNextRow(double simElapsedS) {
     if (eofSeen_ || !stream_ || !ensureHeaderParsed()) return false;
+
+    // Live pipe: surface the latest row immediately, no timestamp pacing.
+    // This is the 1–2s throttle-delay fix — sparse live recordings under
+    // pacing add lag that the engine has no way to hide.
+    if (liveStream_) return tryReadNextRowLive();
 
     // 1) Refill the lookahead buffer until its tail is far enough ahead (or EOF).
     refillRowBuffer(simElapsedS);

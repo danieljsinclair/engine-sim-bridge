@@ -46,6 +46,7 @@ struct CsvHeader {
 // One decoded telemetry sample.
 struct CsvSample {
     double timeS = 0.0;
+    int64_t timeMs = -1;             // raw epoch ms from timestamp_ms column (-1 = absent)
     double throttle = 0.0;           // 0..1
     double roadSpeedKmh = -2.0;      // -2 sentinel = not commanded (dyno off)
     int gear = -1;                   // -1 = unchanged; 0 = neutral; 1..8 = forward

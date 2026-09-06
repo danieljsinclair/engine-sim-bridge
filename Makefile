@@ -151,6 +151,9 @@ clean-test-fixtures:
 # --label "[engine-sim-bridge]", sonar-summary prints its own === headers), so
 # no procedural echo/banner wrapper is needed under test: itself. `summary`
 # (the end-of-make headline) is the LAST prereq so it is the final output.
+# rc/audio keeps coverage in the default chain (owner directive 2026-09-06:
+# this tree has no outer app gate, so make test must generate the coverage
+# stats itself) on top of master's summary tooling (d90c1bf).
 test: test-core test-deep coverage-run coverage-summary summary
 
 # Order-only reset of the combined ctest summary log. Both ctest tiers depend
@@ -322,7 +325,10 @@ check: test
 # pre-scan), coverage_summary.py prints a hint. The --label tag matches the
 # SonarCloud summary banner so coverage + sonar read as one measurement report.
 coverage-summary:
+	@echo ""
+	@echo "=== [engine-sim-bridge] BEGIN: coverage summary ==="
 	@python3 scripts/coverage_summary.py $(BUILD_COV_DIR)/lcov.info --label "[engine-sim-bridge]"
+	@echo "=== [engine-sim-bridge] END: coverage summary ==="
 
 # Sonar summary -- display issues from a LIVE SonarCloud report.
 # No prereq on $(SONAR_REPORT): this must NEVER trigger a scan (only GETs).
@@ -347,7 +353,6 @@ sonar-summary:
 	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=1&resolutions=REMOVED&facets=impactSeverities" > $(SONAR_REMOVED_FACET) 2>/dev/null || true; \
 	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/measures/component?component=danieljsinclair_engine-sim-bridge&metricKeys=coverage,lines_to_cover,uncovered_lines" > $(SONAR_MEASURES) 2>/dev/null || true
 	@echo ""
-	@echo "=== [engine-sim-bridge] BEGIN: SonarCloud issues summary ==="
 	python3 scripts/sonar_summary.py $(SONAR_REPORT) --label "[engine-sim-bridge]" --removed-facet $(SONAR_REMOVED_FACET)
 	@echo "=== [engine-sim-bridge] END: SonarCloud issues summary ==="
 
@@ -364,7 +369,7 @@ sonar-summary:
 # --removed-facet mirrors sonar-summary: total = open + removed (OPEN union
 # REMOVED, matching the dashboard severity widget and sonar_summary.py).
 BUILD_SUMMARY_SCRIPT := scripts/build_summary.py
-summary:
+summary: coverage-summary sonar-summary
 	@python3 $(BUILD_SUMMARY_SCRIPT) \
 		--label "[engine-sim-bridge]" \
 		--test-log $(TEST_SUMMARY_LOG) \

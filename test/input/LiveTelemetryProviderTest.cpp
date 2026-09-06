@@ -20,6 +20,7 @@
 #include "input/LiveTelemetryProvider.h"
 #include "input/EngineInputTarget.h"
 #include "twin/IceVehicleProfile.h"
+#include "twin/WheelCoupling.h"
 #include "simulator/EngineSimTypes.h"
 #include "simulator/GearConventions.h"
 
@@ -421,6 +422,120 @@ TEST(LiveTelemetryStreamTest, ValidityTimestampGuardKeepsTwinAlive) {
     }
     EXPECT_TRUE(cranked)
         << "Blank speed must still be valid telemetry (non-zero ts) so the twin cranks, not time out to OFF";
+}
+
+// T5b: warm-boot acknowledgement. warmBootToRunning() starts the twin's engine
+// OUTSIDE the VehicleStartController — the single start/ignition authority —
+// so the controller's bookkeeping still says "never started". The first frame
+// carrying a start/stop opinion (a brake_light column alone qualifies, even
+// with brake=false in PARK) then flattens the observer's ignition=false over
+// the running twin: the owner's 2026-09-06 road test had the engine die ~2 s
+// in, standing still, no pedal touched. The provider must acknowledge the
+// warm-booted run on its FIRST frame via the ignition intent — ignition only,
+// never the starter (the engine is already running).
+TEST(LiveTelemetryStreamTest, WarmBootAcknowledgesStartAuthorityOnFirstFrame) {
+    LiveStreamHarness h(
+        "time_s,throttle_pct,road_speed_kmh,brake_light,gear_selector\n"
+        "0.10,0,0.0,0,P\n"
+        "0.20,0,0.0,0,P\n");
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->warmBootToRunning();  // exactly what CLIMain does for --live-telemetry
+
+    input::EngineInput first = h.provider->OnUpdateSimulation(0.05);
+    ASSERT_TRUE(first.ignitionRequest.has_value())
+        << "A warm-booted live twin must tell the VehicleStartController about "
+           "the run on its first frame, or the first opinion frame kills it";
+    EXPECT_TRUE(first.ignitionRequest.value())
+        << "The acknowledgement must request ignition ON";
+
+    input::EngineInput second = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_FALSE(second.ignitionRequest.has_value())
+        << "The acknowledgement is one-shot — every later frame would re-assert "
+           "ignition over the authority's own stop decisions";
+}
+
+// T5c: cold contrast. Without the warm boot the twin self-cranks once valid
+// telemetry arrives (the documented cold contract) and the provider owns no
+// ignition claim — emitting ignitionRequest then would seize authority the
+// provider does not have.
+TEST(LiveTelemetryStreamTest, ColdStreamClaimsNoIgnition) {
+    LiveStreamHarness h(
+        "time_s,throttle_pct,road_speed_kmh,brake_light,gear_selector\n"
+        "0.10,0,0.0,0,P\n"
+        "0.20,0,0.0,0,P\n");
+    ASSERT_TRUE(h.provider->Initialize());
+    // NO warmBootToRunning — the cold contract is under test.
+
+    for (int i = 0; i < 3; ++i) {
+        input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+        EXPECT_FALSE(in.ignitionRequest.has_value())
+            << "A cold live stream must not claim ignition intent";
+    }
+}
+
+// T5d: factory-ordering contract for the coupling flags. TelemetryProviderFactory
+// applies --wheel-coupling/--coupling-model/--pin-tau-ms BEFORE the caller runs
+// Initialize() — the ordering ReplayTelemetryProvider's store/re-apply pattern
+// was built for. Live's setters used to be forward-only, so the flag landed on a
+// null twin and was SILENTLY DROPPED: the twin defaulted to Free and the owner's
+// 2026-09-06 road test had "wheel-coupling pin behaving like free" (97 mph sim
+// vs 57 mph road). Pin set BEFORE Initialize must reach the twin — observable as
+// the RUNNING pin surfacing the CSV speed as the vehicle-speed target (FREE
+// leaves the -1 "not commanded" sentinel).
+TEST(LiveTelemetryStreamTest, CouplingFlagsSetBeforeInitialize_ReachTheTwin) {
+    LiveStreamHarness h(
+        "time_s,throttle_pct,road_speed_kmh,gear_selector\n"
+        "0.00,40,50,D\n"
+        "0.10,40,50,D\n");
+    // The factory's ordering: flag applied BEFORE the caller's Initialize().
+    h.provider->setWheelCouplingMode(twin::WheelCouplingMode::Pin);
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->warmBootToRunning();  // exactly what CLIMain does for --live-telemetry
+
+    input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_GT(in.vehicleSpeedTargetKmh, 0.0)
+        << "Pin set BEFORE Initialize must reach the twin: a RUNNING pin surfaces "
+           "the CSV road speed as the vehicle-speed target, not the -1 sentinel";
+}
+
+// T5e: --pin-tau-ms shares the same pre-Initialize factory ordering. tau=1000 ms
+// on a 50 km/h first step must SMOOTH the surfaced target well below the raw
+// value on the first frame (tau=0 returns the raw target untouched), proving the
+// stored tau reached the twin's PinTargetChase — the staircase anti-teleport the
+// owner's --pin-tau-ms 150 relies on.
+TEST(LiveTelemetryStreamTest, PinTauSetBeforeInitialize_ReachesTheTwin) {
+    LiveStreamHarness h(
+        "time_s,throttle_pct,road_speed_kmh,gear_selector\n"
+        "0.00,40,50,D\n"
+        "0.10,40,50,D\n");
+    h.provider->setWheelCouplingMode(twin::WheelCouplingMode::Pin);
+    h.provider->setPinTauMs(1000.0);  // 1 s lag: heavily smoothed first step
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->warmBootToRunning();
+
+    input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+    // One 50 ms frame of a 1 s lag reaches only ~5% of the 50 km/h step.
+    EXPECT_GT(in.vehicleSpeedTargetKmh, 0.0)
+        << "the chased target must move toward the CSV speed";
+    EXPECT_LT(in.vehicleSpeedTargetKmh, 25.0)
+        << "tau=1000 ms must smooth the first step below half the raw 50 km/h — "
+           "an unsmoothed 50 means the tau never reached the twin";
+}
+
+// Contrast / byte-identity guard: with no coupling flag set, the twin keeps its
+// Free default and the target stays the -1 sentinel — the store/re-apply fix
+// must not pin every live stream by default.
+TEST(LiveTelemetryStreamTest, NoCouplingFlag_KeepsTwinFreeDefault) {
+    LiveStreamHarness h(
+        "time_s,throttle_pct,road_speed_kmh,gear_selector\n"
+        "0.00,40,50,D\n"
+        "0.10,40,50,D\n");
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->warmBootToRunning();
+
+    input::EngineInput in = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_DOUBLE_EQ(in.vehicleSpeedTargetKmh, -1.0)
+        << "No coupling flag set: the twin must keep its Free default (no pin target)";
 }
 
 // T6: the gear_selector column is parsed and forwarded to the twin (observable
@@ -1209,3 +1324,145 @@ TEST(LiveTelemetryStreamTest, ProbeReady_ConsumesRow) {
 }
 
 }  // namespace
+
+// ============================================================================
+// LATENCY FIX: liveStream_=true bypasses timestamp pacing. The live pipe path
+// (tryReadNextRowLive) drains every available row and surfaces the LATEST —
+// no sim-clock gating, no 1–2s throttle delay on sparse live recordings. The
+// paced path (tryReadNextRow) gates consumption by sim elapsed time: rows far
+// ahead of the clock are held in the lookahead buffer until the sim catches up.
+//
+// Deterministic observable: a sparse CSV with rows at t=2, 3.5, 4, 8
+// (selectors P, R, N, D). On frame 1 (simElapsedS=0.05):
+//   - Unpaced (liveStream=true):  ALL rows drained → latest = t=8 (D)
+//   - Paced  (liveStream=false): ALL rows buffered; pop loop pops rows whose
+//     relT <= simElapsedS → only first row's relT (0.0) <= 0.05 → surfaces P
+//
+// This proves the fix: live jumps to the latest row immediately, paced waits
+// for the sim clock to reach each row's timestamp.
+// ============================================================================
+
+// Proper live-stream harness: passes liveStream=true so tryReadNextRow() delegates
+// to tryReadNextRowLive() (no timestamp pacing).
+struct UnpacedLiveHarness {
+    std::istringstream stream;
+    std::unique_ptr<input::LiveTelemetryProvider> provider;
+    explicit UnpacedLiveHarness(const std::string& csv)
+        : stream(csv) {
+        provider = std::make_unique<input::LiveTelemetryProvider>(
+            stream, /*autoStart=*/true, /*streamDataReady=*/nullptr, /*liveStream=*/true);
+    }
+};
+
+// Paced harness: explicit liveStream=false for a fair byte-for-byte comparison.
+struct PacedStreamHarness {
+    std::istringstream stream;
+    std::unique_ptr<input::LiveTelemetryProvider> provider;
+    explicit PacedStreamHarness(const std::string& csv)
+        : stream(csv) {
+        provider = std::make_unique<input::LiveTelemetryProvider>(
+            stream, /*autoStart=*/true, /*streamDataReady=*/nullptr, /*liveStream=*/false);
+    }
+};
+
+// T16: liveStream_=true surfaces the LATEST row on frame 1 — no timestamp gating.
+// T16b: liveStream_=false surfaces the FIRST buffered row — timestamp pacing holds
+// later rows until the sim clock reaches them.
+// The contrast: same sparse CSV, same single frame. Unpaced→D (80km/h),
+// Paced→P (5km/h).
+TEST(LiveTelemetryStreamTest, LiveStream_BypassesTimestampPacing_SurfacesLatest) {
+    std::ostringstream csv;
+    csv << "time_s,throttle_pct,road_speed_kmh,gear_selector\n";
+    csv << "2.0,10,5,P\n";    // relT=0.0 (first row)
+    csv << "3.5,20,10,R\n";   // relT=1.5
+    csv << "4.0,30,15,N\n";   // relT=2.0
+    csv << "8.0,100,80,D\n";  // relT=6.0 (last row)
+    const std::string sharedCsv = csv.str();
+
+    const int kD = static_cast<int>(bridge::GearSelector::DRIVE);
+
+    // Unpaced (liveStream=true): drains all rows, surfaces latest (t=8, D, 80km/h).
+    {
+        UnpacedLiveHarness h(sharedCsv);
+        ASSERT_TRUE(h.provider->Initialize());
+        h.provider->setIgnition(true);
+        h.provider->setGearSelector(kD);
+        h.provider->provideFeedback(EngineSimStats{});
+        h.provider->OnUpdateSimulation(0.05);  // simElapsedS=0.05
+        input::UpstreamSignal sig = h.provider->getCurrentSignal();
+        EXPECT_TRUE(sig.isValid);
+        EXPECT_EQ(sig.gearSelector, bridge::GearSelector::DRIVE)
+            << "Unpaced frame 1: latest row (t=8, D) surfaces immediately — "
+               "tryReadNextRowLive() drains all and keeps the last";
+        EXPECT_DOUBLE_EQ(sig.speedKmh, 80.0);
+    }
+
+    // Paced (liveStream=false): refills buffer, pops rows with relT<=simElapsedS.
+    // All 4 rows land in the buffer (all within 0.3s lookahead). Pop loop: only
+    // the first row (relT=0.0) is <= 0.05 → surfaces P (5km/h). R,N,D are future.
+    {
+        PacedStreamHarness h(sharedCsv);
+        ASSERT_TRUE(h.provider->Initialize());
+        h.provider->setIgnition(true);
+        h.provider->setGearSelector(kD);
+        h.provider->provideFeedback(EngineSimStats{});
+        h.provider->OnUpdateSimulation(0.05);  // simElapsedS=0.05
+        input::UpstreamSignal sig = h.provider->getCurrentSignal();
+        EXPECT_TRUE(sig.isValid);
+        EXPECT_EQ(sig.gearSelector, bridge::GearSelector::PARK)
+            << "Paced frame 1: first row (t=2, P) surfaces — only its relT (0.0) "
+               "is <= simElapsedS (0.05); later rows (R,N,D) are still future";
+        EXPECT_DOUBLE_EQ(sig.speedKmh, 5.0);
+    }
+}
+
+// T16b: advancing the paced sim clock past all rows correctly surfaces the last
+// row — timestamp pacing is correct for replay. This proves the paced path is
+// not broken, just wrong for live telemetry (where you want latest immediately).
+TEST(LiveTelemetryStreamTest, PacedPath_WalksRowsWhenClockAdvances) {
+    std::ostringstream csv;
+    csv << "time_s,throttle_pct,road_speed_kmh,gear_selector\n";
+    csv << "2.0,10,5,P\n";
+    csv << "3.5,20,10,R\n";
+    csv << "4.0,30,15,N\n";
+    csv << "8.0,100,80,D\n";
+    PacedStreamHarness h(csv.str());
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);
+    h.provider->setGearSelector(static_cast<int>(bridge::GearSelector::DRIVE));
+    h.provider->provideFeedback(EngineSimStats{});
+
+    const int kD = static_cast<int>(bridge::GearSelector::DRIVE);
+    // Advance sim clock to 10s (well past all rows at t=2..8).
+    input::EngineInput in = h.provider->OnUpdateSimulation(10.0);
+    EXPECT_EQ(in.gearSelector, kD)
+        << "Paced at simElapsedS=10: all rows in the past → last row (D) surfaces";
+    EXPECT_GT(in.roadSpeedKmh, 0.0);
+}
+
+// T16c: the unpaced path holds the last row at EOF (correct live semantics:
+// no new data = keep feeding the last sample). This contrasts with the
+// EOF-drain bug which permanently froze currentSample_ at the capture's last row.
+TEST(LiveTelemetryStreamTest, UnpacedLive_HoldsLastRowAtEof) {
+    std::ostringstream csv;
+    csv << "time_s,throttle_pct,road_speed_kmh,gear_selector\n";
+    csv << "2.0,10,5,P\n";
+    csv << "8.0,100,80,D\n";
+    UnpacedLiveHarness h(csv.str());
+    ASSERT_TRUE(h.provider->Initialize());
+    h.provider->setIgnition(true);
+    h.provider->setGearSelector(static_cast<int>(bridge::GearSelector::DRIVE));
+
+    const int kD = static_cast<int>(bridge::GearSelector::DRIVE);
+
+    // Frame 1: latest row is D (t=8).
+    h.provider->provideFeedback(EngineSimStats{});
+    input::EngineInput in1 = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_EQ(in1.gearSelector, kD) << "Unpaced frame 1: latest is D (t=8)";
+
+    // At EOF: hold last row — correct live hold semantics.
+    h.provider->provideFeedback(EngineSimStats{});
+    input::EngineInput in2 = h.provider->OnUpdateSimulation(0.05);
+    EXPECT_EQ(in2.gearSelector, kD) << "Unpaced at EOF: hold last row (D)";
+    EXPECT_GT(in2.roadSpeedKmh, 0.0);
+}

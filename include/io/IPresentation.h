@@ -44,6 +44,9 @@ struct EngineState {
         double dynoTorque = 0.0;
         double dynoTargetRPM = 0.0;
         double replayTimestampS = -1.0;  // absolute CSV timestamp (-1 = not replaying)
+        // Epoch ms of the live CSV row currently being processed (live telemetry only).
+        // Populated by LiveTelemetryProvider; -1 = not available / replay.
+        int64_t inputTimestampMs = -1;
         // Live coupling diagnostics (surfaced from the twin for the inline
         // [Gear:DAx TC/Cl NN%] readout and the CSV-out spelunking path).
         double clutchPressure = -1.0;    // coupling engagement: 0=decoupled .. 1=coupled (-1=unknown)
