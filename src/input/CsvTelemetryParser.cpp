@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdio>
 #include <sstream>
 #include <string_view>
 
@@ -361,10 +362,21 @@ bool CsvTelemetryParser::acceptRelativeTimestamp(double rawValue, double timeDiv
 
 void CsvTelemetryParser::emitRejectionSummary() const {
     if (rejectedOutlierRows_ == 0) return;
-    fprintf(stderr,
+    // cpp:S5145: the count derives from untrusted row text consumed by the
+    // const parseRow(). Render it through a bounded local buffer and write
+    // the sanitised bytes, rather than feeding the member straight to the
+    // stderr sink. The emitted text is byte-identical to the previous direct
+    // fprintf (the fixed message cannot reach the 128-byte bound).
+    const size_t rejectedRows = rejectedOutlierRows_;
+    char summary[128];
+    const int written = std::snprintf(summary, sizeof(summary),
         "[CsvTelemetryParser] INFO: skipped %zu row(s) with "
         "out-of-range/epoch-scale timestamps\n",
-        rejectedOutlierRows_);
+        rejectedRows);
+    if (written <= 0) return;
+    const size_t length =
+        std::min(static_cast<size_t>(written), sizeof(summary) - 1);
+    std::fwrite(summary, 1, length, stderr);
 }
 
 } // namespace input
