@@ -26,7 +26,7 @@ constexpr const char *EnginePhaseName(EnginePhase phase) noexcept {
         case EnginePhase::Cranking: return "\033[33mCranking\033[0m"; // YELLOW
         case EnginePhase::Rollover: return "\033[36mRollover\033[0m"; // CYAN
         case  EnginePhase::Running: return "\033[32m Running\033[0m"; // GREEN
-        case EnginePhase::Stopping: return "\033[35mStopping\033[0m"; // ORANGE
+        case EnginePhase::Stopping: return "\033[35mStopping\033[0m"; // MAGENTA
         default: return "invalid";
     }
 }
