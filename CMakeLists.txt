@@ -664,6 +664,7 @@ if(BUILD_BRIDGE_TESTS)
         test/twin/PinTargetChaseTest.cpp
         test/twin/PinComplianceTwinTest.cpp
         test/twin/VirtualIceTwinTest.cpp
+        test/twin/VirtualIceTwinCharacterizationTest.cpp
         test/twin/ManualTwinTest.cpp
         test/twin/SlipLockControllerTest.cpp
         test/twin/TorqueConverterLaunchTest.cpp
