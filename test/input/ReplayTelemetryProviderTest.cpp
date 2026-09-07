@@ -1114,3 +1114,20 @@ TEST_F(ReplayTelemetryProviderTest, ArrivalKeepsPopulatedRowAtOffset) {
     EXPECT_DOUBLE_EQ(provider_->currentTimestampS(), 10.0);
     EXPECT_DOUBLE_EQ(input.throttle, 0.60);
 }
+
+// Degenerate-trace fallback of the blank-skip walk (S5566 refactor site):
+// when NO populated row exists at/after the plain arrival row, the
+// walk-forward finds nothing and must return the PLAIN first-at-or-after row
+// — the documented "never returns the pre-offset floor". A restructure of
+// the walk must keep all three distinguishable outcomes: plain row (10.0),
+// not the pre-offset floor (0.0), not the last scanned row (11.0).
+TEST_F(ReplayTelemetryProviderTest, ArrivalWalkFallsBackToPlainRowWhenAllLaterRowsBlank) {
+    // Every row at/after the 10.0 offset is engine-blank (and the 0.0 row
+    // before the offset is blank too — no populated row anywhere).
+    makeProvider("time_s,throttle_pct\n0.0,\n10.0,\n10.5,\n11.0,\n");
+    ASSERT_TRUE(provider_->Initialize());
+    wireDefault();
+    provider_->setStartFromS(10.0);
+
+    EXPECT_DOUBLE_EQ(provider_->arrivalSample().timeS, 10.0);
+}
