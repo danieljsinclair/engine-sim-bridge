@@ -206,6 +206,7 @@ void SimulationLoop::settleAtArrivalPoint(LoopState& state,
     emitAudio_ = false;
     if (presentation_) presentation_->setCsvEmissionEnabled(false);
     while (state.currentTime < ARRIVAL_SETTLE_SECONDS && settleTick(state)) {
+        // Empty body: settleTick() performs the side-effect; we just loop until settled.
     }
 
     // (3) Handoff: release the hold (rows emit from the arrival row onward),

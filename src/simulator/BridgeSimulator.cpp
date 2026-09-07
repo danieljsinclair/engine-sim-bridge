@@ -100,8 +100,10 @@ bool BridgeSimulator::renderDrainedAudio(float* buffer, int32_t frames, int32_t*
     // input and no buffered audio). The loop guard bounds iterations.
     int16_t* conversionBuffer = ensureAudioConversionBufferSize(frames);
     int32_t totalRead = 0;
+    int drainIterations = 0;
     const int MAX_DRAIN_ITERATIONS = 8;
-    for (int iter = 0; iter < MAX_DRAIN_ITERATIONS && totalRead < frames; ++iter) {
+    while (totalRead < frames && drainIterations < MAX_DRAIN_ITERATIONS) {
+        ++drainIterations;
         m_simulator->synthesizer().renderAudioOnDemand();
 
         const int32_t remaining = frames - totalRead;
@@ -383,7 +385,7 @@ void BridgeSimulator::setUseTorqueConverter(bool enabled) {
     // before addToSystem runs) — adding a constraint to an already-initialized
     // live rigid-body system corrupts the solver's pre-sized buffers. So here we
     // only record the flag and confirm the transmission already carries one.
-    auto* trans = m_simulator->getTransmission();
+    const auto* trans = m_simulator->getTransmission();
     usesTorqueConverter_ = (trans != nullptr && trans->hasTorqueConverter());
 }
 
