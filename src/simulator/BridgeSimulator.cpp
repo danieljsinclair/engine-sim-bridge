@@ -385,7 +385,7 @@ void BridgeSimulator::setUseTorqueConverter(bool enabled) {
     // before addToSystem runs) — adding a constraint to an already-initialized
     // live rigid-body system corrupts the solver's pre-sized buffers. So here we
     // only record the flag and confirm the transmission already carries one.
-    auto* trans = m_simulator->getTransmission();
+    const auto* trans = m_simulator->getTransmission();
     usesTorqueConverter_ = (trans != nullptr && trans->hasTorqueConverter());
 }
 
