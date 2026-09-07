@@ -2,8 +2,8 @@
 .PHONY: all build clean clean-test scrub help remove-orphans \
 		check test test-core test-isomorphism test-deep test-reset \
 		presets clean-presets \
-		sonar-clean coverage-clean coverage-run coverage-summary sonar-summary test-nosonar \
-	sonar-scan-soft \
+		sonar-clean coverage-clean coverage-run test-nosonar \
+		sonar-refresh \
 		summary
 
 BUILD_DIR ?= build
@@ -39,6 +39,22 @@ COVERAGE_REPORT := $(BUILD_COV_DIR)/coverage.txt
 SONAR_REPORT := $(BUILD_COV_DIR)/sonar-report.json
 SONAR_TOKEN ?= ${SONAR_TOKEN_ES}
 
+# Live-cache JSON files for the sonar-summary display. These are SEPARATE
+# from $(SONAR_REPORT) (the scan stamp): a summary GET must NEVER write to
+# $(SONAR_REPORT), or a later `make sonar-scan` becomes a no-op (owner
+# report 2026-09-06: "Sonar hasn't been run, but it SHOULD; I've tried
+# make clean"). The scan OWNS sonar-report.json; the summary owns these.
+SONAR_LIVE := $(BUILD_COV_DIR)/sonar-live.json
+SONAR_REMOVED_FACET := $(BUILD_COV_DIR)/sonar-removed-facet.json
+SONAR_MEASURES := $(BUILD_COV_DIR)/sonar-measures.json
+
+# Cached formatted display output. The recipes write the formatted report
+# here; the `sonar-summary` / `coverage-summary` convenience targets just
+# `cat` this file. File-artefact semantics: re-runs only when its input
+# prereqs (the cached JSON or the lcov.info) are newer.
+SONAR_SUMMARY_REPORT := $(BUILD_COV_DIR)/sonar-summary.txt
+COVERAGE_SUMMARY_REPORT := $(BUILD_COV_DIR)/coverage-summary.txt
+
 # Combined ctest summary log: every ctest tier (test-core, test-deep) appends
 # its "N% tests passed, M tests failed out of N" line here (via the tee in
 # run_bridge_ctest_suite). reset at the start of `test` so each run is clean.
@@ -46,9 +62,23 @@ SONAR_TOKEN ?= ${SONAR_TOKEN_ES}
 # union of every tier run in this `make test`, not just the last.
 TEST_SUMMARY_LOG := $(BUILD_DIR)/test-summary.log
 
-# Source inputs that affect the bridge build. This ensures the stamp is invalidated
-# when bridge or engine-sim sources change, so rebuilds happen when necessary.
-BUILD_INPUTS := Makefile CMakeLists.txt $(shell find src include test tools engine-sim -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' -o -name '*.h' -o -name '*.hh' -o -name '*.hpp' -o -name '*.cmake' \) | sort)
+# ---- Single source of truth for source file specs ----
+# Wildcard globs over the bridge + engine-sim source tree. New files picked
+# up automatically — no per-file maintenance. Reused by build, coverage,
+# sonar, and the isomorphism suite (the latter filters to a subset of dirs).
+SRC_HEADER_FILES := $(shell find src include test tools engine-sim -type f \
+	\( -name '*.c' -o -name '*.cc' -o -name '*.cpp' -o -name '*.cxx' \
+	   -o -name '*.h' -o -name '*.hh' -o -name '*.hpp' \
+	   -o -name '*.cmake' \) 2>/dev/null | sort)
+# (sed escapes spaces: es/ has names like "L539 V12.mr" — unescaped, Make
+# would split them into phantom prereqs and die with "No rule to make
+# target `es/L539'")
+PRESET_SCRIPT_FILES := $(shell find es -type f -name '*.mr' 2>/dev/null | sed 's/ /\\ /g' | sort)
+
+# Source inputs that affect the bridge build. Single source of truth — see
+# $(SRC_HEADER_FILES) for the underlying globs. Includes the Makefile itself
+# so a config change rebuilds everything downstream (build, coverage, sonar).
+BUILD_INPUTS := Makefile CMakeLists.txt $(SRC_HEADER_FILES)
 
 ISOMORPHISM_STAMP := $(BUILD_DIR)/bridge_unit_tests
 
@@ -154,7 +184,13 @@ clean-test-fixtures:
 # rc/audio keeps coverage in the default chain (owner directive 2026-09-06:
 # this tree has no outer app gate, so make test must generate the coverage
 # stats itself) on top of master's summary tooling (d90c1bf).
-test: test-core test-deep coverage-run coverage-summary sonar-scan summary
+# coverage-summary is NOT listed mid-chain (before sonar-scan) on purpose:
+# the scan's recipe drops the summary JSON caches, and make caches stat
+# results per invocation — a mid-chain coverage-summary would make `summary`
+# cat the PRE-scan cache (stale server numbers) instead of re-curling. Via
+# summary (post-scan) make stat's the deleted sonar-measures.json fresh and
+# re-curls it, so the final report reflects the just-settled scan.
+test: test-core test-deep coverage-run sonar-scan summary
 
 # Order-only reset of the combined ctest summary log. Both ctest tiers depend
 # on this so the log is empty at the start of a `make test` regardless of
@@ -198,6 +234,13 @@ LLVM_PROFDATA := $(shell xcrun --find llvm-profdata 2>/dev/null || which llvm-pr
 # Uses RelWithDebInfo (NOT Debug) + -fprofile-instr-generate/-fcoverage-mapping/-g.
 # Has its own CMakeCache so coverage reconfigure does NOT invalidate the test build.
 # Does NOT run tests — tests are run separately via make coverage-run
+# NOTE: `touch CMakeCache.txt` after configure is REQUIRED, not cosmetic:
+# cmake does not rewrite an unchanged cache file, so without the touch the
+# cache mtime never advances past an edited CMakeLists.txt — Make then
+# reconfigures on every invocation, each configure rewrites
+# compile_commands.json, and that keeps sonar-report.json permanently stale
+# (the scan re-ran on every `make` in this tree until 2026-09-07). The
+# build/ dir escapes this only because its sed -i rewrites the cache.
 $(BUILD_COV_DIR)/CMakeCache.txt: CMakeLists.txt
 	@mkdir -p $(BUILD_COV_DIR)
 	@cd $(BUILD_COV_DIR) && cmake \
@@ -207,13 +250,17 @@ $(BUILD_COV_DIR)/CMakeCache.txt: CMakeLists.txt
 		-DBUILD_PRESET_ENGINE_TESTS=ON \
 		-DBUILD_IOS_ADAPTER_TESTS=ON \
 		-DBUILD_PHASE0_SPIKES=OFF \
-		..
+		.. && touch CMakeCache.txt
 
 $(BUILD_COV_STAMP): $(BUILD_INPUTS) $(BUILD_COV_DIR)/CMakeCache.txt
 	@echo "=== [engine-sim-bridge] Building coverage (build-cov, RelWithDebInfo+instr) ==="
 	@cmake --build $(BUILD_COV_DIR) $(CMAKE_BUILD_PARALLEL_FLAG)
-	# `cmake --build` updates the libenginesim.a mtime above; that IS the
-	# artefact Make tracks (no separate .stamp file needed).
+	@# `touch $@` mirrors $(BUILD_STAMP): `cmake --build` only advances the
+	@# archive mtime when something relinks — on a no-op build the mtime
+	@# stays put and Make would re-run this recipe forever. Touching the real
+	@# artefact records "checked with these inputs — no change", settling the
+	@# chain (same idiom, no .stamp file).
+	@touch $@
 
 # coverage-run: run tests on coverage-instrumented build, merge profdata, export lcov
 # File-artefact target: re-runs only when build-cov, preset JSONs, source inputs, or
@@ -233,6 +280,10 @@ sonar-scan: $(SONAR_REPORT)
 # writes SONAR_REPORT itself. The CE-poll block guarantees the report is only
 # cached after the Compute Engine has settled: under this file-stamp-gated model
 # a stale report would otherwise not self-correct until the next build change.
+# The recipe's final rm drops the summary JSON caches: the scan just changed
+# SonarCloud's server-side state, so the next sonar-summary must re-curl and
+# re-format — a summary printed from pre-scan counts would be stale, and stale
+# sonar data is the failure mode this Makefile must never hide.
 # Derive -Dsonar.branch.name from the current git branch (worktree-aware).
 # In a worktree, git rev-parse --abbrev-ref HEAD returns the branch name of the
 # worktree, NOT "HEAD". In the main checkout it returns the checked-out branch.
@@ -296,16 +347,18 @@ $(SONAR_REPORT): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(
 	@TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}"; \
 	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500&statuses=OPEN" \
 		> $(SONAR_REPORT) 2>/dev/null || true
+	@rm -f $(SONAR_LIVE) $(SONAR_REMOVED_FACET) $(SONAR_MEASURES)
 
 $(COMPILE_DB): $(BUILD_COV_DIR)/CMakeCache.txt
 
 sonar-clean:
-	@rm -f $(SONAR_REPORT) $(SONAR_LIVE)
+	@rm -f $(SONAR_REPORT) $(SONAR_LIVE) $(SONAR_REMOVED_FACET) $(SONAR_MEASURES) $(SONAR_SUMMARY_REPORT)
 	@rm -rf $(BUILD_COV_DIR)/.scannerwork
 
 coverage-clean:
-	@rm -f $(COVERAGE_REPORT) $(BUILD_COV_DIR)/coverage.profdata $(BUILD_COV_DIR)/lcov.info $(BUILD_COV_DIR)/profraw/*.profraw
+	@rm -f $(COVERAGE_REPORT) $(BUILD_COV_DIR)/coverage.profdata $(BUILD_COV_DIR)/lcov.info $(COVERAGE_SUMMARY_REPORT) $(BUILD_COV_DIR)/profraw/*.profraw
 	@rm -rf $(BUILD_COV_DIR)/profraw
+	@rm -f $(BUILD_COV_DIR)/.build-cov-ready.stamp
 
 check: test
 
@@ -320,48 +373,82 @@ check: test
 # Single source of truth: CANDIDATE_ENGINES lists which scripts to compile.
 # ============================================================================
 
-# Coverage summary -- display local coverage % from lcov.info.
-# No prereq: this must NEVER trigger a scan. If lcov is absent (fresh tree /
-# pre-scan), coverage_summary.py prints a hint. The --label tag matches the
-# SonarCloud summary banner so coverage + sonar read as one measurement report.
-coverage-summary:
-	@echo ""
-	@echo "=== [engine-sim-bridge] BEGIN: coverage summary ==="
-	@python3 scripts/coverage_summary.py $(BUILD_COV_DIR)/lcov.info --label "[engine-sim-bridge]"
-	@echo "=== [engine-sim-bridge] END: coverage summary ==="
+# ============================================================================
+# Coverage summary: file-artefact target. Re-runs only when lcov.info or
+# coverage_summary.py is newer than the cached report file. The convenience
+# target just cats the cache. NEVER triggers a scan — the only inputs are
+# the local lcov export and the cached sonar-measures.json.
+# ============================================================================
+coverage-summary: $(COVERAGE_SUMMARY_REPORT)
+	@cat $<
 
-# Sonar summary -- display issues from a LIVE SonarCloud report.
-# No prereq on $(SONAR_REPORT): this must NEVER trigger a scan (only GETs).
-# Curls the API live at display time (refreshing the cached file) so local
-# counts always match the dashboard -- same pattern as engine-sim-cli/app. The
-# OPEN set is fetched WITH the impactSeverities facet, and the REMOVED set's
-# facet is fetched separately, so sonar_summary.py prints the dashboard's own
-# server-side severity distribution (OPEN union REMOVED). If no token, prints
-# a hint; a transient curl failure is tolerated (|| true) so the summary does
-# not crash on a network blip.
-SONAR_REMOVED_FACET := $(BUILD_COV_DIR)/sonar-removed-facet.json
-# Cached SonarCloud measures (coverage headline). Curled by sonar-summary so
-# build_summary.py reads the SAME headline coverage_block.py/coverage_summary.py
-# show -- no live re-query at summary time (fast, cached).
-SONAR_MEASURES := $(BUILD_COV_DIR)/sonar-measures.json
-# Summary-side LIVE cache. The summary GET must NEVER write $(SONAR_REPORT):
-# that file is the sonar-scan stamp, and a summary curl refreshing its mtime
-# made every later `make sonar-scan` a "Nothing to be done" no-op — the scan
-# silently stopped running in this tree (owner report 2026-09-06: "Sonar
-# hasn't been run, but it SHOULD; I've tried make clean"). Separate files:
-# the scan OWNS sonar-report.json; the summary owns its own live cache.
-SONAR_LIVE := $(BUILD_COV_DIR)/sonar-live.json
-sonar-summary:
-	@echo ""
-	@echo "=== [engine-sim-bridge] BEGIN: SonarCloud issues summary ==="
+$(COVERAGE_SUMMARY_REPORT): $(BUILD_COV_DIR)/lcov.info scripts/coverage_summary.py $(SONAR_MEASURES)
+	@mkdir -p $(BUILD_COV_DIR)
+	@echo "" > $@
+	@echo "=== [engine-sim-bridge] BEGIN: coverage summary ===" >> $@
+	@python3 scripts/coverage_summary.py $< --label "[engine-sim-bridge]" --sonar-measures $(SONAR_MEASURES) >> $@ || true
+	@echo "=== [engine-sim-bridge] END: coverage summary ===" >> $@
+
+# ============================================================================
+# Sonar summary: file-artefact target. The three JSON cache files are
+# themselves file-artefact targets with $(SONAR_PROJECT_PROPERTIES) as prereq
+# — a curl happens only when sonar-project.properties changes (or on a
+# user-initiated `make sonar-refresh`, e.g. after someone triaged issues on
+# the SonarCloud web UI). The formatted report is regenerated only when any
+# of the cached JSONs OR the script changes. NEVER triggers a scan: these
+# recipes only GET; the scan OWNS sonar-report.json (see vars block above).
+# ============================================================================
+
+$(SONAR_LIVE): $(SONAR_PROJECT_PROPERTIES)
+	@mkdir -p $(BUILD_COV_DIR)
 	@TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}"; \
-	if [ -z "$$TOKEN" ]; then echo "  No token"; exit 0; fi; \
-	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500&statuses=OPEN&facets=impactSeverities" > $(SONAR_LIVE) 2>/dev/null || true; \
-	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=1&resolutions=REMOVED&facets=impactSeverities" > $(SONAR_REMOVED_FACET) 2>/dev/null || true; \
-	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/measures/component?component=danieljsinclair_engine-sim-bridge&metricKeys=coverage,lines_to_cover,uncovered_lines" > $(SONAR_MEASURES) 2>/dev/null || true
-	@echo ""
-	python3 scripts/sonar_summary.py $(SONAR_LIVE) --label "[engine-sim-bridge]" --removed-facet $(SONAR_REMOVED_FACET)
-	@echo "=== [engine-sim-bridge] END: SonarCloud issues summary ==="
+	if [ -z "$$TOKEN" ]; then \
+		echo "  No SONAR_TOKEN set; $(SONAR_LIVE) left as empty sentinel."; \
+		printf '' > $@; \
+		exit 0; \
+	fi; \
+	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500&statuses=OPEN&facets=impactSeverities" \
+		> $@ 2>/dev/null || printf '' > $@
+
+$(SONAR_REMOVED_FACET): $(SONAR_PROJECT_PROPERTIES)
+	@mkdir -p $(BUILD_COV_DIR)
+	@TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}"; \
+	if [ -z "$$TOKEN" ]; then \
+		echo "  No SONAR_TOKEN set; $(SONAR_REMOVED_FACET) left as empty sentinel."; \
+		printf '' > $@; \
+		exit 0; \
+	fi; \
+	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=1&resolutions=REMOVED&facets=impactSeverities" \
+		> $@ 2>/dev/null || printf '' > $@
+
+$(SONAR_MEASURES): $(SONAR_PROJECT_PROPERTIES)
+	@mkdir -p $(BUILD_COV_DIR)
+	@TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}"; \
+	if [ -z "$$TOKEN" ]; then \
+		echo "  No SONAR_TOKEN set; $(SONAR_MEASURES) left as empty sentinel."; \
+		printf '' > $@; \
+		exit 0; \
+	fi; \
+	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/measures/component?component=danieljsinclair_engine-sim-bridge&metricKeys=coverage,lines_to_cover,uncovered_lines" \
+		> $@ 2>/dev/null || printf '' > $@
+
+# Force-regenerate the cached JSONs and the formatted report. Use after a
+# SonarCloud-side change (e.g. someone triaged issues on the web UI).
+sonar-refresh:
+	@rm -f $(SONAR_LIVE) $(SONAR_REMOVED_FACET) $(SONAR_MEASURES) $(SONAR_SUMMARY_REPORT)
+	@$(MAKE) sonar-summary
+
+# Convenience: print the cached report. Re-generates only if one of the
+# cached JSONs, the script, or sonar-project.properties is newer.
+sonar-summary: $(SONAR_SUMMARY_REPORT)
+	@cat $<
+
+$(SONAR_SUMMARY_REPORT): $(SONAR_LIVE) $(SONAR_REMOVED_FACET) scripts/sonar_summary.py
+	@mkdir -p $(BUILD_COV_DIR)
+	@echo "" > $@
+	@echo "=== [engine-sim-bridge] BEGIN: SonarCloud issues summary ===" >> $@
+	@python3 scripts/sonar_summary.py $(SONAR_LIVE) --label "[engine-sim-bridge]" --removed-facet $(SONAR_REMOVED_FACET) >> $@ || true
+	@echo "=== [engine-sim-bridge] END: SonarCloud issues summary ===" >> $@
 
 # summary: the end-of-make HEADLINE line (one coloured row) for the bridge.
 # Greps plain numbers from the existing report files and re-emits them
@@ -400,8 +487,10 @@ $(foreach engine,$(ENGINES),$(eval $(call PRESET_COMPILE_RULE,$(engine))))
 
 PRESET_JSONS := $(foreach engine,$(ENGINES),$(PRESET_DIR)/$(engine).json)
 
-ISOMORPHISM_MR_INPUTS := $(shell find es -type f -name '*.mr' -print 2>/dev/null | sed 's/ /\\ /g')
-ISOMORPHISM_CODE_INPUTS := $(shell find src/common src/preset include/common include/preset include/simulator -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) -print 2>/dev/null | sed 's/ /\\ /g')
+# Derived from the single-source-of-truth globs (see SRC_HEADER_FILES /
+# PRESET_SCRIPT_FILES above) — no second find spec to keep in sync.
+ISOMORPHISM_MR_INPUTS := $(PRESET_SCRIPT_FILES)
+ISOMORPHISM_CODE_INPUTS := $(filter src/common/% src/preset/% include/common/% include/preset/% include/simulator/%,$(SRC_HEADER_FILES))
 # bridge_unit_tests is the gtest binary ctest invokes with the -R selector
 # (ctest uses gtest filter matching; there is no separate preset_isomorphism_tests
 # binary on disk). It IS the artefact whose mtime we check.
@@ -449,7 +538,8 @@ help:
 	@echo "  make          - Build + test + presets (complete pipeline)"
 	@echo "  make build    - Compile everything (no tests)"
 	@echo "  make sonar-scan - Run SonarQube scan with coverage (only re-runs when build/inputs change)"
-	@echo "  make sonar-summary - Show SonarCloud issues summary"
+	@echo "  make sonar-summary - Show the cached SonarCloud issues summary (re-formats only when inputs change)"
+	@echo "  make sonar-refresh - Force re-fetch of the SonarCloud summary caches, then show them"
 	@echo "  make test     - Run sonar scan with coverage, core tests, then deep tests"
 	@echo "  make test-core - Run the always-on bridge suite"
 	@echo "  make test-isomorphism - Run file-based incremental isomorphism tests when inputs are newer"

@@ -446,7 +446,40 @@ def is_platform_excluded(path):
     return has_guarded_body and not has_host_body
 
 
-def display(coverage_path, repo_root, verbose=False, label='Local Coverage'):
+def load_cached_sonar_measures(path):
+    """Read the SonarCloud coverage measures from a cached JSON file.
+
+    The Makefile's sonar-summary step curls /api/measures/component into
+    build-cov/sonar-measures.json (an mtime-gated file artefact). When that
+    cache is handed to us via --sonar-measures we read it instead of doing
+    our own live GET — so the summary output reflects exactly the cached
+    data whose freshness Make already tracks.
+
+    Returns a measures dict (same shape as fetch_sonar_coverage()) or None
+    when the file is missing/unparsable — caller falls back to a live fetch
+    or the no-token path, never crashes.
+    """
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    cached = {}
+    for m in (data.get('component', {}) or {}).get('measures', []) or []:
+        metric = m.get('metric')
+        value = m.get('value')
+        if metric and value is not None:
+            try:
+                cached[metric] = float(value)
+            except ValueError:
+                cached[metric] = value
+    if 'coverage' not in cached:
+        return None
+    return cached
+
+
+def display(coverage_path, repo_root, verbose=False, label='Local Coverage',
+            sonar_measures_path=None):
     """Print the coverage summary.
 
     Prints TWO coverage numbers so the dashboard value and the honest local
@@ -454,6 +487,11 @@ def display(coverage_path, repo_root, verbose=False, label='Local Coverage'):
     total). ``label`` names the report section (defaults to a plain header;
     the Makefile passes a repo tag so coverage reads as part of the same
     measurement report as the SonarCloud summary).
+
+    ``sonar_measures_path``: optional path to a cached measures JSON. When it
+    parses, it is used for the headline INSTEAD of a live GET (the Makefile
+    passes the mtime-gated sonar-measures.json artefact); otherwise the
+    behaviour is unchanged (live GET, graceful fallback to local only).
 
     Default (concise, used by `make`): the live SonarCloud headline + the
     local lcov number + the TOP 5 worst (lowest coverage) src files + the
@@ -501,7 +539,20 @@ def display(coverage_path, repo_root, verbose=False, label='Local Coverage'):
     # display time — same live-GET pattern sonar_summary.py uses for issues.
     # Falls back gracefully (local only) when there is no token or the fetch
     # fails, so a missing token / network blip never crashes the report.
-    sonar_measures = fetch_sonar_coverage()
+    # HEADLINE: cached-first. When the Makefile hands us its mtime-gated
+    # sonar-measures.json we read it instead of curling — the output then
+    # reflects exactly what Make considers fresh. Falls back to the live GET
+    # (hand-run invocations without the flag, or an unparsable cache).
+    sonar_measures = None
+    measures_source = None
+    if sonar_measures_path:
+        sonar_measures = load_cached_sonar_measures(sonar_measures_path)
+        if sonar_measures is not None:
+            measures_source = sonar_measures_path
+    if sonar_measures is None:
+        sonar_measures = fetch_sonar_coverage()
+        if sonar_measures is not None:
+            measures_source = 'live {} /api/measures/component'.format(SONAR_HOST)
 
     print('')
     print('=== {} Coverage ==='.format(label))
@@ -515,8 +566,7 @@ def display(coverage_path, repo_root, verbose=False, label='Local Coverage'):
               '{}{}/{}{}'.format(
                   BOLD, coverage_color(sc_cov), sc_cov, RESET,
                   GREY, sc_covd, sc_ltc, RESET))
-        print('  {}source: live {} /api/measures/component{}'.format(
-            GREY, SONAR_HOST, RESET))
+        print('  {}source: {}{}'.format(GREY, measures_source, RESET))
     else:
         # No token or fetch failed — show local as headline with a note so it
         # is never mistaken for the dashboard number.
@@ -602,16 +652,18 @@ def display(coverage_path, repo_root, verbose=False, label='Local Coverage'):
 
 
 def main():
-    """Entry point. Accepts optional --verbose/--all and --label flags in argv.
+    """Entry point. Accepts optional --verbose/--all, --label, --sonar-measures flags.
 
-    Usage: coverage_summary.py <lcov.info> [repo_root] [--verbose|--all] [--label NAME]
-    The Makefile calls this with just the lcov path (concise output) plus a
-    --label tag so coverage reads as part of the same measurement report as the
-    SonarCloud summary. The user can run `python3 coverage_summary.py lcov.info
-    --verbose` for the full list.
+    Usage: coverage_summary.py <lcov.info> [repo_root] [--verbose|--all] [--label NAME] [--sonar-measures PATH]
+    The Makefile calls this with the lcov path (concise output), a --label tag
+    so coverage reads as part of the same measurement report as the SonarCloud
+    summary, and --sonar-measures pointing at its cached sonar-measures.json so
+    the headline reads the mtime-gated cache instead of a live GET. The user
+    can run `python3 coverage_summary.py lcov.info --verbose` for the full list.
     """
     verbose = False
     label = 'Local Coverage'
+    sonar_measures_path = None
     positional = []
     args = list(sys.argv[1:])
     i = 0
@@ -626,12 +678,15 @@ def main():
         elif arg == '--label' and i + 1 < len(args):
             label = args[i + 1]
             i += 2
+        elif arg == '--sonar-measures' and i + 1 < len(args):
+            sonar_measures_path = args[i + 1]
+            i += 2
         else:
             positional.append(arg)
             i += 1
 
     if not positional:
-        print("Usage: coverage_summary.py <lcov.info> [repo_root] [--verbose] [--label NAME]")
+        print("Usage: coverage_summary.py <lcov.info> [repo_root] [--verbose] [--label NAME] [--sonar-measures PATH]")
         sys.exit(1)
 
     coverage_path = positional[0]
@@ -642,7 +697,8 @@ def main():
         sys.exit(0)
 
     try:
-        display(coverage_path, repo_root, verbose=verbose, label=label)
+        display(coverage_path, repo_root, verbose=verbose, label=label,
+                sonar_measures_path=sonar_measures_path)
     except (OSError, ValueError) as exc:
         print('  Failed to read coverage ({}): {}'.format(coverage_path, exc), file=sys.stderr)
         print('  Re-run with: make coverage-run')
