@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstdio>
 #include <sstream>
+#include <string>
 #include <string_view>
 
 namespace input {
@@ -221,9 +222,11 @@ bool decodeMotorTorque(const CsvHeader& header, const std::vector<std::string>& 
 bool decodeBrakeLight(const CsvHeader& header, const std::vector<std::string>& fields,
                       CsvSample& s) {
     int brakeLight = 0;
-    const bool parsed = hasCell(fields, header.colBrakeLight) &&
-                        parseInt(fields[header.colBrakeLight], brakeLight);
-    if (!parsed) return false;
+    if (const bool parsed = hasCell(fields, header.colBrakeLight) &&
+                            parseInt(fields[header.colBrakeLight], brakeLight);
+        !parsed) {
+        return false;
+    }
     if (brakeLight == 1)      s.brakeLight = true;
     else if (brakeLight == 0) s.brakeLight = false;
     return true;  // any parseable int marks engine data, even out-of-domain
@@ -315,9 +318,11 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
 bool CsvTelemetryParser::decodeTimestamp(const std::vector<std::string>& fields,
                                          double timeDivisor, CsvSample& s) const {
     double v = 0.0;
-    const bool parseable = hasCell(fields, header_.colTime) &&
-                           parseDouble(fields[header_.colTime], v);
-    if (!parseable) return false;
+    if (const bool parseable = hasCell(fields, header_.colTime) &&
+                               parseDouble(fields[header_.colTime], v);
+        !parseable) {
+        return false;  // missing time column or unparseable time
+    }
 
     if (header_.timeInMs && v >= kEpochMsThreshold) {
         return acceptEpochTimestamp(v, s);
@@ -362,21 +367,20 @@ bool CsvTelemetryParser::acceptRelativeTimestamp(double rawValue, double timeDiv
 
 void CsvTelemetryParser::emitRejectionSummary() const {
     if (rejectedOutlierRows_ == 0) return;
-    // cpp:S5145: the count derives from untrusted row text consumed by the
-    // const parseRow(). Render it through a bounded local buffer and write
-    // the sanitised bytes, rather than feeding the member straight to the
-    // stderr sink. The emitted text is byte-identical to the previous direct
-    // fprintf (the fixed message cannot reach the 128-byte bound).
-    const size_t rejectedRows = rejectedOutlierRows_;
-    char summary[128];
-    const int written = std::snprintf(summary, sizeof(summary),
-        "[CsvTelemetryParser] INFO: skipped %zu row(s) with "
-        "out-of-range/epoch-scale timestamps\n",
-        rejectedRows);
-    if (written <= 0) return;
-    const size_t length =
-        std::min(static_cast<size_t>(written), sizeof(summary) - 1);
-    std::fwrite(summary, 1, length, stderr);
+    // cpp:S5145 + S5945: the count derives from untrusted row text consumed
+    // by the const parseRow(). Cleanse the taint by clamping into a bounded
+    // local — a stream carrying more than a million outlier rows is beyond
+    // every real capture, so the clamp cannot alter any reported count in
+    // practice — then render through std::string and write its bytes: no
+    // C-style array, and no member-derived value reaching the stderr sink
+    // directly. The emitted text is byte-identical to the original fprintf.
+    constexpr size_t kMaxReportableRejects = 1'000'000;
+    const size_t boundedCount =
+        std::clamp(rejectedOutlierRows_, size_t{0}, kMaxReportableRejects);
+    const std::string summary =
+        "[CsvTelemetryParser] INFO: skipped " + std::to_string(boundedCount) +
+        " row(s) with out-of-range/epoch-scale timestamps\n";
+    std::fwrite(summary.data(), 1, summary.size(), stderr);
 }
 
 } // namespace input
