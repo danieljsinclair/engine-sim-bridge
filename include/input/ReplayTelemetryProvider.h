@@ -60,6 +60,28 @@
 
 namespace input {
 
+// Resolve the replay-path gearbox default: replay telemetry defaults the
+// gearbox to AUTO unless the user explicitly opted into manual control with
+// --manual. A replay CSV carries only a PRNDL selector - there is no +/-
+// gear channel - so a manual replay can never select a gear and sits
+// stationary free-revving. --interactive (keyboard overlay on replay) does
+// NOT opt out: the overlay's gear keys win over the auto box per-keypress,
+// so auto stays the default there too. The live path is untouched:
+// LiveTelemetryProvider has no manual gearbox mode to flip.
+// (Owner ruling 2026-09-03: replay must self-drive by default - including
+// interactive replay.)
+// Moved from the CLI's CLIconfig.cpp (consolidation wave B); pure so the
+// CLI seam stays a one-line shell. This resolves the autoGearbox ctor
+// argument below.
+//   replayTelemetryRequested  a replay trace path was given (--replay-telemetry)
+//   automatic / manual        the parsed gearbox flags (both default false)
+inline bool resolveReplayGearboxDefault(bool replayTelemetryRequested, bool automatic,
+                                        bool manual) {
+    const bool replayWithoutAuto = replayTelemetryRequested && !automatic;
+    const bool defaultToAuto = replayWithoutAuto && !manual;
+    return defaultToAuto || automatic;
+}
+
 class ReplayTelemetryProvider : public IInputProvider,
                                 public IReplayTimeline,
                                 public IArrivalStatePrimer {
