@@ -495,9 +495,9 @@ bool LiveTelemetryProvider::tryParseSourceSkipHint(std::string_view line) {
     char* end = nullptr;
     const double seconds = std::strtod(value.c_str(), &end);
     const std::string_view rest(end);
-    const auto* trailingJunk = std::find_if_not(rest.begin(), rest.end(),
-                                                [](unsigned char c) { return std::isspace(c) != 0; });
-    if (end == value.c_str() || trailingJunk != rest.end() || seconds < 0.0) {
+    if (const auto* trailingJunk = std::find_if_not(rest.begin(), rest.end(),
+                                                    [](unsigned char c) { return std::isspace(c) != 0; });
+        end == value.c_str() || trailingJunk != rest.end() || seconds < 0.0) {
         // Malformed hint: consume nothing further, treat as absent (the line
         // then fails header parsing; the retry loop steps past it and the run
         // degrades to the legacy local timecode rather than aborting).
@@ -623,8 +623,7 @@ void LiveTelemetryProvider::refillRowBuffer(double simElapsedS) {
         if (!std::getline(*stream_, line)) break;  // EOF / error: stop refilling
         if (isBlankLine(line)) continue;
         CsvSample sample;
-        std::string parseError;
-        if (!csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;  // malformed
+        if (std::string parseError; !csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;  // malformed
         if (isSampleBlank(sample)) continue;
         // Anchor the recording clock on the FIRST parsed row. With a source
         // skip hint the recording's TRUE t0 is that row's epoch minus the
@@ -665,8 +664,7 @@ bool LiveTelemetryProvider::tryReadNextRowLive() {
         if (!std::getline(*stream_, line)) break;  // EOF
         if (isBlankLine(line)) continue;
         CsvSample sample;
-        std::string parseError;
-        if (!csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;
+        if (std::string parseError; !csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;
         if (isSampleBlank(sample)) continue;
         // Anchor the recording clock on the first delivered row.
         if (streamAnchorTimeS_ < 0.0) {
