@@ -106,6 +106,30 @@ private:
     // 2001, far beyond any relative-trace duration, so it cleanly separates
     // epoch timestamps from relative ones.
     static constexpr double kEpochMsThreshold = 1e12;
+
+    // Relative timestamps (after division by timeDivisor) strictly above this
+    // many seconds are epoch-scale stragglers, not trace times — rejected as
+    // outliers. 1e7 s is far above any legitimate trace span (the longest
+    // captures are ~1000 s) and far below any epoch value, so it cleanly
+    // separates the two. The comparison is strict: exactly 1e7 s is accepted.
+    static constexpr double kOutlierSeconds = 1e7;
+
+    // --- Row pipeline phases (one responsibility each) ----------------------
+    // Phase 1 — timestamp gate. Decodes the time cell into s.timeS (and, for
+    // epoch rows, s.timeMs). The ONLY phase that can reject a row: false =
+    // missing time column, unparseable time, or a straggler above
+    // kOutlierSeconds.
+    bool decodeTimestamp(const std::vector<std::string>& fields, double timeDivisor,
+                         CsvSample& s) const;
+
+    // Epoch-scale accounting: anchor t=0 on the first kept epoch row, rebase
+    // this row against that anchor, and preserve the raw epoch ms in s.timeMs.
+    bool acceptEpochTimestamp(double rawMs, CsvSample& s) const;
+
+    // Relative-timestamp accounting: divide by timeDivisor, reject (and count)
+    // stragglers above kOutlierSeconds, otherwise store s.timeS.
+    bool acceptRelativeTimestamp(double rawValue, double timeDivisor,
+                                 CsvSample& s) const;
 };
 
 } // namespace input
