@@ -204,6 +204,113 @@ private:
     bool restartIfStalled(TwinOutput& output, double dt,
                           const input::UpstreamSignal& signal);
 
+    // ---- update() decomposition (cpp:S3776): one responsibility per phase ----
+    // update() is the ORCHESTRATOR only: validity gate -> ignition gate ->
+    // throttle derivation -> state dispatch -> common output epilogue. Every
+    // phase below owns exactly one decision, in the order the characterization
+    // net (VirtualIceTwinCharacterizationTest) pins. The RUNNING pipeline's
+    // intra-tick order is a pinned contract: gearbox (RAW signal speed +
+    // throttle) -> stall guard -> selector/shift transitions -> coupling
+    // compute -> creep-relief gate -> desired-pressure precedence -> relief
+    // apply -> rate limit -> pin chase -> torque injection.
+
+    // Gate 1 — telemetry validity. An invalid frame (isValid==false OR
+    // timestampUtcMs==0) PAUSES the twin: only output.gear is populated
+    // (clutch/selector surface the TwinOutput defaults), the state machine,
+    // the smoother and the crank timer all FREEZE, and only the timeout
+    // accumulator advances. TELEMETRY_TIMEOUT_S of consecutive invalid
+    // telemetry forces OFF. Returns the paused frame.
+    TwinOutput advanceInvalidTelemetry(double dt);
+
+    // Gate 2 — ignition off on a valid frame. Forces OFF the same frame with
+    // the TRACKED clutch pressure and the LIVE selector surfaced (contrast
+    // the invalid-telemetry path's defaults) and resets the crank budget to
+    // a fresh CRANK_FALLBACK_DURATION_S. Returns the ignition-off frame.
+    TwinOutput forceOffForIgnitionKill();
+
+    // OFF state: the OFF->CRANKING transition frame — one-tick starter edge,
+    // neutral gear, tracked clutch zeroed.
+    void enterCranking(TwinOutput& output);
+
+    // CRANKING state: crank timer, trace-aware crank throttle floor,
+    // FREE-only dyno load, and the catch (RPM strictly above the threshold,
+    // or the deterministic time fallback) into IDLE.
+    void stepCranking(double dt, const input::UpstreamSignal& signal,
+                      TwinOutput& output);
+
+    // IDLE state: idle-sustain throttle floor, PARK-start restart-on-stall,
+    // neutral gear, and the selector D/R engage into RUNNING.
+    void stepIdle(double dt, const input::UpstreamSignal& signal,
+                  TwinOutput& output);
+
+    // RUNNING state: the closed-loop drive pipeline in the pinned order
+    // above (each phase delegated to its own helper).
+    void stepRunning(double dt, const input::UpstreamSignal& signal,
+                     TwinOutput& output);
+
+    // SHIFTING state: gearbox twin context, shift execution, and the
+    // road-implied RPM surfacing. No pin and no torque injection surface on
+    // a SHIFTING frame (skip-first semantics — pinned).
+    void stepShifting(double dt, const input::UpstreamSignal& signal,
+                      TwinOutput& output);
+
+    // RUNNING phase 1 — gearbox update on the UPSTREAM COMMANDED road speed
+    // and the RAW signal throttle (NOT the smoothed value — pinned: the WOT
+    // band must hold 1st where the smoothed value would upshift).
+    void updateRunningGearbox(double dt, const input::UpstreamSignal& signal);
+
+    // RUNNING phase 2 — stall guard, else idle-hold floor: with the engine
+    // stalled the guard pulses the starter edge + cranking floor; alive but
+    // sagging, the idle-hold controller can only ADD throttle.
+    void applyRunningStallGuards(double dt,
+                                 const input::UpstreamSignal& signal,
+                                 TwinOutput& output);
+
+    // RUNNING phase 3 — selector-to-N/P beats a pending shift request
+    // (else-if: the selector WINS, pinned); otherwise a gearbox shift
+    // request enters SHIFTING.
+    void updateRunningTransitions();
+
+    // RUNNING phase 4 — the creep-drag relief GATE (common to every coupling
+    // path): true when the coupling pins the wheels AND the engine is
+    // lugging AND the vehicle is in the creep regime (or the slip band
+    // demands rescue).
+    bool creepReliefShouldFire(const input::UpstreamSignal& signal,
+                               double roadSpeedImpliedRpm) const;
+
+    // RUNNING phase 5 — desired-pressure precedence: TorqueConverter ->
+    // declarative model (modelOwnsPressure) -> legacy inline slip-lock +
+    // lock-override + launch. The TC branch clears creepReliefFired (the
+    // converter's fluid slip IS the standstill decouple).
+    double desiredClutchPressure(const input::UpstreamSignal& signal,
+                                 double roadSpeedImpliedRpm,
+                                 const twin::CouplingOutput& couplingOut,
+                                 TwinOutput& output);
+
+    // RUNNING phase 6 — apply a fired creep relief on every non-TC path:
+    // open the clutch (desired pressure -> 0) and raise the relief throttle
+    // floor.
+    void openClutchForCreepRelief(TwinOutput& output, double& desiredPressure);
+
+    // RUNNING phase 7 — advance the tracked clutch pressure toward the
+    // desired: TC mode sets it DIRECTLY (capacity scale, not a friction
+    // clutch); every other path is asymmetrically rate-limited (fast
+    // release, smooth engage).
+    void trackClutchPressure(double dt, double desiredPressure);
+
+    // RUNNING phase 8 — surface the coupling's outputs to the simulator:
+    // the (--pin-tau-ms-chased) vehicle-speed pin target and the MATCH-mode
+    // torque injection. FREE/PIN surface no-op defaults for the torque.
+    void surfaceCouplingTargets(double dt,
+                                const input::UpstreamSignal& signal,
+                                TwinOutput& output);
+
+    // True when the coupling model is the torque converter (fluid coupling):
+    // drives the TC branches above and the surfaced output label.
+    bool isTorqueConverterMode() const {
+        return couplingModelKind_ == twin::CouplingModelKind::TorqueConverter;
+    }
+
     void updateShiftExecution(double dt);
 };
 
