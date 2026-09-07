@@ -813,6 +813,7 @@ if(BUILD_BRIDGE_TESTS)
     # CSV telemetry parser tests - shared parser for replay + live providers
     add_executable(csv_telemetry_parser_tests
         test/input/CsvTelemetryParserTest.cpp
+        test/input/CsvTelemetryParserCharacterizationTest.cpp
     )
     target_include_directories(csv_telemetry_parser_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
