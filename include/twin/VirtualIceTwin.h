@@ -285,12 +285,13 @@ private:
     double desiredClutchPressure(const input::UpstreamSignal& signal,
                                  double roadSpeedImpliedRpm,
                                  const twin::CouplingOutput& couplingOut,
-                                 TwinOutput& output);
+                                 TwinOutput& output) const;
 
     // RUNNING phase 6 — apply a fired creep relief on every non-TC path:
     // open the clutch (desired pressure -> 0) and raise the relief throttle
     // floor.
-    void openClutchForCreepRelief(TwinOutput& output, double& desiredPressure);
+    void openClutchForCreepRelief(TwinOutput& output,
+                                  double& desiredPressure) const;
 
     // RUNNING phase 7 — advance the tracked clutch pressure toward the
     // desired: TC mode sets it DIRECTLY (capacity scale, not a friction
