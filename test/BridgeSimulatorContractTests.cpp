@@ -22,11 +22,14 @@
 #include "simulator/SineVehicle.h"
 #include "simulator/SineTransmission.h"
 #include "simulator/EngineSimTypes.h"
+#include "simulator/ScriptLoadHelpers.h"
 #include "simulation/EnginePhase.h"
 #include "common/PresetExceptions.h"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
@@ -35,7 +38,7 @@ namespace {
 
 // Build a fully-created BridgeSimulator around a SineSimulator (the established
 // light path). Returns nullptr-equivalent via ASSERT inside the helper caller.
-std::unique_ptr<BridgeSimulator> makeReadyBridgeSimulator() {
+std::unique_ptr<BridgeSimulator> makeReadyBridgeSimulatorWith(Transmission* transmission) {
     auto sineSim = std::make_unique<SineSimulator>();
     Simulator::Parameters simParams;
     simParams.systemType = Simulator::SystemType::NsvOptimized;
@@ -43,7 +46,7 @@ std::unique_ptr<BridgeSimulator> makeReadyBridgeSimulator() {
     sineSim->setSimulationFrequency(EngineSimDefaults::SIMULATION_FREQUENCY);
     sineSim->setFluidSimulationSteps(EngineSimDefaults::FLUID_SIMULATION_STEPS);
     sineSim->setTargetSynthesizerLatency(EngineSimDefaults::TARGET_SYNTH_LATENCY);
-    sineSim->loadSimulation(new SineEngine(), new SineVehicle(), new SineTransmission());
+    sineSim->loadSimulation(new SineEngine(), new SineVehicle(), transmission);
 
     auto bridge = std::make_unique<BridgeSimulator>(std::move(sineSim), "TestBridge");
     ISimulatorConfig config;
@@ -53,6 +56,10 @@ std::unique_ptr<BridgeSimulator> makeReadyBridgeSimulator() {
     config.targetSynthesizerLatency = EngineSimDefaults::TARGET_SYNTH_LATENCY;
     [[maybe_unused]] const bool created = bridge->create(config, nullptr, nullptr);
     return bridge;
+}
+
+std::unique_ptr<BridgeSimulator> makeReadyBridgeSimulator() {
+    return makeReadyBridgeSimulatorWith(new SineTransmission);
 }
 
 // Build a transition decision targeting a phase (isTransition=true by default).
@@ -389,5 +396,194 @@ TEST(BridgeSimulatorContractTest, SetSpeedTrackingTargetDynoRpmHonorsFloorAndSca
     ASSERT_TRUE(sim->setSpeedTrackingTarget(/*speedKmh*/ 120.0, /*rpmFloor*/ 0.0));
     const double highSpeedRpm = sim->getStats().dynoTargetRPM;
     EXPECT_GT(highSpeedRpm, lowSpeedRpm);   // 4x road speed -> higher target RPM
+}
+
+// ============================================================================
+// renderDrainedAudio: drain-only render contract (S886 refactor site).
+//
+// The method's documented contract: synthesize + drain ALREADY-PRODUCED audio
+// without advancing the core (the loop thread owns core advancement via
+// update()). The internal bounded drain loop re-renders until the request is
+// satisfied or the producer stalls (no new input and no buffered audio), then
+// zero-pads whatever remains. These tests pin the OBSERVABLE outcomes of that
+// loop through the public ISimulator API — a restructure of the loop must
+// keep all four: satisfied requests carry real audio, drained-out requests
+// carry silence, partial requests carry audio then a zero tail, and invalid
+// arguments fail fast.
+// ============================================================================
+
+// A FRESH simulator (no update() yet) has no synthesized audio: the drain must
+// stall immediately, report zero frames written, zero-fill the WHOLE buffer,
+// and still return true. This also pins drain-only-ness: unlike
+// renderOnDemand (which advances the core itself and so always produces — see
+// SineWaveRegressionTests), the drain path must NOT manufacture audio from a
+// never-advanced core.
+TEST(BridgeSimulatorContractTest, RenderDrainedAudioFreshSimulatorWritesZeroSilence) {
+    auto sim = makeReadyBridgeSimulator();
+    ASSERT_NE(sim, nullptr);
+
+    constexpr int32_t kFrames = 256;
+    std::vector<float> buffer(kFrames * 2, 1.0f);  // poison: non-zero start
+    int32_t written = -1;
+
+    EXPECT_TRUE(sim->renderDrainedAudio(buffer.data(), kFrames, &written));
+    EXPECT_EQ(written, 0);
+    for (float sample : buffer) {
+        EXPECT_FLOAT_EQ(sample, 0.0f);  // silence fill covers the full request
+    }
+}
+
+// After the core has advanced (production: update() on the loop thread), a
+// modest drain request must be SATISFIED in full — the drain loop re-renders
+// until the requested frames exist — and the audio is the real sine signal,
+// not silence.
+TEST(BridgeSimulatorContractTest, RenderDrainedAudioAfterUpdateSatisfiesRequest) {
+    auto sim = makeReadyBridgeSimulator();
+    ASSERT_NE(sim, nullptr);
+    for (int i = 0; i < 5; ++i) sim->update(0.05);  // 0.25s of core advance
+
+    constexpr int32_t kFrames = 256;
+    std::vector<float> buffer(kFrames * 2, 0.0f);
+    int32_t written = 0;
+
+    EXPECT_TRUE(sim->renderDrainedAudio(buffer.data(), kFrames, &written));
+    EXPECT_EQ(written, kFrames);  // full request satisfied
+
+    float peak = 0.0f;
+    for (int32_t i = 0; i < kFrames; ++i) {
+        peak = std::max(peak, std::fabs(buffer[i * 2]));  // left channel
+    }
+    EXPECT_GT(peak, 0.0f);  // real audio, not silence
+}
+
+// A request LARGER than what one limited core advance produced must drain the
+// available audio, then zero-pad the remainder (the producer-stall tail).
+// 0.01s of advance synthesizes well under the 4096-frame request, so the
+// bounded drain loop terminates via its stall break with a partial write.
+TEST(BridgeSimulatorContractTest, RenderDrainedAudioPartialProductionPadsSilenceTail) {
+    auto sim = makeReadyBridgeSimulator();
+    ASSERT_NE(sim, nullptr);
+    sim->update(0.01);  // ~441 output frames worth of input — far below request
+
+    constexpr int32_t kFrames = 4096;
+    std::vector<float> buffer(kFrames * 2, 1.0f);  // poison: non-zero start
+    int32_t written = -1;
+
+    EXPECT_TRUE(sim->renderDrainedAudio(buffer.data(), kFrames, &written));
+    EXPECT_GT(written, 0);            // some audio drained
+    EXPECT_LT(written, kFrames);      // ...but not the whole request
+
+    // The unwritten tail must be silence — the zero-pad contract.
+    for (int32_t i = written; i < kFrames; ++i) {
+        EXPECT_FLOAT_EQ(buffer[i * 2], 0.0f) << "left sample past written frames";
+        EXPECT_FLOAT_EQ(buffer[i * 2 + 1], 0.0f) << "right sample past written frames";
+    }
+}
+
+// Argument guards (fail-fast contract): a null buffer or a non-positive frame
+// count throws rather than returning a misleading result. Exception TYPE only
+// — the message text is not the contract.
+TEST(BridgeSimulatorContractTest, RenderDrainedAudioRejectsInvalidArguments) {
+    auto sim = makeReadyBridgeSimulator();
+    ASSERT_NE(sim, nullptr);
+
+    float scratch[8] = {};
+    int32_t written = 0;
+    EXPECT_THROW(sim->renderDrainedAudio(nullptr, 8, &written), SimulatorException);
+    EXPECT_THROW(sim->renderDrainedAudio(scratch, 0, &written), SimulatorException);
+    EXPECT_THROW(sim->renderDrainedAudio(scratch, -1, &written), SimulatorException);
+}
+
+// LATENT-HAZARD CHARACTERIZATION (deterministically reproducible; see the
+// report note on the S886 site): when the drain's first render is
+// free-space-capped it fills the audio ring to EXACTLY capacity, and the
+// upstream RingBuffer's blind-write semantics make writeIndex land on start
+// — size() then reports 0 (full is indistinguishable from empty). The drain
+// loop's stall-break therefore fires and the callback observes a silent
+// dropout even though the ring holds a full second of audio. This pins the
+// CURRENT observable behaviour of the loop in that state (true return,
+// zero written, silence fill) so a behaviour-preserving refactor keeps it
+// and any future fix of the ring ambiguity is flagged deliberately. The
+// production shape (SyncPull drains every ~16ms callback) never approaches
+// ring capacity, so the hazard is latent, not live.
+TEST(BridgeSimulatorContractTest, RenderDrainedAudioNearFullRingStallsToSilence) {
+    auto sim = makeReadyBridgeSimulator();
+    ASSERT_NE(sim, nullptr);
+
+    // Production-shaped chunked driving: small updates each followed by a
+    // small satisfied drain. The audio ring fills toward capacity (verified:
+    // ~41.5k of the 44.1k ring after 11 chunks) while the latency governor
+    // throttles new input to a surplus.
+    std::vector<float> scratch(256 * 2);
+    int32_t written = 0;
+    for (int chunk = 0; chunk < 11; ++chunk) {
+        for (int i = 0; i < 6; ++i) sim->update(1.0 / 60.0);
+        ASSERT_TRUE(sim->renderDrainedAudio(scratch.data(), 256, &written));
+        ASSERT_EQ(written, 256);
+    }
+    // Top up the staged input beyond the ring's remaining free space: the
+    // next render is free-space-capped to an exact fill (the ambiguity above).
+    for (int i = 0; i < 20; ++i) sim->update(1.0 / 60.0);
+
+    const int32_t frames = EngineSimDefaults::SAMPLE_RATE * 2;  // over-request
+    std::vector<float> buffer(frames * 2, 1.0f);  // poison: non-zero start
+    written = 0;
+    EXPECT_TRUE(sim->renderDrainedAudio(buffer.data(), frames, &written));
+    EXPECT_EQ(written, 0);  // exact-fill ambiguity reads as a producer stall
+    for (float sample : buffer) {
+        EXPECT_FLOAT_EQ(sample, 0.0f);  // full-request silence fill
+    }
+}
+
+// ============================================================================
+// setUseTorqueConverter: flag-follows-transmission-reality contract
+// (S5350 refactor site — the `trans` local at the read path).
+//
+// The method records the bridge flag by READING the transmission: enabling is
+// only honoured when the transmission actually carries a converter (installed
+// at factory wiring time); disabling flips the flag and must never REMOVE the
+// converter. Pinning both directions through the public usesTorqueConverter()
+// plus the getInternalSimulator() test seam, so a pointer-to-const change that
+// accidentally alters behaviour (or starts mutating the transmission) fails.
+// ============================================================================
+
+// Enabling on a transmission with NO converter is declined: the flag reports
+// the transmission's reality (false), not the request. The default sine
+// transmission carries no converter.
+TEST(BridgeSimulatorContractTest, SetUseTorqueConverterWithoutConverterStaysFalse) {
+    auto sim = makeReadyBridgeSimulator();
+    ASSERT_NE(sim, nullptr);
+
+    EXPECT_FALSE(sim->usesTorqueConverter());          // flag starts false
+    sim->setUseTorqueConverter(true);
+    EXPECT_FALSE(sim->usesTorqueConverter());          // no converter -> stays false
+    sim->setUseTorqueConverter(false);
+    EXPECT_FALSE(sim->usesTorqueConverter());
+}
+
+// Round trip on a converter-EQUIPPED transmission: the read path honours the
+// converter when enabling, keeps the converter installed when disabling (the
+// documented "only ever added, never removed"), and re-evaluates on re-enable.
+// The transmission is the factory's own ScriptLoadHelpers::createDefaultTransmission
+// (converter installed at initialize time — the documented-safe order), wired
+// through the same loadSimulation path production uses.
+TEST(BridgeSimulatorContractTest, SetUseTorqueConverterRoundTripOnConverterEquippedTransmission) {
+    auto sim = makeReadyBridgeSimulatorWith(
+        ScriptLoadHelpers::createDefaultTransmission(/*useTorqueConverter=*/true));
+    ASSERT_NE(sim, nullptr);
+    const Transmission* trans = sim->getInternalSimulator()->getTransmission();
+    ASSERT_NE(trans, nullptr);
+    ASSERT_TRUE(trans->hasTorqueConverter());  // precondition: converter installed
+
+    EXPECT_FALSE(sim->usesTorqueConverter());   // flag starts false even with a converter
+    sim->setUseTorqueConverter(true);
+    EXPECT_TRUE(sim->usesTorqueConverter());    // enable honours the converter's presence
+
+    sim->setUseTorqueConverter(false);
+    EXPECT_FALSE(sim->usesTorqueConverter());   // disable flips the flag only...
+    EXPECT_TRUE(trans->hasTorqueConverter());   // ...the converter stays installed
+
+    sim->setUseTorqueConverter(true);
+    EXPECT_TRUE(sim->usesTorqueConverter());    // re-enable re-evaluates to true
 }
 
