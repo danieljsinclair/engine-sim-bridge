@@ -584,7 +584,7 @@ bool VirtualIceTwin::creepReliefShouldFire(const input::UpstreamSignal& signal,
 double VirtualIceTwin::desiredClutchPressure(const input::UpstreamSignal& signal,
                                              double roadSpeedImpliedRpm,
                                              const twin::CouplingOutput& couplingOut,
-                                             TwinOutput& output) {
+                                             TwinOutput& output) const {
     // Pressure-model precedence (pinned): TorqueConverter -> declarative
     // model -> legacy inline path.
     if (isTorqueConverterMode()) {
@@ -648,22 +648,22 @@ double VirtualIceTwin::desiredClutchPressure(const input::UpstreamSignal& signal
     // Launch (torque converter): stall-gated launch pressure for the
     // modes whose sim speed is independent (Free/Torque). PIN never
     // launches — its vehicle-speed constraint drives the wheels.
-    const double launchPressure = coupling_->launchAssistAtStandstill()
-        ? computeLaunchPressure(
-            twin::LaunchPressureInput{engineRpmFeedback_,
-                                      roadSpeedImpliedRpm,
-                                      signal.throttleFraction,
-                                      profile_.idleRpm,
-                                      profile_.redlineRpm})
-        : twin::LAUNCH_PRESSURE_DEFER;
-    if (launchPressure != twin::LAUNCH_PRESSURE_DEFER) {
+    if (const double launchPressure = coupling_->launchAssistAtStandstill()
+            ? computeLaunchPressure(
+                twin::LaunchPressureInput{engineRpmFeedback_,
+                                          roadSpeedImpliedRpm,
+                                          signal.throttleFraction,
+                                          profile_.idleRpm,
+                                          profile_.redlineRpm})
+            : twin::LAUNCH_PRESSURE_DEFER;
+        launchPressure != twin::LAUNCH_PRESSURE_DEFER) {
         desiredPressure = launchPressure;
     }
     return desiredPressure;
 }
 
 void VirtualIceTwin::openClutchForCreepRelief(TwinOutput& output,
-                                              double& desiredPressure) {
+                                              double& desiredPressure) const {
     // Apply the creep-drag relief uniformly (every non-TC path). Opening
     // the clutch decouples the engine so it idles instead of lugging
     // against road-implied RPM; the relief-idle-sustain floor holds it
