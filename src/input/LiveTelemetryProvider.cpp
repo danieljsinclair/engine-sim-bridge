@@ -495,9 +495,9 @@ bool LiveTelemetryProvider::tryParseSourceSkipHint(std::string_view line) {
     char* end = nullptr;
     const double seconds = std::strtod(value.c_str(), &end);
     const std::string_view rest(end);
-    const auto* trailingJunk = std::find_if_not(rest.begin(), rest.end(),
-                                                [](unsigned char c) { return std::isspace(c) != 0; });
-    if (end == value.c_str() || trailingJunk != rest.end() || seconds < 0.0) {
+    if (const auto* trailingJunk = std::find_if_not(rest.begin(), rest.end(),
+                                                    [](unsigned char c) { return std::isspace(c) != 0; });
+        end == value.c_str() || trailingJunk != rest.end() || seconds < 0.0) {
         // Malformed hint: consume nothing further, treat as absent (the line
         // then fails header parsing; the retry loop steps past it and the run
         // degrades to the legacy local timecode rather than aborting).
@@ -564,6 +564,38 @@ double LiveTelemetryProvider::interpolatedSpeedKmh(double simElapsedS) const {
     return curSpeedLevelKmh_ + frac * (nextSpeedLevelKmh_ - curSpeedLevelKmh_);
 }
 
+namespace {
+
+// Loop-exit predicates for the row-staging loops below (refillRowBuffer,
+// tryReadNextRowLive). They carry those loops' exit tests so the tests live in
+// the loop condition instead of nested break statements (Sonar S924) — each
+// predicate is a pure test with a single purpose.
+
+// True when the buffered tail already reaches the read-ahead horizon: enough
+// rows are staged to find the next speed level, so refilling can stop.
+bool lookaheadSatisfied(const std::deque<CsvSample>& rows, double baselineTimeS,
+                        double simElapsedS, double lookaheadS) {
+    return !rows.empty() && (rows.back().timeS - baselineTimeS) > simElapsedS + lookaheadS;
+}
+
+// True when the stream may be read without parking the loop thread: no probe
+// injected (a blocking read is acceptable) or the probe reports data waiting.
+//
+// Live-pipe guard: a std::getline on an empty pipe PARKS this (loop) thread
+// until the writer emits the next row. While parked the loop stops stepping
+// the engine, the synthesizer input stops, and the audio ring drains —
+// surfacing as short reads and single-sample waveform steps at device-buffer
+// boundaries (the audible thump/knock in sync-pull mode). With a readiness
+// probe injected we only read when a row is already waiting; otherwise the
+// loops return short and let the sim continue on wall clock with the telemetry
+// it holds. Pipes deliver whole rows atomically (< PIPE_BUF), so "any bytes
+// ready" implies a complete getline without blocking.
+bool streamReadyToRead(const std::function<bool()>& probe) {
+    return !probe || probe();
+}
+
+}  // namespace
+
 // Buffered, timestamp-paced consumption (unifies the former live/paced paths).
 // The CSV stream is forward-only and getline is destructive, so upcoming rows are
 // staged in rowBuffer_ rather than consumed-and-lost. Each call:
@@ -581,30 +613,17 @@ double LiveTelemetryProvider::interpolatedSpeedKmh(double simElapsedS) const {
 void LiveTelemetryProvider::refillRowBuffer(double simElapsedS) {
     constexpr double kLevelLookaheadS = 0.30;  // read-ahead horizon to find the next speed level
     const double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
-    while (true) {
-        if (!rowBuffer_.empty() &&
-            (rowBuffer_.back().timeS - baselineTimeS_) > simElapsedS + kLevelLookaheadS) {
-            break;
-        }
-        // Live-pipe guard: a std::getline on an empty pipe PARKS this (loop)
-        // thread until the writer emits the next row. While parked the loop
-        // stops stepping the engine, the synthesizer input stops, and the
-        // audio ring drains — surfacing as short reads and single-sample
-        // waveform steps at device-buffer boundaries (the audible
-        // thump/knock in sync-pull mode). With a readiness probe injected we
-        // only read when a row is already waiting; otherwise return short and
-        // let the sim continue on wall clock with the telemetry it holds.
-        // Pipes deliver whole rows atomically (< PIPE_BUF), so "any bytes
-        // ready" implies a complete getline without blocking.
-        if (streamDataReady_ && !streamDataReady_()) {
-            break;
-        }
+    // Exit tests live in the loop condition (S924: no nested breaks): refill
+    // while the tail is short of the lookahead horizon and the stream is ready
+    // to read (see streamReadyToRead). Short-circuit && preserves the original
+    // exit order — horizon first, probe second, getline last.
+    while (!lookaheadSatisfied(rowBuffer_, baselineTimeS_, simElapsedS, kLevelLookaheadS) &&
+           streamReadyToRead(streamDataReady_)) {
         std::string line;
         if (!std::getline(*stream_, line)) break;  // EOF / error: stop refilling
         if (isBlankLine(line)) continue;
         CsvSample sample;
-        std::string parseError;
-        if (!csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;  // malformed
+        if (std::string parseError; !csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;  // malformed
         if (isSampleBlank(sample)) continue;
         // Anchor the recording clock on the FIRST parsed row. With a source
         // skip hint the recording's TRUE t0 is that row's epoch minus the
@@ -637,16 +656,15 @@ bool LiveTelemetryProvider::tryReadNextRowLive() {
     CsvSample latest{};
     bool haveLatest = false;
     const double timeDivisor = csvParser_.header().timeInMs ? 1000.0 : 1.0;
-    while (true) {
-        // Respect the non-blocking readiness probe: don't park on a lagging
-        // writer. If a row is ready, take it; otherwise surface what we have.
-        if (streamDataReady_ && !streamDataReady_()) break;
+    // Respect the non-blocking readiness probe: don't park on a lagging
+    // writer. The not-ready exit is the loop condition (S924: no nested
+    // break) — if a row is ready, take it; otherwise surface what we have.
+    while (streamReadyToRead(streamDataReady_)) {
         std::string line;
         if (!std::getline(*stream_, line)) break;  // EOF
         if (isBlankLine(line)) continue;
         CsvSample sample;
-        std::string parseError;
-        if (!csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;
+        if (std::string parseError; !csvParser_.parseRow(line, timeDivisor, sample, parseError)) continue;
         if (isSampleBlank(sample)) continue;
         // Anchor the recording clock on the first delivered row.
         if (streamAnchorTimeS_ < 0.0) {
