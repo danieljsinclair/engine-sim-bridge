@@ -59,7 +59,7 @@ public:
     std::string getModeString() const override;
 
     // Direct diagnostics access (for internal use and testing)
-    const Diagnostics& diagnostics() const { return diagnostics_; }
+    const Diagnostics& diagnostics() const override { return diagnostics_; }
 
 private:
     // Logger: always non-null (defaults to ConsoleLogger if not injected)

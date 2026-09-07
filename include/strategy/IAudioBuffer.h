@@ -16,6 +16,7 @@
 
 #include "hardware/AudioTypes.h"
 #include "common/ILogging.h"
+#include "strategy/Diagnostics.h"
 
 class ISimulator;
 
@@ -97,6 +98,12 @@ public:
     virtual void reset() = 0;
 
     virtual void updateSimulation(ISimulator* simulator, double deltaTimeMs) = 0;
+
+    /**
+     * Access strategy diagnostics (render timing, budget usage).
+     * The strategy owns this data — it is the source of truth that gets pushed to telemetry.
+     */
+    virtual const Diagnostics& diagnostics() const = 0;
 };
 
 /**

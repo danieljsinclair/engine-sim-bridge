@@ -38,7 +38,9 @@ struct Diagnostics {
         , lastHeadroomMs(0.0)
         , lastBudgetPct(0.0)
         , lastFrameBudgetPct(0.0)
+        , lastBreachedBudget(false)
         , totalFramesRendered(0)
+        , breachCount(0)
         , lastFramesRequested(0)
         , lastFramesRendered(0)
         , sampleRate_(0)
@@ -80,11 +82,25 @@ struct Diagnostics {
     std::atomic<double> lastFrameBudgetPct;
 
     /**
+     * Whether the last render exceeded its time budget
+     * - Set by recordRender() when headroom < 0
+     * - Read by audio callback to trigger breach recovery
+     */
+    std::atomic<bool> lastBreachedBudget;
+
+    /**
      * Total number of frames rendered
      * - Monitored for throughput calculation
      * - Reset on re-initialization
      */
     std::atomic<int64_t> totalFramesRendered;
+
+    /**
+     * Cumulative budget breach counter
+     * - Incremented by recordRender() when headroom < 0
+     * - Used for periodic breach logging
+     */
+    std::atomic<int64_t> breachCount;
 
     std::atomic<int> lastFramesRequested{0};
     std::atomic<int> lastFramesRendered{0};
@@ -121,7 +137,12 @@ struct Diagnostics {
 
         // Calculate budget from actual callback interval, not hardcoded 16ms
         double budgetMs = callbackIntervalMs(framesRequested);
-        lastHeadroomMs.store(budgetMs - renderTimeMs);
+        double headroom = budgetMs - renderTimeMs;
+        lastHeadroomMs.store(headroom);
+
+        bool breached = headroom < 0.0;
+        lastBreachedBudget.store(breached);
+        if (breached) breachCount.fetch_add(1);
 
         double budgetPct = (budgetMs > 0.0) ? (renderTimeMs / budgetMs) * 100.0 : 0.0;
         lastBudgetPct.store(budgetPct);
@@ -169,7 +190,9 @@ struct Diagnostics {
         lastHeadroomMs.store(0.0);
         lastBudgetPct.store(0.0);
         lastFrameBudgetPct.store(0.0);
+        lastBreachedBudget.store(false);
         totalFramesRendered.store(0);
+        breachCount.store(0);
         lastFramesRequested.store(0);
         lastFramesRendered.store(0);
         callbackCount_.store(0);

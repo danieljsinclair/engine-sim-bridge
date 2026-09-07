@@ -3,8 +3,9 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include <cstring>
-#include <cmath>
+
+#include "audio/EngineSimAudio.h"
+#include "audio/SpeakerProtection.h"
 
 class ILogging;
 class Simulator;
@@ -60,17 +61,6 @@ namespace EngineSimDefaults {
 
 // ISimulatorConfig — Configuration for ISimulator implementations
 // Inline initializers from EngineSimDefaults (single source of truth)
-//
-// Field ownership:
-// - sampleRate: CROSS-CUTTING value shared across ISimulator, IAudioBuffer, and IAudioHardwareProvider
-//   - ISimulator: computes dt = frames / sampleRate for renderOnDemand()
-//   - IAudioBuffer: receives sampleRate as parameter to initialize()
-//   - IAudioHardwareProvider: receives sampleRate via AudioStreamFormat for hardware configuration
-//   - Canonical source is ISimulatorConfig.sampleRate (set from EngineSimDefaults::SAMPLE_RATE)
-// - simulationFrequency, fluidSimulationSteps, synthLatency: ISimulator-only (factory sets on Simulator subclass)
-// - maxChunkFrames, volume, convolutionLevel: ISimulator-only (runtime use by BridgeSimulator)
-//
-// Note: volume and convolutionLevel are runtime-tunable defaults, not constants
 struct ISimulatorConfig {
     int32_t sampleRate = EngineSimDefaults::SAMPLE_RATE;
     int32_t simulationFrequency = EngineSimDefaults::SIMULATION_FREQUENCY;
@@ -81,6 +71,8 @@ struct ISimulatorConfig {
     float convolutionLevel = 0.5f; // Runtime-tunable default
     bool speakerProtection = true;           // On by default
     float speakerProtectionDrive = 1.0f;     // Tanh drive (1.0 = transparent below 0.7)
+    bool breachRecovery = true;              // On by default
+    bool trendHold = true;                   // On by default
 };
 
 // Runtime statistics
@@ -92,118 +84,6 @@ struct EngineSimStats {
     int32_t activeChannels = 0;
     double processingTimeMs = 0.0;
 };
-
-namespace EngineSimAudio {
-    constexpr int STEREO = 2;
-
-// Converts mono int16 samples to stereo float32 (interleaved) - balanced channels
-inline void convertInt16ToStereoFloat(
-        const int16_t* input,
-        int32_t frameCount,
-        float* output,
-        float volume,
-        float convolutionLevel) {
-    constexpr float scale = 1.0f / 32768.0f;  // int16_t range [-32768, 32767] normalized to [-1.0, 1.0]
-    for (int32_t i = 0; i < frameCount; ++i) {
-        const float sample = static_cast<float>(input[i]) * scale;
-        // Interleaved stereo layout: [L, R, L, R, ...]
-        output[i * STEREO] = sample * volume;           // Left channel
-        output[i * STEREO + 1] = sample * convolutionLevel;  // Right channel
-    }
-}
-
-// Converts mono int16 samples to stereo float32 with clipping protection
-inline void convertInt16ToStereoFloatClipped(const int16_t* input, float* output, int32_t frameCount) {
-    constexpr float scale = 1.0f / 32768.0f;  // int16_t range [-32768, 32767] normalized to [-1.0, 1.0]
-    for (int32_t i = 0; i < frameCount; ++i) {
-        float sample = static_cast<float>(input[i]) * scale;
-        // Clamp to valid float audio range [-1.0, 1.0]
-        if (sample > 1.0f) sample = 1.0f;
-        if (sample < -1.0f) sample = -1.0f;
-        // Interleaved stereo layout: [L, R, L, R, ...]
-        output[i * STEREO] = sample;      // Left channel
-        output[i * STEREO + 1] = sample;  // Right channel
-    }
-}
-
-// Fills a stereo float buffer with silence (zeros)
-inline void fillSilence(float* buffer, int32_t frames) {
-    // STEREO channels per frame, sizeof(float) bytes per sample
-    std::memset(buffer, 0, frames * STEREO * sizeof(float));
-}
-
-} // namespace EngineSimAudio
-
-namespace SpeakerProtection {
-    // Padé [5/4] approximant coefficients for tanh(x)
-    // Numerator: x * (x⁴ + N_x2·x² + N_c)  where N_x2=105, N_c=945
-    // Denominator:        (D_x4·x⁴ + D_x2·x² + D_c)  where D_x4=15, D_x2=420, D_c=945
-    // Max error < 0.5% for |x| <= 3.0. Uses only +,-,*,/ (hardware FPU on ESP32-S3).
-    constexpr float PADE_NUM_X2 = 105.0f;
-    constexpr float PADE_NUM_C  = 945.0f;
-    constexpr float PADE_DEN_X4 = 15.0f;
-    constexpr float PADE_DEN_X2 = 420.0f;
-    constexpr float PADE_DEN_C  = 945.0f;
-
-    inline float fastTanh(float x) {
-        float x2 = x * x;
-        float x4 = x2 * x2;
-        float result = x * (x4 + PADE_NUM_X2 * x2 + PADE_NUM_C)
-                              / (PADE_DEN_X4 * x4 + PADE_DEN_X2 * x2 + PADE_DEN_C);
-        if (result > 1.0f) return 1.0f;
-        if (result < -1.0f) return -1.0f;
-        return result;
-    }
-
-    // Soft-clip a single sample via tanh waveshaping
-    inline float softClip(float sample, float drive) {
-        return fastTanh(sample * drive);
-    }
-
-    // Scan buffer for peak absolute value
-    inline float peakAbs(const float* buffer, size_t totalSamples) {
-        float peak = 0.0f;
-        for (size_t i = 0; i < totalSamples; ++i) {
-            float absSample = std::fabs(buffer[i]);
-            if (absSample > peak) peak = absSample;
-        }
-        return peak;
-    }
-
-    // Scale buffer down if peak exceeds threshold. Returns applied gain.
-    inline float applyPeakLimiter(float* buffer, size_t totalSamples, float threshold) {
-        if (totalSamples == 0) {
-            return 1.0f;
-        }
-
-        float peak = peakAbs(buffer, totalSamples);
-
-        // If peak exceeds threshold, scale entire buffer
-        if (peak > threshold) {
-            float gain = threshold / peak;
-            for (size_t i = 0; i < totalSamples; ++i) {
-                buffer[i] *= gain;
-            }
-            return gain;
-        }
-
-        return 1.0f;
-    }
-
-    // Full pipeline: soft-clip each sample, then peak-limit the buffer
-    inline void protectBuffer(float* buffer, int frameCount, int channelCount,
-                              float drive = 1.0f, float threshold = 0.95f) {
-        size_t totalSamples = static_cast<size_t>(frameCount) * static_cast<size_t>(channelCount);
-
-        // Apply soft clipping to each sample
-        for (size_t i = 0; i < totalSamples; ++i) {
-            buffer[i] = softClip(buffer[i], drive);
-        }
-
-        // Apply peak limiting to the entire buffer
-        applyPeakLimiter(buffer, totalSamples, threshold);
-    }
-} // namespace SpeakerProtection
 
 inline const char* EngineSimGetVersion() {
     return "1.0.0";

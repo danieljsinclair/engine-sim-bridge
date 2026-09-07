@@ -184,8 +184,32 @@ bool SyncPullStrategy::render(AudioBufferView& buffer) {
 
     // Fill remaining buffer with silence on partial render to prevent crackles
     if (framesRendered < framesToGenerate) {
+        int fillFrames = framesToGenerate - framesRendered;
         float* remaining = dst + (framesRendered * 2);
-        EngineSimAudio::fillSilence(remaining, framesToGenerate - framesRendered);
+
+        // Fade to silence over the first few samples to avoid a discontinuity
+        // from the last rendered sample value (~0.45) to 0.0
+        constexpr int FADE_FRAMES = 8;
+        int fadeLen = std::min(FADE_FRAMES, fillFrames);
+
+        // Capture last rendered L/R values for the fade start point
+        float lastL = (framesRendered > 0) ? dst[(framesRendered - 1) * 2]     : 0.0f;
+        float lastR = (framesRendered > 0) ? dst[(framesRendered - 1) * 2 + 1] : 0.0f;
+
+        for (int i = 0; i < fadeLen; ++i) {
+            float gain = 1.0f - static_cast<float>(i + 1) / static_cast<float>(fadeLen);
+            remaining[i * 2]     = lastL * gain;
+            remaining[i * 2 + 1] = lastR * gain;
+        }
+
+        // Fill any remaining frames after the fade with true silence
+        if (fillFrames > fadeLen) {
+            EngineSimAudio::fillSilence(remaining + fadeLen * 2, fillFrames - fadeLen);
+        }
+
+        logger_->warning(LogMask::AUDIO,
+            "Partial render: %d/%d frames, faded silence for %d frames (last=%.4f -> 0.0)",
+            framesRendered, framesToGenerate, fillFrames, lastL);
     }
 
     auto callbackEnd = std::chrono::high_resolution_clock::now();

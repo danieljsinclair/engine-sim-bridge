@@ -17,6 +17,7 @@
 #include "common/Verification.h"
 
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 #include <thread>
 #include <chrono>
@@ -142,42 +143,141 @@ struct LoopTimer {
     }
 };
 
-// Named audio render callback -- bridges AudioBufferView to strategy->render()
-int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer,
-                        bool enableProtection, float drive,
-                        ILogging* logger) {
-    if (!strategy->isPlaying()) {
-        float* dst = buffer.asFloat();
-        if (dst) {
-            size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
-            std::memset(dst, 0, totalSamples * sizeof(float));
-        }
-        return 0;
-    }
+// ============================================================================
+// Audio render callback — extracted concerns (SRP)
+// ============================================================================
 
-    strategy->render(buffer);
+void applySpeakerProtection(AudioBufferView& buffer, float drive, ILogging* logger) {
+    float* dst = buffer.asFloat();
 
-    // Apply speaker protection if enabled
-    if (enableProtection) {
-        float* dst = buffer.asFloat();
-        if (dst) {
-            const size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
+    const size_t totalSamples = static_cast<size_t>(buffer.frameCount) * buffer.channelCount;
 
-            float peakBefore = SpeakerProtection::peakAbs(dst, totalSamples);
-            SpeakerProtection::protectBuffer(dst, buffer.frameCount, buffer.channelCount, drive);
-            float peakAfter = SpeakerProtection::peakAbs(dst, totalSamples);
+    float peakBefore = SpeakerProtection::peakAbs(dst, totalSamples);
+    SpeakerProtection::protectBuffer(dst, buffer.frameCount, buffer.channelCount, drive);
+    float peakAfter = SpeakerProtection::peakAbs(dst, totalSamples);
 
-            // Log periodically (~once per second at 60Hz callback rate)
-            static int callbackCount = 0;
-            callbackCount++;
-            if (callbackCount % 60 == 0) {
+        {
+            static int count = 0;
+            if (++count % 60 == 0) {
                 float reductionDb = (peakAfter > 0.0001f) ? 20.0f * std::log10(peakAfter / std::max(peakBefore, 0.0001f)) : 0.0f;
                 logger->info(LogMask::DIAGNOSTICS, "Speaker protection: peak %.3f -> %.3f (%.1f dB)", peakBefore, peakAfter, reductionDb);
             }
+    }
+}
+
+void logBudgetBreaches(const Diagnostics& diagnostics, ILogging* logger) {
+    int64_t totalBreaches = diagnostics.breachCount.load();
+    if (totalBreaches % 10 == 0) {
+        double renderMs = diagnostics.lastRenderMs.load();
+        double budgetMs = renderMs + diagnostics.lastHeadroomMs.load();
+        logger->info(LogMask::DIAGNOSTICS, "Budget breach: %.1fms render > %.1fms budget (%lld total)", renderMs, budgetMs, totalBreaches);
+    }
+}
+
+// Sample discontinuity diagnostics — measures audio content quality
+// Captures max sample-to-sample delta (discontinuity) and inter-callback continuity
+struct SampleDiagnostics {
+    static constexpr float DISCONTINUITY_THRESHOLD = 0.15f;
+    static constexpr int MAX_CHANNELS = 2;
+    float lastSamples[MAX_CHANNELS] = {};
+    int callbackCount = 0;
+
+    const float* previousSamples() const { return lastSamples; }
+
+    void measure(const float* buffer, int frameCount, int channelCount, ILogging* logger) {
+        int totalSamples = frameCount * channelCount;
+
+        float interDelta = std::fabs(buffer[0] - lastSamples[0]);
+
+        float maxDelta = 0.0f;
+        int maxDeltaIdx = 0;
+        float prev = lastSamples[0];
+        for (int i = 0; i < totalSamples; ++i) {
+            float delta = std::fabs(buffer[i] - prev);
+            if (delta > maxDelta) {
+                maxDelta = delta;
+                maxDeltaIdx = i;
+            }
+            prev = buffer[i];
+        }
+
+        float peak = SpeakerProtection::peakAbs(buffer, totalSamples);
+        for (int ch = 0; ch < std::min(channelCount, MAX_CHANNELS); ++ch) {
+            lastSamples[ch] = buffer[(frameCount - 1) * channelCount + ch];
+        }
+        callbackCount++;
+
+        bool anomaly = maxDelta >= DISCONTINUITY_THRESHOLD;
+        if (callbackCount % 60 == 0 || anomaly) {
+            logger->info(LogMask::DIAGNOSTICS,
+                "Audio content: peak=%.4f maxDelta=%.4f@%d interDelta=%.4f first=%.4f last=%.4f%s",
+                peak, maxDelta, maxDeltaIdx, interDelta,
+                buffer[0], buffer[totalSamples - 1],
+                anomaly ? " ** DISCONTINUITY **" : "");
         }
     }
+};
 
-    return 0;
+// Audio render callback — orchestrates extracted concerns
+int audioRenderCallback(IAudioBuffer* strategy, AudioBufferView& buffer,
+                        bool enableProtection, float drive,
+                        bool enableBreachRecovery,
+                        bool enableTrendHold,
+                        SpeakerProtection::BreachRecoveryState* breachState,
+                        SpeakerProtection::TrendHoldState* trendState,
+                        SampleDiagnostics* sampleDiag,
+                        ILogging* logger) {
+    int result = 0;
+
+    if (strategy->isPlaying()) {
+        float* dst = buffer.asFloat();
+
+        {
+            // Capture previous render's headroom before this render overwrites diagnostics
+            double previousHeadroomMs = strategy->diagnostics().lastHeadroomMs.load();
+
+            strategy->render(buffer);
+
+            // Save tail for breach cross-fade (after every render)
+            if (enableBreachRecovery) {
+                breachState->saveTail(dst, buffer.frameCount, buffer.channelCount);
+            }
+
+            // Breach recovery: cross-fade from held tail on budget breach
+            // Log every breach event with actual sample values for evidence
+            if (enableBreachRecovery && previousHeadroomMs < SpeakerProtection::BREACH_SMOOTH_THRESHOLD_MS) {
+                float heldFirst = breachState->heldTail[0];
+                float heldLast = breachState->heldTail[SpeakerProtection::BREACH_XFADE_SAMPLES * 2 - 1];
+                float newFirst = dst[0];
+                float newLast = dst[buffer.frameCount * buffer.channelCount - 1];
+                logger->info(LogMask::DIAGNOSTICS,
+                    "BREACH RECOVERY: prev=%.2fms held=[%.4f..%.4f] new=[%.4f..%.4f] delta=%.4f",
+                    previousHeadroomMs, heldFirst, heldLast, newFirst, newLast,
+                    std::fabs(newFirst - heldLast));
+                bool applied = breachState->applyCrossfade(dst, buffer.frameCount, buffer.channelCount, previousHeadroomMs);
+                if (applied) {
+                    logger->info(LogMask::DIAGNOSTICS,
+                        "BREACH RECOVERY: cross-fade applied, after=[%.4f,%.4f,%.4f]",
+                        dst[0], dst[2], dst[4]);
+                }
+            }
+        }
+
+        // Content-based discontinuity smoothing — detects sharp sample-to-sample
+        // deltas and replaces them with linear ramps. Catches crackles from any source.
+        SpeakerProtection::smoothDiscontinuities(dst, buffer.frameCount, buffer.channelCount,
+                                                  0.3f, 24, sampleDiag->previousSamples());
+
+        // Speaker protection: soft-clip + peak limiting
+        if (enableProtection) {
+            applySpeakerProtection(buffer, drive, logger);
+        }
+
+        // Measure audio content quality — what the DAC actually receives
+        sampleDiag->measure(dst, buffer.frameCount, buffer.channelCount, logger);
+    }
+
+    return result;
 }
 
 // Create and initialize the audio hardware provider. Throws on failure.
@@ -361,6 +461,7 @@ int runSimulation(
     telemetry::ITelemetryReader* telemetryReader,
     ILogging* logger)
 {
+    ASSERT(logger, "logger must be provided");
     ASSERT(audioBuffer, "audioBuffer must be provided");
     ASSERT(config.engineConfig.sampleRate > 0, "config.sampleRate must be set");
     ASSERT(config.updateInterval() > 0.0, "config.updateInterval must be set");
@@ -379,10 +480,19 @@ int runSimulation(
     }
 
     // Create and initialize audio hardware provider (throws on failure)
-    auto callback = [audioBuffer, config, logger](AudioBufferView& buffer) -> int {
+    auto breachState = std::make_shared<SpeakerProtection::BreachRecoveryState>();
+    auto trendState = std::make_shared<SpeakerProtection::TrendHoldState>();
+    auto sampleDiag = std::make_shared<SampleDiagnostics>();
+
+    auto callback = [audioBuffer, config, logger, breachState, trendState, sampleDiag](AudioBufferView& buffer) -> int {
         return audioRenderCallback(audioBuffer, buffer,
                                    config.engineConfig.speakerProtection,
                                    config.engineConfig.speakerProtectionDrive,
+                                   config.engineConfig.breachRecovery,
+                                   config.engineConfig.trendHold,
+                                   breachState.get(),
+                                   trendState.get(),
+                                   sampleDiag.get(),
                                    logger);
     };
 
