@@ -354,6 +354,7 @@ SONAR_LIVE := $(BUILD_COV_DIR)/sonar-live.json
 sonar-summary:
 	@echo ""
 	@echo "=== [engine-sim-bridge] BEGIN: SonarCloud issues summary ==="
+	@mkdir -p $(BUILD_COV_DIR)
 	@TOKEN="$${SONAR_TOKEN_ES:-$${SONAR_TOKEN}}"; \
 	if [ -z "$$TOKEN" ]; then echo "  No token"; exit 0; fi; \
 	curl -s -u "$$TOKEN:" "https://sonarcloud.io/api/issues/search?componentKeys=danieljsinclair_engine-sim-bridge&ps=500&statuses=OPEN&facets=impactSeverities" > $(SONAR_LIVE) 2>/dev/null || true; \
