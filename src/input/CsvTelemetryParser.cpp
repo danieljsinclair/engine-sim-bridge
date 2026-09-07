@@ -127,6 +127,137 @@ bool isRawCanCapture(const std::vector<std::string>& fields) {
     return hasCanId && hasDataHex;
 }
 
+// True when `column` names a cell actually present in this row. Rows may be
+// short (missing trailing columns keep their defaults) or long (extra
+// trailing columns are ignored).
+bool hasCell(const std::vector<std::string>& fields, int column) {
+    return column >= 0 && column < static_cast<int>(fields.size());
+}
+
+// ---------------------------------------------------------------------------
+// Engine-data field decoders
+//
+// One function per CSV column. Each returns true when it consumed a non-empty
+// parseable cell — that marks the row as an operating point (engine data). A
+// blank, missing, or unparseable cell leaves the sample's default untouched
+// and never rejects the row: the timestamp is the only row-level gate.
+//
+// The asymmetries between decoders are deliberate (pinned by the
+// characterization net) — do NOT "normalise" them:
+//   throttle/road/motor-torque: plain parse (road may be negative: reverse)
+//   clutch: rejects negatives (v >= 0) instead of clamping like throttle
+//   brake light: any parseable int marks engine data; only 0/1 assign a value
+//   gear selector: any non-empty trimmed string, no PRNDL validation
+//   steering: display-only — decodes but never marks engine data
+// ---------------------------------------------------------------------------
+
+bool decodeThrottle(const CsvHeader& header, const std::vector<std::string>& fields,
+                    CsvSample& s) {
+    double v = 0.0;
+    const bool parsed = hasCell(fields, header.colThrottle) &&
+                        parseDouble(fields[header.colThrottle], v);
+    if (parsed) s.throttle = std::clamp(v / 100.0, 0.0, 1.0);
+    return parsed;
+}
+
+bool decodeRoadSpeed(const CsvHeader& header, const std::vector<std::string>& fields,
+                     CsvSample& s) {
+    double v = 0.0;
+    const bool parsed = hasCell(fields, header.colRoad) &&
+                        parseDouble(fields[header.colRoad], v);
+    // Accept negative road speeds: reverse driving is a real state in the CSV
+    // schema (em-dinner.csv carries 'R' rows at -3.2 km/h). The old guard
+    // `v >= 0.0` silently dropped negatives to the -2.0 sentinel, which hid
+    // genuine reverse from downstream coercion and let standstill 'R' rows
+    // leak through as REVERSE (RAR). A blank/unparseable road column still
+    // leaves the -2.0 "not commanded" sentinel intact.
+    if (parsed) s.roadSpeedKmh = v;
+    return parsed;
+}
+
+bool decodeGear(const CsvHeader& header, const std::vector<std::string>& fields,
+                CsvSample& s) {
+    int gear = 0;
+    const bool parsed = hasCell(fields, header.colGear) &&
+                        parseInt(fields[header.colGear], gear);
+    if (parsed) s.gear = gear;
+    return parsed;
+}
+
+bool decodeGearSelector(const CsvHeader& header, const std::vector<std::string>& fields,
+                        CsvSample& s) {
+    if (!hasCell(fields, header.colGearSelector)) return false;
+    // Free-text PRNDL cell: any non-empty trimmed string is stored verbatim
+    // (no validation here); a whitespace-only cell counts as absent.
+    const std::string selector = trim(fields[header.colGearSelector]);
+    const bool present = !selector.empty();
+    if (present) s.gearSelector = selector;
+    return present;
+}
+
+bool decodeClutch(const CsvHeader& header, const std::vector<std::string>& fields,
+                  CsvSample& s) {
+    double v = 0.0;
+    // The anti-throttle: a negative value fails the v >= 0.0 guard and keeps
+    // the -1 "unchanged" sentinel rather than clamping to 0.0.
+    const bool parsed = hasCell(fields, header.colClutch) &&
+                        parseDouble(fields[header.colClutch], v) && v >= 0.0;
+    if (parsed) s.clutchPct = std::clamp(v / 100.0, 0.0, 1.0);
+    return parsed;
+}
+
+bool decodeMotorTorque(const CsvHeader& header, const std::vector<std::string>& fields,
+                       CsvSample& s) {
+    double v = 0.0;
+    const bool parsed = hasCell(fields, header.colMotorTorque) &&
+                        parseDouble(fields[header.colMotorTorque], v);
+    if (parsed) s.motorTorqueNm = v;
+    return parsed;
+}
+
+// brake_light: a binary column. "1" = on, "0" = off; blank/unparseable/
+// out-of-domain values leave the field absent (nullopt) — never a guess.
+bool decodeBrakeLight(const CsvHeader& header, const std::vector<std::string>& fields,
+                      CsvSample& s) {
+    int brakeLight = 0;
+    const bool parsed = hasCell(fields, header.colBrakeLight) &&
+                        parseInt(fields[header.colBrakeLight], brakeLight);
+    if (!parsed) return false;
+    if (brakeLight == 1)      s.brakeLight = true;
+    else if (brakeLight == 0) s.brakeLight = false;
+    return true;  // any parseable int marks engine data, even out-of-domain
+}
+
+// steering_angle_deg: signed degrees from CAN SCCM_steeringAngle (BO_ 297).
+// Blank or unparseable leaves the field absent (nullopt) — never a guess.
+// Display-only: never marks the row as an operating point.
+void decodeSteering(const CsvHeader& header, const std::vector<std::string>& fields,
+                    CsvSample& s) {
+    double steeringDeg = 0.0;
+    const bool parsed = hasCell(fields, header.colSteering) &&
+                        parseDouble(fields[header.colSteering], steeringDeg);
+    if (parsed) s.steeringAngleDeg = steeringDeg;
+}
+
+// Decode every engine-data column of the row. Returns true once ANY field
+// consumed a non-empty cell: a row where only the timestamp parses is a
+// timecoded BLANK (vehicle-sim's USB-settle stalk) — accepted as a paced row
+// but not an operating point (CsvSample::engineDataPresent; the arrival prime
+// skips such rows).
+bool decodeEngineFields(const CsvHeader& header, const std::vector<std::string>& fields,
+                        CsvSample& s) {
+    const bool throttle = decodeThrottle(header, fields, s);
+    const bool roadSpeed = decodeRoadSpeed(header, fields, s);
+    const bool gear = decodeGear(header, fields, s);
+    const bool gearSelector = decodeGearSelector(header, fields, s);
+    const bool clutch = decodeClutch(header, fields, s);
+    const bool motorTorque = decodeMotorTorque(header, fields, s);
+    const bool brakeLight = decodeBrakeLight(header, fields, s);
+    decodeSteering(header, fields, s);  // display-only: never an operating point
+    return throttle || roadSpeed || gear || gearSelector || clutch || motorTorque ||
+           brakeLight;
+}
+
 } // namespace
 
 bool CsvTelemetryParser::parseHeader(const std::string& headerLine, std::string& errorMsg) {
@@ -163,121 +294,68 @@ bool CsvTelemetryParser::parseRow(const std::string& row, double timeDivisor,
     const std::string trimmed = trim(row);
     if (trimmed.empty()) return false;
 
-    auto fields = split(trimmed, ',');
+    const auto fields = split(trimmed, ',');
     CsvSample s;
-    // True once any engine-data field parses from a non-empty cell. A row
-    // where only the timestamp parses is a timecoded BLANK (vehicle-sim's
-    // USB-settle stalk) — accepted as a paced row but not an operating point
-    // (CsvSample::engineDataPresent; the arrival prime skips such rows).
-    bool engineData = false;
+    // Phase 1 — timestamp gate: the ONLY decode that can reject a row. Blank
+    // rows, hint (#vs-) lines, short rows and outlier timestamps all exit
+    // here, leaving `out` untouched.
+    if (!decodeTimestamp(fields, timeDivisor, s)) return false;
 
+    // Phase 2 — engine-data decode: garbage in any engine field degrades that
+    // field to its default; the row itself stays accepted.
+    s.engineDataPresent = decodeEngineFields(header_, fields, s);
+
+    out = s;  // single publish on success
+    return true;
+}
+
+// Timestamp gate: decode the time cell (prefix-tolerant stod semantics) and
+// dispatch to epoch-scale or relative-seconds accounting.
+bool CsvTelemetryParser::decodeTimestamp(const std::vector<std::string>& fields,
+                                         double timeDivisor, CsvSample& s) const {
     double v = 0.0;
-    int64_t rawTimeMs = -1;
-    if (header_.colTime >= 0 && header_.colTime < static_cast<int>(fields.size()) &&
-        parseDouble(fields[header_.colTime], v)) {
-        // Epoch-scale timestamp_ms (e.g. vehicle-sim emits Unix epoch
-        // milliseconds: 1786538088200). Dividing bare by timeDivisor yields
-        // ~1.79e9 s, which the legacy >1e7 backstop below would reject as an
-        // outlier — silently dropping the ENTIRE stream (vehicle-sim's output is
-        // 100% epoch-scale, so every row is "out of range"). Detect epoch-scale
-        // and rebase to 0-based seconds using the first row's timestamp as t=0,
-        // so the trace plays from the start exactly as a 0-based time_s capture
-        // does. The header doc already promises "epoch ms -> auto-converted".
-        if (header_.timeInMs && v >= kEpochMsThreshold) {
-            rawTimeMs = static_cast<int64_t>(v);  // preserve raw epoch ms
-            if (firstRawTimestampMs_ < 0.0) {
-                firstRawTimestampMs_ = v;  // anchor t=0 on the first kept row
-            }
-            s.timeS = (v - firstRawTimestampMs_) / 1000.0;
-        } else {
-            // Relative timestamps (time_s, or relative ms). Reject trailing rows
-            // whose timestamp is inconsistent with the parsed unit — a capture
-            // can carry a few epoch-microsecond rows at the very end (e.g.
-            // 1786961013730 = the wall-clock write time of the last CAN frame,
-            // not a trace time). 1e7 s is far above any legitimate trace span
-            // (the longest captures are ~1000 s) and far below any epoch value,
-            // so it cleanly separates the two. This is the backstop for the
-            // stragglers that escape the caller's first-row heuristic.
-            const double timeInSeconds = v / timeDivisor;
-            if (timeInSeconds > 1e7) {
-                ++rejectedOutlierRows_;  // counted; reported once at end-of-input
-                return false;            // row skipped instantly, no per-row log
-            }
-            s.timeS = timeInSeconds;
-        }
-    } else {
-        return false;  // skip rows with unparseable time
-    }
+    const bool parseable = hasCell(fields, header_.colTime) &&
+                           parseDouble(fields[header_.colTime], v);
+    if (!parseable) return false;
 
-    if (header_.colThrottle >= 0 && header_.colThrottle < static_cast<int>(fields.size()) &&
-        parseDouble(fields[header_.colThrottle], v)) {
-        s.throttle = std::clamp(v / 100.0, 0.0, 1.0);
-        engineData = true;
+    if (header_.timeInMs && v >= kEpochMsThreshold) {
+        return acceptEpochTimestamp(v, s);
     }
+    return acceptRelativeTimestamp(v, timeDivisor, s);
+}
 
-    if (header_.colRoad >= 0 && header_.colRoad < static_cast<int>(fields.size()) &&
-        parseDouble(fields[header_.colRoad], v)) {
-        // Accept negative road speeds: reverse driving is a real state in the CSV
-        // schema (em-dinner.csv carries 'R' rows at -3.2 km/h). The old guard
-        // `v >= 0.0` silently dropped negatives to the -2.0 sentinel, which hid
-        // genuine reverse from downstream coercion and let standstill 'R' rows
-        // leak through as REVERSE (RAR). A blank/unparseable road column still
-        // leaves the -2.0 "not commanded" sentinel intact.
-        s.roadSpeedKmh = v;
-        engineData = true;
+// Epoch-scale timestamp_ms (e.g. vehicle-sim emits Unix epoch milliseconds:
+// 1786538088200). Dividing bare by timeDivisor yields ~1.79e9 s, which the
+// kOutlierSeconds backstop would reject as an outlier — silently dropping the
+// ENTIRE stream (vehicle-sim's output is 100% epoch-scale, so every row is
+// "out of range"). Instead rebase to 0-based seconds using the first kept
+// row's timestamp as t=0, so the trace plays from the start exactly as a
+// 0-based time_s capture does. The header doc already promises "epoch ms ->
+// auto-converted". The raw epoch ms is preserved in s.timeMs for downstream
+// latency math; there is no upper bound on this path, and rows earlier than
+// the anchor keep their negative timeS (no monotonicity fix-up).
+bool CsvTelemetryParser::acceptEpochTimestamp(double rawMs, CsvSample& s) const {
+    if (firstRawTimestampMs_ < 0.0) {
+        firstRawTimestampMs_ = rawMs;  // anchor t=0 on the first kept row
     }
+    s.timeMs = static_cast<int64_t>(rawMs);
+    s.timeS = (rawMs - firstRawTimestampMs_) / 1000.0;
+    return true;
+}
 
-    if (int gi; header_.colGear >= 0 && header_.colGear < static_cast<int>(fields.size()) &&
-        parseInt(fields[header_.colGear], gi)) {
-        s.gear = gi;
-        engineData = true;
+// Relative timestamps (time_s, or relative ms). Reject trailing rows whose
+// timestamp is inconsistent with the parsed unit — a capture can carry a few
+// epoch-microsecond rows at the very end (e.g. 1786961013730 = the wall-clock
+// write time of the last CAN frame, not a trace time). This is the backstop
+// for the stragglers that escape the caller's first-row heuristic.
+bool CsvTelemetryParser::acceptRelativeTimestamp(double rawValue, double timeDivisor,
+                                                 CsvSample& s) const {
+    const double timeInSeconds = rawValue / timeDivisor;
+    if (timeInSeconds > kOutlierSeconds) {
+        ++rejectedOutlierRows_;  // counted; reported once at end-of-input
+        return false;            // row skipped instantly, no per-row log
     }
-
-    if (header_.colGearSelector >= 0 && header_.colGearSelector < static_cast<int>(fields.size())) {
-        const std::string selector = trim(fields[header_.colGearSelector]);
-        if (!selector.empty()) {
-            s.gearSelector = selector;
-            engineData = true;
-        }
-    }
-
-    if (header_.colClutch >= 0 && header_.colClutch < static_cast<int>(fields.size()) &&
-        parseDouble(fields[header_.colClutch], v) && v >= 0.0) {
-        s.clutchPct = std::clamp(v / 100.0, 0.0, 1.0);
-        engineData = true;
-    }
-
-    if (header_.colMotorTorque >= 0 && header_.colMotorTorque < static_cast<int>(fields.size()) &&
-        parseDouble(fields[header_.colMotorTorque], v)) {
-        s.motorTorqueNm = v;
-        engineData = true;
-    }
-
-    // brake_light: a binary column. "1" = on, "0" = off; blank/unparseable/
-    // out-of-domain values leave the field absent (nullopt) — never a guess.
-    if (header_.colBrakeLight >= 0 &&
-        header_.colBrakeLight < static_cast<int>(fields.size())) {
-        int brakeLight = 0;
-        if (parseInt(fields[header_.colBrakeLight], brakeLight)) {
-            if (brakeLight == 1)      s.brakeLight = true;
-            else if (brakeLight == 0) s.brakeLight = false;
-            engineData = true;
-        }
-    }
-
-    // steering_angle_deg: signed degrees from CAN SCCM_steeringAngle (BO_ 297).
-    // Blank or unparseable leaves the field absent (nullopt) — never a guess.
-    if (header_.colSteering >= 0 &&
-        header_.colSteering < static_cast<int>(fields.size())) {
-        double steeringDeg = 0.0;
-        if (parseDouble(fields[header_.colSteering], steeringDeg)) {
-            s.steeringAngleDeg = steeringDeg;
-        }
-    }
-
-    s.engineDataPresent = engineData;
-    s.timeMs = rawTimeMs;  // preserve raw epoch ms for latency calculation
-    out = s;
+    s.timeS = timeInSeconds;
     return true;
 }
 
