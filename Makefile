@@ -4,7 +4,7 @@
 		presets clean-presets \
 		sonar-clean coverage-clean coverage-run test-nosonar \
 		sonar-refresh \
-		summary
+		summary summary-headline
 
 BUILD_DIR ?= build
 BUILD_COV_DIR ?= build-cov
@@ -472,14 +472,27 @@ $(SONAR_SUMMARY_REPORT): $(SONAR_LIVE) $(SONAR_REMOVED_FACET) scripts/sonar_summ
 # --removed-facet mirrors sonar-summary: total = open + removed (OPEN union
 # REMOVED, matching the dashboard severity widget and sonar_summary.py).
 BUILD_SUMMARY_SCRIPT := scripts/build_summary.py
+
+# One shared headline command (DRY): `summary` prints the cached summary
+# BLOCKS (coverage-summary / sonar-summary) and then this headline, while
+# `summary-headline` prints ONLY the headline. The CLI's russian-doll
+# recursion calls summary-headline so a top-level make ENDS on exactly the
+# two headline rows (cli line, then bridge line) with no block rows printed
+# between or after them (found 2026-09-08).
+BUILD_SUMMARY_CMD = python3 $(BUILD_SUMMARY_SCRIPT) \
+    --label "[engine-sim-bridge]" \
+    --test-log $(TEST_SUMMARY_LOG) \
+    --cov-measures $(SONAR_MEASURES) \
+    --local-cov $(BUILD_COV_DIR)/lcov.info --local-type lcov \
+    --sonar-report $(SONAR_LIVE) \
+    --removed-facet $(SONAR_REMOVED_FACET)
+
 summary: coverage-summary sonar-summary
-	@python3 $(BUILD_SUMMARY_SCRIPT) \
-		--label "[engine-sim-bridge]" \
-		--test-log $(TEST_SUMMARY_LOG) \
-		--cov-measures $(SONAR_MEASURES) \
-		--local-cov $(BUILD_COV_DIR)/lcov.info --local-type lcov \
-		--sonar-report $(SONAR_LIVE) \
-		--removed-facet $(SONAR_REMOVED_FACET)
+	@$(BUILD_SUMMARY_CMD)
+
+# Headline ONLY -- no coverage/sonar blocks. See BUILD_SUMMARY_CMD above.
+summary-headline:
+	@$(BUILD_SUMMARY_CMD)
 
 # Add/remove engines here — this is the ONLY list. Everything here is compiled, tested, and shipped.
 ENGINES := ferrari_f136 2jz C63_M156_V3 subaru_ej25 lfa_v10 v8_gm_ls 11_merlin_v12 06_subaru_ej25
