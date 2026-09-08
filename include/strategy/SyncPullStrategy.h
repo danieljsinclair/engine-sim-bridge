@@ -97,10 +97,10 @@ private:
     void fillRemainingSilence(float* dst, int framesRendered, int framesToGenerate, int remainingFrames);
 
     // Startup-crackle fade helpers. fillSilenceFaded ramps from the last real
-    // synthesized sample to zero over FADE_SAMPLES (then holds zero) so the
-    // audio->silence edge is continuous. applyFadeIn ramps the first
-    // FADE_SAMPLES of a resumed audio chunk from zero to full scale so the
-    // silence->audio edge is continuous. Both eliminate the hard-cut
+    // synthesized sample down to SILENCE_FLOOR over FADE_SAMPLES (then holds
+    // the floor) so the audio->silence edge is continuous. applyFadeIn ramps
+    // the first FADE_SAMPLES of a resumed audio chunk up from the floor so
+    // the silence->audio edge is continuous. Both eliminate the hard-cut
     // discontinuity that the ear hears as a crackle during cranking startup.
     void fillSilenceFaded(float* dst, int frames);
     void applyFadeIn(float* dst, int frames);
@@ -122,7 +122,9 @@ private:
     // output (not silence). When we must fill silence we ramp from this value
     // to SILENCE_FLOOR over FADE_SAMPLES instead of a hard zero-fill.
     // fadeInProgress_: when >0 counts down the fade-in ramp at the start of a
-    // freshly-resumed audio chunk (silence->audio edge).
+    // freshly-resumed audio chunk (silence->audio edge). Re-armed by EVERY
+    // silence fill (fillSilenceFaded), not just startPlayback — startup has
+    // multiple silence->audio gaps and each must ramp.
     float lastAudioLeft_ = 0.0f;
     float lastAudioRight_ = 0.0f;
     int fadeInProgress_ = 0;

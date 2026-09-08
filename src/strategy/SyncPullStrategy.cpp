@@ -389,6 +389,13 @@ void SyncPullStrategy::fillSilenceFaded(float* dst, int frames) {
     // re-fade from a stale value.
     lastAudioLeft_ = floorL;
     lastAudioRight_ = floorR;
+    // Re-arm the fade-in budget so the NEXT audio chunk ramps up from the
+    // floor. Startup has MULTIPLE silence->audio gaps (zero-drain discard,
+    // cranking bursts between main-thread ticks, partial-render tails), and
+    // the one-shot arm at startPlayback covers only the first — every later
+    // edge landed as a hard cut (the startup crackle; WAV-verified 2026-09-08:
+    // every >2000-LSB discontinuity sits on a floor->audio edge).
+    fadeInProgress_ = EngineSimAudio::FADE_SAMPLES;
 }
 
 void SyncPullStrategy::applyFadeIn(float* dst, int frames) {
