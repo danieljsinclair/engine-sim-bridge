@@ -382,7 +382,7 @@ void ReplayTelemetryProvider::primeTwinToRunning() {
     //
     // DRY: the OFF->RUNNING stepping + warm basin settle is shared with the live
     // path via warmBootTwinToRunning() so the two prime paths never diverge.
-    const Sample& first = samples_.front();
+    const Sample& first = arrivalSample();
     const bridge::GearSelector sel = first.gearSelector.empty()
         ? bridge::GearSelector::DRIVE : parseGearSelector(first.gearSelector);
     warmBootTwinToRunning(twinProvider_.get(), first.throttle, first.roadSpeedKmh,
@@ -400,6 +400,13 @@ bool ReplayTelemetryProvider::applyTimeSlicing(EngineInput& input, double dt) {
 
     // Time slicing: stop at endAtS — emit an ignition-off frame and signal the
     // caller to return it immediately (no further processing this frame).
+    // elapsedS_ is the ABSOLUTE replay clock: primeArrivalState cold-jumps it
+    // onto the arrival row's timecode, and endAtS is an absolute trace
+    // timecode too (plain --end-at N, or --duration's window
+    // windowStartS + durationS). Both share the same scale, so the direct
+    // comparison is correct at ANY --start-from offset: --start-from 30
+    // --duration 10 (endAtS 40) fires at absolute 40s = 10s of playback
+    // (owner-verified semantics 2026-09-08).
     if (endAtS_ >= 0.0 && elapsedS_ >= endAtS_) {
         if (session_) session_->stop();
         // The BOUND ended the run (not trace exhaustion): record it so the CLI
@@ -446,7 +453,9 @@ void ReplayTelemetryProvider::primeArrivalState() {
     arrivalHoldActive_ = true;
     // Clock cold-jump onto the arrival row's TRUE timecode (mirrors the live
     // path's instant anchor): the first emitted frame reads [mm:ss] at the
-    // offset, and the post-release clock advances from here.
+    // offset, and the post-release clock advances from here. elapsedS_ is the
+    // DISPLAY clock (absolute trace timecode) — sampleAt() and endAtS_ both
+    // read it — so the arrival row's own timecode is the anchor.
     elapsedS_ = arrival.timeS;
 
     if (twinProvider_) {

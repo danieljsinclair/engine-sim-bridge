@@ -60,26 +60,22 @@
 
 namespace input {
 
-// Resolve the replay-path gearbox default: replay telemetry defaults the
-// gearbox to AUTO unless the user explicitly opted into manual control with
-// --manual. A replay CSV carries only a PRNDL selector - there is no +/-
-// gear channel - so a manual replay can never select a gear and sits
-// stationary free-revving. --interactive (keyboard overlay on replay) does
-// NOT opt out: the overlay's gear keys win over the auto box per-keypress,
-// so auto stays the default there too. The live path is untouched:
-// LiveTelemetryProvider has no manual gearbox mode to flip.
-// (Owner ruling 2026-09-03: replay must self-drive by default - including
-// interactive replay.)
+// Resolve the gearbox default: AUTO in ALL modes (interactive, replay, live)
+// unless the user explicitly opts out with --manual. A replay CSV carries
+// only a PRNDL selector - there is no +/- gear channel - so a manual replay
+// can never select a gear and sits stationary free-revving. --interactive
+// (keyboard overlay on replay) does NOT opt out: the overlay's gear keys win
+// over the auto box per-keypress, so auto stays the default there too. The
+// live path is untouched: LiveTelemetryProvider has no manual gearbox mode
+// to flip.
+// (Owner ruling 2026-09-08: --auto is the default everywhere; --manual is the
+// explicit opt-out.)
 // Moved from the CLI's CLIconfig.cpp (consolidation wave B); pure so the
 // CLI seam stays a one-line shell. This resolves the autoGearbox ctor
 // argument below.
-//   replayTelemetryRequested  a replay trace path was given (--replay-telemetry)
 //   automatic / manual        the parsed gearbox flags (both default false)
-inline bool resolveReplayGearboxDefault(bool replayTelemetryRequested, bool automatic,
-                                        bool manual) {
-    const bool replayWithoutAuto = replayTelemetryRequested && !automatic;
-    const bool defaultToAuto = replayWithoutAuto && !manual;
-    return defaultToAuto || automatic;
+inline bool resolveReplayGearboxDefault(bool automatic, bool manual) {
+    return !manual || automatic;
 }
 
 class ReplayTelemetryProvider : public IInputProvider,
@@ -215,7 +211,7 @@ private:
     std::string lastError_;
     CsvTelemetryParser csvParser_;
     std::vector<Sample> samples_;
-    double elapsedS_ = 0.0;
+    double elapsedS_ = 0.0;                 // ABSOLUTE display clock (cold-jumps to the arrival row's timecode)
     bool startFired_ = false;
     twin::IceVehicleProfile gearboxProfile_;  // OWNED SEED for the twin (twin copies it)
 
