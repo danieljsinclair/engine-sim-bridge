@@ -71,6 +71,19 @@ void initializeConvolutionFilters(Simulator* simulator);
 /// @param spanTame         Taming amount, [0, 1]
 void applySpanTame(Simulator* simulator, float spanTame);
 
+/// Apply the brake-torque drive-cap toggle to the simulator's
+/// VehicleSpeedConstraint. Mirrors applySpanTame: a thin setter call so the
+/// bridge can apply it uniformly to any Simulator subclass.
+/// Called from the factory wiring path with ISimulatorConfig::brakeTorqueCap.
+/// false = OFF = pre-cap symmetric limits (-maxTorque .. +maxTorque); true =
+/// ON = asymmetric cap (-maxTorque .. 0.4*maxTorque). See
+/// engine-sim/include/vehicle_speed_constraint.h for the constraint.
+///
+/// @param simulator        The simulator whose constraint is configured
+/// @param brakeTorqueCap   Drive-cap toggle (default false preserves CSV-replay
+///                         semantics; the cap is behaviour-changing)
+void applyBrakeTorqueCap(Simulator* simulator, bool brakeTorqueCap);
+
 } // namespace SimulatorInitHelpers
 
 #endif // ENGINE_SIM_BRIDGE_SIMULATOR_INIT_HELPERS_H

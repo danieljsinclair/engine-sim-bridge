@@ -139,6 +139,15 @@ struct ISimulatorConfig {
     // size and would make the per-frame substep count (and thus the whole run)
     // nondeterministic, tipping the warm-start into the reversion attractor.
     bool pacedReplay = false;
+    // Brake-torque drive-cap toggle (--brake-torque CLI flag). Default OFF
+    // preserves CSV-replay semantics: with the toggle off the VehicleSpeed
+    // constraint uses the pre-cap symmetric limits (-maxTorque .. +maxTorque),
+    // so captured runs replay bit-identically. With the toggle on the drive
+    // side is capped at 0.4*maxTorque (asymmetric authority: braking keeps full
+    // -maxTorque). Flows to the constraint via
+    // SimulatorInitHelpers::applyBrakeTorqueCap at factory build time. See
+    // engine-sim-bridge/engine-sim/REVIEW_brake_torque_cap.md.
+    bool brakeTorqueCap = false;
 };
 
 // Runtime statistics
