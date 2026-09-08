@@ -4,7 +4,7 @@
 		presets clean-presets \
 		sonar-clean coverage-clean coverage-run test-nosonar \
 		sonar-refresh \
-		summary summary-headline
+		summary summary-headline summary-blocks
 
 BUILD_DIR ?= build
 BUILD_COV_DIR ?= build-cov
@@ -493,6 +493,14 @@ summary: coverage-summary sonar-summary
 # Headline ONLY -- no coverage/sonar blocks. See BUILD_SUMMARY_CMD above.
 summary-headline:
 	@$(BUILD_SUMMARY_CMD)
+
+# Blocks ONLY -- coverage-summary + sonar-summary, no headline. Display-only
+# convenience for the CLI's `summary` recursion: a top-level make re-prints
+# the bridge's blocks on EVERY make (cached "TESTS UP TO DATE" path included)
+# while still ending on the two headline rows. `summary` and
+# `summary-headline` are untouched -- a standalone make in this folder keeps
+# its full blocks-then-headline behaviour.
+summary-blocks: coverage-summary sonar-summary
 
 # Add/remove engines here — this is the ONLY list. Everything here is compiled, tested, and shipped.
 ENGINES := ferrari_f136 2jz C63_M156_V3 subaru_ej25 lfa_v10 v8_gm_ls 11_merlin_v12 06_subaru_ej25
