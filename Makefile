@@ -35,6 +35,8 @@ BUILD_STAMP := $(BUILD_DIR)/libenginesim.a
 BUILD_COV_STAMP := $(BUILD_COV_DIR)/libenginesim.a
 SONAR_PROJECT_PROPERTIES := sonar-project.properties
 COMPILE_DB := $(BUILD_COV_DIR)/compile_commands.json
+# coverage.txt is a BYPRODUCT of the lcov.info rule (kept as a var only for
+# coverage-clean); lcov.info is the primary coverage artefact -- see its rule.
 COVERAGE_REPORT := $(BUILD_COV_DIR)/coverage.txt
 SONAR_REPORT := $(BUILD_COV_DIR)/sonar-report.json
 SONAR_TOKEN ?= ${SONAR_TOKEN_ES}
@@ -264,17 +266,24 @@ $(BUILD_COV_STAMP): $(BUILD_INPUTS) $(BUILD_COV_DIR)/CMakeCache.txt
 
 # coverage-run: run tests on coverage-instrumented build, merge profdata, export lcov
 # File-artefact target: re-runs only when build-cov, preset JSONs, source inputs, or
-# the coverage script change. run_coverage_tests.sh writes coverage.txt itself.
-$(COVERAGE_REPORT): $(BUILD_COV_STAMP) $(PRESET_JSONS) $(BUILD_INPUTS) scripts/run_coverage_tests.sh
+# the coverage script change. The PRIMARY artefact is lcov.info -- it is what
+# coverage-summary, sonar-scan and build_summary.py consume; run_coverage_tests.sh
+# writes it alongside coverage.txt (coverage.txt stays a byproduct: removed by
+# coverage-clean, no rule of its own). Declaring the rule here closes the
+# orphan-prereq hole: $(COVERAGE_SUMMARY_REPORT) and `summary` depend on
+# $(BUILD_COV_DIR)/lcov.info, which previously had NO rule -- after `make clean`
+# the summary recursion died with "No rule to make target 'build-cov/lcov.info'".
+$(BUILD_COV_DIR)/lcov.info: $(BUILD_COV_STAMP) $(PRESET_JSONS) $(BUILD_INPUTS) scripts/run_coverage_tests.sh
 	@LLVM_PROFDATA="$(LLVM_PROFDATA)" LLVM_COV="$(LLVM_COV)" \
 		bash scripts/run_coverage_tests.sh $(BUILD_COV_DIR)
+	@test -e $@ || { echo "ERROR: $@ not written by run_coverage_tests.sh"; exit 1; }
 
 # Phony alias so callers can still `make coverage-run`.
-coverage-run: $(COVERAGE_REPORT)
+coverage-run: $(BUILD_COV_DIR)/lcov.info
 
 sonar-scan: $(SONAR_REPORT)
 
-# SONAR_REPORT depends on the coverage ARTEFACT (coverage.txt), so coverage is
+# SONAR_REPORT depends on the coverage ARTEFACT (lcov.info), so coverage is
 # regenerated (tests re-run) before the scan reads the fresh coverage report.
 # Re-scans only when coverage/compile-db/properties/sources change. The curl
 # writes SONAR_REPORT itself. The CE-poll block guarantees the report is only
@@ -299,7 +308,7 @@ ifeq ($(BRANCH),HEAD)
 endif
 SONAR_BRANCH_FLAG := -Dsonar.branch.name=$(BRANCH)
 
-$(SONAR_REPORT): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(BUILD_INPUTS)
+$(SONAR_REPORT): $(BUILD_COV_DIR)/lcov.info $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(BUILD_INPUTS)
 	@if [ -z "$${SONAR_TOKEN_ES}" ] && [ -z "$${SONAR_TOKEN}" ]; then \
 		echo "ERROR: Neither SONAR_TOKEN_ES nor SONAR_TOKEN is set. Run: source ~/.zshrc"; \
 		exit 1; \
