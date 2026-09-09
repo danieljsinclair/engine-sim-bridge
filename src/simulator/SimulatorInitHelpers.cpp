@@ -103,4 +103,14 @@ void applySpanTame(Simulator* simulator, float spanTame)
     simulator->synthesizer().setAudioParameters(params);
 }
 
+// Thin setter pass-through to the simulator's VehicleSpeedConstraint. Mirrors
+// applySpanTame (null-guarded, called from the factory wiring path) so the
+// bridge applies the toggle uniformly to any Simulator subclass. false = OFF =
+// pre-cap symmetric limits; true = ON = asymmetric drive cap.
+void applyBrakeTorqueCap(Simulator* simulator, bool brakeTorqueCap)
+{
+    if (!simulator) return;
+    simulator->setBrakeTorqueCap(brakeTorqueCap);
+}
+
 } // namespace SimulatorInitHelpers

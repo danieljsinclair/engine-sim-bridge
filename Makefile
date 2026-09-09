@@ -4,7 +4,7 @@
 		presets clean-presets \
 		sonar-clean coverage-clean coverage-run test-nosonar \
 		sonar-refresh \
-		summary
+		summary summary-headline summary-blocks
 
 BUILD_DIR ?= build
 BUILD_COV_DIR ?= build-cov
@@ -35,6 +35,8 @@ BUILD_STAMP := $(BUILD_DIR)/libenginesim.a
 BUILD_COV_STAMP := $(BUILD_COV_DIR)/libenginesim.a
 SONAR_PROJECT_PROPERTIES := sonar-project.properties
 COMPILE_DB := $(BUILD_COV_DIR)/compile_commands.json
+# coverage.txt is a BYPRODUCT of the lcov.info rule (kept as a var only for
+# coverage-clean); lcov.info is the primary coverage artefact -- see its rule.
 COVERAGE_REPORT := $(BUILD_COV_DIR)/coverage.txt
 SONAR_REPORT := $(BUILD_COV_DIR)/sonar-report.json
 SONAR_TOKEN ?= ${SONAR_TOKEN_ES}
@@ -57,9 +59,13 @@ COVERAGE_SUMMARY_REPORT := $(BUILD_COV_DIR)/coverage-summary.txt
 
 # Combined ctest summary log: every ctest tier (test-core, test-deep) appends
 # its "N% tests passed, M tests failed out of N" line here (via the tee in
-# run_bridge_ctest_suite). reset at the start of `test` so each run is clean.
-# build_summary.py aggregates ALL summary lines so the headline reflects the
-# union of every tier run in this `make test`, not just the last.
+# run_bridge_ctest_suite). The log is ALSO a real file-artefact: `test` gates
+# its whole ctest stage on the log's mtime (rule next to the isomorphism
+# suite), so a no-change `make` re-runs NO tier and rewrites NOTHING under
+# build/. It is truncated at the start of each real run (test-core's
+# | test-reset) so each run is clean; build_summary.py aggregates ALL summary
+# lines so the headline reflects the union of every tier run, not just the
+# last.
 TEST_SUMMARY_LOG := $(BUILD_DIR)/test-summary.log
 
 # ---- Single source of truth for source file specs ----
@@ -190,7 +196,11 @@ clean-test-fixtures:
 # cat the PRE-scan cache (stale server numbers) instead of re-curling. Via
 # summary (post-scan) make stat's the deleted sonar-measures.json fresh and
 # re-curls it, so the final report reflects the just-settled scan.
-test: test-core test-deep coverage-run sonar-scan summary
+# The ctest stage is gated by the $(TEST_SUMMARY_LOG) file artefact (rule next
+# to the isomorphism suite): when no test input changed, its recipe is
+# skipped -- no ctest runs, NOTHING under build/ is rewritten. coverage-run
+# and sonar-scan are already real-artefact gated the same way.
+test: $(TEST_SUMMARY_LOG) coverage-run sonar-scan summary
 
 # Order-only reset of the combined ctest summary log. Both ctest tiers depend
 # on this so the log is empty at the start of a `make test` regardless of
@@ -212,7 +222,11 @@ test-isomorphism: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: isomorph
 test-isomorphism: SKIP_HINT_MESSAGE := === [engine-sim-bridge] HINT: skip this next time by running make test-core instead of make test or make test-deep. ===
 test-isomorphism: SUMMARY_PASS_MESSAGE := === [engine-sim-bridge] SUMMARY: PASS (isomorphism) ===
 test-isomorphism: SUMMARY_FAIL_MESSAGE := === [engine-sim-bridge] SUMMARY: FAIL (isomorphism) ===
-test-isomorphism: $(ISOMORPHISM_STAMP) | test-reset
+# No | test-reset here on purpose: tiers APPEND to the combined log, and the
+# only reset is test-core's (the first tier of every real run -- see the
+# $(TEST_SUMMARY_LOG) rule). A reset here would truncate the core tier's
+# lines out of the log whenever the deep tier runs after it.
+test-isomorphism: $(ISOMORPHISM_STAMP)
 	@:
 
 test-deep: build test-isomorphism
@@ -264,17 +278,24 @@ $(BUILD_COV_STAMP): $(BUILD_INPUTS) $(BUILD_COV_DIR)/CMakeCache.txt
 
 # coverage-run: run tests on coverage-instrumented build, merge profdata, export lcov
 # File-artefact target: re-runs only when build-cov, preset JSONs, source inputs, or
-# the coverage script change. run_coverage_tests.sh writes coverage.txt itself.
-$(COVERAGE_REPORT): $(BUILD_COV_STAMP) $(PRESET_JSONS) $(BUILD_INPUTS) scripts/run_coverage_tests.sh
+# the coverage script change. The PRIMARY artefact is lcov.info -- it is what
+# coverage-summary, sonar-scan and build_summary.py consume; run_coverage_tests.sh
+# writes it alongside coverage.txt (coverage.txt stays a byproduct: removed by
+# coverage-clean, no rule of its own). Declaring the rule here closes the
+# orphan-prereq hole: $(COVERAGE_SUMMARY_REPORT) and `summary` depend on
+# $(BUILD_COV_DIR)/lcov.info, which previously had NO rule -- after `make clean`
+# the summary recursion died with "No rule to make target 'build-cov/lcov.info'".
+$(BUILD_COV_DIR)/lcov.info: $(BUILD_COV_STAMP) $(PRESET_JSONS) $(BUILD_INPUTS) scripts/run_coverage_tests.sh
 	@LLVM_PROFDATA="$(LLVM_PROFDATA)" LLVM_COV="$(LLVM_COV)" \
 		bash scripts/run_coverage_tests.sh $(BUILD_COV_DIR)
+	@test -e $@ || { echo "ERROR: $@ not written by run_coverage_tests.sh"; exit 1; }
 
 # Phony alias so callers can still `make coverage-run`.
-coverage-run: $(COVERAGE_REPORT)
+coverage-run: $(BUILD_COV_DIR)/lcov.info
 
 sonar-scan: $(SONAR_REPORT)
 
-# SONAR_REPORT depends on the coverage ARTEFACT (coverage.txt), so coverage is
+# SONAR_REPORT depends on the coverage ARTEFACT (lcov.info), so coverage is
 # regenerated (tests re-run) before the scan reads the fresh coverage report.
 # Re-scans only when coverage/compile-db/properties/sources change. The curl
 # writes SONAR_REPORT itself. The CE-poll block guarantees the report is only
@@ -299,7 +320,7 @@ ifeq ($(BRANCH),HEAD)
 endif
 SONAR_BRANCH_FLAG := -Dsonar.branch.name=$(BRANCH)
 
-$(SONAR_REPORT): $(COVERAGE_REPORT) $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(BUILD_INPUTS)
+$(SONAR_REPORT): $(BUILD_COV_DIR)/lcov.info $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(BUILD_INPUTS)
 	@if [ -z "$${SONAR_TOKEN_ES}" ] && [ -z "$${SONAR_TOKEN}" ]; then \
 		echo "ERROR: Neither SONAR_TOKEN_ES nor SONAR_TOKEN is set. Run: source ~/.zshrc"; \
 		exit 1; \
@@ -463,14 +484,35 @@ $(SONAR_SUMMARY_REPORT): $(SONAR_LIVE) $(SONAR_REMOVED_FACET) scripts/sonar_summ
 # --removed-facet mirrors sonar-summary: total = open + removed (OPEN union
 # REMOVED, matching the dashboard severity widget and sonar_summary.py).
 BUILD_SUMMARY_SCRIPT := scripts/build_summary.py
+
+# One shared headline command (DRY): `summary` prints the cached summary
+# BLOCKS (coverage-summary / sonar-summary) and then this headline, while
+# `summary-headline` prints ONLY the headline. The CLI's russian-doll
+# recursion calls summary-headline so a top-level make ENDS on exactly the
+# two headline rows (cli line, then bridge line) with no block rows printed
+# between or after them (found 2026-09-08).
+BUILD_SUMMARY_CMD = python3 $(BUILD_SUMMARY_SCRIPT) \
+    --label "[engine-sim-bridge]" \
+    --test-log $(TEST_SUMMARY_LOG) \
+    --cov-measures $(SONAR_MEASURES) \
+    --local-cov $(BUILD_COV_DIR)/lcov.info --local-type lcov \
+    --sonar-report $(SONAR_LIVE) \
+    --removed-facet $(SONAR_REMOVED_FACET)
+
 summary: coverage-summary sonar-summary
-	@python3 $(BUILD_SUMMARY_SCRIPT) \
-		--label "[engine-sim-bridge]" \
-		--test-log $(TEST_SUMMARY_LOG) \
-		--cov-measures $(SONAR_MEASURES) \
-		--local-cov $(BUILD_COV_DIR)/lcov.info --local-type lcov \
-		--sonar-report $(SONAR_LIVE) \
-		--removed-facet $(SONAR_REMOVED_FACET)
+	@$(BUILD_SUMMARY_CMD)
+
+# Headline ONLY -- no coverage/sonar blocks. See BUILD_SUMMARY_CMD above.
+summary-headline:
+	@$(BUILD_SUMMARY_CMD)
+
+# Blocks ONLY -- coverage-summary + sonar-summary, no headline. Display-only
+# convenience for the CLI's `summary` recursion: a top-level make re-prints
+# the bridge's blocks on EVERY make (cached "TESTS UP TO DATE" path included)
+# while still ending on the two headline rows. `summary` and
+# `summary-headline` are untouched -- a standalone make in this folder keeps
+# its full blocks-then-headline behaviour.
+summary-blocks: coverage-summary sonar-summary
 
 # Add/remove engines here — this is the ONLY list. Everything here is compiled, tested, and shipped.
 ENGINES := ferrari_f136 2jz C63_M156_V3 subaru_ej25 lfa_v10 v8_gm_ls 11_merlin_v12 06_subaru_ej25
@@ -507,7 +549,7 @@ ISOMORPHISM_INPUTS = \
 # invocation. If ctest passes the recipe's exit code is success -> the binary
 # is the artefact; the mtime check determines when to re-run. No .stamp
 # bookkeeping required.
-$(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets test-reset
+$(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets
 	@set -o pipefail; \
 	echo "$(BLOCK_START_MESSAGE)"; \
 	$(call bridge_print_hint) \
@@ -522,6 +564,29 @@ $(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets test-reset
 		exit 1; \
 	fi
 	@touch $@
+
+# ---- Combined ctest artefact: the `make test` ctest gate -------------------
+# test-summary.log is a REAL file artefact: this recipe runs both tiers via
+# their own targets (each keeps its selector and PASS/FAIL messages) and both
+# tee into a .part file that is moved over the log only after BOTH pass -- a
+# failed tier leaves the real log untouched and stale, so Make retries on the
+# next invocation (same honesty contract as the isomorphism stamp above).
+# Found 2026-09-09: `test` used to chain the phony test-core tier, which
+# re-ran ctest on EVERY make, rewriting this log (+ Testing/Temporary/*,
+# threaded_strategy_baseline.dat) even with zero changes -- and the repo-root
+# CLI test cache, -nt-gated on this very log, honestly re-ran its full
+# ctest + sonar scan after every no-change bridge make. With the artefact
+# gate, a no-change `make` rewrites NOTHING under build/.
+# The command-line TEST_SUMMARY_LOG=... overrides the var INSIDE the
+# sub-makes so the tiers write the .part (their tee paths and test-reset all
+# expand it); the real log is only ever replaced by the final mv.
+# Order-only | build presets: phony prereqs must not force the log stale,
+# but the test binaries and preset JSONs must exist before ctest runs.
+$(TEST_SUMMARY_LOG): $(BUILD_INPUTS) $(PRESET_JSONS) | build presets
+	+@$(MAKE) --no-print-directory test-core TEST_SUMMARY_LOG=$(abspath $(TEST_SUMMARY_LOG)).part
+	+@$(MAKE) --no-print-directory test-deep TEST_SUMMARY_LOG=$(abspath $(TEST_SUMMARY_LOG)).part
+	@mv $(abspath $(TEST_SUMMARY_LOG)).part $(TEST_SUMMARY_LOG)
+
 # Build the preset compiler if it doesn't exist (e.g. after scrub)
 $(PRESET_COMPILER):
 	+@$(MAKE) build

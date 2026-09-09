@@ -211,6 +211,10 @@ static void initSimulator(Simulator* sim, const ISimulatorConfig& config) {
     // renderAudio call happens. 0.0 (default/off) writes 0.0f, which the
     // renderAudio path treats as "skip shape() entirely" for bit-identity.
     SimulatorInitHelpers::applySpanTame(sim, config.spanTame);
+
+    // Wire --brake-torque into the vehicle-speed constraint. Default OFF writes
+    // the pre-cap symmetric limits, so CSV-replay behaviour is unchanged.
+    SimulatorInitHelpers::applyBrakeTorqueCap(sim, config.brakeTorqueCap);
 }
 
 static bool endsWith(std::string_view str, std::string_view suffix) {
