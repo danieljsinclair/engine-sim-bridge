@@ -59,9 +59,13 @@ COVERAGE_SUMMARY_REPORT := $(BUILD_COV_DIR)/coverage-summary.txt
 
 # Combined ctest summary log: every ctest tier (test-core, test-deep) appends
 # its "N% tests passed, M tests failed out of N" line here (via the tee in
-# run_bridge_ctest_suite). reset at the start of `test` so each run is clean.
-# build_summary.py aggregates ALL summary lines so the headline reflects the
-# union of every tier run in this `make test`, not just the last.
+# run_bridge_ctest_suite). The log is ALSO a real file-artefact: `test` gates
+# its whole ctest stage on the log's mtime (rule next to the isomorphism
+# suite), so a no-change `make` re-runs NO tier and rewrites NOTHING under
+# build/. It is truncated at the start of each real run (test-core's
+# | test-reset) so each run is clean; build_summary.py aggregates ALL summary
+# lines so the headline reflects the union of every tier run, not just the
+# last.
 TEST_SUMMARY_LOG := $(BUILD_DIR)/test-summary.log
 
 # ---- Single source of truth for source file specs ----
@@ -192,7 +196,11 @@ clean-test-fixtures:
 # cat the PRE-scan cache (stale server numbers) instead of re-curling. Via
 # summary (post-scan) make stat's the deleted sonar-measures.json fresh and
 # re-curls it, so the final report reflects the just-settled scan.
-test: test-core test-deep coverage-run sonar-scan summary
+# The ctest stage is gated by the $(TEST_SUMMARY_LOG) file artefact (rule next
+# to the isomorphism suite): when no test input changed, its recipe is
+# skipped -- no ctest runs, NOTHING under build/ is rewritten. coverage-run
+# and sonar-scan are already real-artefact gated the same way.
+test: $(TEST_SUMMARY_LOG) coverage-run sonar-scan summary
 
 # Order-only reset of the combined ctest summary log. Both ctest tiers depend
 # on this so the log is empty at the start of a `make test` regardless of
@@ -214,7 +222,11 @@ test-isomorphism: BLOCK_START_MESSAGE := === [engine-sim-bridge] START: isomorph
 test-isomorphism: SKIP_HINT_MESSAGE := === [engine-sim-bridge] HINT: skip this next time by running make test-core instead of make test or make test-deep. ===
 test-isomorphism: SUMMARY_PASS_MESSAGE := === [engine-sim-bridge] SUMMARY: PASS (isomorphism) ===
 test-isomorphism: SUMMARY_FAIL_MESSAGE := === [engine-sim-bridge] SUMMARY: FAIL (isomorphism) ===
-test-isomorphism: $(ISOMORPHISM_STAMP) | test-reset
+# No | test-reset here on purpose: tiers APPEND to the combined log, and the
+# only reset is test-core's (the first tier of every real run -- see the
+# $(TEST_SUMMARY_LOG) rule). A reset here would truncate the core tier's
+# lines out of the log whenever the deep tier runs after it.
+test-isomorphism: $(ISOMORPHISM_STAMP)
 	@:
 
 test-deep: build test-isomorphism
@@ -537,7 +549,7 @@ ISOMORPHISM_INPUTS = \
 # invocation. If ctest passes the recipe's exit code is success -> the binary
 # is the artefact; the mtime check determines when to re-run. No .stamp
 # bookkeeping required.
-$(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets test-reset
+$(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets
 	@set -o pipefail; \
 	echo "$(BLOCK_START_MESSAGE)"; \
 	$(call bridge_print_hint) \
@@ -552,6 +564,29 @@ $(ISOMORPHISM_STAMP): $(ISOMORPHISM_INPUTS) | build presets test-reset
 		exit 1; \
 	fi
 	@touch $@
+
+# ---- Combined ctest artefact: the `make test` ctest gate -------------------
+# test-summary.log is a REAL file artefact: this recipe runs both tiers via
+# their own targets (each keeps its selector and PASS/FAIL messages) and both
+# tee into a .part file that is moved over the log only after BOTH pass -- a
+# failed tier leaves the real log untouched and stale, so Make retries on the
+# next invocation (same honesty contract as the isomorphism stamp above).
+# Found 2026-09-09: `test` used to chain the phony test-core tier, which
+# re-ran ctest on EVERY make, rewriting this log (+ Testing/Temporary/*,
+# threaded_strategy_baseline.dat) even with zero changes -- and the repo-root
+# CLI test cache, -nt-gated on this very log, honestly re-ran its full
+# ctest + sonar scan after every no-change bridge make. With the artefact
+# gate, a no-change `make` rewrites NOTHING under build/.
+# The command-line TEST_SUMMARY_LOG=... overrides the var INSIDE the
+# sub-makes so the tiers write the .part (their tee paths and test-reset all
+# expand it); the real log is only ever replaced by the final mv.
+# Order-only | build presets: phony prereqs must not force the log stale,
+# but the test binaries and preset JSONs must exist before ctest runs.
+$(TEST_SUMMARY_LOG): $(BUILD_INPUTS) $(PRESET_JSONS) | build presets
+	+@$(MAKE) --no-print-directory test-core TEST_SUMMARY_LOG=$(abspath $(TEST_SUMMARY_LOG)).part
+	+@$(MAKE) --no-print-directory test-deep TEST_SUMMARY_LOG=$(abspath $(TEST_SUMMARY_LOG)).part
+	@mv $(abspath $(TEST_SUMMARY_LOG)).part $(TEST_SUMMARY_LOG)
+
 # Build the preset compiler if it doesn't exist (e.g. after scrub)
 $(PRESET_COMPILER):
 	+@$(MAKE) build
