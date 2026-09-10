@@ -359,7 +359,7 @@ EngineInput ReplayTelemetryProvider::driveThroughTwin(const Sample& s, double dt
     return input;
 }
 
-void ReplayTelemetryProvider::primeTwinToRunning() {
+void ReplayTelemetryProvider::primeTwinToRunning() const {
     if (!twinProvider_ || samples_.empty()) return;
     // Replay reproduces a running engine, not the cranking transient: feed the
     // twin through OFF->CRANKING->IDLE->RUNNING once at Initialize() so the first

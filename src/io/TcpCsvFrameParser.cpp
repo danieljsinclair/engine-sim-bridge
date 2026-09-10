@@ -6,21 +6,23 @@
 #include "io/TcpCsvFrameParser.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
+#include <string_view>
 
 namespace input {
 
 namespace {
 
 // Column alias tables, first match wins (mirrors the Swift lookup order).
-const char* const kTimestampAliases[] = {"timestamp_ms", "timestamp_utc_ms"};
-const char* const kThrottleAliases[] = {"throttle_pct", "throttle_percent"};
-const char* const kSpeedAliases[]    = {"speed_kmh"};
-const char* const kAccelAliases[]    = {"acceleration_g"};
-const char* const kBrakeAliases[]    = {"brake_pct", "brake_percent"};
+const std::array<const char* const, 2> kTimestampAliases = {"timestamp_ms", "timestamp_utc_ms"};
+const std::array<const char* const, 2> kThrottleAliases = {"throttle_pct", "throttle_percent"};
+const std::array<const char* const, 1> kSpeedAliases    = {"speed_kmh"};
+const std::array<const char* const, 1> kAccelAliases    = {"acceleration_g"};
+const std::array<const char* const, 2> kBrakeAliases    = {"brake_pct", "brake_percent"};
 
 template <std::size_t N>
-int firstIndexOf(const std::vector<std::string>& headers, const char* const (&aliases)[N]) {
+int firstIndexOf(const std::vector<std::string>& headers, const std::array<const char* const, N>& aliases) {
     for (const char* alias : aliases) {
         auto it = std::find(headers.begin(), headers.end(), alias);
         if (it != headers.end()) {
@@ -30,14 +32,14 @@ int firstIndexOf(const std::vector<std::string>& headers, const char* const (&al
     return -1;
 }
 
-std::string trimAscii(const std::string& raw) {
+std::string trimAscii(const std::string_view raw) {
     const char* ws = " \t\r\n\v\f";
     const auto begin = raw.find_first_not_of(ws);
-    if (begin == std::string::npos) {
+    if (begin == std::string_view::npos) {
         return {};
     }
     const auto end = raw.find_last_not_of(ws);
-    return raw.substr(begin, end - begin + 1);
+    return std::string(raw.substr(begin, end - begin + 1));
 }
 
 } // namespace
@@ -113,26 +115,22 @@ std::optional<TcpTelemetryFrame> TcpCsvFrameParser::parseRow(const std::string& 
     // A row with no usable timestamp cannot be paced/aligned; skip silently.
     const std::string* tsCell = cell(map.timestamp);
     const std::optional<double> ts = tsCell ? doubleOrNil(*tsCell) : std::nullopt;
-    if (!ts) {
+    if (!ts.has_value()) {
         return std::nullopt;
     }
 
     TcpTelemetryFrame frame;
     frame.timestampMs = ts.value();
-    const std::string* throttleCell = cell(map.throttle);
-    if (throttleCell) {
+    if (const std::string* throttleCell = cell(map.throttle)) {
         frame.throttle = doubleOrNil(*throttleCell);
     }
-    const std::string* speedCell = cell(map.speed);
-    if (speedCell) {
+    if (const std::string* speedCell = cell(map.speed)) {
         frame.speedKmh = doubleOrNil(*speedCell);
     }
-    const std::string* accelCell = cell(map.acceleration);
-    if (accelCell) {
+    if (const std::string* accelCell = cell(map.acceleration)) {
         frame.accelerationG = doubleOrNil(*accelCell);
     }
-    const std::string* brakeCell = cell(map.brake);
-    if (brakeCell) {
+    if (const std::string* brakeCell = cell(map.brake)) {
         frame.brake = doubleOrNil(*brakeCell);
     }
     return frame;

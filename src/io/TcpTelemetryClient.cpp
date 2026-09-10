@@ -4,6 +4,7 @@
 #include "io/TcpTelemetryClient.h"
 
 #include <algorithm>
+#include <array>
 
 namespace input {
 
@@ -172,11 +173,11 @@ void TcpTelemetryClient::stopDiscovery() {
 }
 
 bool TcpTelemetryClient::isVehicleSimDiscovery(const std::string& bytes) {
-    static const char kMagic[4] = {0x56, 0x53, 0x49, 0x4D};  // "VSIM"
+    static const std::array<unsigned char, 4> kMagic = {0x56, 0x53, 0x49, 0x4D};  // "VSIM"
     if (bytes.size() < 5) {
         return false;
     }
-    for (std::size_t i = 0; i < sizeof(kMagic); ++i) {
+    for (std::size_t i = 0; i < std::size(kMagic); ++i) {
         if (static_cast<unsigned char>(bytes[i]) !=
             static_cast<unsigned char>(kMagic[i])) {
             return false;

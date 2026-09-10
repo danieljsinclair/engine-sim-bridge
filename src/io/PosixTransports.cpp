@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <utility>
 
@@ -88,13 +89,13 @@ void PosixTcpTransport::runReceiveLoop(int fd) {
         if ((pfd.revents & POLLIN) == 0) {
             continue;
         }
-        char buf[4096];
-        const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+        std::array<char, 4096> buf;
+        const ssize_t n = ::recv(fd, buf.data(), std::size(buf), 0);
         if (n <= 0) {
             break;  // 0 = orderly remote close, <0 = error (ECONNRESET etc.)
         }
         if (onData) {
-            onData(std::string(buf, static_cast<std::size_t>(n)));
+            onData(std::string(buf.data(), static_cast<std::size_t>(n)));
         }
     }
     // Exactly one closer wins: close() already shut the fd down (owner clean
@@ -164,20 +165,20 @@ bool PosixUdpListener::listen(uint16_t port) {
     closed_ = false;
     worker_ = std::thread([this, fd]() {
         while (!closed_) {
-            char buf[2048];
+            std::array<char, 2048> buf;
             sockaddr_in from{};
             socklen_t fromLen = sizeof(from);
-            const ssize_t n = ::recvfrom(fd, buf, sizeof(buf), 0,
+            const ssize_t n = ::recvfrom(fd, buf.data(), std::size(buf), 0,
                                          reinterpret_cast<sockaddr*>(&from), &fromLen);
             if (closed_ || n <= 0) {
                 break;
             }
-            char dotted[INET_ADDRSTRLEN] = {0};
+            std::array<char, INET_ADDRSTRLEN> dotted{};
             if (!onPacket) {
                 continue;
             }
-            if (::inet_ntop(AF_INET, &from.sin_addr, dotted, sizeof(dotted)) != nullptr) {
-                onPacket(std::string(buf, static_cast<std::size_t>(n)), dotted);
+            if (::inet_ntop(AF_INET, &from.sin_addr, dotted.data(), std::size(dotted)) != nullptr) {
+                onPacket(std::string(buf.data(), static_cast<std::size_t>(n)), dotted.data());
             }
         }
     });
@@ -203,7 +204,7 @@ void PosixUdpListener::close() {
 
 ThreadScheduler::~ThreadScheduler() {
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::scoped_lock lock(mutex_);
         stopped_ = true;
     }
     cv_.notify_all();
@@ -213,7 +214,7 @@ ThreadScheduler::~ThreadScheduler() {
     // Drain: run whatever is still pending (uncancelled), in deadline order.
     std::vector<Task> drain;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::scoped_lock lock(mutex_);
         drain.swap(queue_);
     }
     for (Task& task : drain) {
@@ -227,7 +228,7 @@ uint64_t ThreadScheduler::post(int delayMs, std::function<void()> fn) {
     const uint64_t token = nextToken_++;
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(delayMs);
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::scoped_lock lock(mutex_);
     Task task{token, deadline, std::move(fn)};
     auto it = std::lower_bound(queue_.begin(), queue_.end(), task,
                                [](const Task& a, const Task& b) {
@@ -244,12 +245,12 @@ uint64_t ThreadScheduler::post(int delayMs, std::function<void()> fn) {
 }
 
 void ThreadScheduler::cancel(uint64_t token) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::scoped_lock lock(mutex_);
     cancelled_.push_back(token);
 }
 
 void ThreadScheduler::runLoop() {
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock lock(mutex_);
     while (true) {
         if (stopped_) {
             return;  // the destructor drains whatever is left

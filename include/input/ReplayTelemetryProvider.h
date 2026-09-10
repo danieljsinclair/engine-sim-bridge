@@ -191,7 +191,7 @@ private:
     // (replay reproduces a running engine, not the cranking transient). The
     // selector comes from the first sample (default DRIVE) so a PARK/NEUTRAL
     // trace never reaches RUNNING. No-op when the twin is absent / no samples.
-    void primeTwinToRunning();
+    void primeTwinToRunning() const;
     void handleNonAutoGearbox(EngineInput& input, const Sample& s) const;
 
     const Sample& sampleAt(double t) const;
