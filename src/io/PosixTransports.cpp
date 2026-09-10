@@ -21,10 +21,14 @@ namespace input {
 // ---- PosixTcpTransport -----------------------------------------------------
 
 PosixTcpTransport::~PosixTcpTransport() {
-    close();
+    closeForTeardown();
     if (worker_.joinable()) {
         worker_.join();
     }
+}
+
+void PosixTcpTransport::closeForTeardown() {
+    close();
 }
 
 void PosixTcpTransport::connect(const std::string& host, uint16_t port) {
@@ -34,68 +38,67 @@ void PosixTcpTransport::connect(const std::string& host, uint16_t port) {
         worker_.join();
     }
     closed_ = false;
-    worker_ = std::thread([this, host, port]() {
-        // Resolve, then blocking connect (private thread keeps the caller
-        // non-blocking without the state machine of a half-open socket).
-        addrinfo hints{};
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        addrinfo* list = nullptr;
-        if (::getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &list) != 0 ||
-            list == nullptr) {
-            if (onDisconnected) {
-                onDisconnected();
-            }
-            return;
-        }
+    worker_ = std::thread([this, host, port]() { connectWorker(host, port); });
+}
 
-        int fd = ::socket(list->ai_family, list->ai_socktype, list->ai_protocol);
-        if (fd < 0 || ::connect(fd, list->ai_addr, list->ai_addrlen) != 0) {
-            if (fd >= 0) {
-                ::close(fd);
-            }
-            ::freeaddrinfo(list);
-            if (onDisconnected) {
-                onDisconnected();
-            }
-            return;
+void PosixTcpTransport::connectWorker(std::string host, uint16_t port) {
+    // Resolve, then blocking connect (private thread keeps the caller
+    // non-blocking without the state machine of a half-open socket).
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* list = nullptr;
+    if (::getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &list) != 0 ||
+        list == nullptr) {
+        if (onDisconnected) {
+            onDisconnected();
+        }
+        return;
+    }
+
+    int fd = ::socket(list->ai_family, list->ai_socktype, list->ai_protocol);
+    if (fd < 0 || ::connect(fd, list->ai_addr, list->ai_addrlen) != 0) {
+        if (fd >= 0) {
+            ::close(fd);
         }
         ::freeaddrinfo(list);
-        ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-        fd_ = fd;
-
-        if (onConnected) {
-            onConnected();
+        if (onDisconnected) {
+            onDisconnected();
         }
-        runReceiveLoop(fd);
-    });
+        return;
+    }
+    ::freeaddrinfo(list);
+    ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    fd_ = fd;
+
+    if (onConnected) {
+        onConnected();
+    }
+    runReceiveLoop(fd);
 }
 
 void PosixTcpTransport::runReceiveLoop(int fd) {
-    while (!closed_) {
+    // Single-exit loop: every terminal condition (closed during poll, error /
+    // hangup, receive end) folds into `stop` and exits through the one break.
+    while (true) {
         pollfd pfd{};
         pfd.fd = fd;
         pfd.events = POLLIN;
         const int ready = ::poll(&pfd, 1, 200);
-        if (closed_) {
+        bool stop = closed_ ||
+                    (ready > 0 && (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0);
+        if (!stop && ready > 0 && (pfd.revents & POLLIN) != 0) {
+            std::array<char, 4096> buf;
+            const ssize_t n = ::recv(fd, buf.data(), std::size(buf), 0);
+            if (n <= 0) {
+                stop = true;  // 0 = orderly remote close, <0 = error (ECONNRESET etc.)
+            } else if (onData) {
+                onData(std::string(buf.data(), static_cast<std::size_t>(n)));
+            }
+        }
+        // ready <= 0 is a poll timeout or EINTR: re-check closed_, poll again.
+        if (stop) {
             break;
-        }
-        if (ready <= 0) {
-            continue;  // timeout or EINTR: re-check closed_, poll again
-        }
-        if ((pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-            break;
-        }
-        if ((pfd.revents & POLLIN) == 0) {
-            continue;
-        }
-        std::array<char, 4096> buf;
-        const ssize_t n = ::recv(fd, buf.data(), std::size(buf), 0);
-        if (n <= 0) {
-            break;  // 0 = orderly remote close, <0 = error (ECONNRESET etc.)
-        }
-        if (onData) {
-            onData(std::string(buf.data(), static_cast<std::size_t>(n)));
         }
     }
     // Exactly one closer wins: close() already shut the fd down (owner clean
@@ -133,10 +136,14 @@ void PosixTcpTransport::close() {
 // ---- PosixUdpListener ------------------------------------------------------
 
 PosixUdpListener::~PosixUdpListener() {
-    close();
+    closeForTeardown();
     if (worker_.joinable()) {
         worker_.join();
     }
+}
+
+void PosixUdpListener::closeForTeardown() {
+    close();
 }
 
 bool PosixUdpListener::listen(uint16_t port) {
@@ -217,9 +224,15 @@ ThreadScheduler::~ThreadScheduler() {
         std::scoped_lock lock(mutex_);
         drain.swap(queue_);
     }
-    for (Task& task : drain) {
+    for (const Task& task : drain) {
         if (std::find(cancelled_.begin(), cancelled_.end(), task.token) == cancelled_.end()) {
-            task.fn();
+            // S1048: a destructor must never let an exception escape — a throw
+            // here (user callback, or allocation during unwinding) would call
+            // std::terminate. This boundary deliberately swallows.
+            try {
+                task.fn();
+            } catch (...) {
+            }
         }
     }
 }
@@ -274,7 +287,12 @@ void ThreadScheduler::runLoop() {
         lock.unlock();
         if (std::find(cancelled_.begin(), cancelled_.end(), task.token) ==
             cancelled_.end()) {
-            task.fn();
+            // Same boundary guarantee as the destructor drain: a throwing
+            // callback here would escape the thread entry and terminate.
+            try {
+                task.fn();
+            } catch (...) {
+            }
         }
         lock.lock();
     }

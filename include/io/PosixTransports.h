@@ -37,7 +37,12 @@ public:
     void close() override;
 
 private:
+    // Body of the connect thread (keeps the thread lambda a one-liner).
+    void connectWorker(std::string host, uint16_t port);
     void runReceiveLoop(int fd);
+    // Non-virtual teardown for the destructor: destructors must not dispatch
+    // through overridable methods (S1699), so they close via this helper.
+    void closeForTeardown();
 
     std::thread worker_;
     std::atomic<bool> closed_{false};
@@ -56,6 +61,9 @@ public:
     void close() override;
 
 private:
+    // Non-virtual teardown for the destructor (see PosixTcpTransport).
+    void closeForTeardown();
+
     std::thread worker_;
     std::atomic<bool> closed_{false};
     int fd_ = -1;
