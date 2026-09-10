@@ -390,6 +390,31 @@ TEST_F(DemoInputProviderTest, EnhanceInput_PreservesCouplingIsTorqueConverterFal
         << "enhanceInput must pass the twin's couplingIsTorqueConverter=false through";
 }
 
+// Defect B (red): enhanceInput must pass vehicleSpeedTargetKmh through from the
+// twin. With PIN wheel coupling (the demo default) and the twin in RUNNING,
+// surfaceCouplingTargets populates pinVehicleSpeedTargetKmh >= 0 (the CSV road
+// speed). The merge must preserve it instead of leaving the baseInput sentinel
+// (-1.0), which SimulationLoop gates on >= 0.0 to engage the VehicleSpeedConstraint.
+TEST_F(DemoInputProviderTest, EnhanceInput_PreservesVehicleSpeedTargetKmh) {
+    // Default: PIN wheel coupling + TorqueConverter model.
+    ASSERT_TRUE(provider_->Initialize());
+    warmTwinToRunning(*provider_, rawThrottle_);
+
+    input::EngineInput base;
+    base.throttle = 0.5;
+    base.ignition = true;
+    base.gearSelector = provider_->getGearSelectorState();
+    base.brakeLevel = 0.0;
+    // Sentinel: untouched. A bare copy leaves -1.0; the twin should produce >= 0.
+    base.vehicleSpeedTargetKmh = -1.0;
+
+    input::EngineInput result = provider_->enhanceInput(base, 0.016);
+
+    EXPECT_GE(result.vehicleSpeedTargetKmh, 0.0)
+        << "enhanceInput must pass the twin's vehicleSpeedTargetKmh (>=0) through; "
+        << "baseInput had -1.0 so only a twin pass-through can make this >= 0";
+}
+
 TEST(DemoInputProviderIntegration, GearboxShiftsAt20PercentThrottle) {
     // Create components exactly like CLIMain.cpp does
     auto throttle = std::make_unique<input::DemoThrottleSource>();

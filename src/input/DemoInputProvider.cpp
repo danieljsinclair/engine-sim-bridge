@@ -272,6 +272,10 @@ EngineInput DemoInputProvider::enhanceInput(const EngineInput& baseInput, double
     // Defect A: couplingIsTorqueConverter drives the ConsolePresentation "TC"
     // vs "Cl" label — the twin surfaces the model it produced clutchPressure under.
     result.couplingIsTorqueConverter = twinInput.couplingIsTorqueConverter;
+    // Defect B: vehicleSpeedTargetKmh from the twin's pin-chase enables the
+    // VehicleSpeedConstraint on the script/demo path (--pin-tau-ms). The twin
+    // in PIN wheel-coupling surfaces the CSV road speed (>=0) here; -1 = FREE.
+    result.vehicleSpeedTargetKmh = twinInput.vehicleSpeedTargetKmh;
 
     return result;
 }
