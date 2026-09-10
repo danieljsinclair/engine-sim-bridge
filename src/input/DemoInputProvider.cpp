@@ -261,12 +261,17 @@ EngineInput DemoInputProvider::enhanceInput(const EngineInput& baseInput, double
     EngineInput twinInput = twinProvider_.OnUpdateSimulation(dt);
     currentGear_ = twinInput.gearAbsolute;
 
-    // Preserve ALL keyboard state; merge ONLY gear/clutch from twin
+    // Preserve ALL keyboard state; merge gear/clutch diagnostics from twin.
+    // The twin surfaces the coupling model identity (TC vs Cl label) that must
+    // survive the merge onto the keyboard base input.
     EngineInput result = baseInput;
     result.gearAbsolute = twinInput.gearAbsolute;
     result.clutchPressure = twinInput.clutchPressure;
     result.gearSelector = twinInput.gearSelector;
     result.gearAutoMode = true;
+    // Defect A: couplingIsTorqueConverter drives the ConsolePresentation "TC"
+    // vs "Cl" label — the twin surfaces the model it produced clutchPressure under.
+    result.couplingIsTorqueConverter = twinInput.couplingIsTorqueConverter;
 
     return result;
 }

@@ -303,6 +303,93 @@ TEST_F(DemoInputProviderTest, Brake_ThrottleIndependent) {
     // Throttle also flows through (after twin warmup it may vary, but raw value was set)
 }
 
+// ============================================================================
+// enhanceInput merge-seam tests
+//
+// enhanceInput is the keyboard/demo path: it receives a base EngineInput
+// (keyboard state) and merges the twin's computed gear/clutch diagnostics
+// ONTO it. Two fields are dropped by the current merge: couplingIsTorqueConverter
+// (Defect A) and vehicleSpeedTargetKmh (Defect B).
+//
+// These tests drive the twin to RUNNING state (so surfaceCouplingTargets
+// populates pinVehicleSpeedTargetKmh), call enhanceInput, and assert the twin's
+// values survive the merge into the returned EngineInput.
+// ============================================================================
+
+namespace {
+
+// Drive a DemoInputProvider's twin to RUNNING state by feeding it ignition +
+// throttle + DRIVE selector over enough frames for the 3s crank fallback to
+// expire and the IDLE->RUNNING transition to fire.
+void warmTwinToRunning(input::DemoInputProvider& provider, input::DemoThrottleSource* rawThrottle,
+                       double dt = 0.016, int maxFrames = 600) {
+    // P → R → N → D (3 shift-ups from the default PARK)
+    provider.shiftUp(); // P → R
+    provider.shiftUp(); // R → N
+    provider.shiftUp(); // N → D
+
+    EngineSimStats feedback{};
+    feedback.currentRPM = 800.0;
+
+    for (int i = 0; i < maxFrames; ++i) {
+        rawThrottle->setThrottleLevel(0.5);
+        provider.provideFeedback(feedback);
+        double throttle = rawThrottle->pollThrottle();
+        input::EngineInput base;
+        base.throttle = throttle;
+        base.ignition = true;
+        base.gearSelector = provider.getGearSelectorState();
+        base.brakeLevel = 0.0;
+        provider.enhanceInput(base, dt);
+    }
+}
+
+}  // namespace
+
+// Defect A (red): enhanceInput must pass couplingIsTorqueConverter through from
+// the twin. The default demo coupling model is TorqueConverter, so the twin
+// surfaces couplingIsTorqueConverter=true. The merge must preserve it.
+TEST_F(DemoInputProviderTest, EnhanceInput_PreservesCouplingIsTorqueConverter) {
+    ASSERT_TRUE(provider_->Initialize());
+    warmTwinToRunning(*provider_, rawThrottle_);
+
+    input::EngineInput base;
+    base.throttle = 0.5;
+    base.ignition = true;
+    base.gearSelector = provider_->getGearSelectorState();
+    base.brakeLevel = 0.0;
+    // Intentionally set baseInput to the OPPOSITE of what the twin produces,
+    // so a bare copy of baseInput would fail the assertion.
+    base.couplingIsTorqueConverter = false;
+
+    input::EngineInput result = provider_->enhanceInput(base, 0.016);
+
+    EXPECT_TRUE(result.couplingIsTorqueConverter)
+        << "enhanceInput must pass the twin's couplingIsTorqueConverter=true through; "
+        << "baseInput had it false so only a twin pass-through can make this true";
+}
+
+// Defect A (red, converse): selecting ClutchMap flips couplingIsTorqueConverter
+// to false in the twin; enhanceInput must carry that false through too.
+TEST_F(DemoInputProviderTest, EnhanceInput_PreservesCouplingIsTorqueConverterFalse) {
+    ASSERT_TRUE(provider_->Initialize());
+    provider_->setCouplingModel(twin::CouplingModelKind::ClutchMap);
+    warmTwinToRunning(*provider_, rawThrottle_);
+
+    input::EngineInput base;
+    base.throttle = 0.5;
+    base.ignition = true;
+    base.gearSelector = provider_->getGearSelectorState();
+    base.brakeLevel = 0.0;
+    // Opposite of what the twin produces — the merge must overwrite this.
+    base.couplingIsTorqueConverter = true;
+
+    input::EngineInput result = provider_->enhanceInput(base, 0.016);
+
+    EXPECT_FALSE(result.couplingIsTorqueConverter)
+        << "enhanceInput must pass the twin's couplingIsTorqueConverter=false through";
+}
+
 TEST(DemoInputProviderIntegration, GearboxShiftsAt20PercentThrottle) {
     // Create components exactly like CLIMain.cpp does
     auto throttle = std::make_unique<input::DemoThrottleSource>();
