@@ -204,6 +204,9 @@ set(BRIDGE_SOURCES
     src/input/VehicleStartController.cpp
     # IO
     src/io/LiveTelemetryParser.cpp
+    src/io/TcpCsvFrameParser.cpp
+    src/io/TcpTelemetryClient.cpp
+    src/io/PosixTransports.cpp
 )
 
 # Platform-specific audio hardware and factory
@@ -430,6 +433,9 @@ if(BUILD_BRIDGE_TESTS)
         test/input/OverlayInputProviderTest.cpp
         test/input/VehicleStartControllerTest.cpp
         test/twin/GearboxCsvLoggerTest.cpp
+        test/TcpCsvFrameParserTests.cpp
+        test/TcpTelemetryClientTests.cpp
+        test/TcpLoopbackTest.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
