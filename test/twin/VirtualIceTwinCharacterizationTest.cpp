@@ -421,71 +421,89 @@ TEST_F(VirtualIceTwinCharacterizationTest, IdleFrame_TouchesNoCouplingSurfaces) 
 // RUNNING: idle-hold floor semantics (add-only, clamped, hysteresis).
 // ---------------------------------------------------------------------------
 
-// The idle-hold controller is a FLOOR: with the driver at ~60% and the engine
-// sagging below idle, the output throttle stays at the driver's (smoothed)
-// value — the controller may only ADD throttle, never reduce it.
+// IDLE-WOBBLE FIX (idlefix, 2026-09-10): the idle-hold controller is GONE.
+// Anti-stall must NEVER touch the throttle; the engine is held at idle by the
+// CLUTCH side (creep-relief opens the clutch so the engine idles decoupled).
+// These three characterization tests previously pinned the old floor's
+// add-only/clamped/hysteresis contract; they are rewritten to pin the NEW
+// contract: the twin's throttle is the DRIVER's throttle, never a floor, at
+// every engine RPM including a sub-idle sag.
+
+// With the driver at ~60% and the engine sagging below idle, the output
+// throttle is the driver's (smoothed) value — the twin must never ADD
+// throttle above what the driver commanded.
 TEST_F(VirtualIceTwinCharacterizationTest, IdleHoldFloor_AddOnly_NeverReducesDriverThrottle) {
     advanceToIdle();
     enterRunningHealthy(5.0, 0.6);
 
     auto sig = makeValidSignal(0.6, 5.0);
     for (int i = 0; i < 30; ++i) twin_->update(1.0 / 60.0, sig);  // smoother settled ~0.6
-    twin_->setEngineRpmFeedback(profile_.idleRpm - 300.0);  // sag below idle -> hold engages
+    twin_->setEngineRpmFeedback(profile_.idleRpm - 300.0);  // sag below idle
 
     const auto out = twin_->update(1.0 / 60.0, sig);
     EXPECT_GE(out.throttle, twin_->getSmoothedThrottle() - 1e-9)
-        << "the idle-hold floor must never take throttle away from the driver";
+        << "the twin must never take throttle away from the driver";
     EXPECT_GE(out.throttle, 0.5)
-        << "driver at ~60% keeps ~60% even while the engine sags (floor semantics)";
+        << "driver at ~60% keeps ~60% even while the engine sags";
+    // The idlefix contract: the twin must never ADD throttle above the driver's
+    // own input, even when the engine sags below idle.
+    EXPECT_LE(out.throttle, twin_->getSmoothedThrottle() + 1e-9)
+        << "anti-stall must NEVER add throttle: a sub-idle sag must not raise "
+           "the throttle above the driver's ~60%";
 }
 
-// The controller's authority is capped at 20% of full throttle: a deep sag
-// (engine at 100 rpm, alive) commands at most 0.20, far below kickdown (95%)
-// and the WOT gate (90%) so it cannot disturb shift logic.
-TEST_F(VirtualIceTwinCharacterizationTest, IdleHoldFloor_ClampedAt20Percent_EvenOnDeepSag) {
+// With the driver at 0 and a deep sag (engine at 100 rpm, alive), the twin
+// must output the driver's 0 — NOT a floor. The old controller floored it at
+// 5% here; that was the idle-wobble source.
+TEST_F(VirtualIceTwinCharacterizationTest, IdleHoldFloor_NoFloorOnDeepSag) {
     advanceToIdle();
     enterRunningHealthy(5.0, 0.0);
 
     twin_->setEngineRpmFeedback(100.0);  // alive (above STOPPED_RPM) but deep sag
     const auto out = twin_->update(1.0 / 60.0, makeValidSignal(0.0, 5.0));
-    EXPECT_LE(out.throttle, 0.20 + 1e-9)
-        << "idle-hold authority is capped at 20% (must not reach kickdown/WOT)";
-    EXPECT_GE(out.throttle, EngineSimDefaults::IDLE_SUSTAIN_THROTTLE - 1e-9)
-        << "an engaged hold floors at the idle-sustain minimum";
+    // The idlefix contract: the twin must never ADD throttle above the
+    // driver's input. The smoother still carries the cranking residue here
+    // (0.6 -> decaying, ~0.15 after 30 frames at tau=50ms), which is the
+    // DRIVER's own input path, not a floor — so the bound is the smoothed
+    // value, not 0. The old controller floored 0.05 here; this frame must
+    // never exceed what the driver's smoother already holds.
+    EXPECT_LE(out.throttle, twin_->getSmoothedThrottle() + 1e-9)
+        << "anti-stall must NEVER touch the throttle: a deep sag with zero "
+           "driver input must not raise the throttle above the driver's own "
+           "(smoothed) input (got " << out.throttle << " vs smoothed "
+           << twin_->getSmoothedThrottle() << "), never a floor";
 }
 
-// Engage/release hysteresis: the hold engages below idle and releases only
-// above idle + 150 rpm. Between idle and idle + 150 (here idle + 75) an
-// already-engaged hold STAYS engaged; above idle + 150 it releases and the
-// throttle falls back to the driver's (0).
+// At every engine RPM with zero driver input the twin outputs the driver's 0.
+// There is no engage/release hysteresis band any more: the clutch side holds
+// the engine, and the throttle is the driver's alone.
 TEST_F(VirtualIceTwinCharacterizationTest, IdleHoldRelease_HysteresisBand_HoldsUntilIdlePlus150) {
     advanceToIdle();
     enterRunningHealthy(5.0, 0.0);
 
-    // Decay the smoother's cranking-throttle residue (~0.6) so the release
-    // frame's throttle is attributable to the hold alone.
+    // Decay the smoother's cranking-throttle residue (~0.6).
     auto zero = makeValidSignal(0.0, 5.0);
     for (int i = 0; i < 90; ++i) twin_->update(1.0 / 60.0, zero);
     ASSERT_LT(twin_->getSmoothedThrottle(), 1e-6)
         << "precondition: smoother residue decayed to ~0";
 
-    // Engage below idle.
+    // Below idle: the driver is at 0, so the twin outputs 0 (no floor).
     twin_->setEngineRpmFeedback(profile_.idleRpm - 50.0);
     auto engaged = twin_->update(1.0 / 60.0, zero);
-    EXPECT_GE(engaged.throttle, EngineSimDefaults::IDLE_SUSTAIN_THROTTLE - 1e-9)
-        << "below idle the hold engages and floors the throttle";
+    EXPECT_LE(engaged.throttle, 1e-9)
+        << "below idle with zero driver input the twin outputs the driver's 0";
 
-    // Inside the hysteresis band (idle + 75 < idle + 150): still engaged.
+    // Inside the old hysteresis band: still the driver's 0.
     twin_->setEngineRpmFeedback(profile_.idleRpm + 75.0);
     engaged = twin_->update(1.0 / 60.0, zero);
-    EXPECT_GE(engaged.throttle, EngineSimDefaults::IDLE_SUSTAIN_THROTTLE - 1e-9)
-        << "inside the release hysteresis band the hold stays engaged";
+    EXPECT_LE(engaged.throttle, 1e-9)
+        << "inside the release band the throttle is still the driver's own (0)";
 
-    // Above idle + 150: released -> no floor at zero driver throttle.
+    // Above idle + 150: the driver's 0.
     twin_->setEngineRpmFeedback(profile_.idleRpm + 250.0);
     engaged = twin_->update(1.0 / 60.0, zero);
     EXPECT_NEAR(engaged.throttle, 0.0, 1e-6)
-        << "above idle + 150 the hold releases; throttle is the driver's own (0)";
+        << "above idle + 150 the throttle is the driver's own (0)";
 }
 
 // ---------------------------------------------------------------------------

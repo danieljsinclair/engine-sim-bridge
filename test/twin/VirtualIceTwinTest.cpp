@@ -1241,15 +1241,32 @@ struct StallPlant {
     static constexpr double kSustainThrottle = 0.02;  // throttle that holds a live engine
     static constexpr double kTauS = 0.15;
 
-    void step(double throttleCmd, bool starter, double dt) {
+    // IDLE-WOBBLE FIX (idlefix, 2026-09-10): a real engine at idle with NO
+    // load holds idle with zero throttle. The old plant model (target 0 below
+    // kSustainThrottle) assumed the ONLY way to hold idle was throttle — that
+    // was the defect the #39 fix papered over with a throttle floor. The
+    // idlefix fix holds idle via the CLUTCH: the creep-drag relief opens the
+    // clutch (clutchPressure ~ 0) so the engine idles decoupled. The plant
+    // now models that: with the clutch open there is no load, so the engine
+    // holds idle on its no-load curve regardless of throttle.
+    void step(double throttleCmd, bool starter, double dt, double clutchPressure,
+              bool torqueConverter = false) {
+        // A friction clutch that is OPEN (relief) or a torque converter's fluid
+        // slip both UNLOAD the engine: it holds idle with zero throttle. A
+        // clutch that is ENGAGED with the wheels pinned drags it down.
+        const bool unloaded = (clutchPressure < 0.05) || torqueConverter;
         double target;
         if (starter) {
             target = kCrankTarget;
             stopped = false;
         } else if (!stopped && throttleCmd >= kSustainThrottle) {
             target = kIdleRun + throttleCmd * (kRedline - kIdleRun);
+        } else if (!stopped && !unloaded) {
+            target = 0.0;  // live engine, clutch ENGAGED, no throttle -> decays
         } else if (!stopped) {
-            target = 0.0;  // live engine, no throttle -> decays toward stall
+            // Unloaded (creep relief open clutch, or TC fluid slip): no load,
+            // holds idle with zero throttle — the idlefix contract.
+            target = kIdleRun;
         } else {
             target = 0.0;  // stopped: throttle ALONE cannot restart
         }
@@ -1287,7 +1304,7 @@ TEST_F(VirtualIceTwinTest, RunningAtStandstill_HoldsIdleFloor_NoStall_GBfix3) {
         sig.speedKmh = 0.5;
         twin_->setEngineRpmFeedback(plant.rpm);
         const auto out = twin_->update(dt, sig);
-        plant.step(out.throttle, out.starterMotor, dt);
+        plant.step(out.throttle, out.starterMotor, dt, out.clutchPressure, out.couplingIsTorqueConverter);
         if (plant.stopped) { stalled = true; break; }
     }
     EXPECT_FALSE(stalled)
@@ -1315,7 +1332,7 @@ TEST_F(VirtualIceTwinTest, MidDriveStall_RestartsWithIgnitionOn_GBfix3) {
     for (int frame = 0; frame < static_cast<int>(1.0 / dt); ++frame) {
         twin_->setEngineRpmFeedback(0.0);  // engine reports a stall
         const auto out = twin_->update(dt, sig);
-        plant.step(out.throttle, out.starterMotor, dt);
+        plant.step(out.throttle, out.starterMotor, dt, out.clutchPressure, out.couplingIsTorqueConverter);
         plant.rpm = 0.0;  // hold the stall condition (engine truly stopped)
         plant.stopped = true;
     }
@@ -1329,7 +1346,7 @@ TEST_F(VirtualIceTwinTest, MidDriveStall_RestartsWithIgnitionOn_GBfix3) {
         // stopped so feedback stays 0 until the twin re-cranks and spins it up.
         twin_->setEngineRpmFeedback(plant.rpm);
         const auto out = twin_->update(dt, sig);
-        plant.step(out.throttle, out.starterMotor, dt);
+        plant.step(out.throttle, out.starterMotor, dt, out.clutchPressure, out.couplingIsTorqueConverter);
         if (!plant.stopped && plant.rpm > 500.0) { restarted = true; break; }
     }
     EXPECT_TRUE(restarted)
@@ -1490,14 +1507,10 @@ TEST_F(VirtualIceTwinTest, CreepRelief_RampsClutchPressure_NoBinarySlam_Issue24)
         << "Re-engage must RAMP up (rate-limited), not slam to the slip-lock value";
 }
 
-TEST_F(VirtualIceTwinTest, CreepRelief_HoldsReliefIdleSustainThrottle_DecoupledEngine_Issue24) {
+TEST_F(VirtualIceTwinTest, CreepRelief_OpensClutchWithoutTouchingThrottle_idlefix) {
     // LEGACY binary relief path (now behind --coupling-model legacy). The default
     // clutch-map never fires the relief; select legacy to exercise this path.
     twin_->setCouplingModel(twin::CouplingModelKind::Legacy);
-    // When the relief fires the engine is decoupled; the relief MUST apply its
-    // stronger idle-sustain floor (RELIEF_IDLE_SUSTAIN_THROTTLE) so the decoupled
-    // engine holds idle instead of drooping on the normal 5% floor. This is the
-    // relief's decoupled-idle behavior — declaratively owned by the relief.
     twin_->reconfigureProfile(kC63Ratios, kC63Diff, kC63TireM);
     twin_->setWheelCouplingMode(twin::WheelCouplingMode::Pin);
     advanceThroughCranking();
@@ -1506,13 +1519,27 @@ TEST_F(VirtualIceTwinTest, CreepRelief_HoldsReliefIdleSustainThrottle_DecoupledE
     twin_->update(0.016, makeValidSignal(0.2, 5.0));
     ASSERT_EQ(twin_->getState(), TwinState::RUNNING);
 
-    // Mid-slip-band, engine below idle, driver lifted (0% throttle): the relief
-    // fires AND the relief idle-sustain floor owns the throttle.
+    // Idlefix contract (2026-09-10): the relief opens ONLY the clutch. It must
+    // NOT floor the throttle at RELIEF_IDLE_SUSTAIN_THROTTLE (the old behavior) —
+    // that floor was the idle-wobble source. The decoupled engine holds idle on
+    // its no-load curve with zero throttle. Here we verify the relief fires and
+    // the clutch drops toward 0, but the throttle stays at the driver's input.
     const auto out = sampleRunningFrame(*twin_, 11.0, 940.0, 0.0);
     EXPECT_TRUE(out.creepReliefFired);
-    EXPECT_GE(out.throttle, EngineSimDefaults::RELIEF_IDLE_SUSTAIN_THROTTLE)
-        << "Relief must floor throttle at RELIEF_IDLE_SUSTAIN_THROTTLE so the "
-        << "decoupled engine holds idle (the normal 5% floor droops to ~800 rpm)";
+    // The clutch pressure is rate-limited toward 0 (anti-slam), not snapped. Over
+    // a few sustained relief frames it must converge to ~0 (fully decoupled).
+    double relieved = out.clutchPressure;
+    for (int i = 0; i < 30 && relieved > 0.001; ++i) {
+        relieved = sampleRunningFrame(*twin_, 11.0, 940.0, 0.0).clutchPressure;
+    }
+    EXPECT_NEAR(relieved, 0.0, 0.02)
+        << "Relief must open the clutch (converges to 0) without a throttle floor";
+    // Throttle is the driver's (smoothed) input — the relief must NEVER add
+    // throttle. (The smoother carries residual from prior throttle; we assert the
+    // contract relative to the smoothed value, not an absolute floor.)
+    EXPECT_LE(out.throttle, twin_->getSmoothedThrottle() + 1e-9)
+        << "The relief must NEVER touch the throttle (idlefix contract); "
+        << "got " << out.throttle << " vs smoothed " << twin_->getSmoothedThrottle();
 }
 
 TEST_F(VirtualIceTwinTest, CreepRelief_DoesNotFireForFreeCoupling_LaunchIntact_Issue24) {
@@ -1565,7 +1592,7 @@ TEST_F(VirtualIceTwinTest, StandstillInDrive_TCIdlesOnReducedCreep_EngineSustain
         sig.speedKmh = 0.5;          // standstill-in-D (creep band)
         twin_->setEngineRpmFeedback(plant.rpm);
         const auto out = twin_->update(dt, sig);
-        plant.step(out.throttle, out.starterMotor, dt);
+        plant.step(out.throttle, out.starterMotor, dt, out.clutchPressure, out.couplingIsTorqueConverter);
         ASSERT_FALSE(plant.stopped)
             << "standstill-in-D must sustain idle; engine latched STOPPED";
         if (out.gear >= 1) {
@@ -1581,6 +1608,115 @@ TEST_F(VirtualIceTwinTest, StandstillInDrive_TCIdlesOnReducedCreep_EngineSustain
     // The pressure contract must actually have been exercised (the box is in
     // DA1 for essentially the whole window, not a stray neutral).
     EXPECT_GE(inGearFrames, totalFrames * 95 / 100);
+}
+
+// ---------------------------------------------------------------------------
+// IDLE-WOBBLE FIX (idlefix, 2026-09-10): anti-stall must NEVER touch the
+// throttle. The #39 idle-hold fix floored the throttle at
+// IDLE_SUSTAIN_THROTTLE (5%) in RUNNING at standstill-in-D, which bang-banged
+// the throttle 0<->5% as the engine crossed the idle band (the owner's
+// "idle wobble" — 186 flips/40s, rpm 869-1145). The fix removes the throttle
+// floor entirely and holds the engine at idle via the CLUTCH/COUPLING side:
+// the creep-drag relief opens the clutch so the engine idles decoupled, and it
+// STAYS open until the vehicle moves. The contract: at standstill-in-D with
+// zero driver throttle the twin must output EXACTLY the driver's throttle (0),
+// never a floor, and the engine must hold a stable idle.
+// ---------------------------------------------------------------------------
+struct IdlePlant {
+    // A real engine at idle with no throttle and no load settles at idleRpm.
+    // With the clutch OPEN (relief held) there is no load, so the engine holds
+    // idle — no wobble, no stall. With the clutch ENGAGED (the bug) the pinned
+    // stationary wheel drags the engine below idle and the throttle floor
+    // bang-bangs it back up.
+    double rpm = 0.0;
+    bool stopped = true;
+    static constexpr double kIdleRpm = 950.0;
+    static constexpr double kStoppedRpm = 50.0;  // engine-sim Stopped latch bar
+    static constexpr double kTauS = 0.15;
+
+    void step(double throttleCmd, bool starter, double dt, double /*clutchPressure*/,
+              bool /*torqueConverter*/) {
+        // IdlePlant models an engine with NO load path at all: a real engine at
+        // idle with zero throttle holds idle (the idlefix contract — the engine
+        // is held by the open clutch / fluid slip, not by throttle). The
+        // clutchPressure/torqueConverter params are accepted for signature
+        // symmetry with StallPlant but unused: this plant has no drag to model.
+        double target;
+        if (starter) {
+            target = kIdleRpm;
+            stopped = false;
+        } else if (!stopped && throttleCmd > 0.0) {
+            // Driver throttle: a real engine revs. (The fix must never reach
+            // here at standstill-in-D with zero input.)
+            target = kIdleRpm + throttleCmd * 5000.0;
+        } else if (!stopped) {
+            // No throttle, no starter: an engine with no load holds idle.
+            target = kIdleRpm;
+        } else {
+            target = 0.0;  // stopped: throttle alone cannot restart
+        }
+        const double alpha = 1.0 - std::exp(-dt / kTauS);
+        rpm += (target - rpm) * alpha;
+        if (rpm < kStoppedRpm) stopped = true;
+    }
+};
+
+TEST_F(VirtualIceTwinTest, StandstillInDrive_ThrottleStaysAtDriverInput_NoIdleWobble_idlefix) {
+    twin_->setWheelCouplingMode(twin::WheelCouplingMode::Pin);
+    advanceThroughCranking();
+    twin_->setGearSelector(bridge::GearSelector::DRIVE);
+    auto sig = makeValidSignal(0.2, 0.5);
+    twin_->setEngineRpmFeedback(800.0);
+    twin_->update(0.016, sig);  // IDLE -> RUNNING
+    ASSERT_EQ(twin_->getState(), TwinState::RUNNING)
+        << "Precondition: twin must reach RUNNING from IDLE at low speed";
+
+    IdlePlant plant;
+    plant.rpm = 800.0;
+    plant.stopped = false;
+    const double dt = 1.0 / 60.0;
+    const int settleFrames = static_cast<int>(15.0 / dt);  // let the smoother's
+    const int totalFrames = static_cast<int>(60.0 / dt);   // 0.2 cranking residue
+    double maxThrottle = 0.0;                               // decay away first
+    double minThrottle = 1.0;
+    double sumRpm = 0.0;
+    double sumRpm2 = 0.0;
+    int measuredFrames = 0;
+    bool stalled = false;
+    for (int frame = 0; frame < totalFrames; ++frame) {
+        sig.throttleFraction = 0.0;  // zero driver throttle: the wobble scenario
+        sig.speedKmh = 0.5;          // standstill-in-D (creep band)
+        twin_->setEngineRpmFeedback(plant.rpm);
+        const auto out = twin_->update(dt, sig);
+        plant.step(out.throttle, out.starterMotor, dt, out.clutchPressure, out.couplingIsTorqueConverter);
+        if (plant.stopped) { stalled = true; break; }
+        if (frame >= settleFrames) {
+            // STEADY STATE: the driver's residue has decayed. From here on the
+            // twin must output EXACTLY the driver's throttle (0) — anti-stall
+            // must NEVER touch the throttle. The bug floored it at 5% here.
+            maxThrottle = std::max(maxThrottle, out.throttle);
+            minThrottle = std::min(minThrottle, out.throttle);
+            sumRpm += plant.rpm;
+            sumRpm2 += plant.rpm * plant.rpm;
+            ++measuredFrames;
+        }
+    }
+    EXPECT_FALSE(stalled)
+        << "standstill-in-D must sustain idle; engine latched STOPPED";
+    EXPECT_GT(measuredFrames, 0)
+        << "the 60s window must reach the steady-state region";
+    EXPECT_LE(maxThrottle, 1e-9)
+        << "anti-stall must NEVER touch the throttle: at standstill-in-D with "
+           "zero driver input the twin must output 0 (got " << maxThrottle
+           << "), never a floor";
+    EXPECT_LE(minThrottle, 1e-9)
+        << "throttle must stay at the driver's input (0) once settled";
+    const double mean = sumRpm / measuredFrames;
+    const double variance = sumRpm2 / measuredFrames - mean * mean;
+    const double std = std::sqrt(std::max(0.0, variance));
+    EXPECT_LT(std, 30.0)
+        << "idle must hold stable (std < 30 rpm over 60s); got std=" << std
+        << " mean=" << mean << " (the wobble band was 869-1145)";
 }
 
 // ---------------------------------------------------------------------------
