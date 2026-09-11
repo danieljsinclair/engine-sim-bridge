@@ -520,11 +520,18 @@ summary-blocks: coverage-summary sonar-summary
 # Add/remove engines here — this is the ONLY list. Everything here is compiled, tested, and shipped.
 ENGINES := ferrari_f136 2jz C63_M156_V3 subaru_ej25 lfa_v10 v8_gm_ls 11_merlin_v12 06_subaru_ej25
 
+# Imported engine scripts + the isomorphism ground-truth copy. The wrapper
+# es/$(engine).mr pulls its engine definition from these trees via import;
+# without them as prerequisites a tune to an imported .mr never regenerates
+# the JSON (found 2026-09-11: a stale preset failed
+# RoundTripIsomorphismTest/Ferrari_F136 while every source had been reverted).
+PRESET_IMPORT_INPUTS := $(wildcard es/engines/*/*.mr) $(wildcard $(ENGINE_SIM_ROOT)/assets/engines/*/*.mr)
+
 # Auto-generate compilation rules: each preset/$(engine).json depends on es/$(engine).mr
 # The preset_compiler takes: <script_path> <output_json> <engine_sim_root>
 # Script paths must be absolute since the compiler changes CWD to engine_sim_root
 define PRESET_COMPILE_RULE
-$(PRESET_DIR)/$(1).json: es/$(1).mr | $(PRESET_COMPILER)
+$(PRESET_DIR)/$(1).json: es/$(1).mr $(PRESET_IMPORT_INPUTS) | $(PRESET_COMPILER)
 	@mkdir -p $$(dir $$@)
 	$(PRESET_COMPILER) $$(abspath es/$(1).mr) $$(abspath $$@) $$(abspath $(ENGINE_SIM_ROOT))
 endef
