@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <exception>
 #include <utility>
 
 namespace input {
@@ -21,14 +22,17 @@ namespace input {
 // ---- PosixTcpTransport -----------------------------------------------------
 
 PosixTcpTransport::~PosixTcpTransport() {
-    closeForTeardown();
+    // S1699: no virtual dispatch from a destructor — inline the clean-close
+    // semantics (suppress the disconnected sink, wake the poll loop, close).
+    closed_.exchange(true);
+    const int fd = fd_.exchange(-1);
+    if (fd >= 0) {
+        ::shutdown(fd, SHUT_RDWR);  // wakes a concurrent poll()/recv()
+        ::close(fd);
+    }
     if (worker_.joinable()) {
         worker_.join();
     }
-}
-
-void PosixTcpTransport::closeForTeardown() {
-    close();
 }
 
 void PosixTcpTransport::connect(const std::string& host, uint16_t port) {
@@ -41,7 +45,7 @@ void PosixTcpTransport::connect(const std::string& host, uint16_t port) {
     worker_ = std::thread([this, host, port]() { connectWorker(host, port); });
 }
 
-void PosixTcpTransport::connectWorker(std::string host, uint16_t port) {
+void PosixTcpTransport::connectWorker(const std::string& host, uint16_t port) {
     // Resolve, then blocking connect (private thread keeps the caller
     // non-blocking without the state machine of a half-open socket).
     addrinfo hints{};
@@ -103,8 +107,7 @@ void PosixTcpTransport::runReceiveLoop(int fd) {
     }
     // Exactly one closer wins: close() already shut the fd down (owner clean
     // close) or we do (genuine drop). Never double-close the descriptor.
-    int expected = fd;
-    if (fd_.compare_exchange_strong(expected, -1)) {
+    if (int expected = fd; fd_.compare_exchange_strong(expected, -1)) {
         ::close(fd);
     }
     // Clean owner close() suppresses the sink; a genuine drop reports it so
@@ -122,8 +125,7 @@ void PosixTcpTransport::send(const std::string& bytes) {
 }
 
 void PosixTcpTransport::close() {
-    const bool alreadyClosed = closed_.exchange(true);
-    if (alreadyClosed) {
+    if (const bool alreadyClosed = closed_.exchange(true); alreadyClosed) {
         return;
     }
     const int fd = fd_.exchange(-1);
@@ -136,14 +138,18 @@ void PosixTcpTransport::close() {
 // ---- PosixUdpListener ------------------------------------------------------
 
 PosixUdpListener::~PosixUdpListener() {
-    closeForTeardown();
+    // S1699: no virtual dispatch from a destructor — inline close() (the
+    // receiver's SO_RCVTIMEO ticks it out of recvfrom() within 200 ms; it
+    // then sees closed_ and exits).
+    closed_ = true;
+    const int fd = fd_;
+    fd_ = -1;
+    if (fd >= 0) {
+        ::close(fd);
+    }
     if (worker_.joinable()) {
         worker_.join();
     }
-}
-
-void PosixUdpListener::closeForTeardown() {
-    close();
 }
 
 bool PosixUdpListener::listen(uint16_t port) {
@@ -164,7 +170,13 @@ bool PosixUdpListener::listen(uint16_t port) {
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(port);
-    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+    // S3630: sockaddr_in and sockaddr are distinct types — alias through a
+    // byte copy, never reinterpret_cast (layout-identical for AF_INET).
+    static_assert(sizeof(sockaddr) >= sizeof(sockaddr_in),
+                  "AF_INET address must fit a generic sockaddr");
+    sockaddr bound{};
+    std::memcpy(&bound, &addr, sizeof(addr));
+    if (::bind(fd, &bound, sizeof(bound)) != 0) {
         ::close(fd);
         return false;
     }
@@ -173,10 +185,10 @@ bool PosixUdpListener::listen(uint16_t port) {
     worker_ = std::thread([this, fd]() {
         while (!closed_) {
             std::array<char, 2048> buf;
-            sockaddr_in from{};
-            socklen_t fromLen = sizeof(from);
+            sockaddr senderAddr{};
+            socklen_t fromLen = sizeof(senderAddr);
             const ssize_t n = ::recvfrom(fd, buf.data(), std::size(buf), 0,
-                                         reinterpret_cast<sockaddr*>(&from), &fromLen);
+                                         &senderAddr, &fromLen);
             if (closed_ || n <= 0) {
                 break;
             }
@@ -184,6 +196,10 @@ bool PosixUdpListener::listen(uint16_t port) {
             if (!onPacket) {
                 continue;
             }
+            // S3630: copy the generic sockaddr back into sockaddr_in instead
+            // of reinterpret_cast (layout-identical for AF_INET).
+            sockaddr_in from{};
+            std::memcpy(&from, &senderAddr, sizeof(from));
             if (::inet_ntop(AF_INET, &from.sin_addr, dotted.data(), std::size(dotted)) != nullptr) {
                 onPacket(std::string(buf.data(), static_cast<std::size_t>(n)), dotted.data());
             }
@@ -193,8 +209,7 @@ bool PosixUdpListener::listen(uint16_t port) {
 }
 
 void PosixUdpListener::close() {
-    const bool alreadyClosed = closed_.exchange(true);
-    if (alreadyClosed) {
+    if (const bool alreadyClosed = closed_.exchange(true); alreadyClosed) {
         return;
     }
     const int fd = fd_;
@@ -228,10 +243,15 @@ ThreadScheduler::~ThreadScheduler() {
         if (std::find(cancelled_.begin(), cancelled_.end(), task.token) == cancelled_.end()) {
             // S1048: a destructor must never let an exception escape — a throw
             // here (user callback, or allocation during unwinding) would call
-            // std::terminate. This boundary deliberately swallows.
+            // std::terminate. This boundary deliberately swallows so the
+            // remaining drained callbacks still run.
             try {
                 task.fn();
+            } catch (const std::exception&) {
+                // Swallowed at this boundary (rationale above).
             } catch (...) {
+                // Non-std exceptions are equally terminal if they escape the
+                // destructor — swallow here too.
             }
         }
     }
@@ -288,10 +308,15 @@ void ThreadScheduler::runLoop() {
         if (std::find(cancelled_.begin(), cancelled_.end(), task.token) ==
             cancelled_.end()) {
             // Same boundary guarantee as the destructor drain: a throwing
-            // callback here would escape the thread entry and terminate.
+            // callback here would escape the thread entry and terminate, so
+            // this boundary deliberately swallows and keeps pumping the queue.
             try {
                 task.fn();
+            } catch (const std::exception&) {
+                // Swallowed at this boundary (rationale above).
             } catch (...) {
+                // Non-std exceptions are equally terminal if they escape the
+                // thread entry — swallow here too.
             }
         }
         lock.lock();

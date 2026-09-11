@@ -53,16 +53,16 @@ std::string TcpCsvFrameParser::normalize(const std::string& raw) {
     return out;
 }
 
-std::vector<std::string> TcpCsvFrameParser::split(const std::string& line) {
+std::vector<std::string> TcpCsvFrameParser::split(const std::string_view line) {
     std::vector<std::string> cols;
     std::size_t start = 0;
     while (true) {
         const std::size_t comma = line.find(',', start);
-        if (comma == std::string::npos) {
-            cols.push_back(line.substr(start));
+        if (comma == std::string_view::npos) {
+            cols.push_back(std::string(line.substr(start)));
             break;
         }
-        cols.push_back(line.substr(start, comma - start));
+        cols.push_back(std::string(line.substr(start, comma - start)));
         start = comma + 1;
     }
     return cols;

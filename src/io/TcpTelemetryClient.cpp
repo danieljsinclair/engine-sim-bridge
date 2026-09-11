@@ -97,7 +97,7 @@ void TcpTelemetryClient::handleDisconnected(const std::string& host) {
     scheduleReconnect(host);
 }
 
-void TcpTelemetryClient::feedBuffer(const std::string& bytes) {
+void TcpTelemetryClient::feedBuffer(std::string_view bytes) {
     buffer_ += bytes;
     // Drain complete lines (split on \n; tolerate \r\n; trim; skip blanks).
     std::size_t start = 0;
@@ -113,15 +113,15 @@ void TcpTelemetryClient::feedBuffer(const std::string& bytes) {
     buffer_.erase(0, start);
 }
 
-void TcpTelemetryClient::handleLine(const std::string& raw) {
+void TcpTelemetryClient::handleLine(std::string_view raw) {
     // Trim ASCII whitespace/newlines (Swift: .whitespacesAndNewlines).
     static const char* kWs = " \t\r\n\v\f";
     const auto begin = raw.find_first_not_of(kWs);
-    if (begin == std::string::npos) {
+    if (begin == std::string_view::npos) {
         return;  // blank line
     }
     const auto end = raw.find_last_not_of(kWs);
-    const std::string line = raw.substr(begin, end - begin + 1);
+    const std::string line(raw.substr(begin, end - begin + 1));
 
     // Until a header locks in, probe each line as a candidate header (this
     // tolerates auth banners / non-CSV prelude lines).

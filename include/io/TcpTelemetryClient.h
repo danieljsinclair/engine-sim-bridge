@@ -27,6 +27,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "io/ITransport.h"
 #include "io/TcpCsvFrameParser.h"
@@ -79,10 +80,10 @@ public:
 
     // ---- Direct-test surface (Swift exposed the same logic as `internal`) --
     /// Append raw received bytes and drain complete lines.
-    void feedBuffer(const std::string& bytes);
+    void feedBuffer(std::string_view bytes);
     /// Parse one line: probe as a candidate header until one locks, then
     /// decode data rows and emit frames (banners/keepalives ignored).
-    void handleLine(const std::string& line);
+    void handleLine(std::string_view line);
     /// True iff bytes start with the vehicle-sim discovery magic "VSIM"
     /// (0x56 0x53 0x49 0x4D) followed by protocol version 1.
     static bool isVehicleSimDiscovery(const std::string& bytes);

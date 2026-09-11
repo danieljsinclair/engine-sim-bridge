@@ -19,6 +19,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace input {
@@ -59,7 +60,7 @@ public:
 
 private:
     /// Split on commas (no quoting in the live schema).
-    static std::vector<std::string> split(const std::string& line);
+    static std::vector<std::string> split(std::string_view line);
 
     /// Normalize a header cell: lowercase, trim, spaces/dashes to underscores.
     static std::string normalize(const std::string& raw);
