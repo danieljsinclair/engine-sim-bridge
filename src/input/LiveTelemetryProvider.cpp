@@ -86,6 +86,7 @@ bool LiveTelemetryProvider::initTwinProvider() {
         // (defaults are inert no-ops on the twin).
         twinProvider_->setEffectiveThrottleConfig(effectiveThrottleConfig_);
         twinProvider_->setTorqueInformedGearboxConfig(torqueInformedGearboxConfig_);
+        twinProvider_->setGearboxReworkConfig(gearboxReworkConfig_);
         // Re-apply the coupling flags the factory set before Initialize() —
         // the store/re-apply contract ReplayTelemetryProvider already honors.
         // Without this the pre-Initialize calls landed on the null twin and were

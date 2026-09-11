@@ -177,9 +177,21 @@ void VirtualIceTwin::setTorqueInformedGearboxConfig(const TorqueInformedGearboxC
 void VirtualIceTwin::setGearboxReworkConfig(
         const IceVehicleProfile::GearboxReworkConfig& config) {
     profile_.gearboxRework = config;
-    if (gearbox_) {
-        gearbox_->setGearboxReworkConfig(config);
+    if (!gearbox_) {
+        // Pre-twin-creation: the profile carries the config into the gearbox
+        // AutomaticGearbox(profile_) built at Initialize(). Nothing to do yet.
+        return;
     }
+    // The gearbox was constructed from the profile at twin creation, so a
+    // rework config arriving AFTER that must rebuild it — the rework tables
+    // and governor are part of the AutomaticGearbox's own state, not a
+    // runtime-mutable field. Rebuild (mirrors reconfigureProfile) so the
+    // live twin shifts on the new maps. Preserve the logger and selector.
+    IGearboxLogger* preservedLogger = gearbox_->getLogger();
+    bridge::GearSelector preservedSelector = gearbox_->getGearSelector();
+    gearbox_ = std::make_unique<AutomaticGearbox>(profile_);
+    gearbox_->setGearSelector(preservedSelector);
+    gearbox_->setLogger(preservedLogger);
 }
 
 std::unique_ptr<ITorqueHint> VirtualIceTwin::gearboxTorqueHint(
