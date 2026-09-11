@@ -128,6 +128,8 @@ public:
     /// in Initialize(), so a pre- or post-Initialize() set both take effect.
     void setEffectiveThrottleConfig(const twin::EffectiveThrottleConfig& config);
     void setTorqueInformedGearboxConfig(const twin::TorqueInformedGearboxConfig& config);
+    void setGearboxReworkConfig(
+            const twin::IceVehicleProfile::GearboxReworkConfig& config);
 
     /// Select the coupling MODEL (how the clutch pressure is derived): clutch-map
     /// (default — declarative smooth governor, no binary relief), torque-converter
@@ -285,6 +287,7 @@ private:
     // twin-provider creation and is re-applied there.
     twin::EffectiveThrottleConfig effectiveThrottleConfig_;
     twin::TorqueInformedGearboxConfig torqueInformedGearboxConfig_;
+    twin::IceVehicleProfile::GearboxReworkConfig gearboxReworkConfig_;
 
     // Twin coupling flags (--wheel-coupling / --coupling-model / --pin-tau-ms).
     // Stored for the same reason: TelemetryProviderFactory applies them BEFORE

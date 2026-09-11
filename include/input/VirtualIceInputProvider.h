@@ -56,6 +56,8 @@ public:
     // seeds its twin provider at Initialize time).
     void setEffectiveThrottleConfig(const twin::EffectiveThrottleConfig& config);
     void setTorqueInformedGearboxConfig(const twin::TorqueInformedGearboxConfig& config);
+    void setGearboxReworkConfig(
+            const twin::IceVehicleProfile::GearboxReworkConfig& config);
 
     // Select the coupling MODEL (clutch-map default, torque-converter, legacy).
     void setCouplingModel(twin::CouplingModelKind kind);
@@ -100,6 +102,7 @@ private:
     // to the twin when Initialize() creates it. Defaults are disabled.
     twin::EffectiveThrottleConfig pendingEffectiveThrottle_;
     twin::TorqueInformedGearboxConfig pendingTorqueInformedGearbox_;
+    twin::IceVehicleProfile::GearboxReworkConfig pendingGearboxRework_;
 
     UpstreamSignal currentSignal_;
 

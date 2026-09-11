@@ -654,6 +654,7 @@ if(BUILD_BRIDGE_TESTS)
     add_executable(twin_gearbox_tests
         test/twin/AutomaticGearboxTest.cpp
         test/twin/AutoGearboxShiftLogicTest.cpp
+        test/twin/GearboxReworkTest.cpp
     )
     target_include_directories(twin_gearbox_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include

@@ -48,6 +48,17 @@ public:
                 double drivetrainTorqueNm,
                 std::unique_ptr<ITorqueHint> upstreamHint);
 
+    // Extended decision inputs for the feature-toggled gearbox rework. The
+    // legacy overload remains the default and is byte-identical when the toggle
+    // is off. brakeActive and motorTorqueNm are decision inputs only.
+    void update(double dt, double speedKmh, double throttleFraction,
+                double drivetrainTorqueNm, bool brakeActive,
+                double motorTorqueNm);
+
+    void update(double dt, double speedKmh, double throttleFraction,
+                double drivetrainTorqueNm, bool brakeActive,
+                double motorTorqueNm, std::unique_ptr<ITorqueHint> upstreamHint);
+
     int getCurrentGear() const;
     bool requestsShift() const;
     int getTargetGear() const;
@@ -79,6 +90,23 @@ public:
 
     int getLastShiftDirection() const { return lastShiftDirection_; }
 
+    void reconfigureProfile(const IceVehicleProfile& profile) {
+        profile_ = profile;
+        currentGear_ = 1;
+        targetGear_ = 1;
+        requestsShift_ = false;
+        timeSinceLastShiftS_ = 0.0;
+        hasShiftedBefore_ = false;
+        lastShiftDirection_ = 0;
+        validateShiftTables(profile_);
+    }
+
+    void setGearboxReworkConfig(
+            const IceVehicleProfile::GearboxReworkConfig& config) {
+        profile_.gearboxRework = config;
+        validateShiftTables(profile_);
+    }
+
 private:
     // A single frame's declarative shift verdict.
     struct ShiftDecision {
@@ -95,13 +123,19 @@ private:
         CommandedRoadSpeed speed;     // table authority (the "where you're going")
         ActualEngineRpm actualRpm;    // anti-lug guard authority (the real engine)
         ThrottleState throttle;       // conditioned (smoothed) throttle
+        double rawThrottleFraction;   // un-smoothed pedal input (foot-off detection)
         bool kickdownActive;
         bool rpmFeedbackValid;        // guard inert until engine feedback is wired
+        bool brakeActive;
+        double motorTorqueNm;
+        double timeSinceClosedThrottleS;
+        double sustainedMotorTorqueS;
+        double gradeHoldRemainingS;   // latch: remaining hold time once load detected
         double timeSinceLastShiftS;
         bool hasShiftedBefore;
     };
 
-    const IceVehicleProfile& profile_;
+    IceVehicleProfile profile_;
     int currentGear_ = 1;
     int targetGear_ = 1;
     bool requestsShift_ = false;
@@ -117,6 +151,12 @@ private:
     double previousThrottle_ = 0.0;
     double throttleDeltaHistory_ = 0.0;
     double throttleDeltaTimeS_ = 0.0;
+    double timeSinceClosedThrottleS_ = 0.0;
+    double sustainedMotorTorqueS_ = 0.0;
+    // Grade-hold latch: armed on load detection, decays over motorTorqueHoldS.
+    // A mutable counter (not in the ShiftFrame) because it must persist across
+    // the transient before sustainedMotorTorqueS reaches the threshold.
+    double gradeHoldRemainingS_ = 0.0;
     bool kickdownActive_ = false;
     // One kickdown per sustained-WOT episode: set when a kickdown shift
     // executes, cleared when the throttle demand falls back below the
@@ -156,6 +196,9 @@ private:
     static ShiftDecision decide(const ShiftFrame& frame,
                                 const ITorqueHint& torqueHint,
                                 const IceVehicleProfile& profile);
+    static ShiftDecision decideRework(const ShiftFrame& frame,
+                                      const ITorqueHint& torqueHint,
+                                      const IceVehicleProfile& profile);
 
     // Thin wrapper that gathers member state into a ShiftFrame and delegates to
     // the pure decide(). Kept as a private member for ergonomic call-sites.
@@ -178,6 +221,19 @@ private:
                                     const IceVehicleProfile& profile);
     static bool speedBelowDownshift(double speedKmh, int gear, double effThrottle,
                                     const IceVehicleProfile& profile);
+    static double interpolateReworkDwell(double throttle,
+                                         const IceVehicleProfile& profile);
+    static double getReworkShiftSpeed(int fromGear, int toGear, double throttle,
+                                      const IceVehicleProfile& profile);
+    static double getReworkDownshiftSpeed(int fromGear, int toGear,
+                                          double throttle,
+                                          const IceVehicleProfile& profile);
+    static bool speedExceedsReworkUpshift(double speedKmh, int gear,
+                                          double effThrottle,
+                                          const IceVehicleProfile& profile);
+    static bool speedBelowReworkDownshift(double speedKmh, int gear,
+                                          double effThrottle,
+                                          const IceVehicleProfile& profile);
     static int findSafeGear(int currentGear, double speedKmh, int maxDownshifts,
                             const IceVehicleProfile& profile);
     // Merged anti-lug guard. floor = max(idle + margin, downshiftRpmFloor).
@@ -207,6 +263,12 @@ private:
 
     // Core throttle/speed/torque shift decision (shared by both public updates).
     void runShiftLogic(double dt, double speedKmh, double throttleFraction);
+    void runLegacyShiftLogic(double dt, double speedKmh, double throttleFraction);
+    void runShiftLogic(double dt, double speedKmh, double throttleFraction,
+                       bool brakeActive, double motorTorqueNm);
+    void trackReworkInputTimers(double dt, double throttleFraction,
+                                double motorTorqueNm);
+    void resetReworkInputState();
 };
 
 }

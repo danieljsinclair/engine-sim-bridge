@@ -218,6 +218,12 @@ void DemoInputProvider::setTorqueInformedGearboxConfig(
     twinProvider_.setTorqueInformedGearboxConfig(config);
 }
 
+void DemoInputProvider::setGearboxReworkConfig(
+    const twin::IceVehicleProfile::GearboxReworkConfig& config) {
+    gearboxReworkConfig_ = config;
+    twinProvider_.setGearboxReworkConfig(config);
+}
+
 void DemoInputProvider::setCouplingModel(twin::CouplingModelKind kind) {
     couplingModelKind_ = kind;
     twinProvider_.setCouplingModel(kind);

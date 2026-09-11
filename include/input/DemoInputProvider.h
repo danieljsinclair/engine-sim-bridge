@@ -81,6 +81,8 @@ public:
     void setPinTauMs(double tauMs);
     void setEffectiveThrottleConfig(const twin::EffectiveThrottleConfig& config);
     void setTorqueInformedGearboxConfig(const twin::TorqueInformedGearboxConfig& config);
+    void setGearboxReworkConfig(
+            const twin::IceVehicleProfile::GearboxReworkConfig& config);
     void setCouplingModel(twin::CouplingModelKind kind);
 
 private:
@@ -106,6 +108,7 @@ private:
     double pinTauMs_ = 0.0;
     twin::EffectiveThrottleConfig effectiveThrottleConfig_;
     twin::TorqueInformedGearboxConfig torqueInformedGearboxConfig_;
+    twin::IceVehicleProfile::GearboxReworkConfig gearboxReworkConfig_;
 };
 
 }

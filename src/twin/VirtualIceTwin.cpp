@@ -174,6 +174,14 @@ void VirtualIceTwin::setTorqueInformedGearboxConfig(const TorqueInformedGearboxC
     torqueInformedGearbox_ = config;
 }
 
+void VirtualIceTwin::setGearboxReworkConfig(
+        const IceVehicleProfile::GearboxReworkConfig& config) {
+    profile_.gearboxRework = config;
+    if (gearbox_) {
+        gearbox_->setGearboxReworkConfig(config);
+    }
+}
+
 std::unique_ptr<ITorqueHint> VirtualIceTwin::gearboxTorqueHint(
     const input::UpstreamSignal& signal) const {
     if (!torqueInformedGearbox_.enabled) {

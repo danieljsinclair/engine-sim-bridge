@@ -397,6 +397,14 @@ void LiveTelemetryProvider::setTorqueInformedGearboxConfig(
     }
 }
 
+void LiveTelemetryProvider::setGearboxReworkConfig(
+    const twin::IceVehicleProfile::GearboxReworkConfig& config) {
+    gearboxReworkConfig_ = config;
+    if (twinProvider_) {
+        twinProvider_->setGearboxReworkConfig(config);
+    }
+}
+
 void LiveTelemetryProvider::setCouplingModel(twin::CouplingModelKind kind) {
     // Stored + re-applied at twin-provider creation, the same ordering contract
     // as setWheelCouplingMode.

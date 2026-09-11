@@ -31,6 +31,35 @@ struct IceVehicleProfile {
     // oscillation. Anti-hunting is provided by the separate downshift table
     // (hysteresis by construction), so this need only cover a couple of frames.
     double shiftDwellS = 0.4;
+
+    // Gearbox rework feature toggle and runtime tuning. The default is OFF:
+    // when false, the expanded maps and multi-input governor are completely
+    // inert and the legacy tables, dwell and shift decisions remain
+    // byte-identical.
+    struct GearboxReworkConfig {
+        bool enabled = false;
+        std::vector<double> shiftTableThrottleLevels;
+        std::vector<std::vector<double>> shiftTable;
+        std::vector<double> downshiftTableThrottleLevels;
+        std::vector<std::vector<double>> downshiftTable;
+        double shiftDwellLightS = 2.7;
+        double shiftDwellHighS = 0.4;
+        double shiftDwellThrottleStart = 0.20;
+        double shiftDwellThrottleEnd = 0.80;
+        double closedThrottleThreshold = 0.02;
+        double closedThrottleDownshiftHoldS = 2.0;
+        double motorTorqueHoldThresholdNm = 1000.0;
+        double motorTorqueHoldMaxSpeedKmh = 40.0;
+        double motorTorqueHoldS = 2.0;
+        double motorTorqueUpshiftThresholdNm = -1000.0;
+        double motorTorqueUpshiftBias = 0.15;
+        double motorTorqueGradeHoldNm = 800.0;
+        double motorTorqueRegenUpshiftNm = -800.0;
+        double motorTorqueGradeHoldWindowS = 1.0;
+        double motorTorqueRegenWindowS = 1.0;
+    };
+    GearboxReworkConfig gearboxRework;
+
     // Engine braking inhibitor
     bool engineBrakingInhibitorEnabled = false;
     double engineBrakingMaxThrottle = 0.01;
@@ -152,6 +181,37 @@ struct IceVehicleProfile {
             {33, 49, 73, 92, 119, 153, 183},// 90%
             {34, 51, 76, 96, 125, 161, 192},// 95%
             {34, 51, 76, 97, 125, 161, 192} // 100%
+        };
+
+        // Expanded feature-toggled rework maps. The legacy maps above remain
+        // authoritative until --gearbox-rework enables this configuration.
+        p.gearboxRework.shiftTableThrottleLevels = {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0};
+        p.gearboxRework.shiftTable = {
+            {30, 38, 46, 54, 62, 70, 78},    // 0%
+            {33, 41, 50, 59, 68, 77, 86},    // 10%
+            {36, 45, 54, 63, 72, 81, 90},    // 20%
+            {39, 48, 58, 68, 78, 88, 98},    // 30%
+            {42, 52, 62, 72, 82, 92, 102},   // 40%
+            {45, 56, 67, 78, 89, 100, 111},  // 50%
+            {48, 60, 72, 84, 96, 108, 120},  // 60%
+            {51, 64, 77, 90, 103, 116, 129}, // 70%
+            {54, 68, 82, 96, 110, 124, 138}, // 80%
+            {57, 72, 87, 102, 117, 132, 147},// 90%
+            {60, 76, 92, 108, 124, 140, 156} // 100%
+        };
+        p.gearboxRework.downshiftTableThrottleLevels = p.gearboxRework.shiftTableThrottleLevels;
+        p.gearboxRework.downshiftTable = {
+            {22, 28, 34, 40, 46, 52, 58},    // 0%
+            {24, 30, 37, 44, 51, 58, 65},    // 10%
+            {26, 33, 40, 47, 54, 61, 68},    // 20%
+            {28, 35, 43, 50, 58, 65, 72},    // 30%
+            {30, 38, 46, 54, 62, 70, 78},    // 40%
+            {32, 40, 49, 58, 67, 76, 85},    // 50%
+            {34, 43, 52, 62, 72, 82, 92},    // 60%
+            {36, 46, 56, 67, 78, 89, 100},   // 70%
+            {38, 49, 60, 72, 84, 96, 108},   // 80%
+            {40, 52, 64, 77, 90, 103, 116},  // 90%
+            {42, 55, 68, 82, 96, 110, 124}   // 100%
         };
 
         // Kickdown

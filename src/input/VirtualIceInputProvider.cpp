@@ -28,6 +28,7 @@ bool VirtualIceInputProvider::Initialize() {
         // (store + re-apply; the defaults are inert no-ops on the twin).
         twin_->setEffectiveThrottleConfig(pendingEffectiveThrottle_);
         twin_->setTorqueInformedGearboxConfig(pendingTorqueInformedGearbox_);
+        twin_->setGearboxReworkConfig(pendingGearboxRework_);
         isInitialized_ = true;
         return true;
     } catch (const PresetException& e) {
@@ -154,6 +155,15 @@ void VirtualIceInputProvider::setTorqueInformedGearboxConfig(
     pendingTorqueInformedGearbox_ = config;
     if (twin_) {
         twin_->setTorqueInformedGearboxConfig(config);
+    }
+}
+
+void VirtualIceInputProvider::setGearboxReworkConfig(
+    const twin::IceVehicleProfile::GearboxReworkConfig& config) {
+    profile_.gearboxRework = config;
+    pendingGearboxRework_ = config;
+    if (twin_) {
+        twin_->setGearboxReworkConfig(config);
     }
 }
 

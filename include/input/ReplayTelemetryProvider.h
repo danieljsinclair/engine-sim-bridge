@@ -161,6 +161,8 @@ public:
     // disabled = inert). Same store + re-forward contract as setPinTauMs.
     void setEffectiveThrottleConfig(const twin::EffectiveThrottleConfig& config);
     void setTorqueInformedGearboxConfig(const twin::TorqueInformedGearboxConfig& config);
+    void setGearboxReworkConfig(
+            const twin::IceVehicleProfile::GearboxReworkConfig& config);
 
     // Select the coupling MODEL (how the clutch pressure is derived):
     // clutch-map (declarative smooth governor), torque-converter (fluid
@@ -243,6 +245,7 @@ private:
     // creation, same as pinTauMs_.
     twin::EffectiveThrottleConfig effectiveThrottleConfig_;
     twin::TorqueInformedGearboxConfig torqueInformedGearboxConfig_;
+    twin::IceVehicleProfile::GearboxReworkConfig gearboxReworkConfig_;
 
     // Blank-row arrival skip (see setBlankSkipEnabled). Default ON.
     bool blankSkipEnabled_ = true;

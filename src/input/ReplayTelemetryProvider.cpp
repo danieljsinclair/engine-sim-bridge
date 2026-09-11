@@ -89,6 +89,7 @@ bool ReplayTelemetryProvider::Initialize() {
         twinProvider_->setPinTauMs(pinTauMs_);
         twinProvider_->setEffectiveThrottleConfig(effectiveThrottleConfig_);
         twinProvider_->setTorqueInformedGearboxConfig(torqueInformedGearboxConfig_);
+        twinProvider_->setGearboxReworkConfig(gearboxReworkConfig_);
         // Bring the twin to RUNNING before the first replayed frame so DRIVE
         // traces expose a forward gear immediately (replay is a running engine,
         // not a cranking capture). PARK/NEUTRAL traces stay out of RUNNING.
@@ -137,6 +138,12 @@ void ReplayTelemetryProvider::setTorqueInformedGearboxConfig(
     const twin::TorqueInformedGearboxConfig& config) {
     torqueInformedGearboxConfig_ = config;
     if (twinProvider_) twinProvider_->setTorqueInformedGearboxConfig(config);
+}
+
+void ReplayTelemetryProvider::setGearboxReworkConfig(
+    const twin::IceVehicleProfile::GearboxReworkConfig& config) {
+    gearboxReworkConfig_ = config;
+    if (twinProvider_) twinProvider_->setGearboxReworkConfig(config);
 }
 
 void ReplayTelemetryProvider::setCouplingModel(twin::CouplingModelKind kind) {

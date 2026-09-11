@@ -5,6 +5,7 @@
 #include <common/Verification.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace twin {
 
@@ -52,19 +53,33 @@ AutomaticGearbox::AutomaticGearbox(const IceVehicleProfile& profile)
     validateShiftTables(profile_);
 }
 
-void AutomaticGearbox::validateShiftTables(const IceVehicleProfile& profile) {
-    if (!profile.separateDownshiftTableEnabled) return;
-    if (profile.shiftTable.empty() || profile.downshiftTable.empty()) return;
-    const size_t numLevels = std::min(profile.shiftTable.size(),
-                                      profile.downshiftTable.size());
+namespace {
+
+void validateShiftTablePair(const std::vector<std::vector<double>>& upshiftTable,
+                            const std::vector<std::vector<double>>& downshiftTable) {
+    if (upshiftTable.empty() || downshiftTable.empty()) return;
+    const size_t numLevels = std::min(upshiftTable.size(),
+                                      downshiftTable.size());
     for (size_t lvl = 0; lvl < numLevels; ++lvl) {
-        const size_t numCols = std::min(profile.shiftTable[lvl].size(),
-                                        profile.downshiftTable[lvl].size());
+        const size_t numCols = std::min(upshiftTable[lvl].size(),
+                                        downshiftTable[lvl].size());
         for (size_t col = 0; col < numCols; ++col) {
-            ASSERT(profile.downshiftTable[lvl][col] <= profile.shiftTable[lvl][col],
+            ASSERT(downshiftTable[lvl][col] <= upshiftTable[lvl][col],
                    "validateShiftTables: downshift cell must be <= upshift cell "
                    "(no-hunting invariant violated)");
         }
+    }
+}
+
+}  // namespace
+
+void AutomaticGearbox::validateShiftTables(const IceVehicleProfile& profile) {
+    if (profile.separateDownshiftTableEnabled) {
+        validateShiftTablePair(profile.shiftTable, profile.downshiftTable);
+    }
+    if (profile.gearboxRework.enabled) {
+        validateShiftTablePair(profile.gearboxRework.shiftTable,
+                               profile.gearboxRework.downshiftTable);
     }
 }
 
@@ -119,7 +134,78 @@ void AutomaticGearbox::update(double dt, double speedKmh, double throttleFractio
     runShiftLogic(dt, speedKmh, throttleFraction);
 }
 
+void AutomaticGearbox::update(double dt, double speedKmh, double throttleFraction,
+                              double drivetrainTorqueNm, bool brakeActive,
+                              double motorTorqueNm) {
+    update(dt, speedKmh, throttleFraction, drivetrainTorqueNm, brakeActive,
+           motorTorqueNm, nullptr);
+}
+
+void AutomaticGearbox::update(double dt, double speedKmh, double throttleFraction,
+                              double drivetrainTorqueNm, bool brakeActive,
+                              double motorTorqueNm,
+                              std::unique_ptr<ITorqueHint> upstreamHint) {
+    torqueHint_ = std::move(upstreamHint);
+    if (!torqueHint_) {
+        torqueHint_ = std::make_unique<SimTorqueHint>(drivetrainTorqueNm,
+                                                      profile_.torqueHintMaxNm,
+                                                      profile_.torqueHintMaxBias);
+    }
+
+    if (!isShifterInDrive()) {
+        throttleFraction = std::clamp(throttleFraction, 0.0, 1.0);
+        timeSinceLastShiftS_ += dt;
+        if (dt > 0.0) {
+            smoothThrottleInput(throttleFraction, dt);
+            trackThrottleDelta(throttleFraction, dt);
+        }
+        previousThrottle_ = throttleFraction;
+        requestsShift_ = false;
+        targetGear_ = currentGear_;
+        kickdownActive_ = false;
+        return;
+    }
+
+    runShiftLogic(dt, speedKmh, throttleFraction, brakeActive, motorTorqueNm);
+}
+
+void AutomaticGearbox::trackReworkInputTimers(double dt, double throttleFraction,
+                                              double motorTorqueNm) {
+    const auto& rework = profile_.gearboxRework;
+    if (throttleFraction <= rework.closedThrottleThreshold) {
+        timeSinceClosedThrottleS_ += dt;
+    } else {
+        timeSinceClosedThrottleS_ = 0.0;
+    }
+
+    const bool gradeLoad =
+        std::abs(motorTorqueNm) >= rework.motorTorqueHoldThresholdNm &&
+        speedFeedbackKmh_ <= rework.motorTorqueHoldMaxSpeedKmh;
+    const bool regenLoad =
+        motorTorqueNm <= rework.motorTorqueUpshiftThresholdNm;
+    if (gradeLoad || regenLoad) {
+        sustainedMotorTorqueS_ += dt;
+    } else {
+        sustainedMotorTorqueS_ = 0.0;
+    }
+}
+
+void AutomaticGearbox::resetReworkInputState() {
+    timeSinceClosedThrottleS_ = 0.0;
+    sustainedMotorTorqueS_ = 0.0;
+    gradeHoldRemainingS_ = 0.0;
+}
+
 void AutomaticGearbox::runShiftLogic(double dt, double speedKmh, double throttleFraction) {
+    if (profile_.gearboxRework.enabled) {
+        runShiftLogic(dt, speedKmh, throttleFraction, false, 0.0);
+        return;
+    }
+    runLegacyShiftLogic(dt, speedKmh, throttleFraction);
+}
+
+void AutomaticGearbox::runLegacyShiftLogic(
+        double dt, double speedKmh, double throttleFraction) {
     // Zero-time calls (the SHIFTING placeholder update(0,0,0) from VirtualIceTwin)
     // must be a no-op: with dt == 0 they would corrupt throttle-tracking state
     // (previousThrottle_, smoothed/delta history) and fabricate phantom kickdown
@@ -162,6 +248,67 @@ void AutomaticGearbox::runShiftLogic(double dt, double speedKmh, double throttle
     logShiftState(throttleFraction, dt, speedKmh);
 }
 
+void AutomaticGearbox::runShiftLogic(double dt, double speedKmh,
+                                     double throttleFraction, bool brakeActive,
+                                     double motorTorqueNm) {
+    if (!profile_.gearboxRework.enabled) {
+        runLegacyShiftLogic(dt, speedKmh, throttleFraction);
+        return;
+    }
+    if (dt <= 0.0) {
+        return;
+    }
+    throttleFraction = std::clamp(throttleFraction, 0.0, 1.0);
+    timeSinceLastShiftS_ += dt;
+    smoothThrottleInput(throttleFraction, dt);
+    trackThrottleDelta(throttleFraction, dt);
+    trackReworkInputTimers(dt, throttleFraction, motorTorqueNm);
+    if (throttleFraction < profile_.kickdownThrottleThreshold) {
+        wotKickdownConsumed_ = false;
+    }
+    kickdownActive_ =
+        shouldKickdown(throttleFraction) && !wotKickdownConsumed_;
+
+    requestsShift_ = false;
+    targetGear_ = currentGear_;
+    if (!isShifterInDrive() || speedKmh < profile_.standstillThresholdKmh) {
+        logShiftState(throttleFraction, dt, speedKmh);
+        return;
+    }
+
+    // Grade latch: arm on load detection and decay over motorTorqueHoldS.
+    // The hold must cover the transient before sustainedMotorTorqueS reaches
+    // the threshold — a downshift cascade to 1st in the first 0.3 s of a
+    // sustained 1200 Nm load at 20 km/h is the failure this prevents.
+    if (std::abs(motorTorqueNm) >=
+            profile_.gearboxRework.motorTorqueHoldThresholdNm &&
+        speedKmh <= profile_.gearboxRework.motorTorqueHoldMaxSpeedKmh) {
+        gradeHoldRemainingS_ = profile_.gearboxRework.motorTorqueHoldS;
+    }
+    if (gradeHoldRemainingS_ > 0.0) {
+        gradeHoldRemainingS_ -= dt;
+    }
+
+    const ShiftFrame frame{
+        currentGear_,
+        CommandedRoadSpeed{speedKmh},
+        actualEngineRpm_,
+        ThrottleState{smoothedThrottle_},
+        throttleFraction,
+        kickdownActive_,
+        rpmFeedbackValid_,
+        brakeActive,
+        motorTorqueNm,
+        timeSinceClosedThrottleS_,
+        sustainedMotorTorqueS_,
+        gradeHoldRemainingS_,
+        timeSinceLastShiftS_,
+        hasShiftedBefore_,
+    };
+    applyShift(decideRework(frame, *torqueHint_, profile_));
+    logShiftState(throttleFraction, dt, speedKmh);
+}
+
 void AutomaticGearbox::smoothThrottleInput(double throttleFraction, double dt) {
     const double tau = profile_.throttleSmoothingTauMs / 1000.0;
     const double alpha = dt / (tau + dt);
@@ -195,12 +342,112 @@ AutomaticGearbox::decideGear(CommandedRoadSpeed speed) const {
         speed,
         actualEngineRpm_,
         ThrottleState{smoothedThrottle_},
+        0.0,
         kickdownActive_,
         rpmFeedbackValid_,
+        false,
+        0.0,
+        timeSinceClosedThrottleS_,
+        sustainedMotorTorqueS_,
+        0.0,
         timeSinceLastShiftS_,
         hasShiftedBefore_,
     };
     return decide(frame, *torqueHint_, profile_);
+}
+
+AutomaticGearbox::ShiftDecision
+AutomaticGearbox::decideRework(const ShiftFrame& frame,
+                               const ITorqueHint& torqueHint,
+                               const IceVehicleProfile& profile) {
+    if (!profile.gearboxRework.enabled) {
+        return decide(frame, torqueHint, profile);
+    }
+
+    const double speedKmh = frame.speed.kmh;
+    const double tableThrottle =
+        std::clamp(effectiveThrottle(frame.throttle, torqueHint), 0.0, 1.0);
+    double governorThrottle = tableThrottle;
+
+    // Regen/coast: sustained negative motor torque (lift-off or regen braking)
+    // lowers the effective throttle for the table lookup, allowing an earlier
+    // upshift than the road-speed table alone would permit. This biases the
+    // UPWARD decision only; the downshift suppression below owns the coast
+    // case. Forcing governorThrottle to 1.0 here would be wrong: WOT throttle
+    // raises the downshift table thresholds, so the box would downshift
+    // SOONER at closed throttle, not later.
+    const bool regenUpshiftActive =
+        frame.motorTorqueNm <=
+            profile.gearboxRework.motorTorqueUpshiftThresholdNm &&
+        frame.sustainedMotorTorqueS >=
+            profile.gearboxRework.motorTorqueHoldS;
+    if (regenUpshiftActive) {
+        governorThrottle = std::max(
+            0.0, governorThrottle -
+                     profile.gearboxRework.motorTorqueUpshiftBias);
+    }
+
+    const double dwell = interpolateReworkDwell(governorThrottle, profile);
+    if (frame.hasShiftedBefore && frame.timeSinceLastShiftS < dwell) {
+        return {frame.currentGear, 0, false};
+    }
+
+    const double lugFloor = std::max(profile.idleRpm + profile.lugFloorMarginRpm,
+                                     profile.downshiftRpmFloor);
+    if (frame.rpmFeedbackValid && frame.currentGear > 1 &&
+        isEngineLugging(frame.actualRpm, lugFloor, profile.engineStoppedRpm)) {
+        return {frame.currentGear - 1, -1, false};
+    }
+
+    int gear = frame.currentGear;
+    while (speedExceedsReworkUpshift(speedKmh, gear, governorThrottle, profile)) {
+        ++gear;
+    }
+    if (gear == frame.currentGear) {
+        while (gear > 1 &&
+               speedBelowReworkDownshift(speedKmh, gear, governorThrottle,
+                                         profile)) {
+            --gear;
+        }
+    }
+
+    int direction = 0;
+    if (gear > frame.currentGear) {
+        direction = +1;
+    } else if (gear < frame.currentGear) {
+        direction = -1;
+    }
+
+    // Closed-throttle downshift delay: at light/no throttle the driver is
+    // coasting, not requesting a downshift. Suppress the table downshift for a
+    // tunable hold UNLESS the brake is active (brake = driver wants engine
+    // braking, so allow a prompt downshift). This owns the coast case; the
+    // regen bias above only nudges the upshift table.
+    //
+    // The gate keys on the RAW pedal input (frame.rawThrottleFraction), not the
+    // smoothed tableThrottle. The closed-throttle state is about the driver's
+    // FOOT (foot off the pedal = coasting), so it must be read from the raw
+    // input — smoothing decays a lift-off from 0.30 to the 0.02 threshold over
+    // ~7 frames, which would let the downshift fire during the hold window the
+    // delay is supposed to suppress.
+    if (direction == -1 && !frame.brakeActive &&
+        frame.rawThrottleFraction <= profile.gearboxRework.closedThrottleThreshold &&
+        frame.timeSinceClosedThrottleS <
+            profile.gearboxRework.closedThrottleDownshiftHoldS) {
+        return {frame.currentGear, 0, false};
+    }
+
+    // Grade hold: sustained positive motor torque at low speed means the
+    // vehicle is loaded (uphill). While the load persists the gearbox holds
+    // the current gear rather than hunting down through it. The latch arms on
+    // load detection and decays over motorTorqueHoldS, so the hold covers the
+    // transient before sustainedMotorTorqueS reaches the threshold; the
+    // closed-throttle delay above owns the coast case.
+    if (direction == -1 && frame.gradeHoldRemainingS > 0.0) {
+        return {frame.currentGear, 0, false};
+    }
+
+    return {gear, direction, false};
 }
 
 AutomaticGearbox::ShiftDecision
@@ -213,7 +460,6 @@ AutomaticGearbox::decide(const ShiftFrame& frame,
     // not convert, so a commanded-speed value can never silently reach the guard.
     const double speedKmh = frame.speed.kmh;
     const double effThrottle = effectiveThrottle(frame.throttle, torqueHint);
-
     // 1. Kickdown — the sole override of the tables. A sudden large throttle
     //    increase (or WOT) forces one RPM-safe downshift, even inside the dwell
     //    window: a legitimate power demand cannot wait.
@@ -274,6 +520,77 @@ AutomaticGearbox::decide(const ShiftFrame& frame,
         direction = -1;
     }
     return {gear, direction, false};
+}
+
+double AutomaticGearbox::interpolateReworkDwell(
+        double throttle, const IceVehicleProfile& profile) {
+    const auto& rework = profile.gearboxRework;
+    if (rework.shiftDwellThrottleEnd <= rework.shiftDwellThrottleStart) {
+        return rework.shiftDwellLightS;
+    }
+    const double t = std::clamp(
+        (throttle - rework.shiftDwellThrottleStart) /
+            (rework.shiftDwellThrottleEnd - rework.shiftDwellThrottleStart),
+        0.0, 1.0);
+    return rework.shiftDwellLightS +
+           t * (rework.shiftDwellHighS - rework.shiftDwellLightS);
+}
+
+double AutomaticGearbox::getReworkShiftSpeed(int fromGear, int toGear,
+                                              double throttle,
+                                              const IceVehicleProfile& profile) {
+    ASSERT(fromGear >= 1 && toGear >= 1 && fromGear < toGear,
+           "getReworkShiftSpeed: gear indexes out of range");
+    const auto& rework = profile.gearboxRework;
+    ASSERT(!rework.shiftTable.empty() &&
+               !rework.shiftTableThrottleLevels.empty(),
+           "getReworkShiftSpeed: rework shift table must be populated");
+    size_t tableIndex = static_cast<size_t>(fromGear) - 1;
+    if (tableIndex >= rework.shiftTable[0].size()) {
+        tableIndex = rework.shiftTable[0].size() - 1;
+    }
+    return interpolateShiftSpeed(rework.shiftTable, throttle,
+                                 rework.shiftTableThrottleLevels, tableIndex);
+}
+
+double AutomaticGearbox::getReworkDownshiftSpeed(int fromGear, int toGear,
+                                                  double throttle,
+                                                  const IceVehicleProfile& profile) {
+    ASSERT(fromGear >= 1 && toGear >= 1 && fromGear < toGear,
+           "getReworkDownshiftSpeed: gear indexes out of range");
+    const auto& rework = profile.gearboxRework;
+    ASSERT(!rework.downshiftTable.empty() &&
+               !rework.downshiftTableThrottleLevels.empty(),
+           "getReworkDownshiftSpeed: rework downshift table must be populated");
+    size_t tableIndex = static_cast<size_t>(fromGear) - 1;
+    if (tableIndex >= rework.downshiftTable[0].size()) {
+        tableIndex = rework.downshiftTable[0].size() - 1;
+    }
+    return interpolateShiftSpeed(rework.downshiftTable, throttle,
+                                 rework.downshiftTableThrottleLevels,
+                                 tableIndex);
+}
+
+bool AutomaticGearbox::speedExceedsReworkUpshift(
+        double speedKmh, int gear, double effThrottle,
+        const IceVehicleProfile& profile) {
+    if (gear >= static_cast<int>(profile.gearRatios.size())) {
+        return false;
+    }
+    const double upshiftSpeed =
+        getReworkShiftSpeed(gear, gear + 1, effThrottle, profile);
+    return upshiftSpeed > 0.0 && speedKmh > upshiftSpeed;
+}
+
+bool AutomaticGearbox::speedBelowReworkDownshift(
+        double speedKmh, int gear, double effThrottle,
+        const IceVehicleProfile& profile) {
+    if (gear <= 1) {
+        return false;
+    }
+    const double downshiftSpeed =
+        getReworkDownshiftSpeed(gear - 1, gear, effThrottle, profile);
+    return downshiftSpeed > 0.0 && speedKmh < downshiftSpeed;
 }
 
 bool AutomaticGearbox::speedExceedsUpshift(double speedKmh, int gear, double effThrottle,

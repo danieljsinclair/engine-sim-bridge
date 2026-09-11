@@ -91,6 +91,11 @@ public:
     // NullTorqueHint (byte-identical decisions).
     void setTorqueInformedGearboxConfig(const TorqueInformedGearboxConfig& config);
 
+    // --gearbox-rework (CLI feature toggle, DEFAULT OFF). Enables the expanded
+    // shift maps, throttle-dependent dwell and brake/motor-torque governor.
+    // Disabled leaves the existing gearbox decision byte-identical.
+    void setGearboxReworkConfig(const IceVehicleProfile::GearboxReworkConfig& config);
+
     // Select the coupling MODEL (how the clutch pressure is derived). Default is
     // ClutchMap (declarative smooth governor — no binary relief, no oscillation).
     // Legacy runs the historical slip-lock + binary-relief path for A/B;

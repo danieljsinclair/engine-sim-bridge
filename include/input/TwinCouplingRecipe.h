@@ -37,6 +37,7 @@
 #include "twin/EffectiveThrottle.h"
 #include "twin/UpstreamTorqueHint.h"
 #include "twin/WheelCoupling.h"
+#include "twin/IceVehicleProfile.h"
 
 namespace input {
 
@@ -50,6 +51,7 @@ struct TwinCouplingRecipe {
     double pinTauMs = 150.0;
     bool effectiveThrottle = false;
     bool torqueInformedGearbox = false;
+    twin::IceVehicleProfile::GearboxReworkConfig gearboxRework;
 };
 
 // Apply the shared twin coupling flags to a coupling-bearing provider, in the
@@ -72,6 +74,7 @@ void applyTwinCouplingFlags(Provider& provider, const TwinCouplingRecipe& recipe
     twin::TorqueInformedGearboxConfig torqueInformedGearbox;
     torqueInformedGearbox.enabled = recipe.torqueInformedGearbox;
     provider.setTorqueInformedGearboxConfig(torqueInformedGearbox);
+    provider.setGearboxReworkConfig(recipe.gearboxRework);
 }
 
 }  // namespace input
