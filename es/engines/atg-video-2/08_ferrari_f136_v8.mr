@@ -230,7 +230,7 @@ public node f136_v8 {
         runner_flow_rate: k_carb(100.0),
         runner_length: 12.0 * units.inch,
         idle_flow_rate: k_carb(0.0),
-        idle_throttle_plate_position: 0.995,
+        idle_throttle_plate_position: 0.9954,
         velocity_decay: 0.5
     )
 
