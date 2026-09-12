@@ -218,7 +218,7 @@ AutomaticGearbox::decide(const ShiftFrame& frame,
     //    increase (or WOT) forces one RPM-safe downshift, even inside the dwell
     //    window: a legitimate power demand cannot wait.
     if (frame.currentGear > 1 && frame.kickdownActive) {
-        const int depth = static_cast<int>(profile.kickdownDownshiftGears);
+        const auto depth = static_cast<int>(profile.kickdownDownshiftGears);
         const int safeGear = findSafeGear(frame.currentGear, speedKmh, depth, profile);
         if (safeGear < frame.currentGear) {
             return {safeGear, -1, true};
@@ -244,9 +244,9 @@ AutomaticGearbox::decide(const ShiftFrame& frame,
     //    feedback is wired (rpmFeedbackValid). Replaces the former two-guard
     //    cascade (idle+margin pre-table, downshiftRpmFloor post-table) with a
     //    single declarative floor.
-    const double lugFloor = std::max(profile.idleRpm + profile.lugFloorMarginRpm,
-                                     profile.downshiftRpmFloor);
-    if (frame.rpmFeedbackValid && frame.currentGear > 1 &&
+    if (const double lugFloor = std::max(profile.idleRpm + profile.lugFloorMarginRpm,
+                                         profile.downshiftRpmFloor);
+        frame.rpmFeedbackValid && frame.currentGear > 1 &&
         isEngineLugging(frame.actualRpm, lugFloor, profile.engineStoppedRpm)) {
         return {frame.currentGear - 1, -1, false};
     }

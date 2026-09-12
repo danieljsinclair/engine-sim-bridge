@@ -437,6 +437,8 @@ if(BUILD_BRIDGE_TESTS)
         test/TcpCsvFrameParserTests.cpp
         test/TcpTelemetryClientTests.cpp
         test/TcpLoopbackTest.cpp
+        test/PosixUdpListenerTest.cpp
+    test/ThreadSchedulerTest.cpp
     )
     target_include_directories(bridge_unit_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include

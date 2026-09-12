@@ -58,6 +58,9 @@ public:
     void close() override;
 
 private:
+    // Body of the receiver thread (keeps the thread lambda a one-liner,
+    // mirroring PosixTcpTransport::runReceiveLoop). Read-only on members.
+    void receiveLoop(int fd) const;
 
     std::thread worker_;
     std::atomic<bool> closed_{false};
@@ -66,7 +69,8 @@ private:
 
 /// One worker thread with a timed task queue ordered by deadline. post()
 /// returns a monotonically increasing token; cancel() drops a pending task.
-/// The destructor drains remaining tasks and joins the worker.
+/// The destructor stops the worker and DISCARDS still-pending tasks — it
+/// never executes client callbacks (see the destructor note in the .cpp).
 class ThreadScheduler : public IScheduler {
 public:
     ThreadScheduler() = default;

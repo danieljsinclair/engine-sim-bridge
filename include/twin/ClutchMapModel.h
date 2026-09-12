@@ -75,7 +75,7 @@ struct ClutchMapParameters {
 // the stateful TorqueConverter model requires).
 class ClutchMapModel : public ICouplingModel {
 public:
-    explicit ClutchMapModel(ClutchMapParameters params = ClutchMapParameters{});
+    explicit ClutchMapModel(const ClutchMapParameters& params = ClutchMapParameters{});
 
     // ICouplingModel: the smooth governor pressure for this frame. Always in
     // [pressureFloor, 1.0]; `locked` is true once road-implied >= lock point.

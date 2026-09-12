@@ -7,7 +7,6 @@
 #include <twin/ClutchMapModel.h>
 
 #include <algorithm>
-#include <cmath>
 
 namespace twin {
 
@@ -26,7 +25,7 @@ inline double smoothstep(double t) {
 
 }  // namespace
 
-ClutchMapModel::ClutchMapModel(ClutchMapParameters params) : params_(params) {}
+ClutchMapModel::ClutchMapModel(const ClutchMapParameters& params) : params_(params) {}
 
 CouplingOutput ClutchMapModel::compute(const CouplingInput& input) {
     const ClutchMapParameters& p = params_;

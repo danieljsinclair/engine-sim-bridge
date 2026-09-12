@@ -59,10 +59,10 @@ std::vector<std::string> TcpCsvFrameParser::split(const std::string_view line) {
     while (true) {
         const std::size_t comma = line.find(',', start);
         if (comma == std::string_view::npos) {
-            cols.push_back(std::string(line.substr(start)));
+            cols.emplace_back(line.substr(start));
             break;
         }
-        cols.push_back(std::string(line.substr(start, comma - start)));
+        cols.emplace_back(line.substr(start, comma - start));
         start = comma + 1;
     }
     return cols;

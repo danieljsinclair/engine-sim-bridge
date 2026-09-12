@@ -11,7 +11,7 @@
 #include <twin/TorqueConverter.h>
 
 #include <algorithm>
-#include <cmath>
+#include <array>
 
 namespace twin {
 
@@ -22,11 +22,11 @@ namespace {
 // SR = w_turbine / w_impeller; torque ratio TR = T_out / T_in. Authored for a
 // 2.0 stall ratio; buildTorqueRatioTable() rescales it for other stall ratios.
 constexpr int kReferenceTableSize = 16;
-constexpr double kReferenceSpeedRatio[kReferenceTableSize] = {
+constexpr std::array<double, kReferenceTableSize> kReferenceSpeedRatio = {
     0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7,
     0.8, 0.85, 0.90, 0.92, 0.94, 0.96, 0.97, 1.0
 };
-constexpr double kReferenceTorqueRatio[kReferenceTableSize] = {
+constexpr std::array<double, kReferenceTableSize> kReferenceTorqueRatio = {
     2.0, 1.85, 1.70, 1.55, 1.40, 1.25, 1.12, 1.02,
     1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.0
 };
@@ -90,7 +90,7 @@ void TorqueConverter::buildTorqueRatioTable() {
 double TorqueConverter::lookupTorqueRatio(double speedRatio) const {
     const double clamped = std::clamp(speedRatio, 0.0, 1.0);
     const double index = clamped * static_cast<double>(kTableResolution - 1);
-    const int i0 = static_cast<int>(index);
+    const auto i0 = static_cast<int>(index);
     const int i1 = std::min(i0 + 1, kTableResolution - 1);
     const double frac = index - static_cast<double>(i0);
     return torqueRatioTable_[i0] * (1.0 - frac) + torqueRatioTable_[i1] * frac;

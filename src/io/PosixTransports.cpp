@@ -14,7 +14,6 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
-#include <exception>
 #include <utility>
 
 namespace input {
@@ -25,8 +24,7 @@ PosixTcpTransport::~PosixTcpTransport() {
     // S1699: no virtual dispatch from a destructor — inline the clean-close
     // semantics (suppress the disconnected sink, wake the poll loop, close).
     closed_.exchange(true);
-    const int fd = fd_.exchange(-1);
-    if (fd >= 0) {
+    if (const int fd = fd_.exchange(-1); fd >= 0) {
         ::shutdown(fd, SHUT_RDWR);  // wakes a concurrent poll()/recv()
         ::close(fd);
     }
@@ -182,30 +180,34 @@ bool PosixUdpListener::listen(uint16_t port) {
     }
     fd_ = fd;
     closed_ = false;
-    worker_ = std::thread([this, fd]() {
-        while (!closed_) {
-            std::array<char, 2048> buf;
-            sockaddr senderAddr{};
-            socklen_t fromLen = sizeof(senderAddr);
-            const ssize_t n = ::recvfrom(fd, buf.data(), std::size(buf), 0,
-                                         &senderAddr, &fromLen);
-            if (closed_ || n <= 0) {
-                break;
-            }
-            std::array<char, INET_ADDRSTRLEN> dotted{};
-            if (!onPacket) {
-                continue;
-            }
-            // S3630: copy the generic sockaddr back into sockaddr_in instead
-            // of reinterpret_cast (layout-identical for AF_INET).
-            sockaddr_in from{};
-            std::memcpy(&from, &senderAddr, sizeof(from));
-            if (::inet_ntop(AF_INET, &from.sin_addr, dotted.data(), std::size(dotted)) != nullptr) {
-                onPacket(std::string(buf.data(), static_cast<std::size_t>(n)), dotted.data());
-            }
-        }
-    });
+    worker_ = std::thread([this, fd]() { receiveLoop(fd); });
     return true;
+}
+
+void PosixUdpListener::receiveLoop(int fd) const {
+    // Body of the receiver thread (keeps the thread lambda a one-liner,
+    // mirroring PosixTcpTransport::runReceiveLoop).
+    while (!closed_) {
+        std::array<char, 2048> buf;
+        sockaddr senderAddr{};
+        socklen_t fromLen = sizeof(senderAddr);
+        const ssize_t n = ::recvfrom(fd, buf.data(), std::size(buf), 0,
+                                     &senderAddr, &fromLen);
+        if (closed_ || n <= 0) {
+            break;
+        }
+        std::array<char, INET_ADDRSTRLEN> dotted{};
+        if (!onPacket) {
+            continue;
+        }
+        // S3630: copy the generic sockaddr back into sockaddr_in instead
+        // of reinterpret_cast (layout-identical for AF_INET).
+        sockaddr_in from{};
+        std::memcpy(&from, &senderAddr, sizeof(from));
+        if (::inet_ntop(AF_INET, &from.sin_addr, dotted.data(), std::size(dotted)) != nullptr) {
+            onPacket(std::string(buf.data(), static_cast<std::size_t>(n)), dotted.data());
+        }
+    }
 }
 
 void PosixUdpListener::close() {
@@ -225,35 +227,22 @@ void PosixUdpListener::close() {
 // ---- ThreadScheduler -------------------------------------------------------
 
 ThreadScheduler::~ThreadScheduler() {
+    // No drain-run at teardown: a destructor must not execute client
+    // callbacks. A pending reconnect fired here would re-enter the object
+    // being torn down, and a callback that re-posts would spawn a NEW worker
+    // after the join below — a joinable thread left in worker_ at member
+    // destruction: std::terminate. (The old swallow-catch hid this landmine
+    // instead of removing it.) Pending work dies with the scheduler; callers
+    // that need a task to run must let it come due before destroying.
     {
         std::scoped_lock lock(mutex_);
         stopped_ = true;
+        queue_.clear();
+        cancelled_.clear();
     }
     cv_.notify_all();
     if (worker_.joinable()) {
         worker_.join();
-    }
-    // Drain: run whatever is still pending (uncancelled), in deadline order.
-    std::vector<Task> drain;
-    {
-        std::scoped_lock lock(mutex_);
-        drain.swap(queue_);
-    }
-    for (const Task& task : drain) {
-        if (std::find(cancelled_.begin(), cancelled_.end(), task.token) == cancelled_.end()) {
-            // S1048: a destructor must never let an exception escape — a throw
-            // here (user callback, or allocation during unwinding) would call
-            // std::terminate. This boundary deliberately swallows so the
-            // remaining drained callbacks still run.
-            try {
-                task.fn();
-            } catch (const std::exception&) {
-                // Swallowed at this boundary (rationale above).
-            } catch (...) {
-                // Non-std exceptions are equally terminal if they escape the
-                // destructor — swallow here too.
-            }
-        }
     }
 }
 
@@ -307,17 +296,12 @@ void ThreadScheduler::runLoop() {
         lock.unlock();
         if (std::find(cancelled_.begin(), cancelled_.end(), task.token) ==
             cancelled_.end()) {
-            // Same boundary guarantee as the destructor drain: a throwing
-            // callback here would escape the thread entry and terminate, so
-            // this boundary deliberately swallows and keeps pumping the queue.
-            try {
-                task.fn();
-            } catch (const std::exception&) {
-                // Swallowed at this boundary (rationale above).
-            } catch (...) {
-                // Non-std exceptions are equally terminal if they escape the
-                // thread entry — swallow here too.
-            }
+            // No catch here, deliberately: scheduled callbacks are in-repo code
+            // that must not throw. A throw is a programmer error, and swallowing
+            // it would silently kill the scheduled work (e.g. a dead reconnect)
+            // while the queue keeps pumping — so it propagates, failing fast at
+            // the thread boundary.
+            task.fn();
         }
         lock.lock();
     }
