@@ -318,6 +318,13 @@ endif
 ifeq ($(BRANCH),HEAD)
   $(error SONAR GUARD: HEAD is detached — cannot derive a branch name. Check out a named branch before scanning.)
 endif
+ifeq ($(BRANCH),master)
+  ifeq ($(ALLOW_MASTER_SCAN),1)
+    # ALLOW_MASTER_SCAN=1 explicitly opts in to a master-branch scan
+  else
+    $(error *** SONAR GUARD: master branch detected. This scan would publish to the SonarCloud master dashboard. To opt in, run with ALLOW_MASTER_SCAN=1)
+  endif
+endif
 SONAR_BRANCH_FLAG := -Dsonar.branch.name=$(BRANCH)
 
 $(SONAR_REPORT): $(BUILD_COV_DIR)/lcov.info $(COMPILE_DB) $(SONAR_PROJECT_PROPERTIES) $(BUILD_INPUTS)
